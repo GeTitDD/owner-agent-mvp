@@ -5,6 +5,7 @@ import { realpathSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { defaultDbPath } from './storage.mjs';
+import { sha256 } from './utils.mjs';
 import { PersonalKnowledgeStore } from './personal-store.mjs';
 
 export class OwnerInputError extends Error { constructor(message,status=400){super(message);this.status=status;} }
@@ -20,7 +21,7 @@ const kinds=new Set(['run_started','tool_finished','run_settled','project_note',
 // Job coordination (P0 control plane): explicit state machine, whitelisted job types only.
 const jobStatuses=new Set(['pending_approval','queued','leased','running','cancel_requested','succeeded','failed','cancelled','rejected','needs_reconciliation']);
 const activeJobStatuses=new Set(['queued','leased','running','cancel_requested']);
-const jobTypes=new Set(['noop','status-note','fake-analysis']);
+const jobTypes=new Set(['noop','status-note','fake-analysis','pi-analysis']);
 const attemptStatuses=new Set(['claimed','running','succeeded','failed','cancelled','orphaned']);
 const jobFilterStatuses=new Set([...jobStatuses]);
 const safeArray=(v,label)=>{check(Array.isArray(v)&&v.length<=30&&v.every(x=>typeof x==='string'&&x.length<=80&&/^[\w.-]+$/.test(x)),`Invalid ${label}`);return [...new Set(v)].sort();};
@@ -118,7 +119,25 @@ export class OwnerStore {
         detail TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS owner_job_events_job ON owner_job_events(job_id,seq);
+      CREATE TABLE IF NOT EXISTS owner_job_results(
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES owner_projects(id),
+        job_id TEXT NOT NULL REFERENCES owner_jobs(id) ON DELETE CASCADE,
+        attempt INTEGER NOT NULL,
+        session_id TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT 'unknown',
+        status TEXT NOT NULL,
+        content TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        truncated INTEGER NOT NULL DEFAULT 0,
+        usage TEXT NOT NULL DEFAULT 'unknown',
+        created_at TEXT NOT NULL,
+        UNIQUE(job_id,attempt)
+      );
     `);
+    // v0.7: re-entrant column migration for Pi session metadata on attempts.
+    const attemptColumns=this.db.prepare('PRAGMA table_info(owner_job_attempts)').all().map(c=>c.name);
+    if(!attemptColumns.includes('session_id'))this.db.exec(`ALTER TABLE owner_job_attempts ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`);
   }
   close(){this.db.close();}
   registerProject({id,name,root,primaryDomain='software-engineering',domains=[],imports=[],goal='',status='planned'}={}){
@@ -249,6 +268,10 @@ export class OwnerStore {
     check(jobTypes.has(jobType),'Unsupported job type; only whitelisted types are accepted');
     check(typeof idempotencyKey==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,88}$/.test(idempotencyKey),'Invalid idempotency key');
     const digest=canonical(cleanPayload(payload));
+    if(jobType==='pi-analysis'){
+      // The analysis input comes from the referenced owner task, never from free-form payloads.
+      check(!!ownerTaskId,'pi-analysis jobs require an owner task reference');
+    }
     if(ownerTaskId){const task=this.getTask(ownerTaskId);check(!!task,'Unknown owner task',404);check(task.project_id===projectId,'Owner task belongs to a different project');}
     actor=txt(actor,'actor',80);
     this.db.exec('BEGIN IMMEDIATE');
@@ -270,7 +293,7 @@ export class OwnerStore {
   }
   getJobRow(id){return this.db.prepare('SELECT * FROM owner_jobs WHERE id=?').get(id)??null;}
   getJob(id){const row=this.getJobRow(id);if(!row)return null;
-    return {...jobRow(row),attempts:this.db.prepare('SELECT id,job_id,attempt,worker_id,status,claimed_at,started_at,finished_at,lease_until,result_note FROM owner_job_attempts WHERE job_id=? ORDER BY attempt').all(id),
+    return {...jobRow(row),attempts:this.db.prepare('SELECT id,job_id,attempt,worker_id,status,claimed_at,started_at,finished_at,lease_until,session_id,result_note FROM owner_job_attempts WHERE job_id=? ORDER BY attempt').all(id),
       events:this.db.prepare('SELECT seq,at,actor,action,detail FROM owner_job_events WHERE job_id=? ORDER BY seq').all(id)};}
   listJobs({projectId='',status='',limit=50}={}){
     check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
@@ -388,7 +411,9 @@ export class OwnerStore {
       const att=this.db.prepare('SELECT * FROM owner_job_attempts WHERE job_id=? AND attempt=?').get(jobId,attemptNo);check(!!att,'Unknown attempt',404);
       check(att.worker_id===workerId,'Attempt belongs to a different worker',403);
       check(['claimed','running'].includes(att.status),`Attempt in status ${att.status} cannot heartbeat`,409);
-      check(['leased','running'].includes(row.status),`Job in status ${row.status} cannot heartbeat`,409);
+      // cancel_requested is still an actively executing state: a long model abort wait must keep renewing
+      // its lease, otherwise the attempt would be fenced while the stop confirmation is in flight.
+      check(['leased','running','cancel_requested'].includes(row.status),`Job in status ${row.status} cannot heartbeat`,409);
       check(row.lease_until&&row.lease_until>=now,'Lease already expired; explicit reconciliation is required',409);
       const leaseUntil=new Date(Date.parse(now)+leaseMs).toISOString();
       this.db.prepare('UPDATE owner_jobs SET lease_until=?,updated_at=? WHERE id=?').run(leaseUntil,now,jobId);
@@ -474,6 +499,34 @@ export class OwnerStore {
       this.db.exec('COMMIT');return this.getJob(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
+  // Pi session metadata (non-sensitive id) attached to an active attempt by the Pi worker.
+  attachAttemptSession(jobId,attemptNo,{workerId,sessionId,now=stamp()}={}){
+    const safe=txt(sessionId,'session id',180);
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getJobRow(jobId);check(!!row,'Unknown job',404);
+      const att=this.db.prepare('SELECT * FROM owner_job_attempts WHERE job_id=? AND attempt=?').get(jobId,attemptNo);check(!!att,'Unknown attempt',404);
+      check(att.worker_id===workerId,'Attempt belongs to a different worker',403);
+      check(['claimed','running'].includes(att.status),`Attempt in status ${att.status} cannot be updated`,409);
+      this.db.prepare('UPDATE owner_job_attempts SET session_id=? WHERE id=?').run(safe,att.id);
+      this.jobAudit(jobId,'session_attached',workerId,`attempt:${attemptNo}`,now);
+      this.db.exec('COMMIT');
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  // Project-private result asset. Job rows and audit events only ever reference id/hash/size.
+  addJobResult({projectId,jobId,attempt,sessionId='',model='unknown',status='completed',content,truncated=false,usage='unknown',now=stamp()}={}){
+    check(!!this.getProject(projectId),'Unknown project',404);
+    const row=this.getJobRow(jobId);check(!!row,'Unknown job',404);check(row.project_id===projectId,'Result does not belong to the job project');
+    check(Number.isSafeInteger(attempt)&&attempt>=1&&attempt<=row.last_attempt,'Invalid attempt for result');
+    check(typeof content==='string'&&content.length>0&&content.length<=65_536,'Result content must be 1–65536 chars');
+    check(['completed','truncated','failed'].includes(status),'Invalid result status');
+    const id=randomUUID();const hash=sha256(content);
+    this.db.prepare(`INSERT INTO owner_job_results(id,project_id,job_id,attempt,session_id,model,status,content,content_hash,truncated,usage,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id,projectId,jobId,attempt,txt(sessionId,'session id',180,false),txt(model,'model',120),txt(status,'status',40),content,hash,truncated?1:0,txt(usage,'usage',20),now);
+    return {id,hash,chars:content.length};
+  }
+  getJobResult(id){return this.db.prepare('SELECT id,project_id,job_id,attempt,session_id,model,status,content,content_hash,truncated,usage,created_at FROM owner_job_results WHERE id=?').get(id)??null;}
+  listJobResults(jobId){return this.db.prepare('SELECT id,project_id,job_id,attempt,session_id,model,status,content_hash,truncated,usage,created_at,length(content) AS chars FROM owner_job_results WHERE job_id=? ORDER BY attempt').all(jobId);}
   summary(){const projects=this.listProjects();const tasks=this.listTasks();const runs=this.listRuns();const pending=this.listSuggestions('pending');
     const counts=this.jobStatusCounts();
     return {projectCount:projects.length,activeRuns:runs.filter(r=>r.status==='running').length,

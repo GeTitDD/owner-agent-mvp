@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import { OwnerStore } from '../src/owner-store.mjs';
 import { OwnerAgent } from '../src/owner-agent.mjs';
 import { FakeWorker, FakeWorkerCrash } from '../src/job-worker.mjs';
+import { PiAnalysisWorker } from '../src/pi-analysis-worker.mjs';
+import { DefaultPiSessionFactory } from '../src/pi-session-factory.mjs';
 import { defaultDbPath } from '../src/storage.mjs';
 const store=new OwnerStore(process.env.OWNER_AGENT_DB??defaultDbPath());
 const args=process.argv.slice(2);const command=args.shift();
@@ -36,11 +38,20 @@ try {
   else if(command==='job-cancel')result=store.requestCancelJob(read('--id'),{actor:'ownerctl'});
   else if(command==='jobs-reconcile')result={expiredJobIds:store.reconcileExpiredLeases()};
   else if(command==='job-reconcile')result=store.reconcileJob(read('--id'),{decision:read('--decision'),reason:read('--reason'),actor:'ownerctl'});
-  else if(command==='run-once')result=await new FakeWorker(store,{workerId:read('--worker','fake-worker')}).runOnce({projectId:read('--project'),behavior:demoBehavior(read('--behavior','succeeded'))});
+  else if(command==='run-once'){
+    if(read('--worker','fake')==='pi'){
+      const worker=new PiAnalysisWorker(store,{workerId:read('--worker-name','pi-analysis-worker'),model:read('--model',''),timeoutMs:Math.max(5000,Number(read('--timeout','120000'))||120000)});
+      result=await worker.runOnce({projectId:read('--project'),allowModel:read('--allow-model')==='1'});
+    }else{
+      result=await new FakeWorker(store,{workerId:read('--worker-name','fake-worker')}).runOnce({projectId:read('--project'),behavior:demoBehavior(read('--behavior','succeeded'))});
+    }
+  }
+  else if(command==='result')result=store.getJobResult(read('--id'));
+  else if(command==='results')result=store.listJobResults(read('--job'));
   else if(command==='ask')result=new OwnerAgent(store).answer(args.join(' '));
   else if(command==='ask-pi')result=await new OwnerAgent(store).askPi(args.join(' '));
   else if(command==='events')result=store.listEvents({projectId:read('--project')});
-  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once [--project] [--worker] [--behavior succeeded/failed/cancelled/crash]');
+  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake [--behavior succeeded/failed/cancelled/crash] | run-once --worker pi --project --allow-model 1 [--model M] [--timeout ms] [--worker-name W] | result --id | results --job');
   console.log(JSON.stringify(result,null,2));
 }catch(e){console.error(e.message);process.exitCode=1;}
 finally{store.close();}

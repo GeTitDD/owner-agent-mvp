@@ -1,6 +1,23 @@
 # Owner Agent × Domain Knowledge Workbench — v0.5
 
+> 当前开发分支含 **v0.7 Pi Analysis Worker** 与 **v0.6 Durable Task Coordinator**（均为 WIP），已合入能力见下方「功能状态」。
+
 **以 Owner 为中心的多项目管理 Agent + 个人领域知识资产工作台 + 可选桌面宠物。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
+
+## v0.7 WIP：Pi Analysis Worker（分支 `feat/v0.7-pi-analysis-worker`）
+
+首个**真实执行闭环**：审批通过的 `pi-analysis` Job 在显式 `--allow-model` 下获得一个**项目级隔离、无工具、只读**的 Pi Session，产出有界、带 sha256 的项目私有分析产物。
+
+- 项目隔离实测：一次性空 agentDir + `noTools:true` → active tools `[]`（对照：全局配置会漏入扩展工具）；fail-closed——工具面非空即中止。
+- v0.6 全部不变量保留：审批门、原子 claim、租约（`cancel_requested` 期间心跳续租）、两阶段取消（`abort()` + 确认）、fence、幂等、迟到结果拒绝、OwnerTask 不自动完成。
+- 产物只存项目私有 `owner_job_results`，Job/审计仅引用 id/hash/字符数；usage 未知时如实标记。
+
+```bash
+npm run demo:pi      # fake session 端到端演示（零 API 成本）
+OWNER_AGENT_REAL_PI_TEST=1 npm test   # 可选真实 Pi 冒烟（需凭据；跳过不失败）
+```
+
+完整生命周期、隔离边界、取消/心跳策略与手动真实冒烟指南见 **[Pi Worker 设计文档](docs/PI_WORKER.md)**。
 
 ## v0.6 WIP：Durable Task Coordinator（分支 `feat/v0.6-durable-task-coordinator`）
 
