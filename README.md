@@ -2,6 +2,20 @@
 
 **以 Owner 为中心的多项目管理 Agent + 个人领域知识资产工作台 + 可选桌面宠物。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
 
+## v0.6 WIP：Durable Task Coordinator（分支 `feat/v0.6-durable-task-coordinator`）
+
+在 v0.5 基础上新增**可持久化、可审核、崩溃可恢复的 Job 生命周期**（控制面 + FakeWorker，无真实执行器）：
+
+- Job 默认 `pending_approval`，Owner 显式批准后才进入队列；同项目默认串行（最多 1 个 active Job），多项目可并发。
+- 原子承领（SQLite 事务 + CAS）、租约与 heartbeat、过期隔离 `needs_reconciliation`、显式 requeue/cancel/fail 裁定、幂等键防重。
+- `ownerctl` 新命令：`job-submit / job-approve / job-reject / jobs / job / job-cancel / jobs-reconcile / job-reconcile / run-once`。
+
+```bash
+npm run demo:jobs   # 临时库 + fake clock 的端到端演示（审批/并发/崩溃恢复/取消/幂等）
+```
+
+完整状态机、不变量、存储约束、Worker 契约与可复制命令见 **[Task Coordinator 设计文档](docs/TASK_COORDINATOR.md)**。
+
 ## 最快试用
 
 - `npm test` — 运行全部自动化测试（无需模型 API）。
@@ -96,6 +110,9 @@ node bin/domainctl.mjs lock --project examples/pi-local-research --out /tmp/pi-c
 | 确定性的适用性判断、显式冲突 | **已实现（v0.3）** |
 | 双快照标识与 Context Lock | **已实现（v0.3）** |
 | 个人知识 Web UI / 人工笔记 CRUD | **已实现（v0.4，本地原型）** |
+| Owner 项目/任务/事件 Registry 与只读问答 | **已实现（v0.5，本地原型）** |
+| Durable Job 生命周期（审批/原子承领/租约/裁定/幂等，FakeWorker） | **已实现（v0.6 WIP，控制面）** |
+| 真实 Pi/Shell 执行器接入与自动调度 | **未实现（下一 Issue）** |
 | Provider prompt cache 命中率统计 / KV Cache 复用 | **未实现（后续）** |
 
 ## 运行环境
