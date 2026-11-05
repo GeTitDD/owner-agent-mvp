@@ -49,3 +49,22 @@ test('[pi-iso factory] DefaultPiSessionFactory loads NO project resources and re
     }finally{session.dispose();}
   }finally{await rm(dir,{recursive:true,force:true});}
 });
+
+test('[pi-iso askPi] the owner cognitive entry (askPi) does not load project resources either',async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),'pi-iso-askpi-'));
+  try{
+    const {project,marker}=await mkProjectWithExtension(dir);
+    const {OwnerStore}=await import('../src/owner-store.mjs');
+    const {OwnerAgent}=await import('../src/owner-agent.mjs');
+    const store=new OwnerStore(path.join(dir,'k.sqlite'));
+    try{
+      store.registerProject({id:'iso-p',name:'ISO',root:project,primaryDomain:'pi-sdk'});
+      const agent=new OwnerAgent(store);
+      let answer=null,failed=null;
+      try{answer=(await agent.askPi('有多少项目？')).answer;}catch(e){failed=e;}
+      // create-phase isolation holds regardless of prompt outcome (CI may lack credentials)
+      assert.ok(!existsSync(marker),'askPi entry never loads project extensions');
+      if(answer)assert.ok(String(answer).length>0);else assert.ok(failed,'either an answer or an error, never silent');
+    }finally{store.close();}
+  }finally{await rm(dir,{recursive:true,force:true});}
+});

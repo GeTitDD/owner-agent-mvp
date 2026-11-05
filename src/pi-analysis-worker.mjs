@@ -13,6 +13,8 @@
 // owner_job_results (project-private), referenced by id/hash/chars only.
 import { DefaultPiSessionFactory } from './pi-session-factory.mjs';
 import { realpath } from 'node:fs/promises';
+import { statSync } from 'node:fs';
+import { sha256 } from './utils.mjs';
 
 // Controlled error taxonomy: fixed summaries only. Upstream error messages may contain
 // endpoints, headers or other sensitive material and are never persisted.
@@ -38,10 +40,11 @@ export class PiAnalysisWorker {
   // isolated per-attempt agentDir); tests/demo inject deterministic fakes. The allow-model
   // gate applies ONLY to the default real factory, so fake-based flows stay free and dry.
   // timers and abortConfirmMs are injectable for deterministic tests.
-  constructor(store,{workerId='pi-analysis-worker',leaseMs=30000,clock=()=>new Date().toISOString(),sessionFactory=DefaultPiSessionFactory,model='',timeoutMs=120000,abortConfirmMs=5000,maxOutputChars=20000,timers={interval:(fn,ms)=>setInterval(fn,ms),timeout:(fn,ms)=>setTimeout(fn,ms),clear:(h)=>{clearInterval(h);clearTimeout(h);}}}={}){
+  constructor(store,{workerId='pi-analysis-worker',leaseMs=30000,clock=()=>new Date().toISOString(),sessionFactory=DefaultPiSessionFactory,model='',timeoutMs=120000,createTimeoutMs=30000,abortConfirmMs=5000,maxOutputChars=20000,timers={interval:(fn,ms)=>setInterval(fn,ms),timeout:(fn,ms)=>setTimeout(fn,ms),clear:(h)=>{clearInterval(h);clearTimeout(h);}}}={}){
     this.store=store;this.workerId=workerId;this.leaseMs=leaseMs;this.clock=clock;
     this.sessionFactory=sessionFactory;this.model=model;this.timeoutMs=timeoutMs;
-    this.abortConfirmMs=abortConfirmMs;this.maxOutputChars=maxOutputChars;this.timers=timers;
+    this.createTimeoutMs=createTimeoutMs;this.abortConfirmMs=abortConfirmMs;
+    this.maxOutputChars=maxOutputChars;this.timers=timers;
   }
   async runOnce({projectId,allowModel=false}={}){
     if(this.sessionFactory===DefaultPiSessionFactory&&!allowModel){
@@ -52,6 +55,13 @@ export class PiAnalysisWorker {
     if(!project)return {claimed:false,reason:'unknown-project'};
     let root;
     try{root=await realpath(project.root);}catch{return {claimed:false,reason:'project-root-missing'};}
+    // Path-drift rejection: a replaced root (e.g. swapped for a symlink to another
+    // directory) has a different file identity than the registered one.
+    const drift=(()=>{try{const st=statSync(project.root,{bigint:true});
+      const identity=sha256(`${st.dev}:${st.ino}`).slice(0,32);
+      if(project.root_identity&&project.root_identity!==identity)return 'moved';
+      return null;}catch{return 'missing';}})();
+    if(drift)return {claimed:false,reason:drift==='moved'?'project-root-moved':'project-root-missing'};
     // Workers claim only the types they are built to execute (review r2: queue consistency).
     const claim=this.store.claimNextJob(projectId,this.workerId,{now:this.clock(),leaseMs:this.leaseMs,allowedTypes:['pi-analysis']});
     if(!claim.claimed)return claim;
@@ -65,7 +75,7 @@ export class PiAnalysisWorker {
       this.store.startJob(job.id,attempt.attempt,{workerId:this.workerId,now:this.clock()});
       // Watchdog covers the WHOLE active window, including sessionFactory.create():
       // renewing the lease while creation is slow, and forwarding stop requests.
-      let session=null,abortRequested=false,fenced=false;
+      let session=null,abortRequested=false,fenced=false,createSettled=false,createTimedOut=false;
       const tick=()=>{
         try{this.store.heartbeatJob(job.id,attempt.attempt,{workerId:this.workerId,now:this.clock(),leaseMs:this.leaseMs});}
         catch{fenced=true;if(session)session.abort?.();return;}
@@ -74,7 +84,28 @@ export class PiAnalysisWorker {
       const tickMs=Math.max(1000,Math.floor(this.leaseMs/3));
       const tickTimer=this.timers.interval(tick,tickMs);
       try{
-        session=await this.sessionFactory.create({cwd:root,model:this.model||undefined});
+        // Creation phase has its own deadline: a hung sessionFactory.create() must not keep
+        // the job running/cancel_requested forever. On deadline we stop renewing the lease
+        // (so reconcile can quarantine), and any late session is aborted+disposed, never prompted.
+        const createController=new AbortController();
+        const created=Promise.resolve(this.sessionFactory.create({cwd:root,model:this.model||undefined,signal:createController.signal}))
+          .then(s=>{createSettled=true;return {session:s};})
+          .catch(e=>({createError:e}));
+        created.then((r)=>{
+          if(!r||!r.session)return;
+          if(createTimedOut||fenced){try{r.session.abort?.();}catch{}r.session.dispose();}
+        }).catch(()=>{});
+        const createResult=await Promise.race([
+          created,
+          new Promise(resolve=>{this.createTimer=this.timers.timeout(()=>{createTimedOut=true;createController.abort();resolve({createTimedOut:true});},this.createTimeoutMs);})
+        ]);
+        if(createResult.createTimedOut){
+          // Stop renewing the lease so the attempt converges into needs_reconciliation.
+          this.timers.clear(tickTimer);
+          return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'fenced',createTimedOut:true};
+        }
+        if(createResult.createError)throw createResult.createError;
+        session=createResult.session;
         // Fail-closed permission checks: unknown tool set is treated as unsafe, and an
         // empty set is required before any prompt is sent.
         let tools=null;
@@ -120,29 +151,35 @@ export class PiAnalysisWorker {
           if(result?.timeout)timedOut=true;
           else if(result&&!result.settled)promptError=result.error;
         }finally{
-          this.timers.clear(tickTimer);
           if(timeoutHandle!==null)this.timers.clear(timeoutHandle);
         }
-        if(fenced)return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'fenced'};
+        // The watchdog keeps renewing through the confirm window; it is stopped further down
+        // once the outcome is decided (review r2: do not let a short lease expire mid-stop).
+        if(fenced){this.timers.clear(tickTimer);return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'fenced'};}
         if(timedOut){
-          // Ask the session to stop, then wait (bounded) for the stop to CONFIRM.
+          // Ask the session to stop, renew the lease once, then wait (bounded) for the stop
+          // to CONFIRM before deciding the outcome.
           session.abort?.();
+          guard(()=>this.store.heartbeatJob(job.id,attempt.attempt,{workerId:this.workerId,now:this.clock(),leaseMs:this.leaseMs}));
           const confirmed=await Promise.race([
             settled.then(()=>true),
             new Promise(resolve=>this.timers.timeout(()=>resolve(false),this.abortConfirmMs))
           ]);
+          this.timers.clear(tickTimer);
           if(confirmed){
             const reported=guard(()=>this.store.reportJobResult(job.id,attempt.attempt,{workerId:this.workerId,outcome:'failed',note:`analysis timeout after ${this.timeoutMs}ms; session stopped`,now:this.clock()}));
             return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:reported?'failed':'fenced'};
           }
           // Stop could not be confirmed: the session may still be running — do not release
-          // the project; leave the attempt for explicit human reconciliation.
+          // the project; stop renewing and leave the attempt for explicit reconciliation.
           return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'fenced',unconfirmedStop:true};
         }
         if(abortRequested&&this.store.getJob(job.id).status==='cancel_requested'){
+          this.timers.clear(tickTimer);
           this.store.confirmJobCancelled(job.id,attempt.attempt,{workerId:this.workerId,note:'stopped via session abort',now:this.clock()});
           return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'cancelled'};
         }
+        this.timers.clear(tickTimer);
         if(promptError){
           const reported=guard(()=>this.store.reportJobResult(job.id,attempt.attempt,{workerId:this.workerId,outcome:'failed',note:`pi session error (${classifyError(promptError)})`,now:this.clock()}));
           return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:reported?'failed':'fenced'};

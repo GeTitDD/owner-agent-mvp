@@ -414,3 +414,73 @@ test('[pi-r2 snapshot] the approved input snapshot pins the analysis material ag
   assert.match(prompt,/批准时的说明/);assert.match(prompt,/批准时的标题/);
   assert.doesNotMatch(prompt,/批准之后被篡改/);assert.doesNotMatch(prompt,/篡改标题/);
 }));
+
+test('[pi-r2 create-deadline] a hung factory.create converges: silent fence, scan quarantines, cancel still lands',()=>withStore(async({store,clock})=>{
+  const job=submitPiJob(store,{projectId:'proj-a',key:'cd1'});
+  store.approveJob(job.id,{now:clock.now()});
+  let resolveCreate=null;
+  const slowFactory={createCalls:[],sessions:[],async create(opts){slowFactory.createCalls.push(opts);
+    await new Promise(res=>{resolveCreate=res;});  // hangs until manually resolved
+    const s=makeFakeSession({hang:true});slowFactory.sessions.push(s);return s;}};
+  const timers=manualTimers();
+  const worker=new PiAnalysisWorker(store,{sessionFactory:slowFactory,clock:clock.now,leaseMs:30000,createTimeoutMs:60,timers});
+  const pending=worker.runOnce({projectId:'proj-a'});
+  await waitFor(()=>slowFactory.createCalls.length===1,'create started');
+  // Owner cancels while creation hangs; the tick records it (session still absent)
+  store.requestCancelJob(job.id,{now:clock.now()});
+  const deadlineId=[...timers.handles.entries()].find(([,h])=>h.ms===60)?.[0];
+  timers.fire(deadlineId); // create deadline hits → worker stops renewing
+  const r=await pending;
+  assert.equal(r.outcome,'fenced');assert.equal(r.createTimedOut,true);
+  assert.equal(store.getJob(job.id).status,'cancel_requested','stop requested but never confirmed (session hung)');
+  // converge via human reconciliation
+  clock.advanceMs(120000);
+  store.reconcileExpiredLeases({now:clock.now()});
+  assert.equal(store.getJob(job.id).status,'needs_reconciliation');
+  store.reconcileJob(job.id,{decision:'cancel',reason:'creation hung',now:clock.now()});
+  assert.equal(store.getJob(job.id).status,'cancelled');
+  // LATE session: whatever the factory eventually returns must be aborted+disposed, never prompted
+  resolveCreate(makeFakeSession({hang:true,text:'迟到的产物绝不能入库'}));
+  await waitFor(()=>slowFactory.sessions.length===1&&slowFactory.sessions[0].disposed,'late session disposed');
+  assert.equal(slowFactory.sessions[0].prompts.length,0);
+  assert.equal(store.listJobResults(job.id).length,0);
+}));
+
+test('[pi-r2 drift] a swapped project root is refused as project-root-moved',()=>withStore(async({store,dir})=>{
+  const real=path.join(dir,'drift-real');fs.mkdirSync(real,{recursive:true});
+  store.registerProject({id:'drift',name:'Drift',root:real,primaryDomain:'pi-sdk'});
+  const stored=store.getProject('drift');
+  assert.ok(stored.root_identity&&stored.root_identity.length>0,'registration records the root identity');
+  const real2=path.join(dir,'drift-real-2');fs.mkdirSync(real2,{recursive:true});
+  // Replace the registered directory with a different one at the same path (the realistic
+  // drift case — no symlink privileges required on any platform).
+  fs.rmSync(real,{recursive:true,force:true});fs.mkdirSync(real,{recursive:true});
+  const factory=makeFactory();
+  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,timers:manualTimers()});
+  const r=await worker.runOnce({projectId:'drift'});
+  assert.deepEqual(r,{claimed:false,reason:'project-root-moved'});
+  assert.equal(factory.createCalls.length,0,'no session for a moved project');
+}));
+
+test('[askPi isolation] non-empty tools fail closed; the factory session is disposed and never prompted',()=>withStore(async({store})=>{
+  let disposed=false,prompted=false;
+  const factory={create:async()=>({sessionId:()=>'s1',activeTools:()=>['web_search'],
+    prompt:async()=>{prompted=true;},abort(){},getLastText:()=>'x',model:'fake/m',
+    dispose(){disposed=true;}})};
+  const agent=new OwnerAgent(store,{piSessionFactory:factory});
+  await assert.rejects(agent.askPi('有哪些项目？'),/tool isolation verification failed/);
+  assert.equal(prompted,false,'no prompt reaches an unsafe session');
+  assert.equal(disposed,true,'session disposed on refusal');
+}));
+
+test('[askPi isolation happy] a zero-tool adapter answers via getLastText and disposes',()=>withStore(async({store})=>{
+  let last=null,disposed=false;
+  const factory={create:async()=>({sessionId:()=>'s2',activeTools:()=>[],
+    prompt:async t=>{last=t;},abort(){},getLastText:()=>'owner 答：2 个项目',model:'fake/m',
+    dispose(){disposed=true;}})};
+  const agent=new OwnerAgent(store,{piSessionFactory:factory});
+  const r=await agent.askPi('有哪些项目？');
+  assert.equal(r.mode,'pi-model');assert.equal(r.answer,'owner 答：2 个项目');
+  assert.match(last,/Owner 的问题：有哪些项目/);
+  assert.equal(disposed,true);
+}));

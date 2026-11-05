@@ -1,9 +1,13 @@
 // Owner-facing read-only cognitive interface. LLM is optional and only invoked explicitly.
 // Durable truth remains in OwnerStore; no chat transcript is treated as project state.
 import { OwnerStore } from './owner-store.mjs';
+import { DefaultPiSessionFactory } from './pi-session-factory.mjs';
+import path from 'node:path';
+import os from 'node:os';
+import { mkdtempSync,rmSync } from 'node:fs';
 
 export class OwnerAgent {
-  constructor(store){this.store=store;}
+  constructor(store,{piSessionFactory}={}){this.store=store;this.piSessionFactory=piSessionFactory??DefaultPiSessionFactory;}
   inspect(){return this.store.summary();}
   attention(){
     const s=this.inspect();const items=[];
@@ -55,22 +59,42 @@ export class OwnerAgent {
   }
   // Model-assisted reasoning is explicitly opt-in, ephemeral and tool-free.
   // Use noTools and a read-only snapshot so the model cannot alter a project.
+  // The real path reuses the SAME isolated PiSessionFactory as the pi-analysis worker
+  // (review r2: the owner cognitive entry must not leak global/project extensions either);
+  // tool verification fails closed before any prompt.
   async askPi(question,{createSession=null}={}){
     const q=String(question??'').trim();if(!q||q.length>1200)throw new Error('Invalid question');
-    const sdk=createSession?null:await import('@earendil-works/pi-coding-agent');
-    const create=createSession??sdk.createAgentSession;
-    const sessionManager=sdk?.SessionManager?.inMemory?.();
-    const {session}=await create({noTools:true,...(sessionManager?{sessionManager}:{})});
     const s=this.inspect();
     const snapshot={projects:s.projects.map(p=>({id:p.id,name:p.name,goal:p.goal,status:p.status,
       tasks:p.tasks.map(t=>({id:t.id,title:t.title,status:t.status})),
       lastEvent:p.last_event_at,runStatuses:p.runs.map(r=>({sessionId:r.session_id,status:r.status,errors:r.errors})),
       knowledgeLinks:p.knowledgeLinks.map(l=>({id:l.knowledge_id,revision:l.revision}))})),
       pendingSuggestions:this.store.listSuggestions('pending').map(x=>({id:x.id,source:x.source_project_id,target:x.target_project_id,knowledgeId:x.knowledge_id}))};
-    try {
-      await session.prompt(`你是以 Owner 为中心的只读项目管理助手。以下 JSON 是唯一已确认的数据来源。不得把未知状态表述为完成，不得声称已读取源码或运行测试。禁止提出未经证据支持的事实，逐条注明项目或任务 ID。无需调用工具，也不能执行任何修改。\n\n数据：${JSON.stringify(snapshot)}\n\nOwner 的问题：${q}`);
-      return {answer:session.getLastAssistantText(),mode:'pi-model',basis:s.projects.map(p=>`project:${p.id}`)};
-    }finally{session.dispose();}
+    const instructions=`你是以 Owner 为中心的只读项目管理助手。以下 JSON 是唯一已确认的数据来源。不得把未知状态表述为完成，不得声称已读取源码或运行测试。禁止提出未经证据支持的事实，逐条注明项目或任务 ID。无需调用工具，也不能执行任何修改。\n\n数据：${JSON.stringify(snapshot)}\n\nOwner 的问题：${q}`;
+    if(createSession){
+      const {session}=await createSession({noTools:true});
+      try{
+        await session.prompt(instructions);
+        return {answer:session.getLastAssistantText(),mode:'pi-model',basis:s.projects.map(p=>`project:${p.id}`)};
+      }finally{session.dispose();}
+    }
+    // Real path: isolated per-call work dir + empty agentDir + noTools; fail closed if the
+    // active tool set is non-empty or unknown.
+    let workDir=null,session=null,disposed=false;
+    try{
+      workDir=mkdtempSync(path.join(os.tmpdir(),'owner-askpi-'));
+      session=await this.piSessionFactory.create({cwd:workDir});
+      let tools=null;try{tools=session.activeTools();}catch{tools=null;}
+      if(!Array.isArray(tools)||tools.length>0){
+        session.abort?.();
+        throw new Error('Pi tool isolation verification failed; refusing to prompt');
+      }
+      await session.prompt(instructions);
+      return {answer:session.getLastText(),mode:'pi-model',basis:s.projects.map(p=>`project:${p.id}`)};
+    }finally{
+      if(session&&!disposed){disposed=true;session.dispose();}
+      if(workDir){try{rmSync(workDir,{recursive:true,force:true});}catch{/* best effort */}}
+    }
   }
 }
 

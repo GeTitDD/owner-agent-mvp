@@ -46,7 +46,7 @@ factory.create({cwd, model?}) -> {
 
 - `heartbeatJob` 放行 `cancel_requested`（v0.7 预授权修订）：等待 SDK abort 确认期间必须续租，否则 abort 在途即被扫描隔离。
 - watchdog 周期 `leaseMs/3`（timers 可注入，测试手动触发）：每 tick 先 heartbeat（失败即 fenced），再检测 `cancel_requested` → `session.abort()`。
-- prompt 结束后：`cancel_requested` → `confirmJobCancelled`；正常完成 → 存结果 + `succeeded`；error/timeout → `failed`（错误分类脱敏记录：仅 name+首 120 字符）。
+- prompt 结束后：`cancel_requested` → `confirmJobCancelled`；正常完成 → 原子提交结果 + `succeeded`；error/timeout → `failed`（错误只记固定分类：`session-aborted/timeout/auth-error/network-error/session-error`，不落上游 message 原文）；timeout 后确认窗口内**继续心跳**，无法确认停止才停止续租并进入人工裁定。
 - fenced（租约丢失）：中止会话、**不存产物、不报告**，交 reconcile。
 
 ## 存储与最小化
@@ -70,6 +70,12 @@ node bin/ownerctl.mjs run-once --worker pi --project my-project --allow-model 1 
 node bin/ownerctl.mjs result --id <RESULT_ID>      # 完整内容（本机 Owner 权限）
 node bin/ownerctl.mjs results --job <JOB_ID>       # 元数据列表
 ```
+
+## 创建期 deadline 与路径漂移
+
+- `sessionFactory.create()` 受独立 deadline（`createTimeoutMs`，默认 30s）约束；超时即 abort 控制器、**停止续租**（租约自然过期 → `needs_reconciliation`），迟到的 session 由工厂信号 + Worker 双层 abort+dispose，**绝不 prompt**。
+- 每次运行前校验注册根的文件身份（dev/ino 哈希）：目录被删除重建或替换为指向他处的链接 → `project-root-moved` 拒绝，零会话创建。
+- Owner 认知入口 `ownerctl ask-pi` 与 Worker 走**同一条隔离链路**（一次性空 workDir/agentDir + noTools + 工具面 fail-closed 校验）——全局/项目扩展注入风险对该入口同样不成立（marker 对照测试锁定）。
 
 ## 真实 Pi 冒烟（可选）
 

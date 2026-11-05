@@ -19,15 +19,14 @@ import os from 'node:os';
 import { mkdtempSync,rmSync } from 'node:fs';
 
 export const DefaultPiSessionFactory={
-  async create({cwd,model}={}){
+  async create({cwd,model,signal}={}){
     const sdk=await import('@earendil-works/pi-coding-agent');
     // Per-attempt empty agentDir: no global extensions, skills, settings or MCP servers.
     const agentDir=mkdtempSync(path.join(os.tmpdir(),'owner-pi-agent-'));
-    let loader;
-    try{
+    const created=(async()=>{
       // Explicitly disable ALL resource discovery (global + project-local):
       // extensions, skills, prompt templates, themes and context files (AGENTS.md etc.).
-      loader=new sdk.DefaultResourceLoader({
+      const loader=new sdk.DefaultResourceLoader({
         cwd,agentDir,
         noExtensions:true,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true
       });
@@ -50,9 +49,14 @@ export const DefaultPiSessionFactory={
         get model(){return session.model?`${session.model.provider}/${session.model.id}`:'unknown';},
         dispose(){if(disposed)return;disposed=true;try{session.dispose?.();}finally{try{rmSync(agentDir,{recursive:true,force:true});}catch{/* best effort cleanup */}}}
       };
-    }catch(e){
-      try{rmSync(agentDir,{recursive:true,force:true});}catch{/* ignore */}
-      throw e;
+    })();
+    // Cancellable creation: when the caller aborts (e.g. a create-phase deadline), any
+    // session that is eventually produced must be aborted+disposed and never prompted.
+    if(signal){
+      const disposeLate=()=>{created.then(a=>{try{a.abort?.();}catch{/* ignore */}a.dispose();}).catch(()=>{try{rmSync(agentDir,{recursive:true,force:true});}catch{/* ignore */}});};
+      if(signal.aborted)disposeLate();
+      else signal.addEventListener('abort',disposeLate,{once:true});
     }
+    return created;
   }
 };

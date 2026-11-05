@@ -1,7 +1,7 @@
 // Local, owner-centric project/event registry. All durable facts are explicit records,
 // not summaries inferred from an LLM conversation. No source code or prompt capture.
 import { DatabaseSync } from 'node:sqlite';
-import { realpathSync, mkdirSync } from 'node:fs';
+import { realpathSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { defaultDbPath } from './storage.mjs';
@@ -142,6 +142,11 @@ export class OwnerStore {
     // task edits cannot change what an approved job will analyse.
     const jobColumns=this.db.prepare('PRAGMA table_info(owner_jobs)').all().map(c=>c.name);
     if(!jobColumns.includes('input_snapshot'))this.db.exec(`ALTER TABLE owner_jobs ADD COLUMN input_snapshot TEXT NOT NULL DEFAULT ''`);
+    // v0.7: root identity (sha256 of dev/ino) for path-drift rejection — a swapped root
+    // (symlink to another directory) resolves to a different file identity than registered.
+    // Raw ino can exceed JS safe integers on Windows, so only the hash is stored.
+    const projectColumns=this.db.prepare('PRAGMA table_info(owner_projects)').all().map(c=>c.name);
+    if(!projectColumns.includes('root_identity'))this.db.exec(`ALTER TABLE owner_projects ADD COLUMN root_identity TEXT NOT NULL DEFAULT ''`);
   }
   close(){this.db.close();}
   registerProject({id,name,root,primaryDomain='software-engineering',domains=[],imports=[],goal='',status='planned'}={}){
@@ -149,12 +154,13 @@ export class OwnerStore {
     check(statuses.has(status),'Invalid project status');
     check(typeof root==='string'&&root.length<=1500,'Invalid path');
     let resolved;try{resolved=realpathSync(root);}catch{throw new OwnerInputError('Project directory must already exist');}
+    let rootIdentity='';try{const st=statSync(resolved,{bigint:true});rootIdentity=sha256(`${st.dev}:${st.ino}`).slice(0,32);}catch{/* stat unavailable: drift check skipped for this project */}
     const cleanedDomains=safeArray(domains,'domains');
     const cleanedImports=safeArray(imports,'imports');
     check(cleanedDomains.length>0||!!primaryDomain,'Project needs at least one domain');
     const timestamp=stamp();
-    try {this.db.prepare(`INSERT INTO owner_projects(id,name,root,primary_domain,domains,imports,goal,status,owner_note,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(id,name,resolved,primaryDomain,json(cleanedDomains),json(cleanedImports),txt(goal,'goal',2000,false),status,'',timestamp,timestamp);}
+    try {this.db.prepare(`INSERT INTO owner_projects(id,name,root,primary_domain,domains,imports,goal,status,owner_note,created_at,updated_at,root_identity)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id,name,resolved,primaryDomain,json(cleanedDomains),json(cleanedImports),txt(goal,'goal',2000,false),status,'',timestamp,timestamp,rootIdentity);}
     catch(e){if(/UNIQUE constraint/.test(e.message))throw new OwnerInputError('Project ID or root already registered',409);throw e;}
     return this.getProject(id);
   }
@@ -533,21 +539,11 @@ export class OwnerStore {
       this.db.exec('COMMIT');
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
-  // Project-private result asset. Job rows and audit events only ever reference id/hash/size.
-  addJobResult({projectId,jobId,attempt,sessionId='',model='unknown',status='completed',content,truncated=false,usage='unknown',now=stamp()}={}){
-    check(!!this.getProject(projectId),'Unknown project',404);
-    const row=this.getJobRow(jobId);check(!!row,'Unknown job',404);check(row.project_id===projectId,'Result does not belong to the job project');
-    check(Number.isSafeInteger(attempt)&&attempt>=1&&attempt<=row.last_attempt,'Invalid attempt for result');
-    check(typeof content==='string'&&content.length>0&&content.length<=65_536,'Result content must be 1–65536 chars');
-    check(['completed','truncated','failed'].includes(status),'Invalid result status');
-    const id=randomUUID();const hash=sha256(content);
-    this.db.prepare(`INSERT INTO owner_job_results(id,project_id,job_id,attempt,session_id,model,status,content,content_hash,truncated,usage,created_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id,projectId,jobId,attempt,txt(sessionId,'session id',180,false),txt(model,'model',120),txt(status,'status',40),content,hash,truncated?1:0,txt(usage,'usage',20),now);
-    return {id,hash,chars:content.length};
-  }
   // Atomic success commit: validates worker/attempt/lease exactly like reportJobResult and
   // inserts the result asset in the SAME transaction, so a lease/cancel race can never leave
   // an orphan result without a valid succeeded state (or vice versa).
+  // (The standalone addJobResult was removed on review: writing results outside the
+  // validated transaction could leave orphan artifacts with no succeeded state.)
   completeJobWithResult(jobId,attemptNo,{workerId,sessionId='',model='unknown',content,truncated=false,usage='unknown',note='',now=stamp()}={}){
     check(typeof content==='string'&&content.length>0&&content.length<=65_536,'Result content must be 1–65536 chars');
     this.db.exec('BEGIN IMMEDIATE');
