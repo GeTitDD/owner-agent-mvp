@@ -1,0 +1,19 @@
+{
+  "project": {
+    "id": "webhook-service",
+    "notes": "HTTP raw request body is available before JSON parsing."
+  },
+  "domainRoot": "../../domains",
+  "domains": [
+    {
+      "id": "software-engineering",
+      "version": "1.0.0"
+    }
+  ],
+  "context": {
+    "maxTokens": 1500
+  },
+  "evolution": {
+    "capture": "metadata"
+  }
+}

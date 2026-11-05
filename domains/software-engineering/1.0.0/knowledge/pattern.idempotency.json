@@ -1,0 +1,6 @@
+{
+  "id": "pattern.idempotency", "kind": "pattern", "title": "Idempotency for retryable writes",
+  "claim": "When a retry may repeat an external side effect such as a payment, use a stable idempotency key, atomic outcome tracking, and tests for duplicate deliveries.",
+  "keywords": ["retry", "duplicate", "payment", "idempotency", "deduplicate"],
+  "status": "published", "sharing": "shared", "evidenceRefs": ["demo-reviewed:3"]
+}

@@ -1,0 +1,8 @@
+{
+  "id": "pi-sdk", "version": "0.1.0", "description": "Small demonstration domain for Pi SDK integration",
+  "stableKnowledgeIds": ["pi.agent-loop"],
+  "knowledgeFiles": ["knowledge/pi.agent-loop.json", "knowledge/pi.extension-pattern.json"],
+  "profiles": {
+    "core": {"knowledgeIds": ["pi.agent-loop", "pi.extension-pattern"], "stableKnowledgeIds": ["pi.agent-loop"]}
+  }
+}

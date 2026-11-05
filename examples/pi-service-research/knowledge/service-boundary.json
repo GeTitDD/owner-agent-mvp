@@ -1,0 +1,8 @@
+{
+  "id": "service-boundary", "layer": "project", "kind": "constraint",
+  "title": "Service-side tenant boundary",
+  "claim": "This project requires per-tenant knowledge access checks before context assembly and blocks local-only experiment assumptions.",
+  "keywords": ["tenant", "service", "auditability", "context", "boundary"],
+  "status": "published", "sharing": "project", "verification": {"status": "unverified"},
+  "relations": {"specializes": ["pi.extension-pattern"]}, "evidenceRefs": ["project:architecture-note"]
+}

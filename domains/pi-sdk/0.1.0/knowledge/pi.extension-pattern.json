@@ -1,0 +1,8 @@
+{
+  "id": "pi.extension-pattern", "layer": "applied", "kind": "pattern",
+  "title": "Pi Extension context adaptation",
+  "claim": "Use a Pi extension to supply task-related context and domain-recall tools; validate the hooks against the installed Pi version.",
+  "keywords": ["pi", "extension", "context", "adapter", "tools"],
+  "status": "published", "sharing": "shared", "verification": {"status": "unverified"},
+  "relations": {"depends_on": ["pi.agent-loop"]}, "evidenceRefs": ["example:pi-extension-smoke-test"]
+}

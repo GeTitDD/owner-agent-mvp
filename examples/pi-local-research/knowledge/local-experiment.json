@@ -1,0 +1,8 @@
+{
+  "id": "local-experiment", "layer": "project", "kind": "experiment",
+  "title": "Local Pi extension sandbox checks",
+  "claim": "In this particular local project, extension tests are executed inside a disposable working directory; results cannot be generalized without review.",
+  "keywords": ["pi", "local", "sandbox", "extension", "experiment"],
+  "status": "published", "sharing": "project", "verification": {"status": "unverified"},
+  "relations": {"implements": ["pi.extension-pattern"]}, "evidenceRefs": ["project:local-smoke-test"]
+}

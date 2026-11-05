@@ -1,0 +1,64 @@
+{
+  "project": {
+    "id": "pi-local-research",
+    "primaryDomain": "pi-sdk",
+    "notes": "Local extension experiment; filesystem operations must stay in the sandbox.",
+    "environment": {
+      "runtime": "Node.js 22",
+      "platform": "local-mac",
+      "dependencies": {
+        "pi-sdk": "version-under-test"
+      },
+      "capabilities": {
+        "prefix_cache": true,
+        "isolated_runner": true,
+        "cache_metrics": true
+      }
+    },
+    "requirements": {
+      "ids": [
+        "reduce-latency",
+        "isolated-experiments"
+      ],
+      "goals": [
+        "Build a reusable Pi context extension"
+      ],
+      "constraints": {
+        "filesystem_isolation": true
+      }
+    },
+    "decisions": [
+      {
+        "id": "use-extension",
+        "summary": "Integrate via Pi Extension without patching the core."
+      }
+    ]
+  },
+  "domainRoot": "../../domains",
+  "domains": [
+    {
+      "id": "context-engineering",
+      "version": "0.1.0",
+      "profile": "cache"
+    },
+    {
+      "id": "software-testing",
+      "version": "0.1.0",
+      "profile": "experiments"
+    }
+  ],
+  "projectKnowledgeFiles": [
+    "knowledge/local-experiment.json"
+  ],
+  "context": {
+    "maxTokens": 2400
+  },
+  "workspace": {
+    "enabled": true,
+    "importDomainIds": [
+      "pi-sdk",
+      "context-engineering"
+    ],
+    "includeProject": true
+  }
+}

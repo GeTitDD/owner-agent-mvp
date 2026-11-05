@@ -1,0 +1,6 @@
+{
+  "id": "invariant.validation", "kind": "invariant", "title": "Validate side effects with tests",
+  "claim": "For code paths that have external side effects, define the intended invariant and validate success and failure branches with tests before declaring the task complete.",
+  "keywords": ["testing", "invariants", "side effects", "reliability"],
+  "status": "published", "sharing": "shared", "evidenceRefs": ["demo-reviewed:1"]
+}

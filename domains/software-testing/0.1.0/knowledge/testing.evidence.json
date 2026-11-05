@@ -1,0 +1,7 @@
+{
+  "id": "testing.evidence", "layer": "domain", "kind": "invariant", "title": "Experiments need falsifiable checks",
+  "claim": "Before calling a local experiment verified, write down its conditions, assertions, result, and tested version so others can reproduce it.",
+  "keywords": ["experiment", "evidence", "testing", "version"],
+  "status": "published", "sharing": "shared", "verification": {"status": "unverified"},
+  "evidenceRefs": ["example:testing-principle"]
+}

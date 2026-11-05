@@ -1,0 +1,6 @@
+{
+  "id": "draft.unverified", "kind": "experience", "title": "Unverified private prototype",
+  "claim": "This document must NEVER be retrieved or injected.",
+  "keywords": ["unverified", "private"],
+  "status": "candidate", "sharing": "private", "evidenceRefs": []
+}

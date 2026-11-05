@@ -1,0 +1,12 @@
+{
+  "id": "context-engineering", "version": "0.1.0", "description": "Cross-project context composition patterns",
+  "stableKnowledgeIds": ["context.foundations"],
+  "knowledgeFiles": ["knowledge/context.foundations.json", "knowledge/context.prefix-cache.json", "knowledge/context.cache-metrics.json"],
+  "profiles": {
+    "cache": {
+      "knowledgeIds": ["context.foundations", "context.prefix-cache", "context.cache-metrics"],
+      "stableKnowledgeIds": ["context.foundations"],
+      "dependencies": [{"id": "pi-sdk", "version": "0.1.0", "profile": "core"}]
+    }
+  }
+}

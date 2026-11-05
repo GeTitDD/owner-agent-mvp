@@ -1,0 +1,63 @@
+{
+  "project": {
+    "id": "pi-service-research",
+    "primaryDomain": "pi-sdk",
+    "notes": "Server-side agent for service requests; do not use client-side filesystem assumptions.",
+    "environment": {
+      "runtime": "Node.js 22",
+      "platform": "linux-container",
+      "dependencies": {
+        "pi-sdk": "version-under-test"
+      },
+      "capabilities": {
+        "prefix_cache": false,
+        "isolated_runner": false
+      }
+    },
+    "requirements": {
+      "ids": [
+        "tenant-safety",
+        "auditability"
+      ],
+      "goals": [
+        "Prototype a tenant-safe context composer"
+      ],
+      "constraints": {
+        "multi_tenant": true
+      }
+    },
+    "decisions": [
+      {
+        "id": "tenant-gating",
+        "summary": "Access to project-scoped knowledge must remain tenant-isolated."
+      }
+    ]
+  },
+  "domainRoot": "../../domains",
+  "domains": [
+    {
+      "id": "context-engineering",
+      "version": "0.1.0",
+      "profile": "cache"
+    },
+    {
+      "id": "software-testing",
+      "version": "0.1.0",
+      "profile": "experiments"
+    }
+  ],
+  "projectKnowledgeFiles": [
+    "knowledge/service-boundary.json"
+  ],
+  "context": {
+    "maxTokens": 2400
+  },
+  "workspace": {
+    "enabled": true,
+    "importDomainIds": [
+      "pi-sdk",
+      "context-engineering"
+    ],
+    "includeProject": true
+  }
+}

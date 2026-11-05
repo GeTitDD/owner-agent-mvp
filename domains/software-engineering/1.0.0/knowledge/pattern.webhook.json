@@ -1,0 +1,6 @@
+{
+  "id": "pattern.webhook", "kind": "pattern", "title": "Webhook duplicates and authenticity",
+  "claim": "Verify webhook authenticity before acting, identify event IDs, and process duplicate deliveries idempotently; validate signatures using the unmodified raw request body where required.",
+  "keywords": ["webhook", "delivery", "duplicate", "signature", "security"],
+  "status": "published", "sharing": "shared", "evidenceRefs": ["demo-reviewed:5"]
+}

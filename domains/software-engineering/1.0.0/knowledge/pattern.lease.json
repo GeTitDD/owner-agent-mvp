@@ -1,0 +1,6 @@
+{
+  "id": "pattern.lease", "kind": "pattern", "title": "Worker lease and recovery",
+  "claim": "A queue worker lease must expire or be renewed, and a recovered job must not cause an unchecked duplicate side effect; test crash and stale-worker races.",
+  "keywords": ["lease", "queue", "worker", "expiry", "heartbeat", "retry", "crash"],
+  "status": "published", "sharing": "shared", "evidenceRefs": ["demo-reviewed:4"]
+}

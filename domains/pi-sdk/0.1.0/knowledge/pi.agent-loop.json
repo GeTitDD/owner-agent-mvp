@@ -1,0 +1,8 @@
+{
+  "id": "pi.agent-loop", "layer": "domain", "kind": "concept",
+  "title": "Pi agent and tool loop",
+  "claim": "Pi's agent runtime coordinates model calls and tools; individual extensions supply integration behavior. Check the concrete Pi version before relying on lifecycle details.",
+  "keywords": ["pi", "agent", "tools", "harness", "loop"],
+  "status": "published", "sharing": "shared", "verification": {"status": "unverified"},
+  "evidenceRefs": ["example:pi-docs-reference"]
+}

@@ -1,0 +1,16 @@
+{
+  "id": "software-engineering",
+  "version": "1.0.0",
+  "description": "Shared reliability lessons for software agent projects",
+  "stableKnowledgeIds": ["invariant.validation", "invariant.privacy"],
+  "knowledgeFiles": [
+    "knowledge/invariant.validation.json",
+    "knowledge/invariant.privacy.json",
+    "knowledge/pattern.idempotency.json",
+    "knowledge/pattern.lease.json",
+    "knowledge/pattern.webhook.json",
+    "knowledge/pattern.outbox.json",
+    "knowledge/draft.unverified.json"
+  ],
+  "skillDirs": ["skills/reliable-retries"]
+}

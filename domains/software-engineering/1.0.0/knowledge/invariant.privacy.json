@@ -1,0 +1,6 @@
+{
+  "id": "invariant.privacy", "kind": "invariant", "title": "Do not expose project secrets",
+  "claim": "Shared domain knowledge must exclude secrets, credentials, client-specific code, and private project data; respect local policies over shared advisory examples.",
+  "keywords": ["security", "privacy", "permission", "tenant"],
+  "status": "published", "sharing": "shared", "evidenceRefs": ["demo-reviewed:2"]
+}

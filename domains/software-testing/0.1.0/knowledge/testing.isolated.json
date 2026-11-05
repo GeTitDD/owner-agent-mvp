@@ -1,0 +1,8 @@
+{
+  "id": "testing.isolated", "layer": "applied", "kind": "pattern", "title": "Use an isolated experiment runner",
+  "claim": "In projects with an isolated runner, execute version-pinned experiments there and preserve test commands and artifacts.",
+  "keywords": ["experiment", "isolated", "runner", "testing"],
+  "status": "published", "sharing": "shared", "verification": {"status": "unverified"},
+  "applicability": {"requires": [{"source": "environment", "path": "capabilities.isolated_runner", "op": "eq", "value": true}]},
+  "evidenceRefs": ["example:runner-check"]
+}

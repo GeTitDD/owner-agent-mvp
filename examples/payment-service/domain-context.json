@@ -1,0 +1,19 @@
+{
+  "project": {
+    "id": "payment-service",
+    "notes": "TypeScript payment backend; database writes must be atomic."
+  },
+  "domainRoot": "../../domains",
+  "domains": [
+    {
+      "id": "software-engineering",
+      "version": "1.0.0"
+    }
+  ],
+  "context": {
+    "maxTokens": 1500
+  },
+  "evolution": {
+    "capture": "metadata"
+  }
+}

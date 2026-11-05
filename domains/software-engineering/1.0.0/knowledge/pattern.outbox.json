@@ -1,0 +1,6 @@
+{
+  "id": "pattern.outbox", "kind": "pattern", "title": "Transactional outbox for events",
+  "claim": "If a database state change and event publication must agree, persist the event in an outbox transaction and publish asynchronously with deduplication and retry recovery.",
+  "keywords": ["outbox", "event", "transaction", "publish", "database"],
+  "status": "published", "sharing": "shared", "evidenceRefs": ["demo-reviewed:6"]
+}

@@ -1,0 +1,9 @@
+{
+  "id": "context.cache-metrics", "layer": "applied", "kind": "pattern", "title": "Collect provider cache telemetry",
+  "claim": "When a provider exposes usage metrics for cached input, record them alongside model and request configuration for cache experiments.",
+  "keywords": ["metrics", "cache", "usage", "telemetry", "tokens"],
+  "status": "published", "sharing": "shared", "verification": {"status": "unverified"},
+  "applicability": {"requires": [
+    {"source": "environment", "path": "capabilities.cache_metrics", "op": "eq", "value": true}
+  ]}, "evidenceRefs": ["example:provider-observability-test"]
+}

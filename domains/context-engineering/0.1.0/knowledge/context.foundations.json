@@ -1,0 +1,7 @@
+{
+  "id": "context.foundations", "layer": "domain", "kind": "concept", "title": "Separate reusable and task-specific context",
+  "claim": "A reusable domain context and project-task context have different lifetimes; represent them as distinct compilation inputs, not one mutable shared document.",
+  "keywords": ["context", "shared", "task", "compilation"],
+  "status": "published", "sharing": "shared", "verification": {"status": "unverified"},
+  "evidenceRefs": ["example:architecture-review"]
+}

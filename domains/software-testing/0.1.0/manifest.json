@@ -1,0 +1,6 @@
+{
+  "id": "software-testing", "version": "0.1.0", "description": "Experimental validation patterns",
+  "stableKnowledgeIds": ["testing.evidence"],
+  "knowledgeFiles": ["knowledge/testing.evidence.json", "knowledge/testing.isolated.json"],
+  "profiles": {"experiments": {"knowledgeIds": ["testing.evidence", "testing.isolated"], "stableKnowledgeIds": ["testing.evidence"]}}
+}

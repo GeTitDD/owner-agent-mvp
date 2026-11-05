@@ -1,0 +1,19 @@
+{
+  "project": {
+    "id": "queue-worker",
+    "notes": "Worker jobs can be redelivered after lease expiry."
+  },
+  "domainRoot": "../../domains",
+  "domains": [
+    {
+      "id": "software-engineering",
+      "version": "1.0.0"
+    }
+  ],
+  "context": {
+    "maxTokens": 1500
+  },
+  "evolution": {
+    "capture": "metadata"
+  }
+}

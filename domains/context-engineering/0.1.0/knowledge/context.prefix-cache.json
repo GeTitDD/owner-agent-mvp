@@ -1,0 +1,10 @@
+{
+  "id": "context.prefix-cache", "layer": "applied", "kind": "pattern", "title": "Stable prefix caching strategy",
+  "claim": "Where the selected provider supports prefix caching, put stable shared context before variable task data and measure actual cached-token usage; identical text alone does not guarantee a cache hit.",
+  "keywords": ["prefix", "cache", "stable", "latency", "tokens"],
+  "status": "published", "sharing": "shared", "verification": {"status": "unverified"},
+  "applicability": {"requires": [
+    {"source": "environment", "path": "capabilities.prefix_cache", "op": "eq", "value": true},
+    {"source": "requirements", "path": "ids", "op": "contains", "value": "reduce-latency"}
+  ]}, "evidenceRefs": ["example:prefix-cache-experiment"]
+}
