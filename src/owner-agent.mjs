@@ -14,13 +14,14 @@ export class OwnerAgent {
         items.push({kind:'tool-errors',projectId:p.id,priority:'normal',title:`${p.name} 的一次 Pi 运行记录了 ${run.errors} 个工具错误`,evidence:[`session:${run.session_id}`]});
     }
     if(s.pendingSuggestions)items.push({kind:'review',priority:'normal',title:`${s.pendingSuggestions} 条跨项目知识迁移建议待审批`,evidence:this.store.listSuggestions('pending').map(x=>`suggestion:${x.id}`)});
-    const jobs=this.store.listJobs({limit:200});const nowStamp=new Date().toISOString();
-    const stuck=jobs.filter(j=>j.status==='needs_reconciliation');
-    if(stuck.length)items.push({kind:'job-stuck',priority:'high',title:`${stuck.length} 个执行 Job 租约过期，等待人工裁定`,evidence:stuck.map(j=>`job:${j.id}`)});
-    const expiredLease=jobs.filter(j=>['leased','running','cancel_requested'].includes(j.status)&&j.lease_until&&j.lease_until<nowStamp);
+    const counts=this.store.jobStatusCounts();const nowStamp=new Date().toISOString();
+    const stuck=this.store.listJobs({status:'needs_reconciliation',limit:100});
+    const stuckTotal=counts['needs_reconciliation']??0;
+    if(stuckTotal)items.push({kind:'job-stuck',priority:'high',title:`${stuckTotal} 个执行 Job 租约过期，等待人工裁定`,evidence:stuck.map(j=>`job:${j.id}`)});
+    const expiredLease=this.store.listJobsWithExpiredLeases({now:nowStamp,limit:100});
     if(expiredLease.length)items.push({kind:'job-lease-expired',priority:'high',title:`${expiredLease.length} 个执行 Job 租约已过期，尚未标记裁定`,evidence:expiredLease.map(j=>`job:${j.id}`)});
-    const awaitingJobs=jobs.filter(j=>j.status==='pending_approval');
-    if(awaitingJobs.length)items.push({kind:'job-approval',priority:'normal',title:`${awaitingJobs.length} 个执行 Job 待审批`,evidence:awaitingJobs.map(j=>`job:${j.id}`)});
+    const awaitingTotal=counts['pending_approval']??0;
+    if(awaitingTotal)items.push({kind:'job-approval',priority:'normal',title:`${awaitingTotal} 个执行 Job 待审批`,evidence:this.store.listJobs({status:'pending_approval',limit:100}).map(j=>`job:${j.id}`)});
     return items;
   }
   answer(question){
@@ -36,14 +37,15 @@ export class OwnerAgent {
       return {answer:suggestions.length?suggestions.map(x=>`${x.source_project_id} → ${x.target_project_id}：${x.rationale}（${x.status}，suggestion:${x.id}）`).join('\n'):'暂无待审核的跨项目知识迁移建议。',basis:suggestions.map(x=>`suggestion:${x.id}`),mode:'local-rules'};
     }
     if(/(执行|job|队列)/i.test(q)){
-      const jobs=this.store.listJobs({limit:200});
-      const active=jobs.filter(j=>['queued','leased','running','cancel_requested'].includes(j.status));
-      const waiting=jobs.filter(j=>j.status==='pending_approval');
-      const stuck=jobs.filter(j=>j.status==='needs_reconciliation');
-      const lines=[`共 ${jobs.length} 个执行 Job：管道中 ${active.length}，待审批 ${waiting.length}，待裁定 ${stuck.length}。`];
-      for(const j of [...active,...waiting,...stuck].slice(0,8))lines.push(`${j.project_id} · ${j.job_type} · ${j.title}（job:${j.id}，状态 ${j.status}，已尝试 ${j.last_attempt} 次）`);
+      const counts=this.store.jobStatusCounts();
+      const active=['queued','leased','running','cancel_requested'].reduce((sum,st)=>sum+(counts[st]??0),0);
+      const waiting=counts['pending_approval']??0;
+      const stuck=counts['needs_reconciliation']??0;
+      const total=Object.values(counts).reduce((sum,n)=>sum+n,0);
+      const lines=[`共 ${total} 个执行 Job：管道中 ${active}，待审批 ${waiting}，待裁定 ${stuck}。`];
+      for(const j of this.store.listJobs({limit:8}))lines.push(`${j.project_id} · ${j.job_type} · ${j.title}（job:${j.id}，状态 ${j.status}，已尝试 ${j.last_attempt} 次）`);
       lines.push('注意：Job 状态均来自持久化登记，不代表已检查项目源码或真实执行结果。');
-      return {answer:lines.join('\n'),basis:jobs.slice(0,10).map(j=>`job:${j.id}`),mode:'local-rules'};
+      return {answer:lines.join('\n'),basis:this.store.listJobs({limit:10}).map(j=>`job:${j.id}`),mode:'local-rules'};
     }
     if(project){
       const projectJobs=project.jobs??[];const inPipeline=projectJobs.filter(j=>['queued','leased','running','cancel_requested'].includes(j.status)).length;

@@ -256,12 +256,15 @@ export class OwnerStore {
       const dup=this.db.prepare('SELECT * FROM owner_jobs WHERE project_id=? AND idempotency_key=?').get(projectId,idempotencyKey);
       if(dup){
         check(dup.job_type===jobType&&dup.payload===digest,'Idempotency key reused with a different request payload',409);
+        // The target owner task is part of the idempotency identity: resubmitting the same
+        // request against another task must conflict instead of silently re-pointing the job.
+        check((dup.owner_task_id??null)===(ownerTaskId||null),'Idempotency key reused with a different target owner task',409);
         this.db.exec('COMMIT');return {...jobRow(dup),duplicate:true};
       }
       const id=randomUUID();
       this.db.prepare(`INSERT INTO owner_jobs(id,project_id,owner_task_id,job_type,title,payload,status,idempotency_key,created_at,updated_at)
         VALUES(?,?,?,?,?,?,'pending_approval',?,?,?)`).run(id,projectId,ownerTaskId||null,jobType,txt(title,'job title',200),digest,idempotencyKey,now,now);
-      this.jobAudit(id,'created',actor,jobType,'',now);
+      this.jobAudit(id,'created',actor,jobType,now);
       this.db.exec('COMMIT');return this.getJob(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -272,9 +275,17 @@ export class OwnerStore {
   listJobs({projectId='',status='',limit=50}={}){
     check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
     check(!status||jobFilterStatuses.has(status),'Invalid job status filter');
-    const rows=projectId?this.db.prepare('SELECT * FROM owner_jobs WHERE project_id=? ORDER BY created_at DESC,id DESC LIMIT ?').all(projectId,limit):
-      this.db.prepare('SELECT * FROM owner_jobs ORDER BY created_at DESC,id DESC LIMIT ?').all(limit);
-    return rows.map(jobRow).filter(j=>!status||j.status===status);}
+    const where=[];const params=[];
+    if(projectId){where.push('project_id=?');params.push(projectId);}
+    if(status){where.push('status=?');params.push(status);}
+    const sql=`SELECT * FROM owner_jobs ${where.length?`WHERE ${where.join(' AND ')}`:''} ORDER BY created_at DESC,id DESC LIMIT ?`;
+    return this.db.prepare(sql).all(...params,limit).map(jobRow);}
+  // True full-table counts per status: summary and attention must not silently under-report
+  // just because a listing was capped.
+  jobStatusCounts(){const counts={};for(const r of this.db.prepare('SELECT status,COUNT(*) AS n FROM owner_jobs GROUP BY status').all())counts[r.status]=r.n;return counts;}
+  listJobsWithExpiredLeases({now=stamp(),limit=100}={}){
+    check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
+    return this.db.prepare(`SELECT * FROM owner_jobs WHERE status IN ('leased','running','cancel_requested') AND lease_until IS NOT NULL AND lease_until<? ORDER BY lease_until,id LIMIT ?`).all(now,limit).map(jobRow);}
   listJobEvents(jobId,{limit=200}={}){
     check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
     return this.db.prepare('SELECT seq,at,actor,action,detail FROM owner_job_events WHERE job_id=? ORDER BY seq LIMIT ?').all(jobId,limit);}
@@ -347,6 +358,8 @@ export class OwnerStore {
       check(att.worker_id===workerId,'Attempt belongs to a different worker',403);
       check(att.status==='claimed',`Attempt in status ${att.status} cannot start`,409);
       check(row.status==='leased',`Job in status ${row.status} cannot start`,409);
+      // A worker whose lease expired must stop even before the reconcile scan quarantines the job.
+      check(row.lease_until&&row.lease_until>=now,'Lease already expired; explicit reconciliation is required',409);
       this.db.prepare(`UPDATE owner_job_attempts SET status='running',started_at=? WHERE id=? AND status='claimed'`).run(now,att.id);
       const changed=this.db.prepare(`UPDATE owner_jobs SET status='running',updated_at=? WHERE id=? AND status='leased'`).run(now,jobId);
       check(changed.changes===1,'Job status changed concurrently',409);
@@ -399,6 +412,8 @@ export class OwnerStore {
       check(att.attempt===row.last_attempt,'Only the latest attempt may confirm cancellation',409);
       check(['claimed','running'].includes(att.status),`Attempt in status ${att.status} cannot confirm cancellation`,409);
       check(row.status==='cancel_requested',`Job in status ${row.status} is not awaiting cancellation`,409);
+      // Confirmation after lease expiry goes through human reconciliation, not the old worker.
+      check(row.lease_until&&row.lease_until>=now,'Lease already expired; explicit reconciliation is required',409);
       const safeNote=txt(note,'result note',400,false);
       this.db.prepare(`UPDATE owner_job_attempts SET status='cancelled',finished_at=?,result_note=? WHERE id=? AND status IN ('claimed','running')`).run(now,safeNote,att.id);
       const changed=this.db.prepare(`UPDATE owner_jobs SET status='cancelled',finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status='cancel_requested'`).run(now,now,jobId);
@@ -427,14 +442,17 @@ export class OwnerStore {
     this.db.exec('BEGIN IMMEDIATE');
     try{
       const row=this.getJobRow(id);check(!!row,'Unknown job',404);check(row.status==='needs_reconciliation',`Job in status ${row.status} does not need reconciliation`,409);
-      actor=txt(actor,'actor',80);const safeReason=txt(reason,'reason',400,false);
+      actor=txt(actor,'actor',80);
       if(decision==='requeue'){
+        // Crash recovery may repeat unknown external side effects; a recorded safety review is mandatory.
+        const safeReason=txt(reason,'reconcile reason',400);
         const active=this.db.prepare(`SELECT COUNT(*) AS n FROM owner_jobs WHERE project_id=? AND status IN ('queued','leased','running','cancel_requested')`).get(row.project_id).n;
         check(active<this.maxActiveJobsPerProject,'Project already has an active job; per-project limit blocks requeue',409);
         const changed=this.db.prepare(`UPDATE owner_jobs SET status='queued',lease_until=NULL,cancel_requested_at=NULL,finished_at=NULL,updated_at=? WHERE id=? AND status='needs_reconciliation'`).run(now,id);
         check(changed.changes===1,'Job status changed concurrently',409);
         this.jobAudit(id,'requeued',actor,safeReason,now);
       }else{
+        const safeReason=txt(reason,'reason',400,false);
         const target=decision==='cancel'?'cancelled':'failed';
         const changed=this.db.prepare(`UPDATE owner_jobs SET status=?,finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status='needs_reconciliation'`).run(target,now,now,id);
         check(changed.changes===1,'Job status changed concurrently',409);
@@ -444,13 +462,14 @@ export class OwnerStore {
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
   summary(){const projects=this.listProjects();const tasks=this.listTasks();const runs=this.listRuns();const pending=this.listSuggestions('pending');
-    const jobs=this.listJobs({limit:500});
+    const counts=this.jobStatusCounts();
     return {projectCount:projects.length,activeRuns:runs.filter(r=>r.status==='running').length,
       blockedTasks:tasks.filter(t=>t.status==='blocked').length,pendingSuggestions:pending.length,
-      activeJobs:jobs.filter(j=>activeJobStatuses.has(j.status)).length,
-      pendingJobApprovals:jobs.filter(j=>j.status==='pending_approval').length,
-      stuckJobs:jobs.filter(j=>j.status==='needs_reconciliation').length,
+      activeJobs:['queued','leased','running','cancel_requested'].reduce((sum,st)=>sum+(counts[st]??0),0),
+      pendingJobApprovals:counts['pending_approval']??0,
+      stuckJobs:counts['needs_reconciliation']??0,
+      totalJobs:Object.values(counts).reduce((sum,n)=>sum+n,0),
       projects:projects.map(p=>({...p,tasks:tasks.filter(t=>t.project_id===p.id),
         runs:runs.filter(r=>r.project_id===p.id).slice(0,8),knowledgeLinks:this.knowledgeLinks(p.id),
-        jobs:jobs.filter(j=>j.project_id===p.id).slice(0,8)}))};}
+        jobs:this.listJobs({projectId:p.id,limit:8})}))};}
 }
