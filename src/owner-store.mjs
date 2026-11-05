@@ -1,7 +1,7 @@
 // Local, owner-centric project/event registry. All durable facts are explicit records,
 // not summaries inferred from an LLM conversation. No source code or prompt capture.
 import { DatabaseSync } from 'node:sqlite';
-import { realpathSync, mkdirSync, statSync } from 'node:fs';
+import { realpathSync, mkdirSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { defaultDbPath } from './storage.mjs';
@@ -154,7 +154,17 @@ export class OwnerStore {
     check(statuses.has(status),'Invalid project status');
     check(typeof root==='string'&&root.length<=1500,'Invalid path');
     let resolved;try{resolved=realpathSync(root);}catch{throw new OwnerInputError('Project directory must already exist');}
-    let rootIdentity='';try{const st=statSync(resolved,{bigint:true});rootIdentity=sha256(`${st.dev}:${st.ino}`).slice(0,32);}catch{/* stat unavailable: drift check skipped for this project */}
+    // Root identity marker: a small file inside the root pins the directory identity
+    // (sha256 of its dev/ino). A file keeps its id across renames and a fresh one always
+    // carries a new id, so drift detection (deleted/recreated/swapped root) is
+    // deterministic on every platform. Best-effort, not adversarial fencing.
+    let rootIdentity='';
+    try{
+      const markerPath=path.join(resolved,'.owner-root-identity');
+      if(!existsSync(markerPath))writeFileSync(markerPath,stamp(),{encoding:'utf8',flag:'wx'});
+      const st=statSync(markerPath,{bigint:true});
+      rootIdentity=sha256(`${st.dev}:${st.ino}`).slice(0,32);
+    }catch{/* stat/write unavailable: drift check skipped for this project */}
     const cleanedDomains=safeArray(domains,'domains');
     const cleanedImports=safeArray(imports,'imports');
     check(cleanedDomains.length>0||!!primaryDomain,'Project needs at least one domain');

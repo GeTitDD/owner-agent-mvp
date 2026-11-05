@@ -3,11 +3,16 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
 import { mkdtemp,rm,realpath } from 'node:fs/promises';
-import fs from 'node:fs';
+import fs, { mkdirSync,renameSync,statSync } from 'node:fs';
 import { OwnerStore } from '../src/owner-store.mjs';
 import { OwnerAgent } from '../src/owner-agent.mjs';
 import { PiAnalysisWorker } from '../src/pi-analysis-worker.mjs';
 import { DefaultPiSessionFactory } from '../src/pi-session-factory.mjs';
+import { sha256 } from '../src/utils.mjs';
+
+// Deterministic fake clock — lease/expiry assertions use injected timestamps, no sleeps.
+const clock=(start='2026-07-01T00:00:00.000Z')=>{let t=Date.parse(start);
+  return {now:()=>new Date(t).toISOString(),advanceMs:(ms)=>{t+=ms;return new Date(t).toISOString();}};};
 
 // Condition-based wait: async fs (realpath etc.) is real I/O, so a single setImmediate
 // is not enough. Poll until the expected state appears; bounded by a real timeout.
@@ -15,12 +20,10 @@ const waitFor=(fn,label,ms=2000)=>new Promise((resolve,reject)=>{
   const start=Date.now();
   const timer=setInterval(()=>{try{if(fn()){clearInterval(timer);resolve();return;}}catch{/* retry */}if(Date.now()-start>ms){clearInterval(timer);reject(new Error('waitFor timeout: '+label));}},5);
 });
-// Deterministic fake clock — lease/expiry assertions use injected timestamps, no sleeps.
-const clock=(start='2026-07-01T00:00:00.000Z')=>{let t=Date.parse(start);
-  return {now:()=>new Date(t).toISOString(),advanceMs:(ms)=>{t+=ms;return new Date(t).toISOString();}};};
 
 // Manual timers: the worker registers its watchdog/timeout handles through this object;
 // tests fire ticks explicitly, so lease renewal and cancel handling are deterministic.
+// handles.size doubles as a leak detector: a completed runOnce must clear every handle.
 const manualTimers=()=>{const handles=new Map();let next=1;
   return {handles,
     interval:(fn,ms)=>{const id=next++;handles.set(id,{fn,ms});return id;},
@@ -56,7 +59,7 @@ const withStore=async cb=>{const dir=await mkdtemp(path.join(os.tmpdir(),'pi-wor
     try{store.registerProject({id:'proj-b',name:'Project B',root:other,primaryDomain:'pi-sdk'});
       return await cb({store,dbPath,dir,other,clock:clock()});
     }finally{await rm(other,{recursive:true,force:true});}
-  }finally{store.close();await rm(dir,{recursive:true,force:true});}};
+  }finally{try{store.close();}catch{/* reopen tests may already have closed it */}await rm(dir,{recursive:true,force:true});}};
 
 const submitPiJob=(store,{projectId,taskTitle='分析重试实现',taskNote='检查 idempotency 与 lease 恢复',key,taskId}={})=>{
   const id=taskId??store.createTask({projectId,title:taskTitle,note:taskNote}).id;
@@ -64,13 +67,15 @@ const submitPiJob=(store,{projectId,taskTitle='分析重试实现',taskNote='检
 };
 
 test('[pi#1] an unapproved pi-analysis job can never reach the session factory',()=>withStore(async({store,clock})=>{
-  const factory=makeFactory();
-  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,leaseMs:30000,timers:manualTimers()});
   const job=submitPiJob(store,{projectId:'proj-a',key:'u1'});
   assert.equal(job.status,'pending_approval');
+  const factory=makeFactory();
+  const timers=manualTimers();
+  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,timers});
   const r=await worker.runOnce({projectId:'proj-a'});
   assert.deepEqual(r,{claimed:false,reason:'no-queued-job'});
   assert.equal(factory.createCalls.length,0,'no session without approval');
+  assert.equal(timers.handles.size,0);
   store.rejectJob(job.id,{reason:'not needed'});
   assert.equal(factory.createCalls.length,0);
 }));
@@ -112,7 +117,6 @@ test('[pi#4] happy path: registered cwd, empty tools, bounded hashed result, tas
   assert.equal(result.project_id,'proj-a');assert.equal(result.attempt,1);
   assert.equal(result.session_id,factory.sessions[0].sessionId());
   assert.equal(result.model,'fake/glm-x');assert.equal(result.usage,'unknown');
-  const {sha256}=await import('../src/utils.mjs');
   assert.equal(result.content_hash,sha256(result.content));
   // attempt + job state
   const full=store.getJob(job.id);
@@ -124,13 +128,15 @@ test('[pi#4] happy path: registered cwd, empty tools, bounded hashed result, tas
   assert.doesNotMatch(blob,/检查 idempotency 与 lease 恢复/);
   // owner task untouched by model success
   assert.equal(store.getTask(task.id).status,'todo');
+  assert.equal(timers.handles.size,0,'no timer leaked');
 }));
 
 test('[pi#5] fail-closed: a non-empty active tool set aborts the attempt before any prompt',()=>withStore(async({store,clock})=>{
   const job=submitPiJob(store,{projectId:'proj-a',key:'fc1'});
   store.approveJob(job.id,{now:clock.now()});
   const factory=makeFactory({tools:['web_search','fetch_content']});
-  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,timers:manualTimers()});
+  const timers=manualTimers();
+  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,timers});
   const r=await worker.runOnce({projectId:'proj-a'});
   assert.equal(r.outcome,'failed');
   assert.equal(factory.sessions[0].prompts.length,0,'no prompt sent to an unsafe session');
@@ -139,6 +145,7 @@ test('[pi#5] fail-closed: a non-empty active tool set aborts the attempt before 
   assert.equal(store.getJob(job.id).status,'failed');
   assert.match(store.getJob(job.id).attempts[0].result_note,/tool isolation verification failed \(2 active tools\)/);
   assert.equal(store.listJobResults(job.id).length,0);
+  assert.equal(timers.handles.size,0,'no timer leaked');
 }));
 
 test('[pi#6] stop request during a long analysis aborts the session and lands cancelled',()=>withStore(async({store,clock})=>{
@@ -161,6 +168,7 @@ test('[pi#6] stop request during a long analysis aborts the session and lands ca
   assert.equal(store.getJob(job.id).status,'cancelled');
   assert.equal(session.disposed,true);
   assert.equal(store.getTask(job.owner_task_id).status,'todo');
+  assert.equal(timers.handles.size,0,'no timer leaked');
 }));
 
 test('[pi#7] analysis timeout aborts the session and reports failure, never success',()=>withStore(async({store,clock})=>{
@@ -187,11 +195,13 @@ test('[pi#8] a fenced worker stops silently; reconcile quarantines; late results
   await waitFor(()=>factory.sessions.length===1,'session created');
   clock.advanceMs(5000); // lease gone; worker unaware until its next tick
   const tickId=[...timers.handles.entries()].find(([,h])=>h.ms===333)?.[0];
-  timers.fire(tickId); // heartbeat fails silently inside the guard
+  timers.fire(tickId); // heartbeat fails silently inside the guard; session aborted
   factory.sessions[0]._resolve?.();
   const r=await pending;
   assert.equal(r.outcome,'fenced','fenced workers do not report');
   assert.equal(store.getJob(job.id).status,'running','no silent status rewrite');
+  assert.equal(store.getJob(job.id).attempts[0].status,'running');
+  assert.equal(store.listJobResults(job.id).length,0,'fenced attempts store no artifact');
   store.reconcileExpiredLeases({now:clock.now()});
   assert.equal(store.getJob(job.id).status,'needs_reconciliation');
   assert.equal(store.getJob(job.id).attempts[0].status,'orphaned');
@@ -229,7 +239,7 @@ test('[pi#10] heartbeat keeps cancel_requested leases alive during the abort wai
   store.startJob(job.id,1,{workerId:'w',now:clock.now()});
   store.requestCancelJob(job.id,{now:clock.now()});
   const beat=store.heartbeatJob(job.id,1,{workerId:'w',now:clock.now(),leaseMs:60000});
-  assert.equal(beat.lease_until,new Date(Date.parse(clock.now())+60000).toISOString(),'cancel_requested still renews its lease');
+  assert.equal(beat.lease_until,new Date(Date.parse(clock.now())+60000).toISOString());
   assert.equal(store.getJob(job.id).status,'cancel_requested');
 }));
 
@@ -371,7 +381,6 @@ test('[pi-r2 #5] result and terminal state commit atomically; invalid commits cr
   assert.equal(store.getJob(job.id).status,'succeeded');
   assert.equal(store.listJobResults(job.id).length,1);
   const result=store.getJobResult(ok.result.id);
-  const {sha256}=await import('../src/utils.mjs');
   assert.equal(result.content_hash,sha256('原子提交的结论'));
   assert.equal(result.attempt,2);
 }));
@@ -446,20 +455,38 @@ test('[pi-r2 create-deadline] a hung factory.create converges: silent fence, sca
   assert.equal(store.listJobResults(job.id).length,0);
 }));
 
-test('[pi-r2 drift] a swapped project root is refused as project-root-moved',()=>withStore(async({store,dir})=>{
+test('[pi-r2 drift] a swapped project root is refused as project-root-moved (deterministic)',()=>withStore(async({store,dir,clock})=>{
   const real=path.join(dir,'drift-real');fs.mkdirSync(real,{recursive:true});
   store.registerProject({id:'drift',name:'Drift',root:real,primaryDomain:'pi-sdk'});
   const stored=store.getProject('drift');
   assert.ok(stored.root_identity&&stored.root_identity.length>0,'registration records the root identity');
-  const real2=path.join(dir,'drift-real-2');fs.mkdirSync(real2,{recursive:true});
-  // Replace the registered directory with a different one at the same path (the realistic
-  // drift case — no symlink privileges required on any platform).
-  fs.rmSync(real,{recursive:true,force:true});fs.mkdirSync(real,{recursive:true});
+  // A schedulable, approved job exists BEFORE the swap, so the drift check is exercised
+  // on a project that would otherwise run (review r3 #3).
+  const task=store.createTask({projectId:'drift',title:'drift task'});
+  const job=store.createJob({projectId:'drift',jobType:'pi-analysis',title:'j',payload:{},idempotencyKey:'d1',ownerTaskId:task.id});
+  store.approveJob(job.id,{now:clock.now()});
+  // renameSync moves the registered root (its identity marker travels with it, so the
+  // OLD identity survives under the backup path) and a FRESH directory takes the old
+  // path — a brand-new marker file with a brand-new identity. Deterministic on every
+  // platform, unlike rm+mkdir where the filesystem may reuse the inode (that flaked CI).
+  const backup=path.join(dir,'drift-backup');
+  renameSync(real,backup);
+  // The path now hosts a DIFFERENT project directory: fresh marker file with a fresh
+  // identity (the old marker survives under backup, so no inode reuse is possible).
+  fs.mkdirSync(real,{recursive:true});
+  fs.writeFileSync(path.join(real,'.owner-root-identity'),'fresh-root',{encoding:'utf8'});
+  const markerAt=filename=>path.join(filename,'.owner-root-identity');
+  const backupIdentity=sha256(`${statSync(markerAt(backup),{bigint:true}).dev}:${statSync(markerAt(backup),{bigint:true}).ino}`).slice(0,32);
+  assert.equal(backupIdentity,stored.root_identity,'rename preserved the old identity');
   const factory=makeFactory();
-  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,timers:manualTimers()});
+  const timers=manualTimers();
+  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,timers});
   const r=await worker.runOnce({projectId:'drift'});
   assert.deepEqual(r,{claimed:false,reason:'project-root-moved'});
   assert.equal(factory.createCalls.length,0,'no session for a moved project');
+  assert.equal(store.getJob(job.id).status,'queued','nothing scheduled under a moved root');
+  assert.equal(store.listJobResults(job.id).length,0);
+  assert.equal(timers.handles.size,0,'no timer leaked on the refusal path');
 }));
 
 test('[askPi isolation] non-empty tools fail closed; the factory session is disposed and never prompted',()=>withStore(async({store})=>{

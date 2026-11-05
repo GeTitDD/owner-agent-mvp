@@ -30,25 +30,32 @@ export const DefaultPiSessionFactory={
         cwd,agentDir,
         noExtensions:true,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true
       });
-      await loader.reload();
-      const {session}=await sdk.createAgentSession({
-        cwd,
-        noTools:true,
-        sessionManager:sdk.SessionManager.inMemory(),
-        resourceLoader:loader,
-        ...(model?{model}:{})
-      });
-      let disposed=false;
-      return {
-        sessionId:()=>String(session.sessionId??''),
-        prompt:(text)=>session.prompt(text),
-        abort:()=>session.abort?.(),
-        // null = the SDK offers no tool enumeration: unknown, NOT empty (fail closed).
-        activeTools:()=>typeof session.getActiveToolNames==='function'?[...session.getActiveToolNames()]:null,
-        getLastText:()=>String(session.getLastAssistantText?.()??''),
-        get model(){return session.model?`${session.model.provider}/${session.model.id}`:'unknown';},
-        dispose(){if(disposed)return;disposed=true;try{session.dispose?.();}finally{try{rmSync(agentDir,{recursive:true,force:true});}catch{/* best effort cleanup */}}}
-      };
+      try{
+        await loader.reload();
+        const {session}=await sdk.createAgentSession({
+          cwd,
+          noTools:true,
+          sessionManager:sdk.SessionManager.inMemory(),
+          resourceLoader:loader,
+          ...(model?{model}:{})
+        });
+        let disposed=false;
+        return {
+          sessionId:()=>String(session.sessionId??''),
+          prompt:(text)=>session.prompt(text),
+          abort:()=>session.abort?.(),
+          // null = the SDK offers no tool enumeration: unknown, NOT empty (fail closed).
+          activeTools:()=>typeof session.getActiveToolNames==='function'?[...session.getActiveToolNames()]:null,
+          getLastText:()=>String(session.getLastAssistantText?.()??''),
+          get model(){return session.model?`${session.model.provider}/${session.model.id}`:'unknown';},
+          dispose(){if(disposed)return;disposed=true;try{session.dispose?.();}finally{try{rmSync(agentDir,{recursive:true,force:true});}catch{/* best effort cleanup */}}}
+        };
+      }catch(e){
+        // Error path (loader.reload / createAgentSession rejects): the temp agentDir must
+        // be cleaned up too, not only on the success path.
+        try{rmSync(agentDir,{recursive:true,force:true});}catch{/* ignore */}
+        throw e;
+      }
     })();
     // Cancellable creation: when the caller aborts (e.g. a create-phase deadline), any
     // session that is eventually produced must be aborted+disposed and never prompted.

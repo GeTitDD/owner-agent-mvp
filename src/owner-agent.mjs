@@ -72,6 +72,9 @@ export class OwnerAgent {
       pendingSuggestions:this.store.listSuggestions('pending').map(x=>({id:x.id,source:x.source_project_id,target:x.target_project_id,knowledgeId:x.knowledge_id}))};
     const instructions=`你是以 Owner 为中心的只读项目管理助手。以下 JSON 是唯一已确认的数据来源。不得把未知状态表述为完成，不得声称已读取源码或运行测试。禁止提出未经证据支持的事实，逐条注明项目或任务 ID。无需调用工具，也不能执行任何修改。\n\n数据：${JSON.stringify(snapshot)}\n\nOwner 的问题：${q}`;
     if(createSession){
+      // TEST-COMPATIBILITY BYPASS: this branch exists so deterministic test hosts can
+      // inject a fake session without touching the real SDK. It provides none of the
+      // production isolation guarantees and must never be exposed to user-controlled input.
       const {session}=await createSession({noTools:true});
       try{
         await session.prompt(instructions);
