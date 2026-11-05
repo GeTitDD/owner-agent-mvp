@@ -6,21 +6,28 @@
 
 ```
 OwnerTask(人工) ──引用──▶ ExecutionJob(pi-analysis, pending_approval)
-        │                        │ Owner approve（含项目栅栏检查）
+        │                        │ Owner approve（含项目栅栏检查；**同时固定输入快照 input_snapshot**）
         │                        ▼
-        │              queued ──claim──▶ leased ──start──▶ running
+        │              queued ──claim(按 Worker 类型过滤)──▶ leased ──start──▶ running
+        │                                                │  watchdog 自 start 起覆盖全程（含 create 阶段）
         │                                                │  PiSessionFactory.create({cwd=注册项目根})
         │                                                │  ├─ 空 agentDir + noTools:true + inMemory
-        │                                                │  ├─ fail-closed：activeTools 必须为空
-        │                                                │  ├─ watchdog(leaseMs/3)：heartbeat + cancel→abort()
-        │                                                │  └─ prompt(受控模板) / timeout
+        │                                                │  ├─ **显式禁用全部资源发现**（noExtensions/
+        │                                                │  │  noSkills/noPromptTemplates/noThemes/
+        │                                                │  │  noContextFiles——项目 .pi/extensions 与
+        │                                                │  │  AGENTS.md 不会被加载，含真实施计验证）
+        │                                                │  ├─ fail-closed：activeTools 必须为空（未知=不安全）
+        │                                                │  ├─ watchdog：heartbeat + cancel→abort()
+        │                                                │  └─ prompt 前重校验租约/取消/栅栏
         │                                    ┌───────────┴────────────┐
         │                              abort 确认                 settled / error / timeout
         │                                    ▼                            ▼
-        └──(永不自动完成)◀── confirmCancel ──▶ cancelled      addJobResult(哈希+有界) → succeeded
+        └──(永不自动完成)◀── confirmCancel ──▶ cancelled   **原子提交** completeJobWithResult
+                                            （结果 INSERT + succeeded 终态同一事务；租约失效/取消
+                                             竞态不可能留下孤儿结果）→ succeeded
 ```
 
-Worker 失联（heartbeat 失败 / 进程丢失）：立即 `session.abort()` 停止花费、**静默停止不报告**，由 `jobs-reconcile` 扫描进入 `needs_reconciliation`；重排队必须附安全复核理由。迟到结果被 v0.6 状态机拒绝。
+**超时停止确认**：timeout → `abort()` → 有界等待 prompt settle（`abortConfirmMs`，默认 5s）→ 确认停止才落 `failed`；**未确认停止 → 静默进入人工裁定**（会话可能仍在运行，不得释放项目执行互斥）。
 
 ## PiSessionFactory 契约
 
@@ -44,9 +51,14 @@ factory.create({cwd, model?}) -> {
 
 ## 存储与最小化
 
-- `owner_job_attempts` 增列 `session_id`（守卫式 ALTER，可重入；仅非敏感会话 id）。
+- `owner_job_attempts` 增列 `session_id`（守卫式 ALTER，可重入；仅非敏感会话 id）；`owner_jobs` 增列 `input_snapshot`（审批事务内固定任务标题/说明，批准后的任务编辑不影响已批 Job）。
 - 新表 `owner_job_results`：项目私有产物（content ≤65536 字符、sha256 content_hash、model、truncated 标记、usage 默认 `unknown`——SDK usage 不可得时不编造）。
-- Job 行与审计事件只引用 `result:<id> sha:<8位> chars:<n>; tools:0; usage:unknown`；**prompt、回答原文、密钥、工具 I/O 一律不入库**（测试断言）。
+- Job 行与审计事件只引用 `chars:<n>; tools:0; usage:unknown`；**prompt、回答原文、密钥、工具 I/O、上游错误消息原文一律不入库**——错误只记固定分类（`session-aborted/timeout/auth-error/network-error/session-error`，有测试断言）。
+- 成功路径使用 `completeJobWithResult` **原子提交**：与 `reportJobResult` 相同的 Worker/Attempt/租约校验 + 结果 INSERT 在同一 `BEGIN IMMEDIATE` 事务内，租约失效/取消竞态不可能留下孤儿结果。
+
+## 队列一致性
+
+`claimNextJob` 支持 `allowedTypes` 过滤（SQL WHERE 下推）：Pi Worker 只承领 `pi-analysis`，FakeWorker 只承领 fake 类型——混合队列中错误类型不会被错误执行器承领后留在 leased 态（有混合队列测试）。
 
 ## 手动运行
 
@@ -69,6 +81,7 @@ OWNER_AGENT_REAL_PI_TEST=1 npm test        # 仅此环境变量+凭据可用时�
 
 ## 已知隔离限制（fail-closed 声明）
 
-- `tools:[]/noTools` 只约束内置工具；**扩展可通过生命周期钩子产生非工具行为**，本方案靠一次性空 agentDir 使扩展集合为空来消除，且每轮以 `activeTools()===[]` 验证工具面。若未来 SDK 出现绕过该验证的加载路径，应视为安全问题处理。
+- 资源发现**显式禁用**（`noExtensions/noSkills/noPromptTemplates/noThemes/noContextFiles`），并有真实施计验证：含 `.pi/extensions` 扩展与 AGENTS.md 的项目，经工厂创建的会话**不会加载它们**（对照实验：默认 loader + 显式信任则确实加载——检测手段有效，见 `tests/pi-isolation.test.mjs`）。
+- `activeTools()` 若 SDK 未来不提供枚举方法，适配器返回 `null` → Worker 视为"未知"按不安全处理（不是当作空集）。
 - 模型凭据来自本机 SDK 默认鉴权链路。若需要按项目隔离凭据，可改用 env 注入（如 `ZAI_API_KEY`），留待后续。
-- 只读靠「无工具 + 空扩展」保证，模型本身仍可能输出误导内容——产物仅是分析文本，不执行、不发布、不影响项目文件。
+- 只读靠「无工具 + 零资源加载」结构性保证，模型本身仍可能输出误导内容——产物仅是分析文本，不执行、不发布、不影响项目文件。

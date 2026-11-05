@@ -2,18 +2,18 @@
 //
 //   factory.create({cwd, model?}) -> session adapter:
 //     { sessionId(): string, prompt(text): Promise<void>, abort(): void|Promise,
-//       activeTools(): string[], getLastText(): string, model: string, dispose(): void }
+//       activeTools(): string[]|null, getLastText(): string, model: string, dispose(): void }
 //
-// Isolation policy (verified empirically against SDK 1.5.0 on this machine):
-// - The DEFAULT resource loader pulls in the user's global agent directory, which
-//   loaded 21 extension tools (web_search, fetch_content, pstack_*) into a
-//   noTools:true session. We therefore build every session against a fresh empty
-//   per-attempt agentDir; measured active tool set is [].
-// - Model credentials still resolve through the SDK default auth chain (env /
-//   global auth store). They are required for billing/auth only and carry no
-//   behavioral configuration; extensions/settings/skills stay isolated.
-// - The worker FAILS CLOSED: it verifies activeTools() is empty after create and
-//   aborts the attempt otherwise (see pi-analysis-worker.mjs).
+// Isolation policy (verified empirically against SDK 1.5.0):
+// - The DEFAULT resource loader pulls in the user's global agent directory AND discovers
+//   project-local `.pi/extensions` from cwd; on this machine the global dir alone loaded
+//   21 extension tools into a noTools:true session. We therefore build every session with
+//   an explicitly disabled loader (noExtensions/noSkills/noPromptTemplates/noThemes/
+//   noContextFiles) AND a fresh empty per-attempt agentDir; measured active tool set is [].
+// - activeTools() returns null when the SDK offers no way to enumerate tools; the worker
+//   must treat null as "unknown" and fail closed.
+// - Model credentials still resolve through the SDK default auth chain (env / global auth
+//   store). They are required for billing/auth only and carry no behavioral configuration.
 import path from 'node:path';
 import os from 'node:os';
 import { mkdtempSync,rmSync } from 'node:fs';
@@ -25,7 +25,12 @@ export const DefaultPiSessionFactory={
     const agentDir=mkdtempSync(path.join(os.tmpdir(),'owner-pi-agent-'));
     let loader;
     try{
-      loader=new sdk.DefaultResourceLoader({cwd,agentDir});
+      // Explicitly disable ALL resource discovery (global + project-local):
+      // extensions, skills, prompt templates, themes and context files (AGENTS.md etc.).
+      loader=new sdk.DefaultResourceLoader({
+        cwd,agentDir,
+        noExtensions:true,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true
+      });
       await loader.reload();
       const {session}=await sdk.createAgentSession({
         cwd,
@@ -39,7 +44,8 @@ export const DefaultPiSessionFactory={
         sessionId:()=>String(session.sessionId??''),
         prompt:(text)=>session.prompt(text),
         abort:()=>session.abort?.(),
-        activeTools:()=>[...(session.getActiveToolNames?.()??[])],
+        // null = the SDK offers no tool enumeration: unknown, NOT empty (fail closed).
+        activeTools:()=>typeof session.getActiveToolNames==='function'?[...session.getActiveToolNames()]:null,
         getLastText:()=>String(session.getLastAssistantText?.()??''),
         get model(){return session.model?`${session.model.provider}/${session.model.id}`:'unknown';},
         dispose(){if(disposed)return;disposed=true;try{session.dispose?.();}finally{try{rmSync(agentDir,{recursive:true,force:true});}catch{/* best effort cleanup */}}}

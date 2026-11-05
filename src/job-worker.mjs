@@ -25,7 +25,7 @@ export class FakeWorker {
     return this.behaviors[job.id]??this.behaviors[job.job_type]??(()=>({outcome:'succeeded',note:'fake-worker ok'}));
   }
   async runOnce({projectId='',behavior}={}){
-    const claim=this.store.claimNextJob(projectId,this.workerId,{now:this.clock(),leaseMs:this.leaseMs});
+    const claim=this.store.claimNextJob(projectId,this.workerId,{now:this.clock(),leaseMs:this.leaseMs,allowedTypes:['noop','status-note','fake-analysis']});
     if(!claim.claimed)return claim;
     const {job,attempt}=claim;
     // A stop request that arrived before start must win over execution.

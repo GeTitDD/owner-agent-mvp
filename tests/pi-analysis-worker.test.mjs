@@ -29,21 +29,24 @@ const manualTimers=()=>{const handles=new Map();let next=1;
     fire:(id)=>{const h=handles.get(id);if(h)h.fn();}};};
 
 // Fake Pi session + factory implementing the PiSessionFactory adapter contract.
-const makeFakeSession=({text='结构化分析：重试路径风险可控，建议补充幂等回归。',tools=[],model='fake/glm-x',sessionId='sess-fake',hang=false}={})=>{
+const makeFakeSession=({text='结构化分析：重试路径风险可控，建议补充幂等回归。',tools=[],model='fake/glm-x',sessionId='sess-fake',hang=false,hangAbort=false,promptError=null,failToolEnum=false}={})=>{
   const s={prompts:[],aborts:0,disposed:false,_resolve:null,tools:tools.slice(),
     sessionId:()=>sessionId,
-    activeTools:()=>s.tools.slice(),
-    prompt:(t)=>{s.prompts.push(t);if(hang)return new Promise(r=>{s._resolve=r;});return Promise.resolve();},
-    abort(){s.aborts++;try{s._resolve?.();}catch{/* already settled */}},
+    // failToolEnum simulates an SDK without tool enumeration: unknown, NOT empty.
+    activeTools:failToolEnum?()=>null:()=>s.tools.slice(),
+    prompt:(t)=>{s.prompts.push(t);if(promptError)return Promise.reject(promptError);if(hang)return new Promise(r=>{s._resolve=r;});return Promise.resolve();},
+    abort(){s.aborts++;if(!hangAbort)try{s._resolve?.();}catch{/* already settled */}},
     getLastText:()=>text,
     model,
     dispose(){s.disposed=true;}};
   return s;
 };
-const makeFactory=({text,tools,model,hang}={})=>{const f={createCalls:[],sessions:[],
+const makeFactory=({text,tools,model,hang,hangAbort,promptError,failToolEnum}={})=>{const f={createCalls:[],sessions:[],
   async create({cwd,model:m}){f.createCalls.push({cwd,model:m});
     const resolvedText=typeof text==='function'?text({cwd,model:m}):text;
-    const s=makeFakeSession({text:resolvedText,tools,model:model??'fake/glm-x',hang});s.cwd=cwd;f.sessions.push(s);return s;}};
+    const s=makeFakeSession({text:resolvedText,tools,model:model??'fake/glm-x',hang,hangAbort,promptError,failToolEnum});
+    s.cwd=cwd;
+    f.sessions.push(s);return s;}};
   return f;};
 
 const withStore=async cb=>{const dir=await mkdtemp(path.join(os.tmpdir(),'pi-worker-test-'));
@@ -114,7 +117,7 @@ test('[pi#4] happy path: registered cwd, empty tools, bounded hashed result, tas
   // attempt + job state
   const full=store.getJob(job.id);
   assert.equal(full.status,'succeeded');assert.equal(full.attempts[0].session_id,factory.sessions[0].sessionId());
-  assert.match(full.attempts[0].result_note,/result:/);assert.match(full.attempts[0].result_note,/usage:unknown/);
+  assert.match(full.attempts[0].result_note,/chars:/);assert.match(full.attempts[0].result_note,/usage:unknown/);
   // no prompt/answer text leaks into job rows or audit events
   const blob=JSON.stringify(full)+JSON.stringify(store.listEvents());
   assert.doesNotMatch(blob,/分析结论：重试风险可控/);
@@ -266,3 +269,148 @@ const REAL_PI=process.env.OWNER_AGENT_REAL_PI_TEST==='1';
     assert.equal(store.getTask(task.id).status,'todo');
   }finally{store.close();await rm(dir,{recursive:true,force:true});}
 });
+
+// ---- Review round 1 (PR #4) regression tests ----
+
+test('[pi-r2 #2] workers claim only their own job types in a mixed queue',()=>withStore(async({store,dbPath,clock})=>{
+  // limit 2 so both jobs can sit in the pipeline simultaneously; the OLDEST job is the
+  // wrong type for the pi worker — proving the type filter, not FIFO luck.
+  const tuned=new OwnerStore(dbPath,{maxActiveJobsPerProject:2});
+  try{
+    const fakeJob=tuned.createJob({projectId:'proj-a',jobType:'fake-analysis',title:'fake job',idempotencyKey:'mix-fake'});
+    const piJob=submitPiJob(tuned,{projectId:'proj-a',key:'mix-pi'});
+    tuned.approveJob(fakeJob.id,{now:clock.now()});tuned.approveJob(piJob.id,{now:clock.now()});
+    const piWorker=new PiAnalysisWorker(tuned,{sessionFactory:makeFactory(),clock:clock.now,timers:manualTimers()});
+    const rPi=await piWorker.runOnce({projectId:'proj-a'});
+    assert.equal(rPi.claimed,true);assert.equal(rPi.jobId,piJob.id,'oldest queued job was skipped as wrong type');
+    const FakeWorker=(await import('../src/job-worker.mjs')).FakeWorker;
+    const rFake=await new FakeWorker(tuned,{workerId:'fw',clock:clock.now}).runOnce({projectId:'proj-a'});
+    assert.equal(rFake.claimed,true);assert.equal(rFake.jobId,fakeJob.id,'fake worker claims its own type, never the pi job');
+    // store-level: an allowedTypes-filtered claim never hands out the wrong type
+    const fake2=tuned.createJob({projectId:'proj-a',jobType:'fake-analysis',title:'fake2',idempotencyKey:'mix-fake2'});
+    const piTask2=tuned.createTask({projectId:'proj-a',title:'pi2 task'});
+    const pi2=tuned.createJob({projectId:'proj-a',jobType:'pi-analysis',title:'pi2',payload:{},idempotencyKey:'mix-pi2',ownerTaskId:piTask2.id});
+    tuned.approveJob(fake2.id,{now:clock.now()});tuned.approveJob(pi2.id,{now:clock.now()});
+    const piOnly=tuned.claimNextJob('proj-a','w',{now:clock.now(),leaseMs:60000,allowedTypes:['pi-analysis']});
+    assert.equal(piOnly.claimed,true);assert.equal(piOnly.job.id,pi2.id,'older fake job skipped by the type filter');
+    const fakeOnly=tuned.claimNextJob('proj-a','w2',{now:clock.now(),leaseMs:60000,allowedTypes:['fake-analysis']});
+    assert.equal(fakeOnly.claimed,true);assert.equal(fakeOnly.job.id,fake2.id);
+  }finally{tuned.close();}
+}));
+
+test('[pi-r2 #3] the watchdog covers session creation; cancel lands without ever prompting',()=>withStore(async({store,clock})=>{
+  const job=submitPiJob(store,{projectId:'proj-a',key:'wd1'});
+  store.approveJob(job.id,{now:clock.now()});
+  const factory=makeFactory({hang:true});
+  const timers=manualTimers();
+  let resolveCreate;
+  const slowFactory={createCalls:[],sessions:[],async create(opts){factory.createCalls.push(opts);
+    const s=await new Promise(res=>{resolveCreate=res;});
+    factory.sessions.push(s);return s;}};
+  const worker=new PiAnalysisWorker(store,{sessionFactory:slowFactory,clock:clock.now,leaseMs:30000,timers});
+  const pending=worker.runOnce({projectId:'proj-a'});
+  await waitFor(()=>factory.createCalls.length===1,'create started');
+  // a stop request arrives while creation is still in flight; the tick forwards it
+  store.requestCancelJob(job.id,{now:clock.now()});
+  const tickId=[...timers.handles.entries()].find(([,h])=>h.ms===10000)?.[0];
+  timers.fire(tickId);
+  assert.equal(store.getJob(job.id).status,'cancel_requested');
+  resolveCreate(makeFakeSession({hang:true}));
+  const r=await pending;
+  assert.equal(r.outcome,'cancelled');
+  assert.equal(store.getJob(job.id).status,'cancelled');
+  assert.equal(factory.sessions[0].prompts.length,0,'no prompt after a stop request');
+  assert.equal(factory.sessions[0].disposed,true);
+}));
+
+test('[pi-r2 #4] timeout without a confirmed stop goes to human reconciliation, not failed',()=>withStore(async({store,clock})=>{
+  const job=submitPiJob(store,{projectId:'proj-a',key:'uc1'});
+  store.approveJob(job.id,{now:clock.now()});
+  // hangAbort: abort() does NOT settle the prompt — stop cannot be confirmed.
+  // REAL default timers: both the 40ms timeout and the 60ms confirm window must fire.
+  const factory=makeFactory({hang:true,hangAbort:true});
+  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,leaseMs:60000,timeoutMs:40,abortConfirmMs:60});
+  const r=await worker.runOnce({projectId:'proj-a'});
+  assert.equal(r.outcome,'fenced');assert.equal(r.unconfirmedStop,true);
+  assert.equal(store.getJob(job.id).status,'running','not marked failed while the session may still run');
+  assert.equal(store.listJobResults(job.id).length,0);
+  store.reconcileExpiredLeases({now:clock.advanceMs(120000)});
+  assert.equal(store.getJob(job.id).status,'needs_reconciliation');
+}));
+
+test('[pi-r2 #4b] a confirmed stop after timeout is reported as an honest failure',()=>withStore(async({store,clock})=>{
+  const job=submitPiJob(store,{projectId:'proj-a',key:'uc2'});
+  store.approveJob(job.id,{now:clock.now()});
+  const factory=makeFactory({hang:true}); // abort() settles the prompt → stop confirmed
+  // REAL timers: the 40ms timeout must fire, then the abort's settle confirms the stop.
+  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,leaseMs:60000,timeoutMs:40,abortConfirmMs:1000});
+  const r=await worker.runOnce({projectId:'proj-a'});
+  assert.equal(r.outcome,'failed');
+  assert.match(store.getJob(job.id).attempts[0].result_note,/session stopped/);
+}));
+
+test('[pi-r2 #5] result and terminal state commit atomically; invalid commits create no orphan results',()=>withStore(async({store,clock})=>{
+  const job=submitPiJob(store,{projectId:'proj-a',key:'at1'});
+  store.approveJob(job.id,{now:clock.now()});
+  store.claimNextJob('proj-a','worker-a',{now:clock.now(),leaseMs:60000});
+  store.startJob(job.id,1,{workerId:'worker-a',now:clock.now()});
+  // wrong worker → no result row
+  assert.throws(()=>store.completeJobWithResult(job.id,1,{workerId:'other',content:'x',now:clock.now()}),/different worker/);
+  assert.equal(store.listJobResults(job.id).length,0);
+  // expired lease → no result row
+  clock.advanceMs(120000);
+  assert.throws(()=>store.completeJobWithResult(job.id,1,{workerId:'worker-a',content:'x',now:clock.now()}),/Lease expired/);
+  assert.equal(store.listJobResults(job.id).length,0);
+  store.reconcileExpiredLeases({now:clock.now()});
+  store.reconcileJob(job.id,{decision:'requeue',reason:'safe',now:clock.now()});
+  const claim=store.claimNextJob('proj-a','worker-a',{now:clock.now(),leaseMs:60000});
+  assert.equal(claim.claimed,true);assert.equal(claim.attempt.attempt,2);
+  store.startJob(job.id,2,{workerId:'worker-a',now:clock.now()});
+  const ok=store.completeJobWithResult(job.id,2,{workerId:'worker-a',sessionId:'sess-a',model:'fake/m',content:'原子提交的结论',now:clock.now()});
+  assert.equal(ok.outcome,'succeeded');
+  assert.equal(store.getJob(job.id).status,'succeeded');
+  assert.equal(store.listJobResults(job.id).length,1);
+  const result=store.getJobResult(ok.result.id);
+  const {sha256}=await import('../src/utils.mjs');
+  assert.equal(result.content_hash,sha256('原子提交的结论'));
+  assert.equal(result.attempt,2);
+}));
+
+test('[pi-r2 #6] error notes are fixed categories; upstream messages are never persisted',()=>withStore(async({store,clock})=>{
+  const job=submitPiJob(store,{projectId:'proj-a',key:'e1'});
+  store.approveJob(job.id,{now:clock.now()});
+  const SECRET='SECRET https://internal.example.com?key=abc';
+  const factory=makeFactory({promptError:Object.assign(new Error(`${SECRET} and more`),{name:'PiApiError'})});
+  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,timers:manualTimers()});
+  const r=await worker.runOnce({projectId:'proj-a'});
+  assert.equal(r.outcome,'failed');
+  const blob=JSON.stringify(store.getJob(job.id))+JSON.stringify(store.listJobResults(job.id));
+  assert.match(blob,/pi session error \(session-error\)/);
+  assert.doesNotMatch(blob,/SECRET/);assert.doesNotMatch(blob,/internal\.example\.com/);
+}));
+
+test('[pi-r2 fail-closed] an SDK without tool enumeration is treated as unsafe, not as empty',()=>withStore(async({store,clock})=>{
+  const job=submitPiJob(store,{projectId:'proj-a',key:'fe1'});
+  store.approveJob(job.id,{now:clock.now()});
+  const factory=makeFactory({failToolEnum:true});
+  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,timers:manualTimers()});
+  const r=await worker.runOnce({projectId:'proj-a'});
+  assert.equal(r.outcome,'failed');
+  assert.match(store.getJob(job.id).attempts[0].result_note,/tool isolation verification unavailable/);
+  assert.equal(factory.sessions[0].prompts.length,0);
+}));
+
+test('[pi-r2 snapshot] the approved input snapshot pins the analysis material against later task edits',()=>withStore(async({store,clock})=>{
+  const task=store.createTask({projectId:'proj-a',title:'批准时的标题',note:'批准时的说明'});
+  const job=store.createJob({projectId:'proj-a',jobType:'pi-analysis',title:'j',payload:{},idempotencyKey:'snap1',ownerTaskId:task.id});
+  store.approveJob(job.id,{now:clock.now()});
+  const approved=JSON.parse(store.getJob(job.id).input_snapshot||'{}');
+  assert.equal(approved.note,'批准时的说明');
+  store.updateTask(task.id,{note:'批准之后被篡改的说明',title:'篡改标题'});
+  const factory=makeFactory();
+  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,timers:manualTimers()});
+  await worker.runOnce({projectId:'proj-a'});
+  const prompt=factory.sessions[0].prompts[0];
+  assert.match(prompt,/批准时的说明/);assert.match(prompt,/批准时的标题/);
+  assert.doesNotMatch(prompt,/批准之后被篡改/);assert.doesNotMatch(prompt,/篡改标题/);
+}));
