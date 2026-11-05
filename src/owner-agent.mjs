@@ -14,6 +14,13 @@ export class OwnerAgent {
         items.push({kind:'tool-errors',projectId:p.id,priority:'normal',title:`${p.name} 的一次 Pi 运行记录了 ${run.errors} 个工具错误`,evidence:[`session:${run.session_id}`]});
     }
     if(s.pendingSuggestions)items.push({kind:'review',priority:'normal',title:`${s.pendingSuggestions} 条跨项目知识迁移建议待审批`,evidence:this.store.listSuggestions('pending').map(x=>`suggestion:${x.id}`)});
+    const jobs=this.store.listJobs({limit:200});const nowStamp=new Date().toISOString();
+    const stuck=jobs.filter(j=>j.status==='needs_reconciliation');
+    if(stuck.length)items.push({kind:'job-stuck',priority:'high',title:`${stuck.length} 个执行 Job 租约过期，等待人工裁定`,evidence:stuck.map(j=>`job:${j.id}`)});
+    const expiredLease=jobs.filter(j=>['leased','running','cancel_requested'].includes(j.status)&&j.lease_until&&j.lease_until<nowStamp);
+    if(expiredLease.length)items.push({kind:'job-lease-expired',priority:'high',title:`${expiredLease.length} 个执行 Job 租约已过期，尚未标记裁定`,evidence:expiredLease.map(j=>`job:${j.id}`)});
+    const awaitingJobs=jobs.filter(j=>j.status==='pending_approval');
+    if(awaitingJobs.length)items.push({kind:'job-approval',priority:'normal',title:`${awaitingJobs.length} 个执行 Job 待审批`,evidence:awaitingJobs.map(j=>`job:${j.id}`)});
     return items;
   }
   answer(question){
@@ -28,10 +35,21 @@ export class OwnerAgent {
       const suggestions=this.store.listSuggestions('pending');
       return {answer:suggestions.length?suggestions.map(x=>`${x.source_project_id} → ${x.target_project_id}：${x.rationale}（${x.status}，suggestion:${x.id}）`).join('\n'):'暂无待审核的跨项目知识迁移建议。',basis:suggestions.map(x=>`suggestion:${x.id}`),mode:'local-rules'};
     }
-    if(project){
-      return {answer:`${project.name}\n当前人工标记状态：${project.status}\n目标：${project.goal||'未登记'}\n任务：${project.tasks.length} 项（进行中 ${project.tasks.filter(x=>x.status==='doing').length}，阻塞 ${project.tasks.filter(x=>x.status==='blocked').length}）\nPi 运行记录：${project.runs.length} 条（运行中 ${project.runs.filter(r=>r.status==='running').length}）\n最近事件：${project.last_event_at||'尚无'}`,basis:[`project:${project.id}`,...project.tasks.map(x=>`task:${x.id}`)],mode:'local-rules'};
+    if(/(执行|job|队列)/i.test(q)){
+      const jobs=this.store.listJobs({limit:200});
+      const active=jobs.filter(j=>['queued','leased','running','cancel_requested'].includes(j.status));
+      const waiting=jobs.filter(j=>j.status==='pending_approval');
+      const stuck=jobs.filter(j=>j.status==='needs_reconciliation');
+      const lines=[`共 ${jobs.length} 个执行 Job：管道中 ${active.length}，待审批 ${waiting.length}，待裁定 ${stuck.length}。`];
+      for(const j of [...active,...waiting,...stuck].slice(0,8))lines.push(`${j.project_id} · ${j.job_type} · ${j.title}（job:${j.id}，状态 ${j.status}，已尝试 ${j.last_attempt} 次）`);
+      lines.push('注意：Job 状态均来自持久化登记，不代表已检查项目源码或真实执行结果。');
+      return {answer:lines.join('\n'),basis:jobs.slice(0,10).map(j=>`job:${j.id}`),mode:'local-rules'};
     }
-    return {answer:`已登记 ${s.projectCount} 个项目，当前记录中有 ${s.activeRuns} 个运行中 Pi Session、${s.blockedTasks} 项人工标记的阻塞任务、${s.pendingSuggestions} 条待审核知识建议。\n注意：这只是登记及事件数据，不代表我已检查项目源代码或真实任务结果。`,basis:s.projects.map(p=>`project:${p.id}`),mode:'local-rules'};
+    if(project){
+      const projectJobs=project.jobs??[];const inPipeline=projectJobs.filter(j=>['queued','leased','running','cancel_requested'].includes(j.status)).length;
+      return {answer:`${project.name}\n当前人工标记状态：${project.status}\n目标：${project.goal||'未登记'}\n任务：${project.tasks.length} 项（进行中 ${project.tasks.filter(x=>x.status==='doing').length}，阻塞 ${project.tasks.filter(x=>x.status==='blocked').length}）\n执行 Job：${projectJobs.length} 个（管道中 ${inPipeline}）\nPi 运行记录：${project.runs.length} 条（运行中 ${project.runs.filter(r=>r.status==='running').length}）\n最近事件：${project.last_event_at||'尚无'}`,basis:[`project:${project.id}`,...project.tasks.map(x=>`task:${x.id}`)],mode:'local-rules'};
+    }
+    return {answer:`已登记 ${s.projectCount} 个项目，当前记录中有 ${s.activeRuns} 个运行中 Pi Session、${s.blockedTasks} 项人工标记的阻塞任务、${s.pendingSuggestions} 条待审核知识建议、${s.activeJobs} 个管道中执行 Job（另有 ${s.pendingJobApprovals} 个待审批）。\n注意：这只是登记及事件数据，不代表我已检查项目源代码或真实任务结果。`,basis:s.projects.map(p=>`project:${p.id}`),mode:'local-rules'};
   }
   // Model-assisted reasoning is explicitly opt-in, ephemeral and tool-free.
   // Use noTools and a read-only snapshot so the model cannot alter a project.
