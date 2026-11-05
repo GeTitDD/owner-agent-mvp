@@ -18,8 +18,8 @@ export class OwnerAgent {
     const stuck=this.store.listJobs({status:'needs_reconciliation',limit:100});
     const stuckTotal=counts['needs_reconciliation']??0;
     if(stuckTotal)items.push({kind:'job-stuck',priority:'high',title:`${stuckTotal} 个执行 Job 租约过期，等待人工裁定`,evidence:stuck.map(j=>`job:${j.id}`)});
-    const expiredLease=this.store.listJobsWithExpiredLeases({now:nowStamp,limit:100});
-    if(expiredLease.length)items.push({kind:'job-lease-expired',priority:'high',title:`${expiredLease.length} 个执行 Job 租约已过期，尚未标记裁定`,evidence:expiredLease.map(j=>`job:${j.id}`)});
+    const expiredTotal=this.store.countJobsWithExpiredLeases({now:nowStamp});
+    if(expiredTotal)items.push({kind:'job-lease-expired',priority:'high',title:`${expiredTotal} 个执行 Job 租约已过期，尚未标记裁定`,evidence:this.store.listJobsWithExpiredLeases({now:nowStamp,limit:100}).map(j=>`job:${j.id}`)});
     const awaitingTotal=counts['pending_approval']??0;
     if(awaitingTotal)items.push({kind:'job-approval',priority:'normal',title:`${awaitingTotal} 个执行 Job 待审批`,evidence:this.store.listJobs({status:'pending_approval',limit:100}).map(j=>`job:${j.id}`)});
     return items;

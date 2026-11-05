@@ -20,8 +20,9 @@ pending_approval ──approve──▶ queued ──claim──▶ leased ─�
        ├──reject──▶ rejected     ├──cancel──▶ cancelled   │                    ├──cancel request──▶ cancel_requested
        ├──cancel──▶ cancelled    (租约到期 + reconcile 扫描)│                    │                      │
        └─(终态)                              ▼            │                      │                      ├──worker confirm──▶ cancelled
-                              needs_reconciliation ◀─────┴──────────────────────┘                      ├──结果仍可提交──▶ succeeded / failed
-                              （隔离区，绝不自动重执行）                                                      └─(终态)
+                              needs_reconciliation ◀─────┴──────────────────────┘        ├──结果仍可提交──▶ succeeded / failed
+                              （隔离区，绝不自动重执行；**栅栏隔离整个项目**：                          └─(终态)
+                               同项目其他 Job 一律禁止 approve/claim，直到人工裁定）
                                   │
                                   ├──requeue──▶ queued（第 attempt+1 次尝试）
                                   ├──cancel ──▶ cancelled
@@ -32,10 +33,10 @@ pending_approval ──approve──▶ queued ──claim──▶ leased ─�
 
 | From | Action | To | 前置条件 |
 |---|---|---|---|
-| pending_approval | approve | queued | 项目管道内 active Job（queued/leased/running/cancel_requested）数 < `maxActiveJobsPerProject`（默认 1） |
+| pending_approval | approve | queued | **项目栅栏：同项目无 `needs_reconciliation` Job**；且管道内 active Job（queued/leased/running/cancel_requested）数 < `maxActiveJobsPerProject`（默认 1） |
 | pending_approval | reject | rejected | —（终态；理由入审计） |
 | pending_approval / queued | requestCancel | cancelled | 尚未执行，直接终态 |
-| queued | claim | leased | 项目内无其他 active Job；CAS `WHERE status='queued'`；创建 attempt N+1 并记录租约 |
+| queued | claim | leased | **项目栅栏同上**；项目内 active Job 数 < `maxActiveJobsPerProject`（claim 与 approve 共同尊重该参数）；CAS `WHERE status='queued'`；创建 attempt N+1 并记录租约 |
 | leased | start | running | 仅 attempt 属主 Worker；attempt 处于 claimed |
 | leased / running | heartbeat | （不变） | 租约未过期；仅属主 Worker；job 与 attempt 同时续租 |
 | running | report(succeeded/failed) | 同名终态 | 仅属主 Worker、仅最新 attempt、attempt 处于 running、租约未过期 |
@@ -54,9 +55,9 @@ pending_approval ──approve──▶ queued ──claim──▶ leased ─�
 - 三张新表全部 `CREATE TABLE IF NOT EXISTS`，在 `OwnerStore` 构造器内与既有表同批执行：**迁移天然可重入**，旧 v0.5 数据库首次用新代码打开即获得新表，原数据、原接口零改动。
 - 外键启用（`PRAGMA foreign_keys=ON`），jobs/attempts/events 均带 `REFERENCES` 与 CHECK 约束；`UNIQUE(project_id,idempotency_key)` 是幂等性的最终防线（应用层先查重给出更友好的 409 文案）。
 - 关键索引：`(project_id,status,created_at)` 支撑 FIFO 承领；`(status,created_at)` 支撑过期扫描与总览。
-- 并发正确性：所有状态迁移使用 `BEGIN IMMEDIATE` 写事务 + 条件 UPDATE（CAS，检查 `changes===1`）。多进程/多连接竞争同一 Job 时，SQLite 单写者串行化保证只有一个 claim 成功；同项目最多一个 active Job 由事务内计数保证。跨项目互不阻塞。
+- 并发正确性：所有状态迁移使用 `BEGIN IMMEDIATE` 写事务 + 条件 UPDATE（CAS，检查 `changes===1`）。多进程/多连接竞争同一 Job 时，SQLite 单写者串行化保证只有一个 claim 成功；同项目最多 `maxActiveJobsPerProject` 个 active Job（默认 1，**claim 与 approve 共同尊重该配置**），多项目互不阻塞。
 - 幂等键语义：幂等身份 = `(project_id, idempotency_key, job_type, canonical payload, owner_task_id)` 五元组——同项目内五元组全同的重复提交返回原 Job（`duplicate:true`）；同 key 但 payload 或**目标 OwnerTask 不同** → 409 冲突；不同项目相同 key 是不同 Job。payload 以 sorted-keys canonical JSON 存储，比较不受键序影响。`title` 是纯展示字段，不参与幂等判断（重复提交不会改写已存 title）。
-- 时间注入：所有迁移方法接受 `now` / `leaseMs` 参数（默认真实时钟），租约比较使用 ISO 字符串序，测试用 fake clock，**无 sleep**。
+- 时间注入：**所有 Job 方法（含 `createJob`）**均接受 `now` / `leaseMs` 参数（默认真实时钟），租约比较使用 ISO 字符串序，测试用 fake clock，**无 sleep**。
 - **租约边界统一**：`start` / `heartbeat` / `report` / `confirmCancel` 全部要求 `lease_until >= now`——租约过期后旧 Worker 在 reconcile 扫描前也无法做任何迁移，必须走人工裁定路径。
 
 ## WorkerAdapter 契约（`src/job-worker.mjs`）
@@ -106,7 +107,7 @@ npm run demo:jobs
 
 - `summary()` 的 Job 计数（`activeJobs / pendingJobApprovals / stuckJobs / totalJobs`）全部来自 SQL `COUNT/GROUP BY` **全表聚合**，与列表分页上限无关；每项目 `jobs` 切片是 SQL 级 `LIMIT 8` 查询（只增字段，v0.5 消费方兼容）；`/api/owner/summary` 自动携带。
 - `listJobs` 的 status/projectId 过滤在 SQL `WHERE` 中完成（不再"先 LIMIT 后 JS 过滤"）；`listJobsWithExpiredLeases` 提供过期租约定向查询。
-- `OwnerAgent.attention()` 新增三类注意力项，标题计数为全表真值、evidence 列表显式封顶 100：`job-stuck`（已隔离待裁定，high）、`job-lease-expired`（租约过期未标记，high）、`job-approval`（待审批，normal）。
+- `OwnerAgent.attention()` 新增三类注意力项：`job-stuck` 与 `job-lease-expired`（high，标题计数为**同过滤条件的 SQL COUNT 真值**，evidence 列表显式封顶 100）、`job-approval`（normal，计数同样来自全表聚合）。
 - `OwnerAgent.answer()` 新增 Job 查询分支（关键词 执行/job/队列），头部数字为全表聚合，回答引用 `job:<id>` 持久化记录。
 
 ## 测试

@@ -244,13 +244,13 @@ export class OwnerStore {
   knowledgeLinks(projectId){return this.db.prepare('SELECT * FROM owner_project_knowledge_links WHERE project_id=? ORDER BY approved_at DESC').all(projectId);}
   // ---- Durable task coordination (P0): every transition is transactional, audited and time-injectable. ----
   jobAudit(jobId,action,actor,detail='',at=stamp()){this.db.prepare('INSERT INTO owner_job_events(job_id,at,actor,action,detail) VALUES(?,?,?,?,?)').run(jobId,at,txt(actor,'actor',80),action,txt(detail,'detail',400,false));}
-  createJob({projectId,jobType,title,payload={},idempotencyKey,ownerTaskId='',actor='owner'}={}){
+  createJob({projectId,jobType,title,payload={},idempotencyKey,ownerTaskId='',actor='owner',now=stamp()}={}){
     check(!!this.getProject(projectId),'Unknown project',404);
     check(jobTypes.has(jobType),'Unsupported job type; only whitelisted types are accepted');
     check(typeof idempotencyKey==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,88}$/.test(idempotencyKey),'Invalid idempotency key');
     const digest=canonical(cleanPayload(payload));
     if(ownerTaskId){const task=this.getTask(ownerTaskId);check(!!task,'Unknown owner task',404);check(task.project_id===projectId,'Owner task belongs to a different project');}
-    const now=stamp();actor=txt(actor,'actor',80);
+    actor=txt(actor,'actor',80);
     this.db.exec('BEGIN IMMEDIATE');
     try{
       const dup=this.db.prepare('SELECT * FROM owner_jobs WHERE project_id=? AND idempotency_key=?').get(projectId,idempotencyKey);
@@ -286,6 +286,9 @@ export class OwnerStore {
   listJobsWithExpiredLeases({now=stamp(),limit=100}={}){
     check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
     return this.db.prepare(`SELECT * FROM owner_jobs WHERE status IN ('leased','running','cancel_requested') AND lease_until IS NOT NULL AND lease_until<? ORDER BY lease_until,id LIMIT ?`).all(now,limit).map(jobRow);}
+  // True count with the same filter as listJobsWithExpiredLeases — attention titles must not
+  // under-report just because the evidence list is capped.
+  countJobsWithExpiredLeases({now=stamp()}={}){return this.db.prepare(`SELECT COUNT(*) AS n FROM owner_jobs WHERE status IN ('leased','running','cancel_requested') AND lease_until IS NOT NULL AND lease_until<?`).get(now).n;}
   listJobEvents(jobId,{limit=200}={}){
     check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
     return this.db.prepare('SELECT seq,at,actor,action,detail FROM owner_job_events WHERE job_id=? ORDER BY seq LIMIT ?').all(jobId,limit);}
@@ -293,6 +296,9 @@ export class OwnerStore {
     this.db.exec('BEGIN IMMEDIATE');
     try{
       const row=this.getJobRow(id);check(!!row,'Unknown job',404);check(row.status==='pending_approval',`Job in status ${row.status} cannot be approved`,409);
+      // Scheduling fence: an unresolved job keeps the whole project quarantined.
+      const stuck=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status='needs_reconciliation' LIMIT 1`).get(row.project_id);
+      check(!stuck,'Project has an unresolved needs_reconciliation job; reconcile it before approving new work',409);
       const active=this.db.prepare(`SELECT COUNT(*) AS n FROM owner_jobs WHERE project_id=? AND status IN ('queued','leased','running','cancel_requested')`).get(row.project_id).n;
       check(active<this.maxActiveJobsPerProject,'Project already has an active job; per-project limit blocks approval',409);
       const changed=this.db.prepare(`UPDATE owner_jobs SET status='queued',approved_at=?,approved_by=?,updated_at=? WHERE id=? AND status='pending_approval'`).run(now,txt(actor,'actor',80),now,id);
@@ -336,8 +342,15 @@ export class OwnerStore {
     const leaseUntil=new Date(Date.parse(now)+leaseMs).toISOString();
     this.db.exec('BEGIN IMMEDIATE');
     try{
-      const busy=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status IN ('leased','running','cancel_requested') LIMIT 1`).get(projectId);
-      if(busy){this.db.exec('COMMIT');return {claimed:false,reason:'project-active-job',activeJobId:busy.id};}
+      // Quarantine fence: one unresolved attempt may still carry unknown external side effects,
+      // so no other job of this project may be scheduled until the owner reconciles it.
+      const stuck=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status='needs_reconciliation' LIMIT 1`).get(projectId);
+      if(stuck){this.db.exec('COMMIT');return {claimed:false,reason:'project-quarantined',quarantinedJobId:stuck.id};}
+      const activeCount=this.db.prepare(`SELECT COUNT(*) AS n FROM owner_jobs WHERE project_id=? AND status IN ('leased','running','cancel_requested')`).get(projectId).n;
+      if(activeCount>=this.maxActiveJobsPerProject){
+        const busy=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status IN ('leased','running','cancel_requested') LIMIT 1`).get(projectId);
+        this.db.exec('COMMIT');return {claimed:false,reason:'project-active-job',activeJobId:busy.id};
+      }
       const job=this.db.prepare(`SELECT * FROM owner_jobs WHERE project_id=? AND status='queued' ORDER BY created_at,id LIMIT 1`).get(projectId);
       if(!job){this.db.exec('COMMIT');return {claimed:false,reason:'no-queued-job'};}
       const attemptNo=job.last_attempt+1,attemptId=randomUUID();

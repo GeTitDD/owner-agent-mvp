@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
 import { mkdtemp,rm } from 'node:fs/promises';
+import { mkdirSync } from 'node:fs';
 import { OwnerStore } from '../src/owner-store.mjs';
 import { OwnerAgent } from '../src/owner-agent.mjs';
 import { FakeWorker,FakeWorkerCrash } from '../src/job-worker.mjs';
@@ -115,7 +116,7 @@ test('heartbeat extends the lease; expired leases need explicit reconciliation a
   assert.equal(quarantined.status,'needs_reconciliation');
   assert.equal(quarantined.attempts[0].status,'orphaned');
   assert.throws(()=>store.reportJobResult(job.id,1,{workerId:'worker-a',outcome:'succeeded',now:clock.now()}),/cannot report a result/);
-  assert.deepEqual(store.claimNextJob('project-a','worker-a',{now:clock.now()}),{claimed:false,reason:'no-queued-job'});
+  assert.deepEqual(store.claimNextJob('project-a','worker-a',{now:clock.now()}),{claimed:false,reason:'project-quarantined',quarantinedJobId:job.id},'quarantine fences the project, not just the job');
 }));
 
 test('reconcile decisions requeue (fresh attempt), cancel or fail; history is preserved',()=>withStore(async({store,clock})=>{
@@ -287,7 +288,8 @@ test('[review r1 #1] the created audit event carries a valid, traceable creation
   const job=store.createJob({projectId:'project-a',jobType:'noop',title:'Audited creation',idempotencyKey:'audit-1',now:at});
   const created=store.getJob(job.id).events.find(e=>e.action==='created');
   assert.ok(created,'created audit event exists');
-  assert.equal(created.at,job.created_at,'audit time equals the persisted created_at');
+  assert.equal(job.created_at,at,'createJob honors the injected now for created_at');
+  assert.equal(created.at,at,'audit time equals the injected creation timestamp');
   assert.match(created.at,/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,'audit time is a real ISO timestamp, not an empty string');
   assert.equal(created.detail,'noop');
 }));
@@ -382,4 +384,73 @@ test('[review r1 #6] requeue requires an explicit safety-review reason; cancel/f
   assert.equal(store.reconcileJob(job2.id,{decision:'cancel',now:clock.now()}).status,'cancelled');
   const job3=await setup('rr3','project-b');
   assert.equal(store.reconcileJob(job3.id,{decision:'fail',now:clock.now()}).status,'failed');
+}));
+
+// ---- Review round 2 regression tests ----
+
+test('[review r2 #1] an unsettled job fences its whole project: no approve/claim until explicit reconciliation',()=>withStore(async({store,clock})=>{
+  const a=store.createJob({projectId:'project-a',jobType:'noop',title:'Crashed A',idempotencyKey:'q1'});
+  store.approveJob(a.id,{now:clock.now()});
+  store.claimNextJob('project-a','worker-a',{now:clock.now(),leaseMs:1000});
+  store.startJob(a.id,1,{workerId:'worker-a',now:clock.now()});
+  clock.advanceMs(5000);
+  store.reconcileExpiredLeases({now:clock.now()});
+  assert.equal(store.getJob(a.id).status,'needs_reconciliation');
+  // the fence blocks BOTH scheduling paths of the same project while A is unresolved
+  const b=store.createJob({projectId:'project-a',jobType:'noop',title:'B while quarantined',idempotencyKey:'q2'});
+  assert.throws(()=>store.approveJob(b.id,{now:clock.now()}),/unresolved needs_reconciliation job/);
+  const blocked=store.claimNextJob('project-a','worker-a',{now:clock.now(),leaseMs:60000});
+  assert.deepEqual(blocked,{claimed:false,reason:'project-quarantined',quarantinedJobId:a.id});
+  // other projects are untouched by the fence
+  const c=store.createJob({projectId:'project-b',jobType:'noop',title:'C elsewhere',idempotencyKey:'q3'});
+  store.approveJob(c.id,{now:clock.now()});
+  assert.equal(store.claimNextJob('project-b','worker-c',{now:clock.now(),leaseMs:60000}).claimed,true);
+  // explicit human reconciliation lifts the fence; the requeued job is then re-claimable
+  store.reconcileJob(a.id,{decision:'requeue',reason:'verified no side effects',actor:'owner',now:clock.now()});
+  const reclaim=store.claimNextJob('project-a','worker-a',{now:clock.now(),leaseMs:60000});
+  assert.equal(reclaim.claimed,true);
+  assert.equal(reclaim.job.id,a.id);assert.equal(reclaim.attempt.attempt,2);
+  store.startJob(a.id,2,{workerId:'worker-a',now:clock.now()});
+  store.reportJobResult(a.id,2,{workerId:'worker-a',outcome:'succeeded',now:clock.now()});
+  // pipeline drained: B can finally flow
+  assert.equal(store.approveJob(b.id,{now:clock.now()}).status,'queued');
+  assert.equal(store.claimNextJob('project-a','worker-a',{now:clock.now(),leaseMs:60000}).claimed,true);
+}));
+
+test('[review r2 #2] expired-lease attention count is SQL-accurate beyond 100 concurrent leases',()=>withStore(async({store,clock,dir})=>{
+  const t0=clock.now();
+  for(let i=0;i<105;i++){
+    const sub=path.join(dir,'lease-p'+i);mkdirSync(sub,{recursive:true});
+    store.registerProject({id:'lp'+i,name:'Lease Project '+i,root:sub,primaryDomain:'pi-sdk'});
+    const job=store.createJob({projectId:'lp'+i,jobType:'noop',title:'lease '+i,idempotencyKey:'k'});
+    store.approveJob(job.id,{now:t0});
+    store.claimNextJob('lp'+i,'worker',{now:t0,leaseMs:1000});
+  }
+  clock.advanceMs(5000);
+  assert.equal(store.countJobsWithExpiredLeases({now:clock.now()}),105,'true count with the same filter as the listing');
+  const agent=new OwnerAgent(store);
+  const item=agent.attention().find(x=>x.kind==='job-lease-expired');
+  assert.ok(item,'attention reports expired leases');
+  assert.match(item.title,/105/,'title carries the true count, not the capped list length');
+  assert.equal(item.evidence.length,100,'evidence stays explicitly capped at 100');
+}));
+
+test('[review r2 #4] claim honors maxActiveJobsPerProject instead of hard-coding a single busy job',()=>withStore(async({store,dbPath,clock})=>{
+  const tuned=new OwnerStore(dbPath,{maxActiveJobsPerProject:2});
+  try{
+    const jobs=['m1','m2','m3'].map(k=>store.createJob({projectId:'project-a',jobType:'noop',title:k,idempotencyKey:k}));
+    tuned.approveJob(jobs[0].id,{now:clock.now()});
+    tuned.approveJob(jobs[1].id,{now:clock.now()});
+    assert.throws(()=>tuned.approveJob(jobs[2].id,{now:clock.now()}),/per-project limit blocks approval/);
+    const first=tuned.claimNextJob('project-a','w1',{now:clock.now(),leaseMs:60000});
+    const second=tuned.claimNextJob('project-a','w2',{now:clock.now(),leaseMs:60000});
+    assert.equal(first.claimed,true);assert.equal(second.claimed,true);
+    assert.notEqual(first.job.id,second.job.id);
+    const third=tuned.claimNextJob('project-a','w3',{now:clock.now(),leaseMs:60000});
+    assert.equal(third.claimed,false);assert.equal(third.reason,'project-active-job');
+    // default store still enforces strict serial execution
+    const serial=new OwnerStore(dbPath);
+    try{assert.equal(serial.claimNextJob('project-a','w4',{now:clock.now(),leaseMs:60000}).reason,'project-active-job');}
+    finally{serial.close();}
+  }finally{tuned.close();}
 }));
