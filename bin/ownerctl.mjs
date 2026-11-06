@@ -6,6 +6,13 @@ import { FakeWorker, FakeWorkerCrash } from '../src/job-worker.mjs';
 import { PiAnalysisWorker } from '../src/pi-analysis-worker.mjs';
 import { PatchCodingWorker } from '../src/patch-coding-worker.mjs';
 import { WorkspaceBroker } from '../src/workspace-broker.mjs';
+import { SandboxRunner } from '../src/sandbox-runner.mjs';
+import { DockerSandboxProvider } from '../src/sandbox-provider.mjs';
+import { createInputSnapshot, cleanupInputSnapshot, defaultSandboxRoot, verifyInputSnapshot } from '../src/sandbox-materializer.mjs';
+import { approvalHash, normalizeIncludePaths, resolveTestProfile } from '../src/sandbox-protocol.mjs';
+import { reconcileSandboxWithProvider, cleanupSandboxWithProvider } from '../src/sandbox-control.mjs';
+import { sha256 } from '../src/utils.mjs';
+import { randomUUID } from 'node:crypto';
 import { defaultDbPath } from '../src/storage.mjs';
 const store=new OwnerStore(process.env.OWNER_AGENT_DB??defaultDbPath());
 const args=process.argv.slice(2);const command=args.shift();
@@ -20,6 +27,7 @@ const demoBehavior=(name)=>({
   crash:()=>{throw new FakeWorkerCrash();}
 }[name]);
 const broker=()=>new WorkspaceBroker(store,{workspacesRoot:read('--workspaces-dir','')||process.env.OWNER_AGENT_WORKSPACES_DIR});
+const sandboxProvider=()=>new DockerSandboxProvider({requireRootless:process.env.OWNER_AGENT_SANDBOX_REQUIRE_ROOTLESS==='1'});
 const showProposal=(id)=>{
   const proposal=store.getPatchProposal(id);
   if(!proposal)throw new Error('Unknown proposal');
@@ -101,6 +109,74 @@ try {
     }
   }
   else if(command==='patch-recover')result={recoveredProposalIds:store.recoverInterruptedPatchApplies()};
+  else if(command==='sandbox-submit'){
+    const proposal=store.getPatchProposal(read('--proposal'));
+    if(!proposal)throw new Error('Unknown proposal');
+    if(proposal.status!=='applied')throw new Error(`Proposal in status ${proposal.status} cannot be sandboxed`);
+    const workspace=store.getWorkspace(proposal.workspace_id);
+    checkRecord(workspace);
+    const verify=await broker().verifyApplied(workspace,proposal);
+    checkVerify(verify);
+    const imageDigest=read('--image-digest',process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST);
+    const profile=resolveTestProfile(read('--profile','node-smoke'),{imageDigest});
+    const includePaths=normalizeIncludePaths(read('--include').split(',').map(s=>s.trim()).filter(Boolean));
+    const runId=randomUUID();
+    const snapshotRoot=read('--sandbox-dir','')||defaultSandboxRoot();
+    const snapshot=createInputSnapshot({runId,workspacePath:workspace.path,proposal,includePaths,sandboxRoot:snapshotRoot});
+    const approval=approvalHash({projectId:proposal.project_id,workspaceId:workspace.id,proposalId:proposal.id,
+      approvedHash:proposal.approved_hash,baseSha:proposal.base_sha,profile,snapshotHash:snapshot.snapshotHash,includePaths});
+    try{
+      result=store.createSandboxRun({id:runId,projectId:proposal.project_id,jobId:proposal.job_id,attempt:proposal.attempt,
+        workspaceId:workspace.id,proposalId:proposal.id,approvedHash:proposal.approved_hash,baseSha:proposal.base_sha,
+        profile,approvalHash:approval,snapshotHash:snapshot.snapshotHash,snapshotPath:snapshot.snapshotPath,includePaths});
+      const manifest=JSON.stringify(snapshot.manifest);
+      store.saveSandboxEvidence(runId,'snapshot_manifest',{content:manifest,contentHash:sha256(manifest),bytes:Buffer.byteLength(manifest)});
+      result={...result,approvalHash:approval,snapshotHash:snapshot.snapshotHash};
+    }catch(e){
+      try{cleanupInputSnapshot({snapshotPath:snapshot.snapshotPath,runId,snapshotHash:snapshot.snapshotHash,sandboxRoot:snapshotRoot});}catch{/* best effort */}
+      throw e;
+    }
+  }
+  else if(command==='sandbox-preflight'){
+    const imageDigest=read('--image-digest',process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST);
+    const profile=resolveTestProfile(read('--profile','node-smoke'),{imageDigest});
+    result=await sandboxProvider().preflight(profile);
+  }
+  else if(command==='sandboxes')result=store.listSandboxRuns({projectId:read('--project'),status:read('--status'),limit:100});
+  else if(command==='sandbox-show'){
+    const run=store.getSandboxRun(read('--id'));if(!run)throw new Error('Unknown sandbox run');
+    result=run;
+    if(read('--logs')==='1')result={...run,stdout:store.getSandboxEvidence(run.id,'stdout')?.content??'',stderr:store.getSandboxEvidence(run.id,'stderr')?.content??''};
+  }
+  else if(command==='sandbox-approve'){
+    const id=read('--id');
+    const run=store.getSandboxRun(id);if(!run)throw new Error('Unknown sandbox run');
+    const manifest=store.getSandboxEvidence(id,'snapshot_manifest');
+    if(!manifest)throw new Error('Sandbox snapshot manifest is missing');
+    verifyInputSnapshot({snapshotPath:run.snapshot_path,manifest:JSON.parse(manifest.content),snapshotHash:run.snapshot_hash});
+    result=store.approveSandboxRun(id,{expectedHash:read('--hash'),actor:'ownerctl'});
+  }
+  else if(command==='sandbox-reject')result=store.rejectSandboxRun(read('--id'),{reason:read('--reason'),actor:'ownerctl'});
+  else if(command==='sandbox-run-once'){
+    const worker=new SandboxRunner(store,{provider:sandboxProvider(),workerId:read('--worker-name','sandbox-runner'),
+      pollMs:Math.max(50,Number(read('--poll-ms','1000'))||1000),leaseMs:30000});
+    result=await worker.runOnce({projectId:read('--project')});
+  }
+  else if(command==='sandbox-cancel')result=store.requestCancelSandboxRun(read('--id'),{actor:'ownerctl'});
+  else if(command==='sandbox-recover')result={recoveredSandboxIds:store.recoverExpiredSandboxRuns()};
+  else if(command==='sandbox-reconcile'){
+    const run=store.getSandboxRun(read('--id'));if(!run)throw new Error('Unknown sandbox run');
+    result=await reconcileSandboxWithProvider(store,sandboxProvider(),run,{
+      decision:read('--decision'),reason:read('--reason'),actor:'ownerctl'
+    });
+  }
+  else if(command==='sandbox-cleanup'){
+    if(read('--confirm')!=='1')throw new Error('sandbox-cleanup requires --confirm 1 (Owner explicit consent)');
+    const run=store.getSandboxRun(read('--id'));if(!run)throw new Error('Unknown sandbox run');
+    result=await cleanupSandboxWithProvider(store,sandboxProvider(),run,{
+      sandboxRoot:read('--sandbox-dir','')||defaultSandboxRoot()
+    });
+  }
   else if(command==='workspaces')result=store.listWorkspaces({projectId:read('--project'),status:read('--status'),limit:100});
   else if(command==='workspace-inspect')result=await broker().inspect(read('--id'));
   else if(command==='workspace-quarantine')result=await broker().quarantine(read('--id'),{reason:read('--reason')});
@@ -124,7 +200,7 @@ try {
   else if(command==='ask')result=new OwnerAgent(store).answer(args.join(' '));
   else if(command==='ask-pi')result=await new OwnerAgent(store).askPi(args.join(' '));
   else if(command==='events')result=store.listEvents({projectId:read('--project')});
-  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake/pi/patch ... | result --id | results --job | code-submit --project --task --base --paths --key | patches [--project] [--status] | patch-show --id [--content 1] | patch-approve --id --hash | patch-apply --id --hash | patch-reject --id --reason | patch-reconcile --id --decision confirm-applied/discard [--reason] | patch-recover | workspaces [--project] [--status] | workspace-inspect --id | workspace-quarantine --id --reason | workspace-cleanup --id --confirm 1');
+  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake/pi/patch ... | result --id | results --job | code-submit --project --task --base --paths --key | patches [--project] [--status] | patch-show --id [--content 1] | patch-approve --id --hash | patch-apply --id --hash | patch-reject --id --reason | patch-reconcile --id --decision confirm-applied/discard [--reason] | patch-recover | workspaces [--project] [--status] | workspace-inspect --id | workspace-quarantine --id --reason | workspace-cleanup --id --confirm 1 | sandbox-submit --proposal --profile node-smoke --image-digest sha256:... [--include a,b] | sandbox-approve --id --hash | sandbox-run-once --project | sandboxes [--project] [--status] | sandbox-show --id [--logs 1] | sandbox-cancel --id | sandbox-recover | sandbox-reconcile --id --decision confirm-stopped/discard [--reason] | sandbox-cleanup --id --confirm 1');
   console.log(JSON.stringify(result,null,2));
 }catch(e){console.error(e.message);process.exitCode=1;}
 finally{store.close();}

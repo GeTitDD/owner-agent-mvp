@@ -1,8 +1,26 @@
 # Owner Agent × Domain Knowledge Workbench — v0.5
 
-> 当前开发分支含 **v0.8 Patch-first Coding Worker**、**v0.7 Pi Analysis Worker** 与 **v0.6 Durable Task Coordinator**（均为 WIP），已合入能力见下方「功能状态」。
+> 当前开发分支含 **v0.9 Sandboxed Test Runner**、**v0.8 Patch-first Coding Worker**、**v0.7 Pi Analysis Worker** 与 **v0.6 Durable Task Coordinator**（均为 WIP），已合入能力见下方「功能状态」。
 
 **以 Owner 为中心的多项目管理 Agent + 个人领域知识资产工作台 + 可选桌面宠物。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
+
+## v0.9 WIP：Sandboxed Test Runner（分支 `feat/v0.9-sandboxed-test-runner`）
+
+把已 applied 的补丁接到**受限测试执行**：Owner 批准固定 TestProfile + 镜像 digest + 有界输入快照后，可信宿主只构造固定 Docker argv，项目测试在非 root、无网络、只读 rootfs、drop caps 的 Linux 容器内运行；宿主进程不执行项目测试。
+
+- **默认拒绝**：无 Docker/镜像 digest/preflight 失败/平台不支持 → `unsupported`，绝不降级 host exec。
+- **输入不可漂移**：快照只来自 applied Proposal/Workspace + Owner 精确 `--include`，路径/链接/hash 复核；审批后改写快照会使运行失败。
+- **状态分离**：`execution_status` 与 `test_status` 独立；非零测试退出是有效 `completed/fail`，基础设施失败才 `failed`。
+- **安全探针**：真实 Linux CI 运行 `node-probe`，验证非 root、零 capabilities、no-new-privileges、只读 `/workspace`、仅 `/tmp` 可写、无网络、无 Docker socket、无 host root 访问。
+- **崩溃/取消**：未确认停止 → `needs_reconciliation` + 项目 fence；只有显式 `sandbox-recover` 才恢复已过期租约，普通 CLI 读取不会抢占 live run；reconcile 需要 provider 查询确认/attestation，不自动重跑、不盲目删除容器。
+- **证据私有**：stdout/stderr 有上限、UTF-8 清洗、secret 字段脱敏与 hash；Job/Event/oplog 不含日志正文。
+
+```bash
+npm run demo:sandbox       # Fake provider 端到端演示（零 Docker/模型调用）
+npm run test:sandbox:real  # 需要 Linux Docker + OWNER_AGENT_SANDBOX_IMAGE_DIGEST，opt-in
+```
+
+完整 SandboxProvider 接口、TestProfile、状态机、证据协议与安全边界见 **[Sandboxed Test Runner 设计文档](docs/SANDBOX_TEST_RUNNER.md)**。
 
 ## v0.8 WIP：Patch-first Coding Worker（分支 `feat/v0.8-patch-coding-worker`）
 
@@ -55,6 +73,7 @@ npm run demo:jobs   # 临时库 + fake clock 的端到端演示（审批/并发/
 
 - `npm test` — 运行全部自动化测试（无需模型 API）。
 - `npm run demo:patch` — v0.8 受控 Worktree/提案/二次审批/应用/清理演示（fake agent）。
+- `npm run demo:sandbox` — v0.9 输入快照/审批/Fake 执行/证据/清理演示（零 Docker 真实调用）。
 - `npm run demo:owner` — 两个临时项目的注册、事件、知识迁移提案、审核演示。
 - `npm run workbench` — 打开 `http://127.0.0.1:4317`。进入 **Owner Agent** 页面登记项目、任务，右下角可打开伴侣对话窗。
 - `node bin/ownerctl.mjs register --id demo --name Demo --root /absolute/path/to/project --domain pi-sdk` — 登记现有本地项目。
@@ -65,7 +84,7 @@ npm run demo:jobs   # 临时库 + fake clock 的端到端演示（审批/并发/
 
 ### 本版交付边界
 
-- 已实现：Owner Project/Task Registry、事件日志和投影、轻量常驻监控、只读智能查询、跨项目知识建议/审批、Web 管理面板、可选 Electron 桌面壳；v0.6 持久化 Job 生命周期；v0.7 只读 Pi 分析；v0.8 受控 Worktree 补丁提案/二次审批/应用。
+- 已实现：Owner Project/Task Registry、事件日志和投影、轻量常驻监控、只读智能查询、跨项目知识建议/审批、Web 管理面板、可选 Electron 桌面壳；v0.6 持久化 Job 生命周期；v0.7 只读 Pi 分析；v0.8 受控 Worktree 补丁提案/二次审批/应用；v0.9 Linux 容器沙箱测试与私有证据。
 - 默认推理模式：**无模型的确定性查询**。可通过 `ownerctl ask-pi` 明确调用工具禁用的 Pi SDK 认知会话（需要额外安装、配置模型；仅模拟集成测试）。
 - 暂未实现：自动启动的 OS 守护进程、项目 Agent 实际调度、自动跨项目知识迁移、生产级权限认证、真实 Pi/Electron GUI 端到端测试。
 - 安全原则：项目必须显式登记；Pi 采集默认关闭，只记元数据；知识建议不自动更改项目；Workbench 仅绑定 loopback。**请勿公网开放。**
