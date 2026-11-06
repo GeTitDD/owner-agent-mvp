@@ -134,7 +134,12 @@ export class PiAnalysisWorker {
         // Stop renewing the lease so the attempt converges into needs_reconciliation.
         return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'fenced',createTimedOut:true};
       }
-      if(createResult.createError)throw createResult.createError;
+      if(createResult.createError){
+        // Creation failed confirmably: nothing is running, so an honest 'failed' with a
+        // fixed error category is safe and releases the project pipeline.
+        const reported=guard(()=>this.store.reportJobResult(job.id,attempt.attempt,{workerId:this.workerId,outcome:'failed',note:`pi session error (${classifyError(createResult.createError)})`,now:this.clock()}));
+        return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:reported?'failed':'fenced'};
+      }
       session=createResult.session;
       // ---- fail-closed permission checks ----
       let tools=null;
@@ -183,23 +188,35 @@ export class PiAnalysisWorker {
       }
       // ---- outcome resolution ----
       const current=this.store.getJob(job.id);
-      if(current.status==='cancel_requested'&&abortRequested){
-        // Our watchdog observed the stop request and aborted the session: renew the lease
-        // during the bounded confirm wait (review r3), then confirm the cancellation.
+      // Fence wins first: a lost lease silences everything (no store writes, no confirms).
+      if(fenced)return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'fenced'};
+      if(current.status==='cancel_requested'){
+        // Our watchdog observed the stop request (or it landed between ticks) and the
+        // session is being aborted: renew the lease during the bounded confirm wait
+        // (review r3), then confirm the cancellation ONLY if the settle is observed.
         session.abort?.();
         guard(()=>this.store.heartbeatJob(job.id,attempt.attempt,{workerId:this.workerId,now:this.clock(),leaseMs:this.leaseMs}));
-        let confirmTimerHandle=null;
+        let confirmed=false,confirmTimerHandle=null;
         try{
-          await Promise.race([settled,new Promise(resolve=>{confirmTimerHandle=this.timers.timeout(()=>resolve(),this.abortConfirmMs);})]);
+          confirmed=await Promise.race([
+            settled.then(()=>true),
+            new Promise(resolve=>{confirmTimerHandle=this.timers.timeout(()=>resolve(false),this.abortConfirmMs);})
+          ]);
         }finally{if(confirmTimerHandle!==null)this.timers.clear(confirmTimerHandle);}
-        this.store.confirmJobCancelled(job.id,attempt.attempt,{workerId:this.workerId,note:'stopped via session abort',now:this.clock()});
-        return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'cancelled'};
+        this.timers.clear(tickTimer);
+        if(confirmed){
+          this.store.confirmJobCancelled(job.id,attempt.attempt,{workerId:this.workerId,note:'stopped via session abort',now:this.clock()});
+          return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'cancelled'};
+        }
+        // Stop could not be confirmed: the session may still be running — do not release
+        // the project and do not mark cancelled; stop renewing and leave the attempt for
+        // explicit human reconciliation.
+        return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'fenced',unconfirmedStop:true};
       }
-      if(fenced)return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'fenced'};
       this.timers.clear(tickTimer);
       if(timedOut){
         session.abort?.();
-        // Renew the lease during the confirm window; renewal stops (tick already cleared)
+        // Keep renewing the lease during the confirm window; renewal stops once decided.
         // only when the stop cannot be confirmed — then reconcile takes over.
         guard(()=>this.store.heartbeatJob(job.id,attempt.attempt,{workerId:this.workerId,now:this.clock(),leaseMs:this.leaseMs}));
         let confirmed=false,confirmTimerHandle=null;

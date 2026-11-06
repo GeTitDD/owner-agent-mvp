@@ -47,13 +47,14 @@ factory.create({cwd, model?}) -> {
 - `heartbeatJob` 放行 `cancel_requested`（v0.7 预授权修订）：等待 SDK abort 确认期间必须续租，否则 abort 在途即被扫描隔离。
 - watchdog 周期 `leaseMs/3`（timers 可注入，测试手动触发）：每 tick 先 heartbeat（失败即 fenced），再检测 `cancel_requested` → `session.abort()`。
 - prompt 结束后：`cancel_requested` → `confirmJobCancelled`；正常完成 → 原子提交结果 + `succeeded`；error/timeout → `failed`（错误只记固定分类：`session-aborted/timeout/auth-error/network-error/session-error`，不落上游 message 原文）；timeout 后确认窗口内**继续心跳**，无法确认停止才停止续租并进入人工裁定。
+- **取消优先于成功（r4）**：一旦 `cancel_requested` 入库，Store 层禁止该 Job 转为 `succeeded`（`completeJobWithResult` 仅允许 `running`；`reportJobResult('succeeded')` 同样 409——`failed` 仍可如实记录）。Worker 看到取消请求后必须走确认停止路径：会话已 settle 即 `confirmJobCancelled` 落 `cancelled`（完成的输出按策略丢弃）；无法确认停止 → 静默 fenced 转人工裁定。
 - **计时器生命周期（r3）**：所有定时器句柄（watchdog interval、create deadline、prompt deadline、confirm 窗口）都是 `runOnce` 局部变量，并在对应的 `finally` 中清理——任何路径（成功/失败/取消/隔离/创建超时/早退/异常）都不会泄漏句柄或误触发旧 deadline；`manual timers` 测试断言每次运行后 `handles.size===0`。
 - fenced（租约丢失）：中止会话、**不存产物、不报告**，交 reconcile。
 
 ## 存储与最小化
 
 - `owner_job_attempts` 增列 `session_id`（守卫式 ALTER，可重入；仅非敏感会话 id）；`owner_jobs` 增列 `input_snapshot`（审批事务内固定任务标题/说明，批准后的任务编辑不影响已批 Job）；`owner_projects` 增列 `root_identity`（见下）。
-- **路径漂移校验（best-effort）**：注册时在项目根内创建 `.owner-root-identity` 标记文件并固化其 dev/ino 哈希；Worker 运行前对比——目录被删除重建/替换为指向他处的链接 → `project-root-moved` 拒绝（零会话创建）。这是**best-effort 身份检查而非对抗性 OS fencing**：极端情况下 inode 复用可能漏检。测试采用 rename 保留旧身份 + 新建 marker 的确定性方案（不受 inode 复用影响）。
+- **路径漂移校验（best-effort）**：注册时在项目根内创建 `.owner-root-identity` 标记文件（约 60 字节；**这是注册的显式副作用**，不希望入库可加入项目 `.gitignore`）并固化其 dev/ino 哈希；Worker 运行前对比——目录被删除重建/替换为指向他处的链接 → `project-root-moved` 拒绝（零会话创建）。这是**best-effort 身份检查而非对抗性 OS fencing**：极端情况下 inode 复用可能漏检。测试采用 rename 保留旧身份 + 新建 marker 的确定性方案（不受 inode 复用影响）。
 - 新表 `owner_job_results`：项目私有产物（content ≤65536 字符、sha256 content_hash、model、truncated 标记、usage 默认 `unknown`——SDK usage 不可得时不编造）。
 - Job 行与审计事件只引用 `chars:<n>; tools:0; usage:unknown`；**prompt、回答原文、密钥、工具 I/O、上游错误消息原文一律不入库**——错误只记固定分类（`session-aborted/timeout/auth-error/network-error/session-error`，有测试断言）。
 - 成功路径使用 `completeJobWithResult` **原子提交**：与 `reportJobResult` 相同的 Worker/Attempt/租约校验 + 结果 INSERT 在同一 `BEGIN IMMEDIATE` 事务内，租约失效/取消竞态不可能留下孤儿结果。

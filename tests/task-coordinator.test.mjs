@@ -198,7 +198,8 @@ test('cancellation distinguishes stop-request from actual stop; worker cannot ca
   assert.equal(outcome.outcome,'cancelled');
   assert.equal(store.getJob(running.id).status,'cancelled');
   assert.equal(store.getJob(running.id).attempts[0].status,'cancelled');
-  // a running worker finishing despite the stop request still records a real outcome
+  // a stop request recorded before a late completion wins: the completed output is
+  // discarded by policy and the job lands cancelled (review r4 state-machine priority)
   const finishes=store.createJob({projectId:'project-a',jobType:'noop',title:'Finishes despite request',idempotencyKey:'c5'});
   store.approveJob(finishes.id,{now:clock.now()});
   const workerC=new FakeWorker(store,{workerId:'worker-c',clock:clock.now,behaviors:{[finishes.id]:({job})=>{
@@ -206,8 +207,9 @@ test('cancellation distinguishes stop-request from actual stop; worker cannot ca
     return {outcome:'succeeded',note:'completed before observing the request'};
   }}});
   const done=await workerC.runOnce({projectId:'project-a'});
-  assert.equal(done.outcome,'succeeded');
-  assert.equal(store.getJob(finishes.id).status,'succeeded');
+  assert.equal(done.outcome,'cancelled');
+  assert.equal(store.getJob(finishes.id).status,'cancelled');
+  assert.equal(store.listJobResults(finishes.id).length,0,'no result row may exist for a cancelled job');
   // worker aborting without an owner stop request is recorded as failure, not cancellation
   const stubborn=store.createJob({projectId:'project-b',jobType:'noop',title:'Aborting worker',idempotencyKey:'c3'});
   store.approveJob(stubborn.id,{now:clock.now()});

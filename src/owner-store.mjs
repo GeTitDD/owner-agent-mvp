@@ -468,6 +468,9 @@ export class OwnerStore {
       check(att.attempt===row.last_attempt,'Only the latest attempt may report a result',409);
       check(att.status==='running',`Attempt in status ${att.status} cannot report a result`,409);
       check(['running','cancel_requested'].includes(row.status),`Job in status ${row.status} cannot accept a result`,409);
+      // State-machine priority (review r4 #2): a recorded cancel request can never become
+      // 'succeeded'. An honest 'failed' report from a cancel_requested job stays allowed.
+      if(outcome==='succeeded')check(row.status==='running',`Job in status ${row.status} cannot succeed; confirm the stop or reconcile first`,409);
       check(row.lease_until&&row.lease_until>=now,'Lease expired; late result rejected pending reconciliation',409);
       const safeNote=txt(note,'result note',400,false);
       this.db.prepare(`UPDATE owner_job_attempts SET status=?,finished_at=?,result_note=? WHERE id=? AND status='running'`).run(outcome,now,safeNote,att.id);
@@ -563,14 +566,16 @@ export class OwnerStore {
       check(att.worker_id===workerId,'Attempt belongs to a different worker',403);
       check(att.attempt===row.last_attempt,'Only the latest attempt may report a result',409);
       check(att.status==='running',`Attempt in status ${att.status} cannot report a result`,409);
-      check(['running','cancel_requested'].includes(row.status),`Job in status ${row.status} cannot accept a result`,409);
+      // State-machine priority: a recorded cancel request can never be overwritten by a
+      // late success — only a job still in 'running' may succeed (review r4 #2).
+      check(row.status==='running',`Job in status ${row.status} cannot succeed; confirm the stop or reconcile first`,409);
       check(row.lease_until&&row.lease_until>=now,'Lease expired; result rejected pending reconciliation',409);
       const safeNote=txt(note,'result note',400,false);
       const id=randomUUID();const hash=sha256(content);
       this.db.prepare(`INSERT INTO owner_job_results(id,project_id,job_id,attempt,session_id,model,status,content,content_hash,truncated,usage,created_at)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id,row.project_id,jobId,attemptNo,txt(sessionId,'session id',180,false),txt(model,'model',120),truncated?'truncated':'completed',content,hash,truncated?1:0,txt(usage,'usage',20),now);
       this.db.prepare(`UPDATE owner_job_attempts SET status='succeeded',finished_at=?,result_note=? WHERE id=? AND status='running'`).run(now,safeNote,att.id);
-      const changed=this.db.prepare(`UPDATE owner_jobs SET status='succeeded',finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status IN ('running','cancel_requested')`).run(now,now,jobId);
+      const changed=this.db.prepare(`UPDATE owner_jobs SET status='succeeded',finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status='running'`).run(now,now,jobId);
       check(changed.changes===1,'Job status changed concurrently',409);
       this.jobAudit(jobId,'succeeded',workerId,safeNote,now);
       this.db.exec('COMMIT');

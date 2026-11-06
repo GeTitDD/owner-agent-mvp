@@ -511,3 +511,83 @@ test('[askPi isolation happy] a zero-tool adapter answers via getLastText and di
   assert.match(last,/Owner 的问题：有哪些项目/);
   assert.equal(disposed,true);
 }));
+
+// ---- Review round 4 (PR #4) regression tests ----
+
+test('[pi-r4 #1] an unconfirmed stop never lands cancelled: fence, scan, then converge',()=>withStore(async({store,clock})=>{
+  const job=submitPiJob(store,{projectId:'proj-a',key:'cc1'});
+  store.approveJob(job.id,{now:clock.now()});
+  // hangAbort: abort() cannot settle the prompt — the stop can never be confirmed.
+  const factory=makeFactory({hang:true,hangAbort:true});
+  // REAL default timers: the 60ms confirm window must fire for a never-settling prompt.
+  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,leaseMs:30000,abortConfirmMs:60});
+  const pending=worker.runOnce({projectId:'proj-a'});
+  await waitFor(()=>factory.sessions.length===1,'session created');
+  store.requestCancelJob(job.id,{now:clock.now()});
+  const r=await pending;
+  assert.equal(r.outcome,'fenced');assert.equal(r.unconfirmedStop,true);
+  assert.equal(store.getJob(job.id).status,'cancel_requested','never marked cancelled without a confirmed stop');
+  assert.equal(store.listJobResults(job.id).length,0,'no artifact for an unconfirmed stop');
+  assert.ok(factory.sessions[0].aborts>=1,'the watchdog/worker did attempt to abort');
+  // the cancel request still converges through human reconciliation
+  clock.advanceMs(120000);
+  store.reconcileExpiredLeases({now:clock.now()});
+  assert.equal(store.getJob(job.id).status,'needs_reconciliation');
+  store.reconcileJob(job.id,{decision:'cancel',reason:'session lost after cancel',now:clock.now()});
+  assert.equal(store.getJob(job.id).status,'cancelled');
+  // a different project is never affected by this fence
+  const other=store.createJob({projectId:'proj-b',jobType:'noop',title:'elsewhere',idempotencyKey:'cc-other'});
+  store.approveJob(other.id,{now:clock.now()});
+  assert.equal(store.claimNextJob('proj-b','w',{now:clock.now(),leaseMs:60000}).claimed,true);
+}));
+
+test('[pi-r4 #2] a cancel recorded between watchdog ticks beats a late success',()=>withStore(async({store,clock})=>{
+  const task=store.createTask({projectId:'proj-a',title:'race target'});
+  const job=submitPiJob(store,{projectId:'proj-a',key:'race1',taskId:task.id});
+  store.approveJob(job.id,{now:clock.now()});
+  const factory=makeFactory({hang:true});
+  const timers=manualTimers();
+  const worker=new PiAnalysisWorker(store,{sessionFactory:factory,clock:clock.now,leaseMs:30000,timers});
+  const pending=worker.runOnce({projectId:'proj-a'});
+  await waitFor(()=>factory.sessions.length===1,'session created');
+  // Owner cancels BETWEEN watchdog ticks: abortRequested is still false when the model
+  // output arrives — the worker must take the confirm-stop path, never the success path.
+  store.requestCancelJob(job.id,{now:clock.now()});
+  factory.sessions[0]._resolve?.(); // late model output settles the prompt
+  const r=await pending;
+  assert.equal(r.outcome,'cancelled');
+  assert.equal(store.getJob(job.id).status,'cancelled');
+  assert.equal(store.listJobResults(job.id).length,0,'no result row may exist for a cancelled job');
+  assert.equal(store.getTask(task.id).status,'todo');
+}));
+
+test('[pi-r4 store] cancel_requested blocks succeeded commits on both store paths',()=>withStore(async({store,clock})=>{
+  const job=submitPiJob(store,{projectId:'proj-a',key:'p1'});
+  store.approveJob(job.id,{now:clock.now()});
+  store.claimNextJob('proj-a','w',{now:clock.now(),leaseMs:60000});
+  store.startJob(job.id,1,{workerId:'w',now:clock.now()});
+  store.requestCancelJob(job.id,{now:clock.now()});
+  // atomic success path refuses
+  assert.throws(()=>store.completeJobWithResult(job.id,1,{workerId:'w',content:'late result',now:clock.now()}),/cannot succeed/);
+  assert.equal(store.listJobResults(job.id).length,0,'no orphan result row');
+  // report path refuses succeeded, allows honest failed
+  assert.throws(()=>store.reportJobResult(job.id,1,{workerId:'w',outcome:'succeeded',now:clock.now()}),/cannot succeed/);
+  assert.equal(store.reportJobResult(job.id,1,{workerId:'w',outcome:'failed',note:'stopped',now:clock.now()}).status,'failed');
+}));
+
+test('[pi-r3 create-error] a rejecting factory create reports a fixed category and releases the project',()=>withStore(async({store,clock})=>{
+  const job=submitPiJob(store,{projectId:'proj-a',key:'ce1'});
+  store.approveJob(job.id,{now:clock.now()});
+  const SECRET='SECRET https://internal.example.com?key=xyz';
+  const boomFactory={createCalls:[],async create(){throw Object.assign(new Error(`${SECRET} boom`),{name:'PiInitError'});}};
+  const timers=manualTimers();
+  const worker=new PiAnalysisWorker(store,{sessionFactory:boomFactory,clock:clock.now,timers});
+  const r=await worker.runOnce({projectId:'proj-a'});
+  assert.equal(r.outcome,'failed');
+  assert.match(store.getJob(job.id).attempts[0].result_note,/pi session error \(session-error\)/);
+  assert.doesNotMatch(store.getJob(job.id).attempts[0].result_note,/SECRET/);
+  assert.doesNotMatch(store.getJob(job.id).attempts[0].result_note,/internal\.example\.com/);
+  assert.equal(store.getJob(job.id).status,'failed');
+  assert.equal(store.listJobResults(job.id).length,0);
+  assert.equal(timers.handles.size,0,'no timer leaked');
+}));
