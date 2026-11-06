@@ -24,7 +24,7 @@ export const PATCH_LIMITS = {
 // keys are never patchable, even when an owner accidentally allows a broad directory.
 const DENY_SEGMENTS = new Set(['.git', '.pi', '.owner-root-identity']);
 const DENY_NAMES = new Set([
-  '.env', '.npmrc', '.pypirc', '.netrc', '.git-credentials',
+  '.env', '.gitattributes', '.npmrc', '.pypirc', '.netrc', '.git-credentials',
   'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519'
 ]);
 const DENY_SUFFIX = /\.(pem|key|pfx|p12|crt|der|jks|keystore|kdbx)$/i;

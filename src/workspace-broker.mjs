@@ -77,10 +77,68 @@ export class WorkspaceBroker {
   }
 
   // Git filters run arbitrary local commands during checkout/add/diff. P0 promises not to
-  // execute project code, so a repository whose tracked files (or info/global attributes)
-  // assign a `filter` attribute is a hard refusal. A global filter config that is not
-  // referenced by any attribute is harmless and does not block ordinary repositories.
+  // execute project code. Scanning only tracked files is insufficient: a tracked
+  // `.gitattributes` with `*.txt filter=evil` can match a NEW proposal file that is not
+  // tracked yet. We therefore reject any `filter` assignment in every attributes source
+  // (tracked/untracked `.gitattributes`, `$GIT_DIR/info/attributes`, core.attributesFile
+  // and the XDG default), regardless of which files currently exist.
+  async attributeFiles(cwd) {
+    const files = new Set();
+    const listed = await this.git(cwd, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
+    for (const rel of listed.split('\u0000').filter(Boolean)) {
+      if (rel === '.gitattributes' || rel.endsWith('/.gitattributes')) {
+        files.add(path.resolve(cwd, rel));
+      }
+    }
+    try {
+      const info = (await this.git(cwd, ['rev-parse', '--git-path', 'info/attributes'])).trim();
+      if (info) files.add(path.isAbsolute(info) ? info : path.resolve(cwd, info));
+    } catch {
+      // Missing info/attributes is normal.
+    }
+    try {
+      const configured = (await this.git(cwd, ['config', '--path', '--get', 'core.attributesFile'])).trim();
+      if (configured) files.add(path.isAbsolute(configured) ? configured : path.resolve(cwd, configured));
+    } catch {
+      // No core.attributesFile.
+    }
+    const xdg = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+    files.add(path.join(xdg, 'git', 'attributes'));
+    return [...files];
+  }
+
   async assertNoExecutableFilters(cwd) {
+    for (const file of await this.attributeFiles(cwd)) {
+      let stat;
+      try {
+        stat = fs.lstatSync(file);
+      } catch {
+        continue;
+      }
+      if (stat.isSymbolicLink()) {
+        throw new Error('Git attributes path is a symbolic link; refusing worktree operation');
+      }
+      if (!stat.isFile()) continue;
+      if (stat.size > 1_048_576) {
+        throw new Error('Git attributes file is too large; refusing worktree operation');
+      }
+      const text = fs.readFileSync(file, 'utf8');
+      for (const line of text.split(/\r?\n/)) {
+        const clean = line.replace(/#.*$/, '').trim();
+        if (!clean) continue;
+        // The first token is a pattern (or `[attr]macro`); any later token that assigns
+        // `filter` can invoke a smudge/clean/process command on matching paths.
+        for (const token of clean.split(/\s+/).slice(1)) {
+          if (token.startsWith('-') || token.startsWith('!')) continue;
+          if (token === 'filter' || token.startsWith('filter=')) {
+            throw new Error('repository assigns Git filter attributes; refusing worktree operation');
+          }
+        }
+      }
+    }
+
+    // Defense in depth: resolve attributes for every currently tracked path too, so a
+    // macro/global source we failed to parse still cannot slip through for existing files.
     const files = await this.git(cwd, ['ls-files', '-z']);
     if (!files) return;
     const hooksPath = this.noHooksDir();
@@ -551,6 +609,7 @@ export class WorkspaceBroker {
     let artifact;
     try {
       await this.assertNoExecutableFilters(rootCheck.root);
+      await this.assertNoExecutableFilters(record.path);
       const artifactRow = this.store.getPatchArtifact(proposal.id, 'proposal');
       check(!!artifactRow, 'stored proposal artifact is missing');
       check(sha256(artifactRow.content) === artifactRow.content_hash, 'stored proposal artifact hash mismatch');
@@ -653,6 +712,7 @@ export class WorkspaceBroker {
       const rootCheck = verifyProjectRoot(project);
       check(rootCheck.ok, `project root is unavailable (${rootCheck.reason})`);
       await this.assertNoExecutableFilters(rootCheck.root);
+      await this.assertNoExecutableFilters(record.path);
       const head = (await this.git(record.path, ['rev-parse', 'HEAD'])).trim();
       check(head === proposal.base_sha, 'worktree HEAD drifted from the approved base');
       const artifactRow = this.store.getPatchArtifact(proposal.id, 'proposal');

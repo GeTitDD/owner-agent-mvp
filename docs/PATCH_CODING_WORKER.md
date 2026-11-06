@@ -27,10 +27,12 @@ OwnerTask → code-patch Job（人工审批）→ 固定 base 的独立 Worktree
   即使 `<workspacesRoot>/<projectId>` 被替换为链接，也不会先写到链接目标再检查。
 - 所有 Git 操作使用 `execFile('git', [固定参数])`，**不经过 shell**，也不把 Git 交给模型；
   同时固定 `core.hooksPath` 到 Owner 私有空目录、关闭 `core.fsmonitor`。
-- **Git filter 默认拒绝**：创建前对当前 tracked 文件执行 `git check-attr filter`；只要
-  存在 `filter` 属性（无论 smudge/clean/process 配置来自 repo、info 还是全局 attributes），
-  一律拒绝 worktree 操作，避免 checkout/add/status 执行任意 filter 命令。LFS 等需要 filter
-  的仓库暂不支持，后续应由安全 materialization 处理。
+- **Git filter 默认拒绝**：扫描 **所有 attributes 来源**（tracked/untracked `.gitattributes`、
+  `$GIT_DIR/info/attributes`、`core.attributesFile`、XDG 默认 attributes），只要出现
+  `filter=` / 裸 `filter` 属性就拒绝 worktree 操作；即使当前没有 tracked 匹配文件，未来
+  新增 `docs/new.txt` 也不会绕过（配置项测试）。同时 `patch-protocol` 将
+  `.gitattributes` 加入 deny-list，提案不能修改属性语义。LFS 等需要 filter 的仓库暂不
+  支持，后续应由安全 materialization 处理。
 - 创建前依次拒绝：
   1. 未登记 / 根目录缺失 / 根身份漂移（复用 v0.7 `.owner-root-identity` 文件身份）；
   2. `git rev-parse --show-toplevel` 与登记根不一致；
@@ -117,8 +119,9 @@ Workspace
 ```
 
 - Worker 只创建 `proposed`；取消/失联/超时/未确认停止**永不 apply**，Worktree 转
-  `quarantined` 留证。取消只有在 generator 已 settled（或 Agent 明确确认停止）后才能
-  `confirmJobCancelled`；prompt 仍悬挂时返回 fenced，交给租约/人工裁定。
+  `quarantined` 留证。取消只有在 **generator 最终结果**已返回（且不是后来的
+  `unconfirmed-stop`）后才能 `confirmJobCancelled`；`cancelSeen` 先赢 race 不足以判定
+  停止，prompt 仍悬挂或最终返回 `unconfirmed-stop` 时返回 fenced，交给租约/人工裁定。
 - 项目栅栏同时覆盖 Job 与 PatchProposal：`owner_jobs.needs_reconciliation` **或**
   `owner_patch_proposals.status IN ('applying','needs_reconciliation')` 都会阻止同项目
   新 Job 的批准与 claim；不同项目不受影响，Owner 裁定后解除。
@@ -213,7 +216,8 @@ node bin/ownerctl.mjs patch-reconcile --id <PROPOSAL_ID> --decision discard --re
 | traversal/绝对路径/symlink/hardlink/case-alias/.git/敏感文件/大小限制 | `[patch#4]` `[patch#5]` |
 | 改哈希审批失效；拒绝不应用；仅在对应 Worktree 应用一次；崩溃可裁定 | `[patch#6]` `[patch#7]` `[patch#8]` |
 | 跨项目/跨 Attempt 不能读取或应用另一项目补丁 | `[patch#9]` |
-| 取消/失联/过期租约/迟到输出/未确认停止：不应用、不释放隔离 | `[patch#10]` `[patch#14]` |
+| 取消/失联/过期租约/迟到输出/未确认停止：不应用、不释放隔离 | `[patch#10]` `[patch#14]` `[patch#21]` |
+| filter 模式只匹配“未来新增文件”时仍在 checkout/diff 前拒绝 | `[patch#22]` `[patch#23]` |
 | OwnerTask 原状态；Job 成功仅表示提案存储；审计无源码/Prompt/密钥 | `[patch#2]` `[patch#20]` |
 | 模型材料读取的父链 symlink/hardlink/UTF-8 防护 | `[patch#13]` |
 | Git filter 不执行（恶意 smudge 外部 marker 不存在） | `[patch#15]` |

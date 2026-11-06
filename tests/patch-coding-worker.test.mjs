@@ -330,6 +330,7 @@ test('[patch#4] path/scope/link/size attacks are rejected by the trusted validat
     assert.throws(() => validate([add('/absolute.txt')]), /absolute/);
     assert.throws(() => validate([add('C:\\absolute.txt')]), /drive-letter/);
     assert.throws(() => validate([add('.git/config')]), /denied path segment/);
+    assert.throws(() => validate([add('.gitattributes', '*.txt filter=evil\n')]), /private key|credential|denied/i);
     assert.throws(() => validate([add('.pi/ext.js')]), /denied path segment/);
     assert.throws(() => validate([add('.env')]), /environment files/);
     assert.throws(() => validate([add('src/secret.txt')]), /secret\/credential/);
@@ -773,6 +774,86 @@ test('[patch#20] unknown provider error categories never enter the durable job n
   assert.match(note, /worker-error/);
   assert.equal(note.includes('provider-secret-category'), false);
   assert.equal(note.includes('endpoint and secret'), false);
+}));
+
+test('[patch#21] a late unconfirmed-stop after cancel wins still stays fenced', () => withEnv(async ({ store, base, broker, clock }) => {
+  const { job } = submitCode(store, clock, { base, key: 'late-unconfirmed-1' });
+  let rejectGeneration;
+  const agent = new FakePatchProposalAgent({
+    onGenerate: () => new Promise((_resolve, reject) => { rejectGeneration = reject; })
+  });
+  const timers = manualTimers();
+  const run = runWorker({ store, broker, clock, agent, timers, abortConfirmMs: 5000 });
+  await waitFor(() => agent.calls.length === 1, 'late-unconfirmed agent called');
+  store.requestCancelJob(job.id, { now: clock.now() });
+  timers.fireByMs(10000);
+  await waitFor(() => [...timers.handles.values()].some((handle) => handle.ms === 5000),
+    'late-unconfirmed stop timer');
+  rejectGeneration(Object.assign(new Error('inner session stop did not confirm'), { category: 'unconfirmed-stop' }));
+  const result = await run;
+  assert.equal(result.outcome, 'fenced');
+  assert.equal(result.unconfirmedStop, true);
+  assert.equal(store.getJob(job.id).status, 'cancel_requested');
+  assert.equal(store.listPatchProposals({ projectId: 'proj-a' }).filter((p) => p.job_id === job.id).length, 0);
+  assert.equal(store.getWorkspaceForAttempt(job.id, 1).status, 'quarantined');
+  assert.equal(timers.handles.size, 0);
+}));
+
+test('[patch#22] filter attributes matching only a NEW proposal path are refused before checkout', () => withEnv(async ({ root, repo, base, store, broker, clock }) => {
+  // Tracked .gitattributes matches *.txt, but the repo contains no tracked .txt yet.
+  writeFileSync(path.join(repo, '.gitattributes'), '*.txt filter=evil\n');
+  git(repo, ['add', '.gitattributes']);
+  git(repo, ['commit', '-qm', 'filter pattern only']);
+  const marker = path.join(root, 'new-path-smudge-marker.txt');
+  const script = path.join(root, 'new-path-smudge.mjs');
+  writeFileSync(script, `import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(marker)},'ran');`);
+  const command = `"${process.execPath}" "${script}"`;
+  git(repo, ['config', 'filter.evil.smudge', command]);
+  git(repo, ['config', 'filter.evil.clean', command]);
+  const head = gitOut(repo, ['rev-parse', 'HEAD']);
+  mkdirSync(path.join(repo, 'docs'), { recursive: true });
+  writeFileSync(path.join(repo, 'docs', '.keep'), '');
+  git(repo, ['add', 'docs/.keep']);
+  git(repo, ['commit', '-qm', 'docs dir']);
+  const currentBase = gitOut(repo, ['rev-parse', 'HEAD']);
+  const { job } = submitCode(store, clock, { base: currentBase, key: 'new-path-filter-1', allowedPaths: 'docs/' });
+  const agent = new FakePatchProposalAgent({
+    files: [{ path: 'docs/new.txt', action: 'add', content: 'new filtered path\n' }]
+  });
+  const result = await runWorker({ store, broker, clock, agent });
+  assert.equal(result.outcome, 'failed');
+  assert.equal(store.getWorkspaceForAttempt(job.id, 1), null);
+  assert.equal(existsSync(marker), false, 'new-path smudge/clean must not run');
+  assert.equal(head === currentBase, false);
+}));
+
+test('[patch#23] a filter added to the worktree after proposal is caught at apply precheck', () => withEnv(async ({ root, repo, base, store, broker, clock }) => {
+  mkdirSync(path.join(repo, 'docs'), { recursive: true });
+  writeFileSync(path.join(repo, 'docs', '.keep'), '');
+  git(repo, ['add', 'docs/.keep']);
+  git(repo, ['commit', '-qm', 'docs dir']);
+  const currentBase = gitOut(repo, ['rev-parse', 'HEAD']);
+  const { job } = submitCode(store, clock, { base: currentBase, key: 'apply-filter-1', allowedPaths: 'docs/' });
+  const agent = new FakePatchProposalAgent({
+    files: [{ path: 'docs/new.txt', action: 'add', content: 'new filtered path\n' }]
+  });
+  const run = await runWorker({ store, broker, clock, agent });
+  assert.equal(run.outcome, 'succeeded');
+  const proposal = store.getPatchProposal(run.proposalId);
+  store.approvePatchProposal(proposal.id, { expectedHash: proposal.proposal_hash });
+  const workspace = store.getWorkspaceForAttempt(job.id, 1);
+  const marker = path.join(root, 'apply-smudge-marker.txt');
+  const script = path.join(root, 'apply-smudge.mjs');
+  writeFileSync(script, `import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(marker)},'ran');`);
+  const command = `"${process.execPath}" "${script}"`;
+  git(repo, ['config', 'filter.evil.smudge', command]);
+  git(repo, ['config', 'filter.evil.clean', command]);
+  writeFileSync(path.join(workspace.path, '.gitattributes'), '*.txt filter=evil\n');
+  const applied = await broker.applyProposal(workspace, store.getPatchProposal(proposal.id));
+  assert.equal(applied.outcome, 'apply_failed');
+  assert.equal(existsSync(marker), false, 'apply/verify must not execute the worktree filter');
+  assert.equal(store.getPatchProposal(proposal.id).status, 'apply_failed');
+  assert.equal(store.getWorkspaceForAttempt(job.id, 1).status, 'quarantined');
 }));
 
 test('[patch-real] optional real Pi smoke (OWNER_AGENT_REAL_PATCH_TEST=1)', {

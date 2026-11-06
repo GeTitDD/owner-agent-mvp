@@ -270,23 +270,31 @@ export class PatchCodingWorker {
         if (generationTimer !== null) this.timers.clear(generationTimer);
       }
 
+      // Wait for the OUTER generation promise to settle and return its final payload. A
+      // cancelSeen race winner must not be mistaken for the generator's final state: the
+      // Agent may reject later with `unconfirmed-stop` even though the wrapper promise
+      // itself becomes fulfilled.
       const waitSettled = async () => {
-        let confirmed = false;
+        let result = null;
+        let waitTimedOut = false;
         let confirmTimer = null;
         try {
-          confirmed = await Promise.race([
-            generation.then(() => true),
+          result = await Promise.race([
+            generation,
             new Promise((resolve) => {
-              confirmTimer = this.timers.timeout(() => resolve(false), this.abortConfirmMs);
+              confirmTimer = this.timers.timeout(() => {
+                waitTimedOut = true;
+                resolve(null);
+              }, this.abortConfirmMs);
             })
           ]);
         } finally {
           if (confirmTimer !== null) this.timers.clear(confirmTimer);
         }
-        return confirmed;
+        return waitTimedOut ? { settled: false, result: null } : { settled: true, result };
       };
-      const stopUnconfirmed = Boolean(generationResult?.error)
-        && classifyWorkerError(generationResult.error) === 'unconfirmed-stop';
+      const resultIsUnconfirmed = (result) =>
+        Boolean(result?.error) && classifyWorkerError(result.error) === 'unconfirmed-stop';
 
       // Fence wins over any model output: no report, no proposal, keep evidence.
       if (fenced) {
@@ -301,8 +309,8 @@ export class PatchCodingWorker {
         // (or the agent explicitly confirms its stop). Never release the project fence while
         // the model prompt could still be running.
         controller.abort();
-        const settled = await waitSettled();
-        if (!settled || stopUnconfirmed) {
+        const waited = await waitSettled();
+        if (!waited.settled || resultIsUnconfirmed(waited.result)) {
           guard(() => this.store.quarantineWorkspace(workspace.id, {
             reason: 'proposal generation stop could not be confirmed',
             now: this.clock()
@@ -321,8 +329,8 @@ export class PatchCodingWorker {
       if (timedOut) {
         // Bounded stop confirmation: if the agent cannot confirm, stay fenced and let the
         // lease expire into human reconciliation instead of reporting a false stop.
-        const settled = await waitSettled();
-        const confirmed = settled && !stopUnconfirmed;
+        const waited = await waitSettled();
+        const confirmed = waited.settled && !resultIsUnconfirmed(waited.result);
         if (!confirmed) {
           guard(() => this.store.quarantineWorkspace(workspace.id, {
             reason: 'proposal generation stop could not be confirmed',
