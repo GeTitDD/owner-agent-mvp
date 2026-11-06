@@ -856,6 +856,38 @@ test('[patch#23] a filter added to the worktree after proposal is caught at appl
   assert.equal(store.getWorkspaceForAttempt(job.id, 1).status, 'quarantined');
 }));
 
+test('[patch#24] an ignored .gitattributes injected into the worktree is caught before apply', () => withEnv(async ({ root, repo, store, broker, clock }) => {
+  mkdirSync(path.join(repo, 'docs'), { recursive: true });
+  writeFileSync(path.join(repo, 'docs', '.keep'), '');
+  writeFileSync(path.join(repo, '.gitignore'), 'docs/.gitattributes\n');
+  git(repo, ['add', '.gitignore', 'docs/.keep']);
+  git(repo, ['commit', '-qm', 'ignored attributes fixture']);
+  const base = gitOut(repo, ['rev-parse', 'HEAD']);
+  const { job } = submitCode(store, clock, { base, key: 'ignored-attrs-1', allowedPaths: 'docs/' });
+  const agent = new FakePatchProposalAgent({
+    files: [{ path: 'docs/new.txt', action: 'add', content: 'new filtered path\n' }]
+  });
+  const run = await runWorker({ store, broker, clock, agent });
+  assert.equal(run.outcome, 'succeeded');
+  const proposal = store.getPatchProposal(run.proposalId);
+  store.approvePatchProposal(proposal.id, { expectedHash: proposal.proposal_hash });
+  const workspace = store.getWorkspaceForAttempt(job.id, 1);
+
+  const marker = path.join(root, 'ignored-attrs-marker.txt');
+  const script = path.join(root, 'ignored-attrs-smudge.mjs');
+  writeFileSync(script, `import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(marker)},'ran');`);
+  const command = `"${process.execPath}" "${script}"`;
+  git(repo, ['config', 'filter.evil.smudge', command]);
+  git(repo, ['config', 'filter.evil.clean', command]);
+  writeFileSync(path.join(workspace.path, 'docs', '.gitattributes'), '*.txt filter=evil\n');
+
+  const applied = await broker.applyProposal(workspace, store.getPatchProposal(proposal.id));
+  assert.equal(applied.outcome, 'apply_failed');
+  assert.equal(existsSync(marker), false, 'ignored .gitattributes must not trigger clean/smudge');
+  assert.equal(store.getPatchProposal(proposal.id).status, 'apply_failed');
+  assert.equal(store.getWorkspaceForAttempt(job.id, 1).status, 'quarantined');
+}));
+
 test('[patch-real] optional real Pi smoke (OWNER_AGENT_REAL_PATCH_TEST=1)', {
   skip: process.env.OWNER_AGENT_REAL_PATCH_TEST !== '1'
 }, () => withEnv(async ({ store, base, broker, clock }) => {

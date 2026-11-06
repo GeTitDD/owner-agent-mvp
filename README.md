@@ -11,7 +11,7 @@
 - 原项目主工作区、`main` 与 OwnerTask 完全不动；不自动 commit/push/PR/merge。
 - 路径防护：traversal/绝对路径/盘符、`.git`/`.pi`/`.env`/密钥、symlink/junction/hardlink、大小写别名、超范围/超大小文件全部由宿主拒绝；模型材料读取复用同一父链检查。
 - Workspace 父链与 cleanup 身份双重校验：symlink/junction 在写入前拒绝；cleanup 必须证明物理目录仍是登记的 Git worktree，替换目录不会被递归删除。
-- 带可执行 Git filter 的仓库默认拒绝 worktree 操作；LFS 等留待后续安全 materialization。
+- 带可执行 Git filter 的仓库默认拒绝 worktree 操作（含 ignored `.gitattributes` 与待新增路径 `check-attr`）；LFS 等留待后续安全 materialization。
 - 审批绑定提案哈希；提案变化即审批失效；同一 Worktree 只能应用一次；`patch-apply` 显式恢复 approved→applying 崩溃窗口。
 - 崩溃 fail-closed：`applying → needs_reconciliation`，Owner 显式 `patch-reconcile` 裁定，**绝不自动重放**；`applying/needs_reconciliation` 提案同时触发项目调度 fence。
 - 真实 Pi 调用必须 `--allow-model 1`；CI/测试/演示全部使用 Fake agent，零模型费用。

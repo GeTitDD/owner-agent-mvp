@@ -27,12 +27,14 @@ OwnerTask → code-patch Job（人工审批）→ 固定 base 的独立 Worktree
   即使 `<workspacesRoot>/<projectId>` 被替换为链接，也不会先写到链接目标再检查。
 - 所有 Git 操作使用 `execFile('git', [固定参数])`，**不经过 shell**，也不把 Git 交给模型；
   同时固定 `core.hooksPath` 到 Owner 私有空目录、关闭 `core.fsmonitor`。
-- **Git filter 默认拒绝**：扫描 **所有 attributes 来源**（tracked/untracked `.gitattributes`、
-  `$GIT_DIR/info/attributes`、`core.attributesFile`、XDG 默认 attributes），只要出现
-  `filter=` / 裸 `filter` 属性就拒绝 worktree 操作；即使当前没有 tracked 匹配文件，未来
-  新增 `docs/new.txt` 也不会绕过（配置项测试）。同时 `patch-protocol` 将
-  `.gitattributes` 加入 deny-list，提案不能修改属性语义。LFS 等需要 filter 的仓库暂不
-  支持，后续应由安全 materialization 处理。
+- **Git filter 默认拒绝**：扫描 **所有 attributes 来源**（tracked/untracked **以及被
+  `.gitignore` 忽略**的 `.gitattributes`、`$GIT_DIR/info/attributes`、
+  `core.attributesFile`、XDG 默认 attributes），只要出现 `filter=` / 裸 `filter` 属性就
+  拒绝 worktree 操作；即使当前没有 tracked 匹配文件，未来新增 `docs/new.txt` 也不会绕过。
+- 在 apply/verify 前还对**全部待新增/修改路径**执行 `git check-attr filter --stdin`
+  fail-closed，覆盖“worktree 创建后才注入 ignored `.gitattributes`”的路径；无法可靠核验
+  时直接拒绝。`patch-protocol` 将 `.gitattributes` 加入 deny-list，提案不能修改属性语义。
+  LFS 等需要 filter 的仓库暂不支持，后续应由安全 materialization 处理。
 - 创建前依次拒绝：
   1. 未登记 / 根目录缺失 / 根身份漂移（复用 v0.7 `.owner-root-identity` 文件身份）；
   2. `git rev-parse --show-toplevel` 与登记根不一致；
@@ -218,6 +220,7 @@ node bin/ownerctl.mjs patch-reconcile --id <PROPOSAL_ID> --decision discard --re
 | 跨项目/跨 Attempt 不能读取或应用另一项目补丁 | `[patch#9]` |
 | 取消/失联/过期租约/迟到输出/未确认停止：不应用、不释放隔离 | `[patch#10]` `[patch#14]` `[patch#21]` |
 | filter 模式只匹配“未来新增文件”时仍在 checkout/diff 前拒绝 | `[patch#22]` `[patch#23]` |
+| 被 `.gitignore` 忽略的 worktree `.gitattributes` 注入后 apply 仍 fail-closed | `[patch#24]` |
 | OwnerTask 原状态；Job 成功仅表示提案存储；审计无源码/Prompt/密钥 | `[patch#2]` `[patch#20]` |
 | 模型材料读取的父链 symlink/hardlink/UTF-8 防护 | `[patch#13]` |
 | Git filter 不执行（恶意 smudge 外部 marker 不存在） | `[patch#15]` |

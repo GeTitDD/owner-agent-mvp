@@ -90,6 +90,18 @@ export class WorkspaceBroker {
         files.add(path.resolve(cwd, rel));
       }
     }
+    // Git still reads ignored `.gitattributes` files from the working tree. Enumerate only
+    // attribute-shaped paths so a large ignored directory (node_modules etc.) is not
+    // scanned file-by-file.
+    const ignored = await this.git(cwd, [
+      'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--',
+      '.gitattributes', ':(glob)**/.gitattributes'
+    ]);
+    for (const rel of ignored.split('\u0000').filter(Boolean)) {
+      if (rel === '.gitattributes' || rel.endsWith('/.gitattributes')) {
+        files.add(path.resolve(cwd, rel));
+      }
+    }
     try {
       const info = (await this.git(cwd, ['rev-parse', '--git-path', 'info/attributes'])).trim();
       if (info) files.add(path.isAbsolute(info) ? info : path.resolve(cwd, info));
@@ -107,7 +119,39 @@ export class WorkspaceBroker {
     return [...files];
   }
 
-  async assertNoExecutableFilters(cwd) {
+  // Resolve `filter` for an explicit NUL-separated path list. This is the authoritative
+  // check for paths that do not exist yet (new proposal files): only Git's own attribute
+  // resolver knows whether an ignored `.gitattributes` or a macro applies to them.
+  async checkFilterAttributes(cwd, input) {
+    const hooksPath = this.noHooksDir();
+    const args = [
+      '-c', `core.hooksPath=${hooksPath}`,
+      '-c', 'core.fsmonitor=false',
+      'check-attr', '-z', '--stdin', 'filter'
+    ];
+    let output;
+    try {
+      output = execFileSync(this.gitBin, args, {
+        cwd,
+        input,
+        encoding: 'utf8',
+        maxBuffer: 16 * 1024 * 1024,
+        windowsHide: true,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' }
+      });
+    } catch {
+      throw new Error('unable to verify Git filter safety; refusing worktree operation');
+    }
+    const parts = output.split('\u0000');
+    for (let i = 0; i + 2 < parts.length; i += 3) {
+      const value = parts[i + 2];
+      if (value && value !== 'unspecified' && value !== 'unset') {
+        throw new Error('repository assigns executable Git filters; refusing worktree operation');
+      }
+    }
+  }
+
+  async assertNoExecutableFilters(cwd, { paths = [] } = {}) {
     for (const file of await this.attributeFiles(cwd)) {
       let stat;
       try {
@@ -137,35 +181,13 @@ export class WorkspaceBroker {
       }
     }
 
-    // Defense in depth: resolve attributes for every currently tracked path too, so a
-    // macro/global source we failed to parse still cannot slip through for existing files.
+    // Defense in depth: resolve attributes for every currently tracked path, and for the
+    // explicit pending paths supplied by apply/verify. The latter covers paths that do not
+    // exist yet, including attributes from a `.gitattributes` that is itself ignored.
     const files = await this.git(cwd, ['ls-files', '-z']);
-    if (!files) return;
-    const hooksPath = this.noHooksDir();
-    const args = [
-      '-c', `core.hooksPath=${hooksPath}`,
-      '-c', 'core.fsmonitor=false',
-      'check-attr', '-z', '--stdin', 'filter'
-    ];
-    let output;
-    try {
-      output = execFileSync(this.gitBin, args, {
-        cwd,
-        input: files,
-        encoding: 'utf8',
-        maxBuffer: 16 * 1024 * 1024,
-        windowsHide: true,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' }
-      });
-    } catch {
-      throw new Error('unable to verify Git filter safety; refusing worktree operation');
-    }
-    const parts = output.split('\u0000');
-    for (let i = 0; i + 2 < parts.length; i += 3) {
-      const value = parts[i + 2];
-      if (value && value !== 'unspecified' && value !== 'unset') {
-        throw new Error('repository assigns executable Git filters; refusing worktree operation');
-      }
+    if (files) await this.checkFilterAttributes(cwd, files);
+    if (paths.length > 0) {
+      await this.checkFilterAttributes(cwd, `${paths.join('\u0000')}\u0000`);
     }
   }
 
@@ -603,13 +625,15 @@ export class WorkspaceBroker {
     const proposalAllowed = Array.isArray(proposal.allowedPaths)
       ? proposal.allowedPaths
       : JSON.parse(proposal.allowed_paths);
+    const proposalFiles = Array.isArray(proposal.files) ? proposal.files : JSON.parse(proposal.files);
+    const proposalPaths = proposalFiles.map((file) => file.path);
 
     // Any precheck failure after approval is fail-closed too: no file is written, the
     // proposal becomes apply_failed, and the workspace is quarantined for inspection.
     let artifact;
     try {
-      await this.assertNoExecutableFilters(rootCheck.root);
-      await this.assertNoExecutableFilters(record.path);
+      await this.assertNoExecutableFilters(rootCheck.root, { paths: proposalPaths });
+      await this.assertNoExecutableFilters(record.path, { paths: proposalPaths });
       const artifactRow = this.store.getPatchArtifact(proposal.id, 'proposal');
       check(!!artifactRow, 'stored proposal artifact is missing');
       check(sha256(artifactRow.content) === artifactRow.content_hash, 'stored proposal artifact hash mismatch');
@@ -711,8 +735,10 @@ export class WorkspaceBroker {
       check(!!project, 'Unknown project');
       const rootCheck = verifyProjectRoot(project);
       check(rootCheck.ok, `project root is unavailable (${rootCheck.reason})`);
-      await this.assertNoExecutableFilters(rootCheck.root);
-      await this.assertNoExecutableFilters(record.path);
+      const proposalFiles = Array.isArray(proposal.files) ? proposal.files : JSON.parse(proposal.files);
+      const proposalPaths = proposalFiles.map((file) => file.path);
+      await this.assertNoExecutableFilters(rootCheck.root, { paths: proposalPaths });
+      await this.assertNoExecutableFilters(record.path, { paths: proposalPaths });
       const head = (await this.git(record.path, ['rev-parse', 'HEAD'])).trim();
       check(head === proposal.base_sha, 'worktree HEAD drifted from the approved base');
       const artifactRow = this.store.getPatchArtifact(proposal.id, 'proposal');
