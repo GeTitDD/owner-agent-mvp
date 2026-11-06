@@ -1,8 +1,26 @@
 # Owner Agent × Domain Knowledge Workbench — v0.5
 
-> 当前开发分支含 **v0.7 Pi Analysis Worker** 与 **v0.6 Durable Task Coordinator**（均为 WIP），已合入能力见下方「功能状态」。
+> 当前开发分支含 **v0.8 Patch-first Coding Worker**、**v0.7 Pi Analysis Worker** 与 **v0.6 Durable Task Coordinator**（均为 WIP），已合入能力见下方「功能状态」。
 
 **以 Owner 为中心的多项目管理 Agent + 个人领域知识资产工作台 + 可选桌面宠物。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
+
+## v0.8 WIP：Patch-first Coding Worker（分支 `feat/v0.8-patch-coding-worker`）
+
+在 v0.7 的隔离 Pi 会话之上，新增**受控代码补丁闭环**：Owner 为指定项目/任务/文件范围批准一次 `code-patch` Job，Pi 只生成**结构化补丁提案**（无工具、无 Shell、无 Git），宿主验证后进入**二次审批**；只有 Owner 用固定 `proposal_hash` 批准后，才在从批准 base 创建的**独立 Git Worktree** 中应用，并产出只读 Diff 证据。
+
+- 原项目主工作区、`main` 与 OwnerTask 完全不动；不自动 commit/push/PR/merge。
+- 路径防护：traversal/绝对路径/盘符、`.git`/`.pi`/`.env`/密钥、symlink/junction/hardlink、大小写别名、超范围/超大小文件全部由宿主拒绝；模型材料读取复用同一父链检查。
+- Workspace 父链与 cleanup 身份双重校验：symlink/junction 在写入前拒绝；cleanup 必须证明物理目录仍是登记的 Git worktree，替换目录不会被递归删除。
+- 带可执行 Git filter 的仓库默认拒绝 worktree 操作（含 ignored `.gitattributes` 与待新增路径 `check-attr`）；LFS 等留待后续安全 materialization。
+- 审批绑定提案哈希；提案变化即审批失效；同一 Worktree 只能应用一次；`patch-apply` 显式恢复 approved→applying 崩溃窗口。
+- 崩溃 fail-closed：`applying → needs_reconciliation`，Owner 显式 `patch-reconcile` 裁定，**绝不自动重放**；`applying/needs_reconciliation` 提案同时触发项目调度 fence。
+- 真实 Pi 调用必须 `--allow-model 1`；CI/测试/演示全部使用 Fake agent，零模型费用。
+
+```bash
+npm run demo:patch     # fake agent 端到端：worktree → proposal → approve → apply → cleanup
+```
+
+完整工作区边界、补丁协议、三条状态机与崩溃恢复见 **[Patch Coding Worker 设计文档](docs/PATCH_CODING_WORKER.md)**。
 
 ## v0.7 WIP：Pi Analysis Worker（分支 `feat/v0.7-pi-analysis-worker`）
 
@@ -36,6 +54,7 @@ npm run demo:jobs   # 临时库 + fake clock 的端到端演示（审批/并发/
 ## 最快试用
 
 - `npm test` — 运行全部自动化测试（无需模型 API）。
+- `npm run demo:patch` — v0.8 受控 Worktree/提案/二次审批/应用/清理演示（fake agent）。
 - `npm run demo:owner` — 两个临时项目的注册、事件、知识迁移提案、审核演示。
 - `npm run workbench` — 打开 `http://127.0.0.1:4317`。进入 **Owner Agent** 页面登记项目、任务，右下角可打开伴侣对话窗。
 - `node bin/ownerctl.mjs register --id demo --name Demo --root /absolute/path/to/project --domain pi-sdk` — 登记现有本地项目。
@@ -46,7 +65,7 @@ npm run demo:jobs   # 临时库 + fake clock 的端到端演示（审批/并发/
 
 ### 本版交付边界
 
-- 已实现：Owner Project/Task Registry、事件日志和投影、轻量常驻监控、只读智能查询、跨项目知识建议/审批、Web 管理面板、可选 Electron 桌面壳。
+- 已实现：Owner Project/Task Registry、事件日志和投影、轻量常驻监控、只读智能查询、跨项目知识建议/审批、Web 管理面板、可选 Electron 桌面壳；v0.6 持久化 Job 生命周期；v0.7 只读 Pi 分析；v0.8 受控 Worktree 补丁提案/二次审批/应用。
 - 默认推理模式：**无模型的确定性查询**。可通过 `ownerctl ask-pi` 明确调用工具禁用的 Pi SDK 认知会话（需要额外安装、配置模型；仅模拟集成测试）。
 - 暂未实现：自动启动的 OS 守护进程、项目 Agent 实际调度、自动跨项目知识迁移、生产级权限认证、真实 Pi/Electron GUI 端到端测试。
 - 安全原则：项目必须显式登记；Pi 采集默认关闭，只记元数据；知识建议不自动更改项目；Workbench 仅绑定 loopback。**请勿公网开放。**

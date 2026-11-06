@@ -93,7 +93,11 @@ export class OwnerAgent {
         throw new Error('Pi tool isolation verification failed; refusing to prompt');
       }
       await session.prompt(instructions);
-      return {answer:session.getLastText(),mode:'pi-model',basis:s.projects.map(p=>`project:${p.id}`)};
+      const text=String(session.getLastText?.()??'');
+      // An empty model response is not an answer: surface it as an error instead of
+      // returning a silent success to the owner (and to the deterministic test suite).
+      if(!text.trim())throw new Error('Pi returned no answer');
+      return {answer:text,mode:'pi-model',basis:s.projects.map(p=>`project:${p.id}`)};
     }finally{
       if(session&&!disposed){disposed=true;session.dispose();}
       if(workDir){try{rmSync(workDir,{recursive:true,force:true});}catch{/* best effort */}}

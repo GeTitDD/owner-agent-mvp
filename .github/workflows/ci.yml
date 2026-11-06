@@ -13,10 +13,13 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Cross-platform lock: worktree/path/symlink behaviour is exercised on both OSes.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         node-version: [22]
     steps:
       - uses: actions/checkout@v4
@@ -29,3 +32,4 @@ jobs:
       - run: npm test
       - run: npm run demo:jobs
       - run: npm run demo:pi
+      - run: npm run demo:patch

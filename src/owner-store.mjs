@@ -6,6 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { defaultDbPath } from './storage.mjs';
 import { sha256 } from './utils.mjs';
+import { canonicalProposalHash } from './patch-protocol.mjs';
 import { PersonalKnowledgeStore } from './personal-store.mjs';
 
 export class OwnerInputError extends Error { constructor(message,status=400){super(message);this.status=status;} }
@@ -21,7 +22,7 @@ const kinds=new Set(['run_started','tool_finished','run_settled','project_note',
 // Job coordination (P0 control plane): explicit state machine, whitelisted job types only.
 const jobStatuses=new Set(['pending_approval','queued','leased','running','cancel_requested','succeeded','failed','cancelled','rejected','needs_reconciliation']);
 const activeJobStatuses=new Set(['queued','leased','running','cancel_requested']);
-const jobTypes=new Set(['noop','status-note','fake-analysis','pi-analysis']);
+const jobTypes=new Set(['noop','status-note','fake-analysis','pi-analysis','code-patch']);
 const attemptStatuses=new Set(['claimed','running','succeeded','failed','cancelled','orphaned']);
 const jobFilterStatuses=new Set([...jobStatuses]);
 const safeArray=(v,label)=>{check(Array.isArray(v)&&v.length<=30&&v.every(x=>typeof x==='string'&&x.length<=80&&/^[\w.-]+$/.test(x)),`Invalid ${label}`);return [...new Set(v)].sort();};
@@ -134,7 +135,67 @@ export class OwnerStore {
         created_at TEXT NOT NULL,
         UNIQUE(job_id,attempt)
       );
+      CREATE TABLE IF NOT EXISTS owner_workspaces(
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES owner_projects(id),
+        job_id TEXT NOT NULL REFERENCES owner_jobs(id) ON DELETE CASCADE,
+        attempt INTEGER NOT NULL,
+        base_sha TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        path TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL CHECK(status IN ('active','quarantined','cleaned')),
+        created_at TEXT NOT NULL,
+        quarantined_at TEXT,
+        cleaned_at TEXT,
+        quarantine_reason TEXT NOT NULL DEFAULT '',
+        UNIQUE(job_id,attempt)
+      );
+      CREATE TABLE IF NOT EXISTS owner_patch_proposals(
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES owner_projects(id),
+        job_id TEXT NOT NULL REFERENCES owner_jobs(id) ON DELETE CASCADE,
+        attempt INTEGER NOT NULL,
+        workspace_id TEXT NOT NULL REFERENCES owner_workspaces(id),
+        owner_task_id TEXT REFERENCES owner_tasks(id),
+        base_sha TEXT NOT NULL,
+        allowed_paths TEXT NOT NULL,
+        files TEXT NOT NULL,
+        proposal_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('proposed','approved','applying','applied','needs_reconciliation','apply_failed','rejected')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        approved_at TEXT, approved_by TEXT, approved_hash TEXT,
+        rejected_at TEXT, reject_reason TEXT NOT NULL DEFAULT '',
+        reconciled_at TEXT, reconcile_decision TEXT NOT NULL DEFAULT '',
+        apply_error TEXT NOT NULL DEFAULT '',
+        UNIQUE(job_id,attempt)
+      );
+      CREATE TABLE IF NOT EXISTS owner_patch_artifacts(
+        id TEXT PRIMARY KEY,
+        proposal_id TEXT NOT NULL REFERENCES owner_patch_proposals(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        content TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(proposal_id,kind)
+      );
+      CREATE TABLE IF NOT EXISTS owner_patch_oplog(
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        proposal_id TEXT NOT NULL REFERENCES owner_patch_proposals(id) ON DELETE CASCADE,
+        at TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        action TEXT NOT NULL,
+        detail TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS owner_patch_oplog_proposal ON owner_patch_oplog(proposal_id,seq);
     `);
+    // Re-entrant v0.8 migrations: tolerate databases created by an earlier WIP build.
+    const workspaceColumns=this.db.prepare('PRAGMA table_info(owner_workspaces)').all().map(c=>c.name);
+    if(!workspaceColumns.includes('quarantine_reason'))this.db.exec(`ALTER TABLE owner_workspaces ADD COLUMN quarantine_reason TEXT NOT NULL DEFAULT ''`);
+    const proposalColumns=this.db.prepare('PRAGMA table_info(owner_patch_proposals)').all().map(c=>c.name);
+    if(!proposalColumns.includes('apply_error'))this.db.exec(`ALTER TABLE owner_patch_proposals ADD COLUMN apply_error TEXT NOT NULL DEFAULT ''`);
+    const oplogColumns=this.db.prepare('PRAGMA table_info(owner_patch_oplog)').all().map(c=>c.name);
+    if(!oplogColumns.includes('actor'))this.db.exec(`ALTER TABLE owner_patch_oplog ADD COLUMN actor TEXT NOT NULL DEFAULT 'system'`);
     // v0.7: re-entrant column migration for Pi session metadata on attempts.
     const attemptColumns=this.db.prepare('PRAGMA table_info(owner_job_attempts)').all().map(c=>c.name);
     if(!attemptColumns.includes('session_id'))this.db.exec(`ALTER TABLE owner_job_attempts ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`);
@@ -292,6 +353,14 @@ export class OwnerStore {
       // The analysis input comes from the referenced owner task, never from free-form payloads.
       check(!!ownerTaskId,'pi-analysis jobs require an owner task reference');
     }
+    if(jobType==='code-patch'){
+      // A coding proposal is always scoped to one owner task and one explicit base commit.
+      check(!!ownerTaskId,'code-patch jobs require an owner task reference');
+      check(typeof payload.baseSha==='string'&&/^[0-9a-f]{40}$/.test(payload.baseSha),'code-patch payload.baseSha must be an explicit 40-hex commit SHA');
+      check(typeof payload.allowedPaths==='string'&&payload.allowedPaths.length<=300,'code-patch payload.allowedPaths is required');
+      const allowed=payload.allowedPaths.split(',').map(part=>part.trim()).filter(Boolean);
+      check(allowed.length>=1&&allowed.length<=5,'code-patch requires 1-5 allowed paths');
+    }
     if(ownerTaskId){const task=this.getTask(ownerTaskId);check(!!task,'Unknown owner task',404);check(task.project_id===projectId,'Owner task belongs to a different project');}
     actor=txt(actor,'actor',80);
     this.db.exec('BEGIN IMMEDIATE');
@@ -335,13 +404,20 @@ export class OwnerStore {
   listJobEvents(jobId,{limit=200}={}){
     check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
     return this.db.prepare('SELECT seq,at,actor,action,detail FROM owner_job_events WHERE job_id=? ORDER BY seq LIMIT ?').all(jobId,limit);}
+  // A patch proposal whose apply was interrupted or is still in progress owns unresolved
+  // project side effects even though its Job already succeeded (proposal stored). Both
+  // scheduling entry points must honor this fence.
+  unresolvedPatchForProject(projectId){
+    return this.db.prepare(`SELECT id,status FROM owner_patch_proposals WHERE project_id=? AND status IN ('applying','needs_reconciliation') ORDER BY created_at,id LIMIT 1`).get(projectId)??null;}
   approveJob(id,{actor='owner',now=stamp()}={}){
     this.db.exec('BEGIN IMMEDIATE');
     try{
       const row=this.getJobRow(id);check(!!row,'Unknown job',404);check(row.status==='pending_approval',`Job in status ${row.status} cannot be approved`,409);
-      // Scheduling fence: an unresolved job keeps the whole project quarantined.
+      // Scheduling fence: an unresolved job or patch apply keeps the whole project quarantined.
       const stuck=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status='needs_reconciliation' LIMIT 1`).get(row.project_id);
       check(!stuck,'Project has an unresolved needs_reconciliation job; reconcile it before approving new work',409);
+      const unresolvedPatch=this.unresolvedPatchForProject(row.project_id);
+      check(!unresolvedPatch,'Project has an unresolved patch proposal; reconcile it before approving new work',409);
       const active=this.db.prepare(`SELECT COUNT(*) AS n FROM owner_jobs WHERE project_id=? AND status IN ('queued','leased','running','cancel_requested')`).get(row.project_id).n;
       check(active<this.maxActiveJobsPerProject,'Project already has an active job; per-project limit blocks approval',409);
       const changed=this.db.prepare(`UPDATE owner_jobs SET status='queued',approved_at=?,approved_by=?,updated_at=? WHERE id=? AND status='pending_approval'`).run(now,txt(actor,'actor',80),now,id);
@@ -405,6 +481,8 @@ export class OwnerStore {
       // so no other job of this project may be scheduled until the owner reconciles it.
       const stuck=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status='needs_reconciliation' LIMIT 1`).get(projectId);
       if(stuck){this.db.exec('COMMIT');return {claimed:false,reason:'project-quarantined',quarantinedJobId:stuck.id};}
+      const unresolvedPatch=this.unresolvedPatchForProject(projectId);
+      if(unresolvedPatch){this.db.exec('COMMIT');return {claimed:false,reason:'project-patch-quarantined',quarantinedProposalId:unresolvedPatch.id};}
       const activeCount=this.db.prepare(`SELECT COUNT(*) AS n FROM owner_jobs WHERE project_id=? AND status IN ('leased','running','cancel_requested')`).get(projectId).n;
       if(activeCount>=this.maxActiveJobsPerProject){
         const busy=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status IN ('leased','running','cancel_requested') LIMIT 1`).get(projectId);
@@ -584,14 +662,304 @@ export class OwnerStore {
   }
   getJobResult(id){return this.db.prepare('SELECT id,project_id,job_id,attempt,session_id,model,status,content,content_hash,truncated,usage,created_at FROM owner_job_results WHERE id=?').get(id)??null;}
   listJobResults(jobId){return this.db.prepare('SELECT id,project_id,job_id,attempt,session_id,model,status,content_hash,truncated,usage,created_at,length(content) AS chars FROM owner_job_results WHERE job_id=? ORDER BY attempt').all(jobId);}
+  // ---- Patch-first coding worker (v0.8): workspaces, proposals, apply, reconciliation ----
+  // Workspace records are the durable boundary between a job attempt and its worktree.
+  createWorkspaceRecord({projectId,jobId,attempt,baseSha,branch,path,now=stamp()}={}){
+    check(!!this.getProject(projectId),'Unknown project',404);
+    const job=this.getJobRow(jobId);check(!!job,'Unknown job',404);
+    check(job.project_id===projectId,'Job belongs to a different project');
+    check(Number.isSafeInteger(attempt)&&attempt>=1&&attempt===job.last_attempt,'Invalid attempt for workspace');
+    check(typeof baseSha==='string'&&/^[0-9a-f]{40}$/.test(baseSha),'Invalid workspace base SHA');
+    check(branch===`owner/job-${jobId}-a${attempt}`,'Controlled branch does not match the attempt');
+    check(typeof path==='string'&&path.length>0&&path.length<=1500,'Invalid workspace path');
+    const id=randomUUID();
+    try{
+      this.db.prepare(`INSERT INTO owner_workspaces(id,project_id,job_id,attempt,base_sha,branch,path,status,created_at)
+        VALUES(?,?,?,?,?,?,?,'active',?)`).run(id,projectId,jobId,attempt,baseSha,branch,path,now);
+    }catch(e){if(/UNIQUE constraint/.test(e.message))throw new OwnerInputError('Workspace already exists for this attempt',409);throw e;}
+    return this.getWorkspace(id);
+  }
+  getWorkspace(id){return this.db.prepare('SELECT * FROM owner_workspaces WHERE id=?').get(id)??null;}
+  getWorkspaceForAttempt(jobId,attempt){return this.db.prepare('SELECT * FROM owner_workspaces WHERE job_id=? AND attempt=?').get(jobId,attempt)??null;}
+  listWorkspaces({projectId='',status='',limit=100}={}){
+    check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
+    check(!status||['active','quarantined','cleaned'].includes(status),'Invalid workspace status');
+    const where=[];const params=[];
+    if(projectId){where.push('project_id=?');params.push(projectId);}
+    if(status){where.push('status=?');params.push(status);}
+    return this.db.prepare(`SELECT * FROM owner_workspaces ${where.length?`WHERE ${where.join(' AND ')}`:''} ORDER BY created_at DESC,id DESC LIMIT ?`)
+      .all(...params,limit);
+  }
+  quarantineWorkspaceInTx(id,{reason='',now=stamp()}={}){
+    const row=this.getWorkspace(id);if(!row)return false;
+    if(row.status==='active'){
+      this.db.prepare(`UPDATE owner_workspaces SET status='quarantined',quarantined_at=?,quarantine_reason=? WHERE id=? AND status='active'`)
+        .run(now,txt(reason,'quarantine reason',400,false),id);
+    }
+    return true;
+  }
+  quarantineWorkspace(id,{reason='',now=stamp()}={}){
+    const row=this.getWorkspace(id);check(!!row,'Unknown workspace',404);
+    if(row.status==='quarantined')return row;
+    check(row.status==='active','Workspace is already cleaned',409);
+    const changed=this.db.prepare(`UPDATE owner_workspaces SET status='quarantined',quarantined_at=?,quarantine_reason=? WHERE id=? AND status='active'`)
+      .run(now,txt(reason,'quarantine reason',400,false),id);
+    check(changed.changes===1,'Workspace status changed concurrently',409);
+    return this.getWorkspace(id);
+  }
+  cleanupWorkspace(id,{now=stamp()}={}){
+    const changed=this.db.prepare(`UPDATE owner_workspaces SET status='cleaned',cleaned_at=? WHERE id=? AND status IN ('active','quarantined')`).run(now,id);
+    check(changed.changes===1,'Workspace is not cleanable',409);
+    return this.getWorkspace(id);
+  }
+  // Atomic success commit for code-patch: proposal row + private artifacts + job/attempt
+  // success in ONE transaction. Job succeeded means exactly "proposal stored", never
+  // "code changed". Source content lives only in owner_patch_artifacts.
+  completeJobWithProposal({jobId,attemptNo,workerId,projectId,ownerTaskId='',workspaceId,baseSha,allowedPaths,files,proposalHash,proposalArtifact,proposalDiff,note='',now=stamp()}={}){
+    check(Array.isArray(allowedPaths)&&allowedPaths.length>=1&&allowedPaths.length<=5,'Invalid allowed paths');
+    for(const p of allowedPaths)txt(p,'allowed path',200);
+    check(Array.isArray(files)&&files.length>=1&&files.length<=5,'Invalid proposal files');
+    for(const f of files){
+      check(!!f&&typeof f==='object','Invalid proposal file metadata');
+      txt(f.path,'proposal path',200);check(f.action==='add'||f.action==='modify','Invalid proposal action');
+      check(f.old_sha===null||(typeof f.old_sha==='string'&&/^[0-9a-f]{64}$/.test(f.old_sha)),'Invalid proposal old hash');
+      check(typeof f.new_sha==='string'&&/^[0-9a-f]{64}$/.test(f.new_sha),'Invalid proposal new hash');
+    }
+    check(typeof proposalHash==='string'&&/^[0-9a-f]{64}$/.test(proposalHash),'Invalid proposal hash');
+    check(canonicalProposalHash(files)===proposalHash,'Proposal hash does not match its file metadata');
+    check(typeof proposalArtifact==='string'&&proposalArtifact.length>0&&proposalArtifact.length<=1_500_000,'Invalid proposal artifact');
+    check(typeof proposalDiff==='string'&&proposalDiff.length>0&&proposalDiff.length<=1_048_576,'Invalid proposal diff');
+    const safeNote=txt(note,'result note',400,false);
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getJobRow(jobId);check(!!row,'Unknown job',404);
+      check(row.project_id===projectId,'Proposal does not belong to the job project');
+      check((row.owner_task_id??null)===(ownerTaskId||null),'Proposal owner task mismatch');
+      const att=this.db.prepare('SELECT * FROM owner_job_attempts WHERE job_id=? AND attempt=?').get(jobId,attemptNo);check(!!att,'Unknown attempt',404);
+      check(att.worker_id===workerId,'Attempt belongs to a different worker',403);
+      check(att.attempt===row.last_attempt,'Only the latest attempt may store a proposal',409);
+      check(att.status==='running',`Attempt in status ${att.status} cannot store a proposal`,409);
+      check(row.status==='running',`Job in status ${row.status} cannot store a proposal`,409);
+      check(row.lease_until&&row.lease_until>=now,'Lease expired; proposal rejected pending reconciliation',409);
+      const ws=this.getWorkspace(workspaceId);check(!!ws,'Unknown workspace',404);
+      check(ws.project_id===projectId&&ws.job_id===jobId&&ws.attempt===attemptNo,'Workspace does not match the job attempt');
+      check(ws.status==='active','Workspace is not active');
+      check(ws.base_sha===baseSha,'Workspace base SHA mismatch');
+      const id=randomUUID();
+      this.db.prepare(`INSERT INTO owner_patch_proposals(id,project_id,job_id,attempt,workspace_id,owner_task_id,base_sha,allowed_paths,files,proposal_hash,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,'proposed',?,?)`)
+        .run(id,projectId,jobId,attemptNo,workspaceId,ownerTaskId||null,baseSha,json(allowedPaths),json(files),proposalHash,now,now);
+      this.db.prepare(`INSERT INTO owner_patch_artifacts(id,proposal_id,kind,content,content_hash,created_at) VALUES(?,?,'proposal',?,?,?)`)
+        .run(randomUUID(),id,proposalArtifact,sha256(proposalArtifact),now);
+      this.db.prepare(`INSERT INTO owner_patch_artifacts(id,proposal_id,kind,content,content_hash,created_at) VALUES(?,?,'proposal_diff',?,?,?)`)
+        .run(randomUUID(),id,proposalDiff,sha256(proposalDiff),now);
+      this.patchAudit(id,'proposed',workerId,`sha:${proposalHash.slice(0,8)}; files:${files.length}`,now);
+      this.db.prepare(`UPDATE owner_job_attempts SET status='succeeded',finished_at=?,result_note=? WHERE id=? AND status='running'`)
+        .run(now,safeNote,att.id);
+      const changed=this.db.prepare(`UPDATE owner_jobs SET status='succeeded',finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status='running'`)
+        .run(now,now,jobId);
+      check(changed.changes===1,'Job status changed concurrently',409);
+      this.jobAudit(jobId,'succeeded',workerId,safeNote,now);
+      this.db.exec('COMMIT');
+      return this.getPatchProposal(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  getPatchProposalRow(id){return this.db.prepare('SELECT * FROM owner_patch_proposals WHERE id=?').get(id)??null;}
+  getPatchProposal(id){const row=this.getPatchProposalRow(id);if(!row)return null;
+    return {...row,allowedPaths:parse(row.allowed_paths),files:parse(row.files),
+      artifacts:this.db.prepare('SELECT id,kind,content_hash,length(content) AS chars,created_at FROM owner_patch_artifacts WHERE proposal_id=? ORDER BY kind').all(id),
+      oplog:this.db.prepare('SELECT seq,at,actor,action,detail FROM owner_patch_oplog WHERE proposal_id=? ORDER BY seq').all(id)};}
+  getPatchProposalForWorkspace(workspaceId){return this.db.prepare('SELECT * FROM owner_patch_proposals WHERE workspace_id=? ORDER BY created_at DESC,id DESC LIMIT 1').get(workspaceId)??null;}
+  listPatchProposals({projectId='',status='',limit=100}={}){
+    check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
+    check(!status||['proposed','approved','applying','applied','needs_reconciliation','apply_failed','rejected'].includes(status),'Invalid proposal status');
+    const where=[];const params=[];
+    if(projectId){where.push('project_id=?');params.push(projectId);}
+    if(status){where.push('status=?');params.push(status);}
+    return this.db.prepare(`SELECT * FROM owner_patch_proposals ${where.length?`WHERE ${where.join(' AND ')}`:''} ORDER BY created_at DESC,id DESC LIMIT ?`)
+      .all(...params,limit)
+      .map(r=>({...r,allowedPaths:parse(r.allowed_paths),files:parse(r.files)}));
+  }
+  getPatchArtifact(proposalId,kind){return this.db.prepare('SELECT * FROM owner_patch_artifacts WHERE proposal_id=? AND kind=?').get(proposalId,kind)??null;}
+  getPatchArtifactContent(proposalId,kind){return this.getPatchArtifact(proposalId,kind)?.content??null;}
+  listPatchOplog(jobId){const ids=this.db.prepare('SELECT id FROM owner_patch_proposals WHERE job_id=?').all(jobId).map(r=>r.id);
+    if(!ids.length)return [];
+    return this.db.prepare(`SELECT seq,proposal_id,at,actor,action,detail FROM owner_patch_oplog WHERE proposal_id IN (${ids.map(()=>'?').join(',')}) ORDER BY seq`).all(...ids);}
+  patchAudit(proposalId,action,actor,detail='',at=stamp()){
+    this.db.prepare('INSERT INTO owner_patch_oplog(proposal_id,at,actor,action,detail) VALUES(?,?,?,?,?)')
+      .run(proposalId,at,txt(actor,'actor',80),txt(action,'action',80),txt(detail,'detail',400,false));}
+  approvePatchProposal(id,{expectedHash,reviewer='owner',now=stamp()}={}){
+    check(typeof expectedHash==='string'&&/^[0-9a-f]{64}$/.test(expectedHash),'An explicit 64-hex proposal hash is required for approval');
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getPatchProposalRow(id);check(!!row,'Unknown proposal',404);
+      check(row.status==='proposed',`Proposal in status ${row.status} cannot be approved`,409);
+      const ws=this.getWorkspace(row.workspace_id);check(!!ws,'Unknown workspace',404);
+      check(ws.status==='active','Workspace is not active; proposal cannot be approved',409);
+      check(expectedHash===row.proposal_hash,'Approval hash does not match the proposal; approval invalidated',409);
+      const changed=this.db.prepare(`UPDATE owner_patch_proposals SET status='approved',approved_at=?,approved_by=?,approved_hash=?,updated_at=? WHERE id=? AND status='proposed'`)
+        .run(now,txt(reviewer,'reviewer',80),row.proposal_hash,now,id);
+      check(changed.changes===1,'Proposal status changed concurrently',409);
+      this.patchAudit(id,'approved',reviewer,`sha:${row.proposal_hash.slice(0,8)}`,now);
+      this.db.exec('COMMIT');return this.getPatchProposal(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  // Explicit, hash-bound resume point for the narrow crash window between
+  // proposed→approved and the first file write. It never mutates state and never runs at
+  // startup; the Owner must invoke `patch-apply` (or re-run `patch-approve`).
+  assertPatchApplyAllowed(id,{expectedHash}={}){
+    check(typeof expectedHash==='string'&&/^[0-9a-f]{64}$/.test(expectedHash),'An explicit 64-hex proposal hash is required to apply');
+    const row=this.getPatchProposalRow(id);check(!!row,'Unknown proposal',404);
+    check(expectedHash===row.proposal_hash,'Apply hash does not match the proposal',409);
+    if(row.status==='applied')return {proposal:this.getPatchProposal(id),alreadyApplied:true};
+    if(row.status==='approved'){
+      check(row.approved_hash===row.proposal_hash,'Approval is not bound to the current proposal hash',409);
+      const ws=this.getWorkspace(row.workspace_id);check(!!ws,'Unknown workspace',404);
+      check(ws.status==='active','Workspace is not active; proposal cannot be applied',409);
+      return {proposal:this.getPatchProposal(id),alreadyApplied:false};
+    }
+    if(row.status==='applying'||row.status==='needs_reconciliation'){
+      throw new OwnerInputError(`Proposal in status ${row.status} requires patch reconciliation, not re-apply`,409);
+    }
+    throw new OwnerInputError(`Proposal in status ${row.status} cannot be applied; approve it first`,409);
+  }
+  rejectPatchProposal(id,{reason='',reviewer='owner',now=stamp()}={}){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getPatchProposalRow(id);check(!!row,'Unknown proposal',404);
+      check(row.status==='proposed',`Proposal in status ${row.status} cannot be rejected`,409);
+      const safeReason=txt(reason,'reject reason',400,false);
+      const changed=this.db.prepare(`UPDATE owner_patch_proposals SET status='rejected',rejected_at=?,reject_reason=?,updated_at=? WHERE id=? AND status='proposed'`)
+        .run(now,safeReason,now,id);
+      check(changed.changes===1,'Proposal status changed concurrently',409);
+      this.patchAudit(id,'rejected',reviewer,safeReason,now);
+      this.db.exec('COMMIT');return this.getPatchProposal(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  beginPatchApply(id,{now=stamp()}={}){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getPatchProposalRow(id);check(!!row,'Unknown proposal',404);
+      check(row.status==='approved',`Proposal in status ${row.status} cannot enter apply`,409);
+      const ws=this.getWorkspace(row.workspace_id);check(!!ws,'Unknown workspace',404);
+      check(ws.status==='active','Workspace is not active; proposal cannot enter apply',409);
+      check(row.approved_hash===row.proposal_hash,'Approval is not bound to the current proposal hash',409);
+      const changed=this.db.prepare(`UPDATE owner_patch_proposals SET status='applying',updated_at=? WHERE id=? AND status='approved'`).run(now,id);
+      check(changed.changes===1,'Proposal status changed concurrently',409);
+      this.patchAudit(id,'apply_begin','host','',now);
+      this.db.exec('COMMIT');
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  failPatchPrecheck(id,{reason='',now=stamp()}={}){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getPatchProposalRow(id);check(!!row,'Unknown proposal',404);
+      check(row.status==='approved',`Proposal in status ${row.status} cannot fail a precheck`,409);
+      const safeReason=txt(reason,'precheck reason',400,false);
+      const changed=this.db.prepare(`UPDATE owner_patch_proposals SET status='apply_failed',apply_error=?,updated_at=? WHERE id=? AND status='approved'`)
+        .run(safeReason,now,id);
+      check(changed.changes===1,'Proposal status changed concurrently',409);
+      this.patchAudit(id,'apply_precheck_failed','host',safeReason,now);
+      this.db.exec('COMMIT');return this.getPatchProposal(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  logPatchOp(id,action,actor,detail='',at=stamp()){
+    this.patchAudit(id,action,actor,detail,at);
+  }
+  completePatchApply(id,{diffContent,now=stamp()}={}){
+    check(typeof diffContent==='string'&&diffContent.length>0&&diffContent.length<=1_048_576,'Applied diff must be 1-1048576 chars');
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getPatchProposalRow(id);check(!!row,'Unknown proposal',404);
+      check(row.status==='applying',`Proposal in status ${row.status} cannot complete apply`,409);
+      this.db.prepare(`INSERT INTO owner_patch_artifacts(id,proposal_id,kind,content,content_hash,created_at) VALUES(?,?,'applied_diff',?,?,?)`)
+        .run(randomUUID(),id,diffContent,sha256(diffContent),now);
+      const changed=this.db.prepare(`UPDATE owner_patch_proposals SET status='applied',apply_error='',updated_at=? WHERE id=? AND status='applying'`).run(now,id);
+      check(changed.changes===1,'Proposal status changed concurrently',409);
+      this.patchAudit(id,'applied','host',`sha:${sha256(diffContent).slice(0,8)}`,now);
+      this.db.exec('COMMIT');return this.getPatchProposal(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  markPatchNeedsReconciliation(id,{reason='',now=stamp()}={}){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getPatchProposalRow(id);check(!!row,'Unknown proposal',404);
+      const safeReason=txt(reason,'reason',400,false);
+      if(row.status==='needs_reconciliation'){
+        this.db.prepare('UPDATE owner_patch_proposals SET apply_error=?,updated_at=? WHERE id=?').run(safeReason,now,id);
+        this.quarantineWorkspaceInTx(row.workspace_id,{reason:'apply evidence retained',now});
+        this.db.exec('COMMIT');return this.getPatchProposal(id);
+      }
+      check(row.status==='applying',`Proposal in status ${row.status} cannot need reconciliation`,409);
+      const changed=this.db.prepare(`UPDATE owner_patch_proposals SET status='needs_reconciliation',apply_error=?,updated_at=? WHERE id=? AND status='applying'`)
+        .run(safeReason,now,id);
+      check(changed.changes===1,'Proposal status changed concurrently',409);
+      this.patchAudit(id,'needs_reconciliation','system',safeReason,now);
+      this.quarantineWorkspaceInTx(row.workspace_id,{reason:'apply evidence retained',now});
+      this.db.exec('COMMIT');return this.getPatchProposal(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  reconcilePatch(id,{decision,reason='',actor='owner',diffContent=null,now=stamp()}={}){
+    check(['confirm-applied','discard'].includes(decision),'Invalid reconcile decision');
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getPatchProposalRow(id);check(!!row,'Unknown proposal',404);
+      check(['applying','needs_reconciliation'].includes(row.status),`Proposal in status ${row.status} does not need reconciliation`,409);
+      const safeReason=txt(reason,'reconcile reason',400,false);
+      if(decision==='confirm-applied'){
+        check(typeof diffContent==='string'&&diffContent.length>0&&diffContent.length<=1_048_576,'Confirmed apply requires a verified diff');
+        const existing=this.getPatchArtifact(id,'applied_diff');
+        if(!existing){
+          this.db.prepare(`INSERT INTO owner_patch_artifacts(id,proposal_id,kind,content,content_hash,created_at) VALUES(?,?,'applied_diff',?,?,?)`)
+            .run(randomUUID(),id,diffContent,sha256(diffContent),now);
+        }
+        const changed=this.db.prepare(`UPDATE owner_patch_proposals SET status='applied',apply_error='',updated_at=?,reconciled_at=?,reconcile_decision=? WHERE id=? AND status IN ('applying','needs_reconciliation')`)
+          .run(now,now,decision,id);
+        check(changed.changes===1,'Proposal status changed concurrently',409);
+        this.patchAudit(id,'reconcile_confirm_applied',actor,safeReason,now);
+      }else{
+        const changed=this.db.prepare(`UPDATE owner_patch_proposals SET status='apply_failed',apply_error=?,updated_at=?,reconciled_at=?,reconcile_decision=? WHERE id=? AND status IN ('applying','needs_reconciliation')`)
+          .run(safeReason,now,now,decision,id);
+        check(changed.changes===1,'Proposal status changed concurrently',409);
+        this.patchAudit(id,'reconcile_discard',actor,safeReason,now);
+        this.quarantineWorkspaceInTx(row.workspace_id,{reason:'owner discarded the interrupted apply',now});
+      }
+      this.db.exec('COMMIT');return this.getPatchProposal(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  // Crash recovery: any `applying` row on a fresh process is ambiguous by definition.
+  // Mark it needs_reconciliation and quarantine its workspace; never auto-retry/rollback.
+  recoverInterruptedPatchApplies({now=stamp()}={}){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const rows=this.db.prepare(`SELECT * FROM owner_patch_proposals WHERE status='applying'`).all();
+      for(const row of rows){
+        const reason='interrupted apply found at startup; owner reconciliation required';
+        this.db.prepare(`UPDATE owner_patch_proposals SET status='needs_reconciliation',apply_error=?,updated_at=? WHERE id=? AND status='applying'`)
+          .run(reason,now,row.id);
+        this.patchAudit(row.id,'recovered_interrupted_apply','system',reason,now);
+        const ws=this.getWorkspace(row.workspace_id);
+        if(ws&&ws.status==='active'){
+          this.db.prepare(`UPDATE owner_workspaces SET status='quarantined',quarantined_at=?,quarantine_reason=? WHERE id=? AND status='active'`)
+            .run(now,'interrupted apply evidence',ws.id);
+        }
+      }
+      this.db.exec('COMMIT');
+      return rows.map(r=>r.id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
   summary(){const projects=this.listProjects();const tasks=this.listTasks();const runs=this.listRuns();const pending=this.listSuggestions('pending');
     const counts=this.jobStatusCounts();
+    const patchCounts={};let patchTotal=0;
+    for(const r of this.db.prepare('SELECT status,COUNT(*) AS n FROM owner_patch_proposals GROUP BY status').all()){patchCounts[r.status]=r.n;patchTotal+=r.n;}
     return {projectCount:projects.length,activeRuns:runs.filter(r=>r.status==='running').length,
       blockedTasks:tasks.filter(t=>t.status==='blocked').length,pendingSuggestions:pending.length,
       activeJobs:['queued','leased','running','cancel_requested'].reduce((sum,st)=>sum+(counts[st]??0),0),
       pendingJobApprovals:counts['pending_approval']??0,
       stuckJobs:counts['needs_reconciliation']??0,
       totalJobs:Object.values(counts).reduce((sum,n)=>sum+n,0),
+      patchProposals:patchTotal,
+      pendingPatchApprovals:patchCounts['proposed']??0,
       projects:projects.map(p=>({...p,tasks:tasks.filter(t=>t.project_id===p.id),
         runs:runs.filter(r=>r.project_id===p.id).slice(0,8),knowledgeLinks:this.knowledgeLinks(p.id),
         jobs:this.listJobs({projectId:p.id,limit:8})}))};}
