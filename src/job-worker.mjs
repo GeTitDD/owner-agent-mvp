@@ -25,7 +25,7 @@ export class FakeWorker {
     return this.behaviors[job.id]??this.behaviors[job.job_type]??(()=>({outcome:'succeeded',note:'fake-worker ok'}));
   }
   async runOnce({projectId='',behavior}={}){
-    const claim=this.store.claimNextJob(projectId,this.workerId,{now:this.clock(),leaseMs:this.leaseMs});
+    const claim=this.store.claimNextJob(projectId,this.workerId,{now:this.clock(),leaseMs:this.leaseMs,allowedTypes:['noop','status-note','fake-analysis']});
     if(!claim.claimed)return claim;
     const {job,attempt}=claim;
     // A stop request that arrived before start must win over execution.
@@ -40,11 +40,13 @@ export class FakeWorker {
       if(e instanceof FakeWorkerCrash)throw e;
       decision={outcome:'failed',note:`worker error: ${String(e.message).slice(0,200)}`};
     }
+    // A recorded stop request wins over ANY behavior outcome (review r4): the session is
+    // confirmed stopped and completed work is discarded by policy.
+    if(this.store.getJob(job.id).status==='cancel_requested'){
+      this.store.confirmJobCancelled(job.id,attempt.attempt,{workerId:this.workerId,note:`stopped on request (behavior outcome was ${decision.outcome})`,now:this.clock()});
+      return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'cancelled'};
+    }
     if(decision.outcome==='cancelled'){
-      if(this.store.getJob(job.id).status==='cancel_requested'){
-        this.store.confirmJobCancelled(job.id,attempt.attempt,{workerId:this.workerId,note:decision.note??'',now:this.clock()});
-        return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'cancelled'};
-      }
       // Abandoning work without an owner stop request is a failure, not a cancellation.
       this.store.reportJobResult(job.id,attempt.attempt,{workerId:this.workerId,outcome:'failed',note:'worker aborted without a cancel request',now:this.clock()});
       return {claimed:true,jobId:job.id,attempt:attempt.attempt,outcome:'failed'};

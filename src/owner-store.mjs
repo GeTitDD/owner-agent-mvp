@@ -1,10 +1,11 @@
 // Local, owner-centric project/event registry. All durable facts are explicit records,
 // not summaries inferred from an LLM conversation. No source code or prompt capture.
 import { DatabaseSync } from 'node:sqlite';
-import { realpathSync, mkdirSync } from 'node:fs';
+import { realpathSync, mkdirSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { defaultDbPath } from './storage.mjs';
+import { sha256 } from './utils.mjs';
 import { PersonalKnowledgeStore } from './personal-store.mjs';
 
 export class OwnerInputError extends Error { constructor(message,status=400){super(message);this.status=status;} }
@@ -20,7 +21,7 @@ const kinds=new Set(['run_started','tool_finished','run_settled','project_note',
 // Job coordination (P0 control plane): explicit state machine, whitelisted job types only.
 const jobStatuses=new Set(['pending_approval','queued','leased','running','cancel_requested','succeeded','failed','cancelled','rejected','needs_reconciliation']);
 const activeJobStatuses=new Set(['queued','leased','running','cancel_requested']);
-const jobTypes=new Set(['noop','status-note','fake-analysis']);
+const jobTypes=new Set(['noop','status-note','fake-analysis','pi-analysis']);
 const attemptStatuses=new Set(['claimed','running','succeeded','failed','cancelled','orphaned']);
 const jobFilterStatuses=new Set([...jobStatuses]);
 const safeArray=(v,label)=>{check(Array.isArray(v)&&v.length<=30&&v.every(x=>typeof x==='string'&&x.length<=80&&/^[\w.-]+$/.test(x)),`Invalid ${label}`);return [...new Set(v)].sort();};
@@ -118,7 +119,34 @@ export class OwnerStore {
         detail TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS owner_job_events_job ON owner_job_events(job_id,seq);
+      CREATE TABLE IF NOT EXISTS owner_job_results(
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES owner_projects(id),
+        job_id TEXT NOT NULL REFERENCES owner_jobs(id) ON DELETE CASCADE,
+        attempt INTEGER NOT NULL,
+        session_id TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT 'unknown',
+        status TEXT NOT NULL,
+        content TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        truncated INTEGER NOT NULL DEFAULT 0,
+        usage TEXT NOT NULL DEFAULT 'unknown',
+        created_at TEXT NOT NULL,
+        UNIQUE(job_id,attempt)
+      );
     `);
+    // v0.7: re-entrant column migration for Pi session metadata on attempts.
+    const attemptColumns=this.db.prepare('PRAGMA table_info(owner_job_attempts)').all().map(c=>c.name);
+    if(!attemptColumns.includes('session_id'))this.db.exec(`ALTER TABLE owner_job_attempts ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`);
+    // v0.7: approval-time snapshot of the referenced owner task input (title/note), so later
+    // task edits cannot change what an approved job will analyse.
+    const jobColumns=this.db.prepare('PRAGMA table_info(owner_jobs)').all().map(c=>c.name);
+    if(!jobColumns.includes('input_snapshot'))this.db.exec(`ALTER TABLE owner_jobs ADD COLUMN input_snapshot TEXT NOT NULL DEFAULT ''`);
+    // v0.7: root identity (sha256 of dev/ino) for path-drift rejection — a swapped root
+    // (symlink to another directory) resolves to a different file identity than registered.
+    // Raw ino can exceed JS safe integers on Windows, so only the hash is stored.
+    const projectColumns=this.db.prepare('PRAGMA table_info(owner_projects)').all().map(c=>c.name);
+    if(!projectColumns.includes('root_identity'))this.db.exec(`ALTER TABLE owner_projects ADD COLUMN root_identity TEXT NOT NULL DEFAULT ''`);
   }
   close(){this.db.close();}
   registerProject({id,name,root,primaryDomain='software-engineering',domains=[],imports=[],goal='',status='planned'}={}){
@@ -126,12 +154,23 @@ export class OwnerStore {
     check(statuses.has(status),'Invalid project status');
     check(typeof root==='string'&&root.length<=1500,'Invalid path');
     let resolved;try{resolved=realpathSync(root);}catch{throw new OwnerInputError('Project directory must already exist');}
+    // Root identity marker: a small file inside the root pins the directory identity
+    // (sha256 of its dev/ino). A file keeps its id across renames and a fresh one always
+    // carries a new id, so drift detection (deleted/recreated/swapped root) is
+    // deterministic on every platform. Best-effort, not adversarial fencing.
+    let rootIdentity='';
+    try{
+      const markerPath=path.join(resolved,'.owner-root-identity');
+      if(!existsSync(markerPath))writeFileSync(markerPath,stamp(),{encoding:'utf8',flag:'wx'});
+      const st=statSync(markerPath,{bigint:true});
+      rootIdentity=sha256(`${st.dev}:${st.ino}`).slice(0,32);
+    }catch{/* stat/write unavailable: drift check skipped for this project */}
     const cleanedDomains=safeArray(domains,'domains');
     const cleanedImports=safeArray(imports,'imports');
     check(cleanedDomains.length>0||!!primaryDomain,'Project needs at least one domain');
     const timestamp=stamp();
-    try {this.db.prepare(`INSERT INTO owner_projects(id,name,root,primary_domain,domains,imports,goal,status,owner_note,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(id,name,resolved,primaryDomain,json(cleanedDomains),json(cleanedImports),txt(goal,'goal',2000,false),status,'',timestamp,timestamp);}
+    try {this.db.prepare(`INSERT INTO owner_projects(id,name,root,primary_domain,domains,imports,goal,status,owner_note,created_at,updated_at,root_identity)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id,name,resolved,primaryDomain,json(cleanedDomains),json(cleanedImports),txt(goal,'goal',2000,false),status,'',timestamp,timestamp,rootIdentity);}
     catch(e){if(/UNIQUE constraint/.test(e.message))throw new OwnerInputError('Project ID or root already registered',409);throw e;}
     return this.getProject(id);
   }
@@ -249,6 +288,10 @@ export class OwnerStore {
     check(jobTypes.has(jobType),'Unsupported job type; only whitelisted types are accepted');
     check(typeof idempotencyKey==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,88}$/.test(idempotencyKey),'Invalid idempotency key');
     const digest=canonical(cleanPayload(payload));
+    if(jobType==='pi-analysis'){
+      // The analysis input comes from the referenced owner task, never from free-form payloads.
+      check(!!ownerTaskId,'pi-analysis jobs require an owner task reference');
+    }
     if(ownerTaskId){const task=this.getTask(ownerTaskId);check(!!task,'Unknown owner task',404);check(task.project_id===projectId,'Owner task belongs to a different project');}
     actor=txt(actor,'actor',80);
     this.db.exec('BEGIN IMMEDIATE');
@@ -270,7 +313,7 @@ export class OwnerStore {
   }
   getJobRow(id){return this.db.prepare('SELECT * FROM owner_jobs WHERE id=?').get(id)??null;}
   getJob(id){const row=this.getJobRow(id);if(!row)return null;
-    return {...jobRow(row),attempts:this.db.prepare('SELECT id,job_id,attempt,worker_id,status,claimed_at,started_at,finished_at,lease_until,result_note FROM owner_job_attempts WHERE job_id=? ORDER BY attempt').all(id),
+    return {...jobRow(row),attempts:this.db.prepare('SELECT id,job_id,attempt,worker_id,status,claimed_at,started_at,finished_at,lease_until,session_id,result_note FROM owner_job_attempts WHERE job_id=? ORDER BY attempt').all(id),
       events:this.db.prepare('SELECT seq,at,actor,action,detail FROM owner_job_events WHERE job_id=? ORDER BY seq').all(id)};}
   listJobs({projectId='',status='',limit=50}={}){
     check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
@@ -303,6 +346,13 @@ export class OwnerStore {
       check(active<this.maxActiveJobsPerProject,'Project already has an active job; per-project limit blocks approval',409);
       const changed=this.db.prepare(`UPDATE owner_jobs SET status='queued',approved_at=?,approved_by=?,updated_at=? WHERE id=? AND status='pending_approval'`).run(now,txt(actor,'actor',80),now,id);
       check(changed.changes===1,'Job status changed concurrently',409);
+      // Pin the analysis input at approval time: later owner-task edits must not change
+      // what an already-approved job will analyse.
+      if(row.owner_task_id){
+        const task=this.getTask(row.owner_task_id);
+        if(task)this.db.prepare('UPDATE owner_jobs SET input_snapshot=? WHERE id=?')
+          .run(json({title:String(task.title).slice(0,200),note:String(task.note).slice(0,500)}),id);
+      }
       this.jobAudit(id,'approved',actor,'',now);
       this.db.exec('COMMIT');return this.getJob(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
@@ -335,10 +385,19 @@ export class OwnerStore {
       this.db.exec('COMMIT');return this.getJob(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
-  claimNextJob(projectId,workerId,{now=stamp(),leaseMs=30000}={}){
+  claimNextJob(projectId,workerId,{now=stamp(),leaseMs=30000,allowedTypes}={}){
     check(!!this.getProject(projectId),'Unknown project',404);
     workerId=ident(workerId,'worker id');
     check(Number.isSafeInteger(leaseMs)&&leaseMs>=1000&&leaseMs<=3_600_000,'Invalid lease duration');
+    // Workers only claim the job types they are built to execute; a mixed queue never
+    // leaves a job leased under the wrong executor.
+    let typeFilter='';
+    const typeParams=[];
+    if(allowedTypes!==undefined){
+      check(Array.isArray(allowedTypes)&&allowedTypes.length>0&&allowedTypes.length<=jobTypes.size&&allowedTypes.every(t=>jobTypes.has(t)),'Invalid allowed job types');
+      typeFilter=` AND job_type IN (${allowedTypes.map(()=>'?').join(',')})`;
+      typeParams.push(...allowedTypes);
+    }
     const leaseUntil=new Date(Date.parse(now)+leaseMs).toISOString();
     this.db.exec('BEGIN IMMEDIATE');
     try{
@@ -351,7 +410,7 @@ export class OwnerStore {
         const busy=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status IN ('leased','running','cancel_requested') LIMIT 1`).get(projectId);
         this.db.exec('COMMIT');return {claimed:false,reason:'project-active-job',activeJobId:busy.id};
       }
-      const job=this.db.prepare(`SELECT * FROM owner_jobs WHERE project_id=? AND status='queued' ORDER BY created_at,id LIMIT 1`).get(projectId);
+      const job=this.db.prepare(`SELECT * FROM owner_jobs WHERE project_id=? AND status='queued'${typeFilter} ORDER BY created_at,id LIMIT 1`).get(projectId,...typeParams);
       if(!job){this.db.exec('COMMIT');return {claimed:false,reason:'no-queued-job'};}
       const attemptNo=job.last_attempt+1,attemptId=randomUUID();
       const changed=this.db.prepare(`UPDATE owner_jobs SET status='leased',lease_until=?,updated_at=?,last_attempt=? WHERE id=? AND status='queued'`).run(leaseUntil,now,attemptNo,job.id);
@@ -388,7 +447,9 @@ export class OwnerStore {
       const att=this.db.prepare('SELECT * FROM owner_job_attempts WHERE job_id=? AND attempt=?').get(jobId,attemptNo);check(!!att,'Unknown attempt',404);
       check(att.worker_id===workerId,'Attempt belongs to a different worker',403);
       check(['claimed','running'].includes(att.status),`Attempt in status ${att.status} cannot heartbeat`,409);
-      check(['leased','running'].includes(row.status),`Job in status ${row.status} cannot heartbeat`,409);
+      // cancel_requested is still an actively executing state: a long model abort wait must keep renewing
+      // its lease, otherwise the attempt would be fenced while the stop confirmation is in flight.
+      check(['leased','running','cancel_requested'].includes(row.status),`Job in status ${row.status} cannot heartbeat`,409);
       check(row.lease_until&&row.lease_until>=now,'Lease already expired; explicit reconciliation is required',409);
       const leaseUntil=new Date(Date.parse(now)+leaseMs).toISOString();
       this.db.prepare('UPDATE owner_jobs SET lease_until=?,updated_at=? WHERE id=?').run(leaseUntil,now,jobId);
@@ -407,6 +468,9 @@ export class OwnerStore {
       check(att.attempt===row.last_attempt,'Only the latest attempt may report a result',409);
       check(att.status==='running',`Attempt in status ${att.status} cannot report a result`,409);
       check(['running','cancel_requested'].includes(row.status),`Job in status ${row.status} cannot accept a result`,409);
+      // State-machine priority (review r4 #2): a recorded cancel request can never become
+      // 'succeeded'. An honest 'failed' report from a cancel_requested job stays allowed.
+      if(outcome==='succeeded')check(row.status==='running',`Job in status ${row.status} cannot succeed; confirm the stop or reconcile first`,409);
       check(row.lease_until&&row.lease_until>=now,'Lease expired; late result rejected pending reconciliation',409);
       const safeNote=txt(note,'result note',400,false);
       this.db.prepare(`UPDATE owner_job_attempts SET status=?,finished_at=?,result_note=? WHERE id=? AND status='running'`).run(outcome,now,safeNote,att.id);
@@ -474,6 +538,52 @@ export class OwnerStore {
       this.db.exec('COMMIT');return this.getJob(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
+  // Pi session metadata (non-sensitive id) attached to an active attempt by the Pi worker.
+  attachAttemptSession(jobId,attemptNo,{workerId,sessionId,now=stamp()}={}){
+    const safe=txt(sessionId,'session id',180);
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getJobRow(jobId);check(!!row,'Unknown job',404);
+      const att=this.db.prepare('SELECT * FROM owner_job_attempts WHERE job_id=? AND attempt=?').get(jobId,attemptNo);check(!!att,'Unknown attempt',404);
+      check(att.worker_id===workerId,'Attempt belongs to a different worker',403);
+      check(['claimed','running'].includes(att.status),`Attempt in status ${att.status} cannot be updated`,409);
+      this.db.prepare('UPDATE owner_job_attempts SET session_id=? WHERE id=?').run(safe,att.id);
+      this.jobAudit(jobId,'session_attached',workerId,`attempt:${attemptNo}`,now);
+      this.db.exec('COMMIT');
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  // Atomic success commit: validates worker/attempt/lease exactly like reportJobResult and
+  // inserts the result asset in the SAME transaction, so a lease/cancel race can never leave
+  // an orphan result without a valid succeeded state (or vice versa).
+  // (The standalone addJobResult was removed on review: writing results outside the
+  // validated transaction could leave orphan artifacts with no succeeded state.)
+  completeJobWithResult(jobId,attemptNo,{workerId,sessionId='',model='unknown',content,truncated=false,usage='unknown',note='',now=stamp()}={}){
+    check(typeof content==='string'&&content.length>0&&content.length<=65_536,'Result content must be 1–65536 chars');
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getJobRow(jobId);check(!!row,'Unknown job',404);
+      const att=this.db.prepare('SELECT * FROM owner_job_attempts WHERE job_id=? AND attempt=?').get(jobId,attemptNo);check(!!att,'Unknown attempt',404);
+      check(att.worker_id===workerId,'Attempt belongs to a different worker',403);
+      check(att.attempt===row.last_attempt,'Only the latest attempt may report a result',409);
+      check(att.status==='running',`Attempt in status ${att.status} cannot report a result`,409);
+      // State-machine priority: a recorded cancel request can never be overwritten by a
+      // late success — only a job still in 'running' may succeed (review r4 #2).
+      check(row.status==='running',`Job in status ${row.status} cannot succeed; confirm the stop or reconcile first`,409);
+      check(row.lease_until&&row.lease_until>=now,'Lease expired; result rejected pending reconciliation',409);
+      const safeNote=txt(note,'result note',400,false);
+      const id=randomUUID();const hash=sha256(content);
+      this.db.prepare(`INSERT INTO owner_job_results(id,project_id,job_id,attempt,session_id,model,status,content,content_hash,truncated,usage,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id,row.project_id,jobId,attemptNo,txt(sessionId,'session id',180,false),txt(model,'model',120),truncated?'truncated':'completed',content,hash,truncated?1:0,txt(usage,'usage',20),now);
+      this.db.prepare(`UPDATE owner_job_attempts SET status='succeeded',finished_at=?,result_note=? WHERE id=? AND status='running'`).run(now,safeNote,att.id);
+      const changed=this.db.prepare(`UPDATE owner_jobs SET status='succeeded',finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status='running'`).run(now,now,jobId);
+      check(changed.changes===1,'Job status changed concurrently',409);
+      this.jobAudit(jobId,'succeeded',workerId,safeNote,now);
+      this.db.exec('COMMIT');
+      return {outcome:'succeeded',result:{id,hash,chars:content.length}};
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  getJobResult(id){return this.db.prepare('SELECT id,project_id,job_id,attempt,session_id,model,status,content,content_hash,truncated,usage,created_at FROM owner_job_results WHERE id=?').get(id)??null;}
+  listJobResults(jobId){return this.db.prepare('SELECT id,project_id,job_id,attempt,session_id,model,status,content_hash,truncated,usage,created_at,length(content) AS chars FROM owner_job_results WHERE job_id=? ORDER BY attempt').all(jobId);}
   summary(){const projects=this.listProjects();const tasks=this.listTasks();const runs=this.listRuns();const pending=this.listSuggestions('pending');
     const counts=this.jobStatusCounts();
     return {projectCount:projects.length,activeRuns:runs.filter(r=>r.status==='running').length,

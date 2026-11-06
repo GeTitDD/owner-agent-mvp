@@ -38,7 +38,7 @@ pending_approval ──approve──▶ queued ──claim──▶ leased ─�
 | pending_approval / queued | requestCancel | cancelled | 尚未执行，直接终态 |
 | queued | claim | leased | **项目栅栏同上**；项目内 active Job 数 < `maxActiveJobsPerProject`（claim 与 approve 共同尊重该参数）；CAS `WHERE status='queued'`；创建 attempt N+1 并记录租约 |
 | leased | start | running | 仅 attempt 属主 Worker；attempt 处于 claimed |
-| leased / running | heartbeat | （不变） | 租约未过期；仅属主 Worker；job 与 attempt 同时续租 |
+| leased / running / cancel_requested | heartbeat | （不变） | 仅属主 Worker；attempt claimed/running；租约未过期——**cancel_requested 亦续租**（v0.7：abort 等待期间不能被扫描隔离） |
 | running | report(succeeded/failed) | 同名终态 | 仅属主 Worker、仅最新 attempt、attempt 处于 running、租约未过期 |
 | running / cancel_requested | report(succeeded/failed) | 同名终态 | Worker 无视停止请求完成时，如实记录真实结果 |
 | leased / running | requestCancel | cancel_requested | 「请求取消」≠「已停止」；Worker 须显式确认 |
