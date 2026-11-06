@@ -404,13 +404,20 @@ export class OwnerStore {
   listJobEvents(jobId,{limit=200}={}){
     check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
     return this.db.prepare('SELECT seq,at,actor,action,detail FROM owner_job_events WHERE job_id=? ORDER BY seq LIMIT ?').all(jobId,limit);}
+  // A patch proposal whose apply was interrupted or is still in progress owns unresolved
+  // project side effects even though its Job already succeeded (proposal stored). Both
+  // scheduling entry points must honor this fence.
+  unresolvedPatchForProject(projectId){
+    return this.db.prepare(`SELECT id,status FROM owner_patch_proposals WHERE project_id=? AND status IN ('applying','needs_reconciliation') ORDER BY created_at,id LIMIT 1`).get(projectId)??null;}
   approveJob(id,{actor='owner',now=stamp()}={}){
     this.db.exec('BEGIN IMMEDIATE');
     try{
       const row=this.getJobRow(id);check(!!row,'Unknown job',404);check(row.status==='pending_approval',`Job in status ${row.status} cannot be approved`,409);
-      // Scheduling fence: an unresolved job keeps the whole project quarantined.
+      // Scheduling fence: an unresolved job or patch apply keeps the whole project quarantined.
       const stuck=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status='needs_reconciliation' LIMIT 1`).get(row.project_id);
       check(!stuck,'Project has an unresolved needs_reconciliation job; reconcile it before approving new work',409);
+      const unresolvedPatch=this.unresolvedPatchForProject(row.project_id);
+      check(!unresolvedPatch,'Project has an unresolved patch proposal; reconcile it before approving new work',409);
       const active=this.db.prepare(`SELECT COUNT(*) AS n FROM owner_jobs WHERE project_id=? AND status IN ('queued','leased','running','cancel_requested')`).get(row.project_id).n;
       check(active<this.maxActiveJobsPerProject,'Project already has an active job; per-project limit blocks approval',409);
       const changed=this.db.prepare(`UPDATE owner_jobs SET status='queued',approved_at=?,approved_by=?,updated_at=? WHERE id=? AND status='pending_approval'`).run(now,txt(actor,'actor',80),now,id);
@@ -474,6 +481,8 @@ export class OwnerStore {
       // so no other job of this project may be scheduled until the owner reconciles it.
       const stuck=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status='needs_reconciliation' LIMIT 1`).get(projectId);
       if(stuck){this.db.exec('COMMIT');return {claimed:false,reason:'project-quarantined',quarantinedJobId:stuck.id};}
+      const unresolvedPatch=this.unresolvedPatchForProject(projectId);
+      if(unresolvedPatch){this.db.exec('COMMIT');return {claimed:false,reason:'project-patch-quarantined',quarantinedProposalId:unresolvedPatch.id};}
       const activeCount=this.db.prepare(`SELECT COUNT(*) AS n FROM owner_jobs WHERE project_id=? AND status IN ('leased','running','cancel_requested')`).get(projectId).n;
       if(activeCount>=this.maxActiveJobsPerProject){
         const busy=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status IN ('leased','running','cancel_requested') LIMIT 1`).get(projectId);
@@ -675,9 +684,11 @@ export class OwnerStore {
   listWorkspaces({projectId='',status='',limit=100}={}){
     check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
     check(!status||['active','quarantined','cleaned'].includes(status),'Invalid workspace status');
-    const rows=projectId?this.db.prepare('SELECT * FROM owner_workspaces WHERE project_id=? ORDER BY created_at DESC,id DESC LIMIT ?').all(projectId,limit):
-      this.db.prepare('SELECT * FROM owner_workspaces ORDER BY created_at DESC,id DESC LIMIT ?').all(limit);
-    return rows.filter(r=>!status||r.status===status);
+    const where=[];const params=[];
+    if(projectId){where.push('project_id=?');params.push(projectId);}
+    if(status){where.push('status=?');params.push(status);}
+    return this.db.prepare(`SELECT * FROM owner_workspaces ${where.length?`WHERE ${where.join(' AND ')}`:''} ORDER BY created_at DESC,id DESC LIMIT ?`)
+      .all(...params,limit);
   }
   quarantineWorkspaceInTx(id,{reason='',now=stamp()}={}){
     const row=this.getWorkspace(id);if(!row)return false;
@@ -762,11 +773,12 @@ export class OwnerStore {
   listPatchProposals({projectId='',status='',limit=100}={}){
     check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
     check(!status||['proposed','approved','applying','applied','needs_reconciliation','apply_failed','rejected'].includes(status),'Invalid proposal status');
-    const rows=projectId?this.db.prepare('SELECT * FROM owner_patch_proposals WHERE project_id=? ORDER BY created_at DESC,id DESC LIMIT ?').all(projectId,limit):
-      this.db.prepare('SELECT * FROM owner_patch_proposals ORDER BY created_at DESC,id DESC LIMIT ?').all(limit);
-    return rows
-      .map(r=>({...r,allowedPaths:parse(r.allowed_paths),files:parse(r.files)}))
-      .filter(p=>!status||p.status===status);
+    const where=[];const params=[];
+    if(projectId){where.push('project_id=?');params.push(projectId);}
+    if(status){where.push('status=?');params.push(status);}
+    return this.db.prepare(`SELECT * FROM owner_patch_proposals ${where.length?`WHERE ${where.join(' AND ')}`:''} ORDER BY created_at DESC,id DESC LIMIT ?`)
+      .all(...params,limit)
+      .map(r=>({...r,allowedPaths:parse(r.allowed_paths),files:parse(r.files)}));
   }
   getPatchArtifact(proposalId,kind){return this.db.prepare('SELECT * FROM owner_patch_artifacts WHERE proposal_id=? AND kind=?').get(proposalId,kind)??null;}
   getPatchArtifactContent(proposalId,kind){return this.getPatchArtifact(proposalId,kind)?.content??null;}
@@ -791,6 +803,25 @@ export class OwnerStore {
       this.patchAudit(id,'approved',reviewer,`sha:${row.proposal_hash.slice(0,8)}`,now);
       this.db.exec('COMMIT');return this.getPatchProposal(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  // Explicit, hash-bound resume point for the narrow crash window between
+  // proposed→approved and the first file write. It never mutates state and never runs at
+  // startup; the Owner must invoke `patch-apply` (or re-run `patch-approve`).
+  assertPatchApplyAllowed(id,{expectedHash}={}){
+    check(typeof expectedHash==='string'&&/^[0-9a-f]{64}$/.test(expectedHash),'An explicit 64-hex proposal hash is required to apply');
+    const row=this.getPatchProposalRow(id);check(!!row,'Unknown proposal',404);
+    check(expectedHash===row.proposal_hash,'Apply hash does not match the proposal',409);
+    if(row.status==='applied')return {proposal:this.getPatchProposal(id),alreadyApplied:true};
+    if(row.status==='approved'){
+      check(row.approved_hash===row.proposal_hash,'Approval is not bound to the current proposal hash',409);
+      const ws=this.getWorkspace(row.workspace_id);check(!!ws,'Unknown workspace',404);
+      check(ws.status==='active','Workspace is not active; proposal cannot be applied',409);
+      return {proposal:this.getPatchProposal(id),alreadyApplied:false};
+    }
+    if(row.status==='applying'||row.status==='needs_reconciliation'){
+      throw new OwnerInputError(`Proposal in status ${row.status} requires patch reconciliation, not re-apply`,409);
+    }
+    throw new OwnerInputError(`Proposal in status ${row.status} cannot be applied; approve it first`,409);
   }
   rejectPatchProposal(id,{reason='',reviewer='owner',now=stamp()}={}){
     this.db.exec('BEGIN IMMEDIATE');

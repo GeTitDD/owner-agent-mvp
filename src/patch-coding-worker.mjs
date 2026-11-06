@@ -30,9 +30,15 @@ const splitAllowed = (value) => {
   return raw;
 };
 
+const WORKER_CATEGORIES = new Set([
+  'invalid-proposal', 'timeout', 'aborted', 'unconfirmed-stop', 'isolation-error',
+  'proposal-error', 'session-aborted', 'auth-error', 'network-error', 'session-error',
+  'workspace-error', 'worker-error'
+]);
+
 const classifyWorkerError = (error) => {
   const category = String(error?.category ?? '');
-  if (category) return category;
+  if (WORKER_CATEGORIES.has(category)) return category;
   const name = String(error?.name ?? '');
   if (/abort/i.test(name)) return 'session-aborted';
   if (/timeout/i.test(name)) return 'timeout';
@@ -102,6 +108,9 @@ export class PatchCodingWorker {
     const controller = new AbortController();
     let fenced = false;
     let workspace = null;
+    let cancelDetected = false;
+    let signalCancel = null;
+    const cancelSeen = new Promise((resolve) => { signalCancel = resolve; });
 
     const tick = () => {
       try {
@@ -116,7 +125,11 @@ export class PatchCodingWorker {
         return;
       }
       try {
-        if (this.store.getJob(job.id).status === 'cancel_requested') controller.abort();
+        if (this.store.getJob(job.id).status === 'cancel_requested') {
+          cancelDetected = true;
+          controller.abort();
+          signalCancel({ cancelled: true });
+        }
       } catch {
         // The next tick re-checks; a failed heartbeat is the authoritative fence.
       }
@@ -244,6 +257,7 @@ export class PatchCodingWorker {
       try {
         generationResult = await Promise.race([
           generation,
+          cancelSeen,
           new Promise((resolve) => {
             generationTimer = this.timers.timeout(() => {
               timedOut = true;
@@ -256,22 +270,7 @@ export class PatchCodingWorker {
         if (generationTimer !== null) this.timers.clear(generationTimer);
       }
 
-      // Fence wins over any model output: no report, no proposal, keep evidence.
-      if (fenced) {
-        guard(() => this.store.quarantineWorkspace(workspace.id, {
-          reason: 'lease lost during proposal generation',
-          now: this.clock()
-        }));
-        return { claimed: true, jobId: job.id, attempt: attempt.attempt, outcome: 'fenced' };
-      }
-      if (this.store.getJob(job.id).status === 'cancel_requested') {
-        controller.abort();
-        return cancelled('cancelled during proposal generation');
-      }
-
-      if (timedOut) {
-        // Bounded stop confirmation: if the agent cannot confirm, stay fenced and let the
-        // lease expire into human reconciliation instead of reporting a false stop.
+      const waitSettled = async () => {
         let confirmed = false;
         let confirmTimer = null;
         try {
@@ -284,6 +283,46 @@ export class PatchCodingWorker {
         } finally {
           if (confirmTimer !== null) this.timers.clear(confirmTimer);
         }
+        return confirmed;
+      };
+      const stopUnconfirmed = Boolean(generationResult?.error)
+        && classifyWorkerError(generationResult.error) === 'unconfirmed-stop';
+
+      // Fence wins over any model output: no report, no proposal, keep evidence.
+      if (fenced) {
+        guard(() => this.store.quarantineWorkspace(workspace.id, {
+          reason: 'lease lost during proposal generation',
+          now: this.clock()
+        }));
+        return { claimed: true, jobId: job.id, attempt: attempt.attempt, outcome: 'fenced' };
+      }
+      if (cancelDetected || this.store.getJob(job.id).status === 'cancel_requested') {
+        // A cancel request may only be confirmed after the generator has actually settled
+        // (or the agent explicitly confirms its stop). Never release the project fence while
+        // the model prompt could still be running.
+        controller.abort();
+        const settled = await waitSettled();
+        if (!settled || stopUnconfirmed) {
+          guard(() => this.store.quarantineWorkspace(workspace.id, {
+            reason: 'proposal generation stop could not be confirmed',
+            now: this.clock()
+          }));
+          return {
+            claimed: true,
+            jobId: job.id,
+            attempt: attempt.attempt,
+            outcome: 'fenced',
+            unconfirmedStop: true
+          };
+        }
+        return cancelled('cancelled during proposal generation');
+      }
+
+      if (timedOut) {
+        // Bounded stop confirmation: if the agent cannot confirm, stay fenced and let the
+        // lease expire into human reconciliation instead of reporting a false stop.
+        const settled = await waitSettled();
+        const confirmed = settled && !stopUnconfirmed;
         if (!confirmed) {
           guard(() => this.store.quarantineWorkspace(workspace.id, {
             reason: 'proposal generation stop could not be confirmed',

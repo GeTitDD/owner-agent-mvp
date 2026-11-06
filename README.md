@@ -9,9 +9,11 @@
 在 v0.7 的隔离 Pi 会话之上，新增**受控代码补丁闭环**：Owner 为指定项目/任务/文件范围批准一次 `code-patch` Job，Pi 只生成**结构化补丁提案**（无工具、无 Shell、无 Git），宿主验证后进入**二次审批**；只有 Owner 用固定 `proposal_hash` 批准后，才在从批准 base 创建的**独立 Git Worktree** 中应用，并产出只读 Diff 证据。
 
 - 原项目主工作区、`main` 与 OwnerTask 完全不动；不自动 commit/push/PR/merge。
-- 路径防护：traversal/绝对路径/盘符、`.git`/`.pi`/`.env`/密钥、symlink/junction/hardlink、大小写别名、超范围/超大小文件全部由宿主拒绝。
-- 审批绑定提案哈希；提案变化即审批失效；同一 Worktree 只能应用一次。
-- 崩溃 fail-closed：`applying → needs_reconciliation`，Owner 显式 `patch-reconcile` 裁定，**绝不自动重放**。
+- 路径防护：traversal/绝对路径/盘符、`.git`/`.pi`/`.env`/密钥、symlink/junction/hardlink、大小写别名、超范围/超大小文件全部由宿主拒绝；模型材料读取复用同一父链检查。
+- Workspace 父链与 cleanup 身份双重校验：symlink/junction 在写入前拒绝；cleanup 必须证明物理目录仍是登记的 Git worktree，替换目录不会被递归删除。
+- 带可执行 Git filter 的仓库默认拒绝 worktree 操作；LFS 等留待后续安全 materialization。
+- 审批绑定提案哈希；提案变化即审批失效；同一 Worktree 只能应用一次；`patch-apply` 显式恢复 approved→applying 崩溃窗口。
+- 崩溃 fail-closed：`applying → needs_reconciliation`，Owner 显式 `patch-reconcile` 裁定，**绝不自动重放**；`applying/needs_reconciliation` 提案同时触发项目调度 fence。
 - 真实 Pi 调用必须 `--allow-model 1`；CI/测试/演示全部使用 Fake agent，零模型费用。
 
 ```bash

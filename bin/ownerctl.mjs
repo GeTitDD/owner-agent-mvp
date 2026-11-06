@@ -29,6 +29,13 @@ const showProposal=(id)=>{
     applied_diff:store.getPatchArtifactContent(id,'applied_diff'),
     ...(includeContent?{proposal_content:store.getPatchArtifactContent(id,'proposal')}:{})};
 };
+const applyApprovedProposal=async(id,hash)=>{
+  const check=store.assertPatchApplyAllowed(id,{expectedHash:hash});
+  if(check.alreadyApplied)return {outcome:'already-applied',proposal:check.proposal};
+  const record=store.getWorkspaceForAttempt(check.proposal.job_id,check.proposal.attempt);
+  checkRecord(record);
+  return broker().applyProposal(record,check.proposal);
+};
 try {
   // A fresh CLI process holding an `applying` proposal means a previous apply was
   // interrupted: fail closed into owner reconciliation before serving any command.
@@ -63,12 +70,18 @@ try {
   else if(command==='patch-show')result=showProposal(read('--id'));
   else if(command==='patch-approve'){
     const id=read('--id');
-    store.approvePatchProposal(id,{expectedHash:read('--hash'),reviewer:read('--reviewer','owner')});
-    const proposal=store.getPatchProposal(id);
-    const record=store.getWorkspaceForAttempt(proposal.job_id,proposal.attempt);
-    checkRecord(record);
-    result=await broker().applyProposal(record,proposal);
-    if(result.outcome!=='applied')process.exitCode=2;
+    const hash=read('--hash');
+    const before=store.getPatchProposal(id);
+    if(!before)throw new Error('Unknown proposal');
+    // Re-running patch-approve after a crash between approve and apply resumes the same
+    // hash-bound approval instead of leaving the proposal permanently stuck in approved.
+    if(before.status==='proposed')store.approvePatchProposal(id,{expectedHash:hash,reviewer:read('--reviewer','owner')});
+    result=await applyApprovedProposal(id,hash);
+    if(result.outcome&&!['applied','already-applied'].includes(result.outcome))process.exitCode=2;
+  }
+  else if(command==='patch-apply'){
+    result=await applyApprovedProposal(read('--id'),read('--hash'));
+    if(result.outcome&&!['applied','already-applied'].includes(result.outcome))process.exitCode=2;
   }
   else if(command==='patch-reject')result=store.rejectPatchProposal(read('--id'),{reason:read('--reason'),reviewer:read('--reviewer','owner')});
   else if(command==='patch-reconcile'){
@@ -111,7 +124,7 @@ try {
   else if(command==='ask')result=new OwnerAgent(store).answer(args.join(' '));
   else if(command==='ask-pi')result=await new OwnerAgent(store).askPi(args.join(' '));
   else if(command==='events')result=store.listEvents({projectId:read('--project')});
-  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake/pi/patch ... | result --id | results --job | code-submit --project --task --base --paths --key | patches [--project] [--status] | patch-show --id [--content 1] | patch-approve --id --hash | patch-reject --id --reason | patch-reconcile --id --decision confirm-applied/discard [--reason] | patch-recover | workspaces [--project] [--status] | workspace-inspect --id | workspace-quarantine --id --reason | workspace-cleanup --id --confirm 1');
+  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake/pi/patch ... | result --id | results --job | code-submit --project --task --base --paths --key | patches [--project] [--status] | patch-show --id [--content 1] | patch-approve --id --hash | patch-apply --id --hash | patch-reject --id --reason | patch-reconcile --id --decision confirm-applied/discard [--reason] | patch-recover | workspaces [--project] [--status] | workspace-inspect --id | workspace-quarantine --id --reason | workspace-cleanup --id --confirm 1');
   console.log(JSON.stringify(result,null,2));
 }catch(e){console.error(e.message);process.exitCode=1;}
 finally{store.close();}

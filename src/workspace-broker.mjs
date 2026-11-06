@@ -7,7 +7,7 @@
 // The broker refuses: non-git projects, dirty working trees (excluding the v0.7 identity
 // marker), base-SHA drift, pre-existing workspace paths and path escape from the
 // workspaces root. It is NOT a security sandbox — only worktree/index isolation.
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
@@ -16,8 +16,9 @@ import { sha256 } from './utils.mjs';
 import {
   PATCH_LIMITS,
   canonicalProposalHash,
-  normalizeRelPath,
+  inspectSafePath,
   readProposalArtifact,
+  readSafeMaterial,
   validateProposal
 } from './patch-protocol.mjs';
 import { samePath, verifyProjectRoot } from './project-identity.mjs';
@@ -75,6 +76,41 @@ export class WorkspaceBroker {
     }
   }
 
+  // Git filters run arbitrary local commands during checkout/add/diff. P0 promises not to
+  // execute project code, so a repository whose tracked files (or info/global attributes)
+  // assign a `filter` attribute is a hard refusal. A global filter config that is not
+  // referenced by any attribute is harmless and does not block ordinary repositories.
+  async assertNoExecutableFilters(cwd) {
+    const files = await this.git(cwd, ['ls-files', '-z']);
+    if (!files) return;
+    const hooksPath = this.noHooksDir();
+    const args = [
+      '-c', `core.hooksPath=${hooksPath}`,
+      '-c', 'core.fsmonitor=false',
+      'check-attr', '-z', '--stdin', 'filter'
+    ];
+    let output;
+    try {
+      output = execFileSync(this.gitBin, args, {
+        cwd,
+        input: files,
+        encoding: 'utf8',
+        maxBuffer: 16 * 1024 * 1024,
+        windowsHide: true,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' }
+      });
+    } catch {
+      throw new Error('unable to verify Git filter safety; refusing worktree operation');
+    }
+    const parts = output.split('\u0000');
+    for (let i = 0; i + 2 < parts.length; i += 3) {
+      const value = parts[i + 2];
+      if (value && value !== 'unspecified' && value !== 'unset') {
+        throw new Error('repository assigns executable Git filters; refusing worktree operation');
+      }
+    }
+  }
+
   static sanitizeIds({ projectId, jobId, attempt }) {
     const idRe = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,88}$/;
     check(idRe.test(projectId) && !projectId.includes('..'), 'invalid project id');
@@ -83,8 +119,65 @@ export class WorkspaceBroker {
   }
 
   rootReal() {
-    fs.mkdirSync(this.workspacesRoot, { recursive: true, mode: 0o700 });
+    if (fs.existsSync(this.workspacesRoot)) {
+      const stat = fs.lstatSync(this.workspacesRoot);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error('workspaces root must be a real directory, not a link');
+      }
+    } else {
+      fs.mkdirSync(this.workspacesRoot, { recursive: true, mode: 0o700 });
+    }
     return fs.realpathSync(this.workspacesRoot);
+  }
+
+  // Reject an existing symlink/junction anywhere below the workspaces root before any
+  // directory creation or Git operation can follow it.
+  assertNoSymlinkComponents(target) {
+    const root = this.rootReal();
+    const relative = path.relative(root, target);
+    check(relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative),
+      'workspace path escapes the workspaces root');
+    let current = root;
+    for (const segment of relative.split(path.sep).filter(Boolean)) {
+      current = path.join(current, segment);
+      let stat;
+      try {
+        stat = fs.lstatSync(current);
+      } catch {
+        break; // The remaining components do not exist yet.
+      }
+      if (stat.isSymbolicLink()) {
+        throw new Error('workspace path contains a symbolic link/junction');
+      }
+      if (current !== target && !stat.isDirectory()) {
+        throw new Error('workspace parent path is not a real directory');
+      }
+      const real = fs.realpathSync(current);
+      check(samePath(real, current), 'workspace path aliases another location');
+    }
+  }
+
+  ensureWorkspaceParent(projectId, jobId) {
+    const root = this.rootReal();
+    let current = root;
+    for (const segment of [projectId, jobId]) {
+      const next = path.join(current, segment);
+      if (!fs.existsSync(next)) {
+        try {
+          fs.mkdirSync(next, { mode: 0o700 });
+        } catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+        }
+      }
+      const stat = fs.lstatSync(next);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error('workspace parent path is not a real directory');
+      }
+      const real = fs.realpathSync(next);
+      check(samePath(real, next), 'workspace parent path aliases another location');
+      current = next;
+    }
+    return current;
   }
 
   workspacePath(projectId, jobId, attempt) {
@@ -97,6 +190,7 @@ export class WorkspaceBroker {
       ? resolved.toLowerCase().startsWith(prefix.toLowerCase())
       : resolved.startsWith(prefix);
     check(within, 'workspace path escapes the workspaces root');
+    this.assertNoSymlinkComponents(resolved);
     return resolved;
   }
 
@@ -119,26 +213,82 @@ export class WorkspaceBroker {
     }
   }
 
+  async isRegisteredWorktree(root, worktreePath, branch) {
+    const output = await this.git(root, ['worktree', 'list', '--porcelain']);
+    const expectedRef = `refs/heads/${branch}`;
+    for (const block of output.split(/\r?\n\r?\n/)) {
+      const lines = block.split(/\r?\n/).filter(Boolean);
+      const pathLine = lines.find((line) => line.startsWith('worktree '));
+      const branchLine = lines.find((line) => line.startsWith('branch '));
+      if (!pathLine || !branchLine) continue;
+      const registeredPath = pathLine.slice('worktree '.length);
+      if (samePath(registeredPath, worktreePath) && branchLine.slice('branch '.length) === expectedRef) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Prove the physical directory is still the linked worktree Git registered for this
+  // project: its `.git` file points into the common git dir's worktrees area, and that
+  // gitdir's reverse `gitdir` file points back to the same `.git` file. A replaced
+  // ordinary directory cannot satisfy both sides of the link.
+  async assertWorktreeIdentity(root, worktreePath) {
+    const dotGit = path.join(worktreePath, '.git');
+    let stat;
+    try {
+      stat = fs.lstatSync(dotGit);
+    } catch {
+      throw new Error('workspace path is not a linked git worktree; refusing to remove it');
+    }
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 4096) {
+      throw new Error('workspace path has an unexpected .git file; refusing to remove it');
+    }
+    const match = fs.readFileSync(dotGit, 'utf8').match(/^gitdir:\s*(.+)$/m);
+    if (!match) throw new Error('workspace path has no gitdir link; refusing to remove it');
+    const gitdir = path.resolve(worktreePath, match[1].trim());
+    const commonRaw = (await this.git(root, ['rev-parse', '--git-common-dir'])).trim();
+    const commonDir = path.resolve(root, commonRaw);
+    const worktreesRoot = path.join(commonDir, 'worktrees');
+    const gitdirReal = fs.realpathSync(gitdir);
+    const worktreesReal = fs.realpathSync(worktreesRoot);
+    const prefix = worktreesReal + path.sep;
+    const inside = process.platform === 'win32'
+      ? gitdirReal.toLowerCase().startsWith(prefix.toLowerCase())
+      : gitdirReal.startsWith(prefix);
+    if (!inside) throw new Error('workspace gitdir is outside the project worktrees area');
+    const reverseFile = path.join(gitdir, 'gitdir');
+    if (!fs.existsSync(reverseFile)) throw new Error('workspace gitdir has no reverse link');
+    const reverseRaw = fs.readFileSync(reverseFile, 'utf8').trim();
+    const reverseTarget = path.isAbsolute(reverseRaw) ? reverseRaw : path.resolve(gitdir, reverseRaw);
+    if (!samePath(reverseTarget, dotGit)) {
+      throw new Error('workspace gitdir reverse link does not point back to the workspace');
+    }
+  }
+
+  // Remove only a worktree that Git still registers for this controlled branch. If the
+  // recorded path was manually removed and replaced by an unrelated ordinary directory,
+  // refuse and leave it untouched (the DB row stays active/quarantined for inspection).
   async removeWorktree(root, worktreePath, branch) {
-    try {
+    const registered = await this.isRegisteredWorktree(root, worktreePath, branch);
+    const exists = fs.existsSync(worktreePath);
+    if (!registered && exists) {
+      throw new Error('workspace path is not a registered git worktree; refusing to remove it');
+    }
+    if (registered && exists) {
+      await this.assertWorktreeIdentity(root, worktreePath);
       await this.git(root, ['worktree', 'remove', '--force', worktreePath]);
-    } catch {
-      // The worktree may already be gone or only partially created.
-    }
-    try {
-      fs.rmSync(worktreePath, { recursive: true, force: true });
-    } catch {
-      // Ignore: the caller re-checks containment and never removes a project path.
-    }
-    try {
-      await this.git(root, ['branch', '-D', branch]);
-    } catch {
-      // Branch may not exist if `worktree add` failed before creating it.
+      if (fs.existsSync(worktreePath)) {
+        throw new Error('git worktree remove did not remove the workspace path');
+      }
     }
     try {
       await this.git(root, ['worktree', 'prune']);
     } catch {
-      // Best effort only.
+      // Best effort; stale metadata never authorizes a recursive filesystem delete.
+    }
+    if (await this.branchExists(root, branch)) {
+      await this.git(root, ['branch', '-D', branch]);
     }
   }
 
@@ -169,6 +319,10 @@ export class WorkspaceBroker {
     }
     check(samePath(toplevelReal, root), 'git toplevel does not match the registered project root');
 
+    // Filter safety must be verified BEFORE `git status`, because status can itself run a
+    // configured clean filter. `ls-files`/`check-attr` are metadata-only and do not.
+    await this.assertNoExecutableFilters(root);
+
     // Clean snapshot: untracked/modified files are refused. The identity marker written
     // by v0.7 registration is the one documented exception.
     const status = (await this.git(root, [
@@ -184,7 +338,10 @@ export class WorkspaceBroker {
     const branch = `owner/job-${jobId}-a${attempt}`;
     check(await this.branchExists(root, branch) === false, 'controlled branch already exists; clean or reconcile it first');
 
-    fs.mkdirSync(path.dirname(wtPath), { recursive: true, mode: 0o700 });
+    // Create only the two parent levels, one at a time, re-checking real directory identity
+    // after each mkdir. The worktree target itself is created exclusively by git.
+    const parent = this.ensureWorkspaceParent(projectId, jobId);
+    check(samePath(parent, path.dirname(wtPath)), 'workspace parent path changed unexpectedly');
     let created = false;
     try {
       await this.git(root, ['worktree', 'add', '-b', branch, wtPath, baseSha]);
@@ -201,7 +358,14 @@ export class WorkspaceBroker {
       });
       return { record, path: wtReal, branch, baseSha };
     } catch (error) {
-      if (created) await this.removeWorktree(root, wtPath, branch);
+      if (created) {
+        try {
+          await this.removeWorktree(root, wtPath, branch);
+        } catch {
+          // Preserve the original create failure; the partial path is never recursively
+          // deleted without proof that Git still registers it.
+        }
+      }
       throw error;
     }
   }
@@ -223,42 +387,53 @@ export class WorkspaceBroker {
     return { ...record, head, dirty: !!status, alive };
   }
 
-  // Trusted host-side read broker for prompt material. Only owner-approved files (or files
-  // under an approved directory) are read, with fixed limits and the same deny-list.
+  // Trusted host-side read broker for prompt material. Every path reuses the patch
+  // validator's parent-chain/link/case checks: an approved path whose intermediate
+  // directory is a symlink/junction is a hard failure, not a silent empty read. Directory
+  // walks skip unsafe children (they are not explicitly approved material).
   readMaterial(record, entries) {
-    const root = fs.realpathSync(record.path);
     const out = [];
     let total = 0;
     const seen = new Set();
+    const worktreeRoot = record.path;
 
-    const addFile = (rel, full) => {
-      if (seen.has(rel) || out.length >= PATCH_LIMITS.maxMaterialFiles) return;
-      let st;
-      try {
-        st = fs.lstatSync(full);
-      } catch {
+    const addInspected = (inspected, { failClosed = false } = {}) => {
+      if (out.length >= PATCH_LIMITS.maxMaterialFiles) return;
+      if (seen.has(inspected.path)) return;
+      if (inspected.kind !== 'file') return;
+      if (inspected.stat.size > PATCH_LIMITS.maxFileBytes) {
+        if (failClosed) throw new Error('approved material exceeds the per-file size limit');
         return;
       }
-      if (st.isSymbolicLink() || !st.isFile()) return;
-      if (st.size > PATCH_LIMITS.maxFileBytes) return;
-      if (total + st.size > PATCH_LIMITS.maxMaterialBytes) return;
-      let buffer;
-      try {
-        buffer = fs.readFileSync(full);
-      } catch {
+      if (total + inspected.stat.size > PATCH_LIMITS.maxMaterialBytes) {
+        if (failClosed) throw new Error('approved material exceeds the total size limit');
         return;
       }
-      if (buffer.includes(0)) return;
-      seen.add(rel);
-      out.push({ path: rel, content: buffer.toString('utf8') });
-      total += buffer.length;
+      let material;
+      try {
+        material = readSafeMaterial(inspected);
+      } catch (error) {
+        if (failClosed) throw error;
+        return;
+      }
+      seen.add(inspected.path);
+      out.push({ path: material.path, content: material.content });
+      total += material.bytes;
     };
 
-    const walk = (dir, prefix, depth) => {
+    const walk = (prefix, depth) => {
       if (depth > 4 || out.length >= PATCH_LIMITS.maxMaterialFiles) return;
+      let directory;
+      try {
+        directory = inspectSafePath({ worktreeRoot, relPath: prefix });
+      } catch {
+        return;
+      }
+      if (directory.kind !== 'directory') return;
       let names;
       try {
-        names = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+        names = fs.readdirSync(directory.full, { withFileTypes: true })
+          .sort((a, b) => a.name.localeCompare(b.name));
       } catch {
         return;
       }
@@ -266,30 +441,23 @@ export class WorkspaceBroker {
         if (out.length >= PATCH_LIMITS.maxMaterialFiles) return;
         if (dirent.name.startsWith('.')) continue;
         const rel = `${prefix}/${dirent.name}`;
-        let normalized;
+        let inspected;
         try {
-          normalized = normalizeRelPath(rel).norm;
+          inspected = inspectSafePath({ worktreeRoot, relPath: rel });
         } catch {
-          continue; // deny-listed or unsafe path: skip silently
+          continue; // symlink/hardlink/case-alias/binary child: never material
         }
-        const full = path.join(dir, dirent.name);
-        if (dirent.isSymbolicLink()) continue;
-        if (dirent.isDirectory()) walk(full, normalized, depth + 1);
-        else if (dirent.isFile()) addFile(normalized, full);
+        if (inspected.kind === 'directory') walk(rel, depth + 1);
+        else if (inspected.kind === 'file') addInspected(inspected, { failClosed: false });
       }
     };
 
     for (const entry of entries) {
-      const full = path.join(root, entry.norm);
-      let st;
-      try {
-        st = fs.lstatSync(full);
-      } catch {
-        continue;
-      }
-      if (st.isSymbolicLink()) continue;
-      if (st.isFile()) addFile(entry.norm, full);
-      else if (st.isDirectory()) walk(full, entry.norm, 0);
+      // Explicit approved paths are fail-closed: unsafe parents, links or invalid UTF-8
+      // abort the attempt instead of silently dropping material.
+      const inspected = inspectSafePath({ worktreeRoot, relPath: entry.norm });
+      if (inspected.kind === 'file') addInspected(inspected, { failClosed: true });
+      else if (inspected.kind === 'directory') walk(entry.norm, 0);
     }
     return out;
   }
@@ -311,7 +479,8 @@ export class WorkspaceBroker {
         fs.writeFileSync(newPath, file.content, 'utf8');
         const raw = await this.git(tmp, [
           '-c', 'core.autocrlf=false',
-          'diff', '--no-index', '--no-color', '--unified=3', '--', 'old', 'new'
+          'diff', '--no-index', '--no-color', '--no-ext-diff', '--no-textconv',
+          '--unified=3', '--', 'old', 'new'
         ], { allowDiffExit: true });
         const header = `diff --git a/${file.path} b/${file.path}`;
         if (!raw.trim()) {
@@ -348,9 +517,9 @@ export class WorkspaceBroker {
   // exact changed-path set for independent comparison with the proposal.
   async buildAppliedDiff(worktreePath) {
     await this.git(worktreePath, ['add', '--intent-to-add', '.']);
-    const namesRaw = await this.git(worktreePath, ['diff', '--name-only', '-z']);
+    const namesRaw = await this.git(worktreePath, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z']);
     const paths = namesRaw.split('\u0000').filter(Boolean).sort();
-    const diff = await this.git(worktreePath, ['diff']);
+    const diff = await this.git(worktreePath, ['diff', '--no-ext-diff', '--no-textconv']);
     return { diff, paths };
   }
 
@@ -381,6 +550,7 @@ export class WorkspaceBroker {
     // proposal becomes apply_failed, and the workspace is quarantined for inspection.
     let artifact;
     try {
+      await this.assertNoExecutableFilters(rootCheck.root);
       const artifactRow = this.store.getPatchArtifact(proposal.id, 'proposal');
       check(!!artifactRow, 'stored proposal artifact is missing');
       check(sha256(artifactRow.content) === artifactRow.content_hash, 'stored proposal artifact hash mismatch');
@@ -478,6 +648,11 @@ export class WorkspaceBroker {
     try {
       check(!!record && !!proposal, 'workspace and proposal are required');
       this.assertRecordPath(record);
+      const project = this.store.getProject(record.project_id);
+      check(!!project, 'Unknown project');
+      const rootCheck = verifyProjectRoot(project);
+      check(rootCheck.ok, `project root is unavailable (${rootCheck.reason})`);
+      await this.assertNoExecutableFilters(rootCheck.root);
       const head = (await this.git(record.path, ['rev-parse', 'HEAD'])).trim();
       check(head === proposal.base_sha, 'worktree HEAD drifted from the approved base');
       const artifactRow = this.store.getPatchArtifact(proposal.id, 'proposal');
@@ -487,10 +662,9 @@ export class WorkspaceBroker {
       check(canonicalProposalHash(artifact.files) === proposal.proposal_hash,
         'proposal hash no longer matches its content');
       for (const file of artifact.files) {
-        const full = path.join(record.path, file.path);
-        const st = fs.lstatSync(full);
-        if (st.isSymbolicLink() || !st.isFile()) return { ok: false, reason: `not a regular file: ${file.path}` };
-        const current = fs.readFileSync(full, 'utf8');
+        const inspected = inspectSafePath({ worktreeRoot: record.path, relPath: file.path });
+        if (inspected.kind !== 'file') return { ok: false, reason: `not a regular file: ${file.path}` };
+        const current = readSafeMaterial(inspected).content;
         if (sha256(current) !== file.new_sha) return { ok: false, reason: `content hash mismatch: ${file.path}` };
       }
       const { diff, paths } = await this.buildAppliedDiff(record.path);
@@ -521,12 +695,13 @@ export class WorkspaceBroker {
         `proposal in status ${proposal.status} must be reconciled before cleanup`);
     }
     const root = this.rootReal();
-    check(fs.existsSync(expected) ? fs.realpathSync(expected) === expected : true,
+    check(fs.existsSync(expected) ? samePath(fs.realpathSync(expected), expected) : true,
       'workspace path was replaced by a link');
     const project = this.store.getProject(record.project_id);
     check(!!project, 'Unknown project');
     const rootCheck = verifyProjectRoot(project);
     check(rootCheck.ok, `project root is unavailable (${rootCheck.reason})`);
+    await this.assertNoExecutableFilters(rootCheck.root);
     if (fs.existsSync(expected) || await this.branchExists(rootCheck.root, record.branch)) {
       await this.removeWorktree(rootCheck.root, expected, record.branch);
     }

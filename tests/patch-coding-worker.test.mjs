@@ -8,6 +8,7 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -96,6 +97,23 @@ const git = (cwd, args) => execFileSync('git', args, {
 });
 
 const gitOut = (cwd, args) => git(cwd, args).trim();
+
+// Directory links are unavailable in some restricted Windows hosts; try a real symlink
+// first, then a junction, and let the caller skip only when neither is possible.
+const makeDirLink = (target, link) => {
+  try {
+    symlinkSync(target, link, 'dir');
+    return true;
+  } catch {
+    // fall through
+  }
+  try {
+    symlinkSync(target, link, 'junction');
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const makeRepo = (parent, name = 'repo') => {
   const repo = path.join(parent, name);
@@ -588,6 +606,174 @@ test('[patch#12] proposal parser and real-Pi smoke are opt-in and fail closed', 
   assert.throws(() => parseProposalText('{"files":[]}'), /non-empty/);
   assert.throws(() => parseProposalText('{"files":[{"path":"a","action":"add"}]}'), /path\/action\/content/);
 });
+
+test('[patch#13] material broker reuses parent-chain/link checks and fails closed on explicit paths', () => withEnv(async ({ root, repo, broker }) => {
+  const outside = path.join(root, 'outside-material');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(path.join(outside, 'private.txt'), 'TOP SECRET\n');
+  mkdirSync(path.join(repo, 'docs'), { recursive: true });
+  const linked = makeDirLink(outside, path.join(repo, 'docs', 'link'));
+  if (linked) {
+    assert.throws(
+      () => broker.readMaterial({ path: repo }, [{ norm: 'docs/link/private.txt', lower: 'docs/link/private.txt' }]),
+      /symbolic link|non-directory|escapes/
+    );
+  }
+
+  linkSync(path.join(outside, 'private.txt'), path.join(repo, 'docs', 'hard.txt'));
+  assert.throws(
+    () => broker.readMaterial({ path: repo }, [{ norm: 'docs/hard.txt', lower: 'docs/hard.txt' }]),
+    /hard-linked/
+  );
+
+  writeFileSync(path.join(repo, 'docs', 'bad.txt'), Buffer.from([0xff, 0xfe, 0x00]));
+  assert.throws(
+    () => broker.readMaterial({ path: repo }, [{ norm: 'docs/bad.txt', lower: 'docs/bad.txt' }]),
+    /binary|UTF-8/
+  );
+}));
+
+test('[patch#14] cancel with a never-settling prompt is never confirmed and stays fenced', () => withEnv(async ({ store, base, broker, clock }) => {
+  const { job } = submitCode(store, clock, { base, key: 'cancel-unconfirmed' });
+  const agent = new FakePatchProposalAgent({ onGenerate: () => new Promise(() => {}) });
+  const timers = manualTimers();
+  const run = runWorker({ store, broker, clock, agent, timers, abortConfirmMs: 5000 });
+  await waitFor(() => agent.calls.length === 1, 'unconfirmed cancel agent called');
+  store.requestCancelJob(job.id, { now: clock.now() });
+  timers.fireByMs(10000);
+  await waitFor(() => [...timers.handles.values()].some((handle) => handle.ms === 5000),
+    'unconfirmed cancel stop timer');
+  timers.fireByMs(5000);
+  const result = await run;
+  assert.equal(result.outcome, 'fenced');
+  assert.equal(result.unconfirmedStop, true);
+  assert.equal(store.getJob(job.id).status, 'cancel_requested');
+  assert.equal(store.listPatchProposals({ projectId: 'proj-a' }).filter((p) => p.job_id === job.id).length, 0);
+  assert.equal(store.getWorkspaceForAttempt(job.id, 1).status, 'quarantined');
+  assert.equal(timers.handles.size, 0);
+}));
+
+test('[patch#15] Git filter attributes are refused before checkout and never execute', () => withEnv(async ({ root, repo, base, store, broker, clock }) => {
+  writeFileSync(path.join(repo, '.gitattributes'), '*.txt filter=evil\n');
+  writeFileSync(path.join(repo, 'src', 'app.txt'), 'filtered\n');
+  git(repo, ['add', '.gitattributes', 'src/app.txt']);
+  git(repo, ['commit', '-qm', 'add filter attributes']);
+  const marker = path.join(root, 'smudge-marker.txt');
+  const script = path.join(root, 'smudge.mjs');
+  writeFileSync(script, `import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(marker)},'ran');`);
+  const command = `"${process.execPath}" "${script}"`;
+  git(repo, ['config', 'filter.evil.smudge', command]);
+  git(repo, ['config', 'filter.evil.clean', command]);
+  const head = gitOut(repo, ['rev-parse', 'HEAD']);
+  const { job } = submitCode(store, clock, { base: head, key: 'filter-1' });
+  const result = await runWorker({ store, broker, clock });
+  assert.equal(result.outcome, 'failed');
+  assert.equal(store.getWorkspaceForAttempt(job.id, 1), null);
+  assert.equal(existsSync(marker), false, 'the malicious smudge command must not run');
+}));
+
+test('[patch#16] a symlink under the workspaces root is refused before any write', () => withEnv(async ({ root, repo, base, store, broker, clock }) => {
+  const workspacesRoot = path.join(root, 'workspaces');
+  mkdirSync(workspacesRoot, { recursive: true });
+  const outside = path.join(root, 'outside-workspaces');
+  mkdirSync(outside, { recursive: true });
+  if (!makeDirLink(outside, path.join(workspacesRoot, 'proj-a'))) return;
+  const { job } = submitCode(store, clock, { base, key: 'parent-link-1' });
+  const result = await runWorker({ store, broker, clock });
+  assert.equal(result.outcome, 'failed');
+  assert.equal(store.listWorkspaces().length, 0);
+  assert.deepEqual(readdirSync(outside), []);
+  assert.equal(readFileSync(path.join(repo, 'src', 'app.js'), 'utf8'), 'export const x = 1;\n');
+}));
+
+test('[patch#17] an unresolved patch apply fences the whole project until Owner reconciliation', () => withEnv(async ({ root, store, base, broker, clock }) => {
+  const { job } = submitCode(store, clock, { base, key: 'fence-patch-1' });
+  const run = await runWorker({ store, broker, clock });
+  const proposal = store.getPatchProposal(run.proposalId);
+  store.approvePatchProposal(proposal.id, { expectedHash: proposal.proposal_hash });
+  store.beginPatchApply(proposal.id);
+
+  const pendingTask = store.createTask({ projectId: 'proj-a', title: 'blocked by unresolved patch' });
+  const pendingJob = store.createJob({
+    projectId: 'proj-a',
+    jobType: 'code-patch',
+    title: 'blocked patch',
+    payload: { baseSha: base, allowedPaths: 'src/' },
+    idempotencyKey: 'fence-patch-2',
+    ownerTaskId: pendingTask.id
+  });
+  assert.throws(() => store.approveJob(pendingJob.id), /unresolved patch proposal/);
+  assert.deepEqual(
+    store.claimNextJob('proj-a', 'fence-test-worker', { now: clock.now() }),
+    { claimed: false, reason: 'project-patch-quarantined', quarantinedProposalId: proposal.id }
+  );
+
+  // A different project is unaffected.
+  const otherRepo = makeRepo(root, 'repo-other');
+  store.registerProject({ id: 'proj-other', name: 'Other', root: otherRepo.repo, primaryDomain: 'software-engineering' });
+  const otherTask = store.createTask({ projectId: 'proj-other', title: 'other' });
+  const otherJob = store.createJob({
+    projectId: 'proj-other',
+    jobType: 'code-patch',
+    title: 'other patch',
+    payload: { baseSha: otherRepo.base, allowedPaths: 'src/' },
+    idempotencyKey: 'fence-other-1',
+    ownerTaskId: otherTask.id
+  });
+  assert.equal(store.approveJob(otherJob.id, { now: clock.now() }).status, 'queued');
+
+  store.reconcilePatch(proposal.id, { decision: 'discard', reason: 'fence test' });
+  assert.equal(store.approveJob(pendingJob.id, { now: clock.now() }).status, 'queued');
+  assert.equal(store.getWorkspaceForAttempt(job.id, 1).status, 'quarantined');
+}));
+
+test('[patch#18] cleanup refuses a replaced ordinary directory and preserves its data', () => withEnv(async ({ store, base, broker, clock }) => {
+  const { job } = submitCode(store, clock, { base, key: 'cleanup-replaced-1' });
+  const run = await runWorker({ store, broker, clock });
+  store.rejectPatchProposal(run.proposalId, { reason: 'cleanup replacement test' });
+  const workspace = store.getWorkspaceForAttempt(job.id, 1);
+  rmSync(workspace.path, { recursive: true, force: true });
+  mkdirSync(workspace.path, { recursive: true });
+  const sentinel = path.join(workspace.path, 'user-data.txt');
+  writeFileSync(sentinel, 'do not delete\n');
+  await assert.rejects(() => broker.cleanup(workspace.id, { confirm: true }),
+    /not a registered git worktree|linked git worktree|unexpected .git/);
+  assert.equal(readFileSync(sentinel, 'utf8'), 'do not delete\n');
+  assert.equal(store.getWorkspace(workspace.id).status, 'active');
+}));
+
+test('[patch#19] a crash after approval can resume via the explicit hash-bound apply path', () => withEnv(async ({ store, base, broker, clock }) => {
+  const { job } = submitCode(store, clock, { base, key: 'resume-approved-1' });
+  const run = await runWorker({ store, broker, clock });
+  const proposal = store.getPatchProposal(run.proposalId);
+  // Simulate the crash window: approval persisted, apply never started.
+  store.approvePatchProposal(proposal.id, { expectedHash: proposal.proposal_hash });
+  assert.equal(store.getPatchProposal(proposal.id).status, 'approved');
+  assert.throws(() => store.assertPatchApplyAllowed(proposal.id, { expectedHash: '0'.repeat(64) }),
+    /does not match/);
+  const resume = store.assertPatchApplyAllowed(proposal.id, { expectedHash: proposal.proposal_hash });
+  assert.equal(resume.alreadyApplied, false);
+  const applied = await broker.applyProposal(store.getWorkspaceForAttempt(job.id, 1), resume.proposal);
+  assert.equal(applied.outcome, 'applied');
+  assert.equal(store.assertPatchApplyAllowed(proposal.id, { expectedHash: proposal.proposal_hash }).alreadyApplied, true);
+}));
+
+test('[patch#20] unknown provider error categories never enter the durable job note', () => withEnv(async ({ store, base, broker, clock }) => {
+  const { job } = submitCode(store, clock, { base, key: 'error-category-1' });
+  const agent = new FakePatchProposalAgent({
+    onGenerate: async () => {
+      const error = new Error('provider endpoint and secret material');
+      error.category = 'provider-secret-category';
+      throw error;
+    }
+  });
+  const result = await runWorker({ store, broker, clock, agent });
+  assert.equal(result.outcome, 'failed');
+  const note = store.getJob(job.id).attempts[0].result_note;
+  assert.match(note, /worker-error/);
+  assert.equal(note.includes('provider-secret-category'), false);
+  assert.equal(note.includes('endpoint and secret'), false);
+}));
 
 test('[patch-real] optional real Pi smoke (OWNER_AGENT_REAL_PATCH_TEST=1)', {
   skip: process.env.OWNER_AGENT_REAL_PATCH_TEST !== '1'

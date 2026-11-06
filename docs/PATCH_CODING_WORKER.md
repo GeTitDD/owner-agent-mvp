@@ -22,15 +22,22 @@ OwnerTask → code-patch Job（人工审批）→ 固定 base 的独立 Worktree
   `OWNER_AGENT_WORKSPACES_DIR` 覆盖）。**绝不在原项目目录下创建临时工作区**。
 - `projectId` / `jobId` / `attempt` 全部经过字符集校验；最终路径再做包含性检查，
   防止 `..`、绝对路径或拼接逃逸。
+- **父链无链接**：在任何 `mkdir` / Git 操作前，从 `workspacesRoot` 到目标父目录逐级
+  `lstat`，拒绝 symlink / junction / 非目录；目录逐层创建后再次核验 `realpath`。
+  即使 `<workspacesRoot>/<projectId>` 被替换为链接，也不会先写到链接目标再检查。
 - 所有 Git 操作使用 `execFile('git', [固定参数])`，**不经过 shell**，也不把 Git 交给模型；
-  同时固定 `core.hooksPath` 到 Owner 私有空目录、关闭 `core.fsmonitor`，避免项目 hook 在
-  worktree 创建时执行。
+  同时固定 `core.hooksPath` 到 Owner 私有空目录、关闭 `core.fsmonitor`。
+- **Git filter 默认拒绝**：创建前对当前 tracked 文件执行 `git check-attr filter`；只要
+  存在 `filter` 属性（无论 smudge/clean/process 配置来自 repo、info 还是全局 attributes），
+  一律拒绝 worktree 操作，避免 checkout/add/status 执行任意 filter 命令。LFS 等需要 filter
+  的仓库暂不支持，后续应由安全 materialization 处理。
 - 创建前依次拒绝：
   1. 未登记 / 根目录缺失 / 根身份漂移（复用 v0.7 `.owner-root-identity` 文件身份）；
   2. `git rev-parse --show-toplevel` 与登记根不一致；
-  3. 工作树脏（排除 v0.7 的 `.owner-root-identity` 标记）；
-  4. 显式 `payload.baseSha` 不是 40-hex，或与当时 `HEAD` 不一致；
-  5. 目标 worktree 路径 / 受控分支已存在。
+  3. 可执行 Git filter（见上）；
+  4. 工作树脏（排除 v0.7 的 `.owner-root-identity` 标记）；
+  5. 显式 `payload.baseSha` 不是 40-hex，或与当时 `HEAD` 不一致；
+  6. 目标 worktree 路径 / 受控分支已存在。
 - 创建命令固定为：
   ```
   git worktree add -b owner/job-<jobId>-a<attempt> <isolated-path> <baseSha>
@@ -39,9 +46,12 @@ OwnerTask → code-patch Job（人工审批）→ 固定 base 的独立 Worktree
 - 失败时只清理本次已创建的 worktree 和分支，不触碰项目根。
 - `workspace-inspect` 只返回元数据、HEAD、是否脏、是否存活；`workspace-cleanup` 必须
   `--confirm 1`，且：
-  - 路径必须与由 `projectId/jobId/attempt` 重新推导的路径一致（防 DB 篡改）；
+  - 路径与受控分支都必须与由 `projectId/jobId/attempt` 重新推导的值一致（防 DB 篡改）；
   - 拒绝清理仍在 `proposed/approved/applying/needs_reconciliation` 的提案；
-  - 只 `worktree remove --force` + `branch -D` 该受控分支，再 `worktree prune`。
+  - **删除前证明物理目录仍是登记的 Git worktree**：`.git` 文件必须指向项目
+    `common-dir/worktrees/...`，且该 gitdir 的反向 `gitdir` 文件指回同一 `.git`；
+  - 只有上述身份成立才执行 `worktree remove --force`；若路径被替换为普通目录，
+    **不做任何递归删除**，保留现场并报错；随后删除受控分支并 `worktree prune`。
 - 并发/隔离：每个 Attempt 一个 worktree；不同项目、不同 Attempt 路径天然分离。
 
 ## 2. Patch 协议与路径/哈希不变量
@@ -74,6 +84,9 @@ OwnerTask → code-patch Job（人工审批）→ 固定 base 的独立 Worktree
     拒绝 symlink / junction / 非目录；
   - `modify` 目标必须是普通文件，拒绝 symlink、硬链接（`nlink > 1`）、二进制（NUL）；
   - `add` 目标必须不存在，父目录必须已存在（P0 不创建目录），并拒绝大小写变体已存在。
+- **模型材料读取复用同一套路径检查**：显式批准的 `docs/link/private.txt` 会先逐级校验
+  父链；中间目录是 symlink/junction、目标硬链接、非 UTF-8 或 NUL 内容都 fail-closed，
+  不会“空读”后继续生成。目录遍历中的链接/非法子项跳过，显式批准路径则整次 attempt 失败。
 - 提案 diff 由宿主用 `git diff --no-index` 针对临时 old/new 文件生成，路径头改写为
   仓库相对路径；审批前 Owner 即可查看受控 unified diff。
 - 存储：
@@ -104,21 +117,28 @@ Workspace
 ```
 
 - Worker 只创建 `proposed`；取消/失联/超时/未确认停止**永不 apply**，Worktree 转
-  `quarantined` 留证。
-- `needs_reconciliation` 的项目栅栏继续生效；新 Job 不能在同一项目批准/调度。
+  `quarantined` 留证。取消只有在 generator 已 settled（或 Agent 明确确认停止）后才能
+  `confirmJobCancelled`；prompt 仍悬挂时返回 fenced，交给租约/人工裁定。
+- 项目栅栏同时覆盖 Job 与 PatchProposal：`owner_jobs.needs_reconciliation` **或**
+  `owner_patch_proposals.status IN ('applying','needs_reconciliation')` 都会阻止同项目
+  新 Job 的批准与 claim；不同项目不受影响，Owner 裁定后解除。
 - 命令：`code-submit`、`run-once --worker patch`、`patches`、`patch-show`、
-  `patch-approve`、`patch-reject`、`patch-reconcile`、`patch-recover`、`workspaces`、
-  `workspace-inspect`、`workspace-quarantine`、`workspace-cleanup`。
+  `patch-approve`、`patch-apply`、`patch-reject`、`patch-reconcile`、`patch-recover`、
+  `workspaces`、`workspace-inspect`、`workspace-quarantine`、`workspace-cleanup`。
 
 ## 4. Apply 与崩溃恢复
 
 - `patch-approve --id --hash`：
   1. Store 校验 `expectedHash === proposal_hash`，`proposed → approved`；
-  2. Host 重新核验项目根身份、Worktree HEAD = base、提案 artifact hash、文件元数据、
-     allowed scope、父链/链接/大小写、old hash；
+  2. Host 重新核验项目根身份、可执行 Git filter、Worktree HEAD = base、提案 artifact
+     hash、文件元数据、allowed scope、父链/链接/大小写、old hash；
   3. 通过后才持久化 `applying`，再逐文件写入，并为每个文件写 oplog（只记路径/动作）；
   4. 用 `git add --intent-to-add .` + `git diff --name-only -z` 独立复验变更路径集合，
      再逐文件复验 `new_sha`，最后取 unified diff 存为 `applied_diff`，才落 `applied`。
+- **approved → applying 崩溃窗口**：`patch-apply --id --hash` 提供显式、幂等、同 hash
+  绑定的 resume 操作；`patch-approve` 重跑也会识别 `approved` 状态并继续 apply。
+  启动恢复只处理 `applying`，**不会自动 apply 一个已批准的提案**。已 `applied` 的重复
+  `patch-apply` 返回既有结果，不会再次写文件。
 - 任何 `applying` 之后的异常都 fail-closed：
   - 不自动重放、不自动回滚；
   - 提案 → `needs_reconciliation`，Worktree → `quarantined`；
@@ -179,6 +199,7 @@ node bin/ownerctl.mjs workspace-cleanup --id <WORKSPACE_ID> --confirm 1
 
 ```bash
 node bin/ownerctl.mjs patch-recover
+node bin/ownerctl.mjs patch-apply --id <PROPOSAL_ID> --hash <PROPOSAL_HASH>   # approved→applying 崩溃恢复
 node bin/ownerctl.mjs patch-reconcile --id <PROPOSAL_ID> --decision confirm-applied --reason "已核对 Diff"
 node bin/ownerctl.mjs patch-reconcile --id <PROPOSAL_ID> --decision discard --reason "放弃"
 ```
@@ -192,8 +213,14 @@ node bin/ownerctl.mjs patch-reconcile --id <PROPOSAL_ID> --decision discard --re
 | traversal/绝对路径/symlink/hardlink/case-alias/.git/敏感文件/大小限制 | `[patch#4]` `[patch#5]` |
 | 改哈希审批失效；拒绝不应用；仅在对应 Worktree 应用一次；崩溃可裁定 | `[patch#6]` `[patch#7]` `[patch#8]` |
 | 跨项目/跨 Attempt 不能读取或应用另一项目补丁 | `[patch#9]` |
-| 取消/失联/过期租约/迟到输出/未确认停止：不应用、不释放隔离 | `[patch#10]` |
-| OwnerTask 原状态；Job 成功仅表示提案存储；审计无源码/Prompt/密钥 | `[patch#2]` |
+| 取消/失联/过期租约/迟到输出/未确认停止：不应用、不释放隔离 | `[patch#10]` `[patch#14]` |
+| OwnerTask 原状态；Job 成功仅表示提案存储；审计无源码/Prompt/密钥 | `[patch#2]` `[patch#20]` |
+| 模型材料读取的父链 symlink/hardlink/UTF-8 防护 | `[patch#13]` |
+| Git filter 不执行（恶意 smudge 外部 marker 不存在） | `[patch#15]` |
+| workspaces root 父链 symlink 在任何写入前拒绝 | `[patch#16]` |
+| PatchProposal applying/needs 进入项目 fence，异项目不受影响 | `[patch#17]` |
+| cleanup 不删除被替换的普通目录（sentinel 保留） | `[patch#18]` |
+| approved→applying 崩溃窗口可显式 resume | `[patch#19]` |
 | Windows + Linux 路径/symlink 行为 | 同一测试在 CI 的 `ubuntu-latest` + `windows-latest` 运行；无权限的主机自动跳过 symlink 分支 |
 | `npm run check` / `npm test` / demos / CI | `npm run check`、`npm test`、`demo:jobs`、`demo:pi`、`demo:patch` |
 
@@ -205,9 +232,9 @@ OWNER_AGENT_REAL_PATCH_TEST=1 npm test   # 需要已配置的 Pi 凭据，会产
 
 ## 8. 已知限制 / 明确不做
 
-- Worktree 不是 OS sandbox：模型无工具、宿主不执行项目代码，但同进程仍具有 Owner 权限；
-  Git hooks 已禁用，但仓库 `.gitattributes` 中自定义的 clean/smudge filter 仍可能由 Git
-  自身调用——这是 Git 行为，不是模型可控路径。真正隔离的测试执行器留到后续 Issue。
+- Worktree 不是 OS sandbox：模型无工具、宿主不执行项目代码，但同进程仍具有 Owner 权限。
+  Git hooks 已禁用，且带 `filter` 属性的仓库默认拒绝 worktree 操作；LFS 等需要 filter 的
+  仓库暂不支持，后续由安全 materialization 处理。真正隔离的测试执行器留到后续 Issue。
 - 真实 Pi 的 JSON 输出可靠性未承诺；解析失败即失败，不做“宽松猜测”。
 - P0 不创建目录、不支持 rename/delete/binary/子模块；不支持多提案版本线。
 - SQLite 与文件系统不做跨资源事务；崩溃恢复依赖 Owner 显式裁定。
