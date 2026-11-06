@@ -94,8 +94,13 @@ test_status:      pass | fail | unknown
   deadline 只表示“宿主停止等待”，不表示底层动作已中止；不能据此确认停止。
 - **每个不可逆 side effect 前**重查 cancel/lease：preflight→create、create→start、start 后；
   cancel 先到则零容器；create 完成后先到则销毁未启动容器且零启动；已启动则走确认停止。
-- 启动时 `recoverInterruptedSandboxRuns()` 把 `provisioning/running/collecting` → `needs_reconciliation`；不自动重跑/删除未知容器。
-- Owner `sandbox-reconcile --decision confirm-stopped|discard` 仅在 provider 确认非运行并 dispose 后落 `failed`。
+- **不因另一个 CLI 启动而恢复运行中的 Run**：普通 `sandboxes`/`sandbox-show`/`sandbox-cancel` 不做全局恢复。
+  只有显式 `sandbox-recover` 对 `provisioning/running/collecting` 且 `lease_until < now` 的过期
+  租约做 CAS 恢复 → `needs_reconciliation`；有效租约绝不覆盖。
+- Owner `sandbox-reconcile --decision confirm-stopped|discard` 必须先从已知 provider ID 或
+  确定性 `owner-sandbox-<runId>` + labels 做权威 Docker 查询；查询失败/身份不符拒绝解封。
+  Store 事务要求 `providerChecked` attestation，不能由其它直接调用绕过。
+- 不自动重跑/删除未知容器。
 
 ## 6. Evidence 与隐私
 
@@ -122,6 +127,7 @@ node bin/ownerctl.mjs sandbox-run-once --project my-proj
 node bin/ownerctl.mjs sandboxes --project my-proj
 node bin/ownerctl.mjs sandbox-show --id <RUN_ID> --logs 1
 node bin/ownerctl.mjs sandbox-cancel --id <RUN_ID>
+node bin/ownerctl.mjs sandbox-recover          # 仅恢复已过期租约，显式副作用
 node bin/ownerctl.mjs sandbox-reconcile --id <RUN_ID> --decision confirm-stopped --reason "已核对容器已停止"
 node bin/ownerctl.mjs sandbox-cleanup --id <RUN_ID> --confirm 1
 ```
@@ -130,7 +136,7 @@ node bin/ownerctl.mjs sandbox-cleanup --id <RUN_ID> --confirm 1
 
 ## 8. 测试与 CI
 
-- Fake/协议测试（Ubuntu + Windows）：未批准零 provider 调用、pass/fail 区分、approval/profile/snapshot 漂移、cancel、timeout、未确认停止、lease/崩溃恢复、项目 fence、日志截断/脱敏/哈希、preflight unsupported、快照改写。
+- Fake/协议测试（Ubuntu + Windows）：未批准零 provider 调用、pass/fail 区分、approval/profile/snapshot 漂移、cancel、timeout、未确认停止、lease/崩溃恢复、项目 fence、日志截断/脱敏/哈希、preflight unsupported、快照改写、额外快照内容、跨 OwnerStore live lease、无 provider ID 的 reconcile/cleanup 查询失败。
 - Linux 实跑（Ubuntu CI `sandbox-real`）：`docker pull node:22-alpine`，解析 digest，运行 `node-smoke`、`node-fail`、`node-probe`；探针覆盖非 root、零 capabilities、Seccomp=2、NoNewPrivs=1、只读 `/workspace` mount、仅 `/tmp` 可写、无网络、无 Docker socket、无 `/root` 访问，并**断言 cgroup 的 pids.max / memory.max / cpu.max 等于批准 profile**。
 - 本地：`npm run demo:sandbox`（Fake，零 Docker/模型调用）；真实 backend 可通过
   `OWNER_AGENT_SANDBOX_REAL=1 OWNER_AGENT_SANDBOX_IMAGE_DIGEST=sha256:... npm run test:sandbox:real` 运行。

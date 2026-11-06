@@ -340,21 +340,43 @@ export class DockerSandboxProvider {
     return true;
   }
 
-  async findOwnedContainer({ runId, projectId, attempt } = {}) {
+  // Strict lookup for Owner reconciliation: null means "the lookup succeeded and no
+  // matching container exists". Any query/identity failure throws and must keep the fence.
+  async findOwnedContainerStrict({ runId, projectId, attempt } = {}) {
+    let ids;
     try {
-      const ids = (await this.docker([
+      ids = (await this.docker([
         'ps', '-a', '--filter', `label=owner.run=${runId}`, '--format', '{{.ID}}'
       ])).trim().split(/\s+/).filter(Boolean);
-      for (const id of ids) {
-        const handle = { providerRunId: id, name: `owner-sandbox-${runId}`, runId, projectId, attempt };
-        try {
-          await this.assertOwnership(handle);
-          return handle;
-        } catch {
-          // Keep searching; a same-label foreign container is not ours.
-        }
+    } catch {
+      throw new SandboxProviderError('sandbox lookup unavailable', 'inspect-unavailable');
+    }
+    for (const id of ids) {
+      let labels;
+      try {
+        labels = JSON.parse((await this.docker([
+          'inspect', '--format', '{{json .Config.Labels}}', id
+        ])).trim());
+      } catch (error) {
+        if (this.isMissingContainer(error)) continue;
+        throw new SandboxProviderError('sandbox lookup identity unavailable', 'inspect-unavailable');
       }
-      return null;
+      const matches = labels
+        && labels['owner.sandbox'] === '1'
+        && labels['owner.run'] === runId
+        && labels['owner.project'] === projectId
+        && labels['owner.attempt'] === String(attempt);
+      if (!matches) {
+        throw new SandboxProviderError('sandbox lookup found a foreign container', 'ownership-mismatch');
+      }
+      return { providerRunId: id, name: `owner-sandbox-${runId}`, runId, projectId, attempt };
+    }
+    return null;
+  }
+
+  async findOwnedContainer({ runId, projectId, attempt } = {}) {
+    try {
+      return await this.findOwnedContainerStrict({ runId, projectId, attempt });
     } catch {
       return null;
     }

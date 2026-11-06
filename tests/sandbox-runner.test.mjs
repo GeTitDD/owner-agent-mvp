@@ -7,6 +7,7 @@ import { FakeSandboxProvider } from '../src/sandbox-provider.mjs';
 import { SandboxRunner } from '../src/sandbox-runner.mjs';
 import { createInputSnapshot, verifyInputSnapshot } from '../src/sandbox-materializer.mjs';
 import { approvalHash, resolveTestProfile } from '../src/sandbox-protocol.mjs';
+import { reconcileSandboxWithProvider, cleanupSandboxWithProvider } from '../src/sandbox-control.mjs';
 import { sha256 } from '../src/utils.mjs';
 
 const FAKE_IMAGE = `sha256:${'a'.repeat(64)}`;
@@ -247,7 +248,9 @@ test('[sandbox#5] an unconfirmed stop fences the project until explicit reconcil
       ownerTaskId: task.id
     });
     assert.throws(() => fixture.store.approveJob(job.id), /unresolved sandbox run/);
-    fixture.store.reconcileSandboxRun(run.runId, { decision: 'discard', reason: 'test reconcile' });
+    assert.throws(() => fixture.store.reconcileSandboxRun(run.runId, { decision: 'discard', reason: 'no attestation' }),
+      /provider-confirmation attestation/);
+    fixture.store.reconcileSandboxRun(run.runId, { decision: 'discard', reason: 'test reconcile', providerChecked: true });
     assert.equal(fixture.store.getSandboxRun(run.runId).status, 'failed');
     assert.equal(fixture.store.approveJob(job.id).status, 'queued');
   } finally {
@@ -296,7 +299,7 @@ test('[sandbox#7] a lost lease never reports a result and requires crash reconci
     timers.fireByMs(1000);
     const result = await running;
     assert.equal(result.outcome, 'fenced');
-    fixture.store.recoverInterruptedSandboxRuns({ now: c.now() });
+    fixture.store.recoverExpiredSandboxRuns({ now: c.now() });
     assert.equal(fixture.store.getSandboxRun(run.runId).status, 'needs_reconciliation');
   } finally {
     fixture.cleanup();
@@ -568,6 +571,95 @@ test('[sandbox#17] a stop that never returns is bounded and stays fenced', async
       ownerTaskId: task.id
     });
     assert.throws(() => fixture.store.approveJob(job.id), /unresolved sandbox run/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('[sandbox#18] a second OwnerStore never steals a live lease; only expiry is recoverable', async () => {
+  const fixture = await makeAppliedSandboxFixture({ key: 'sandbox-cross-process' });
+  const dbPath = path.join(fixture.root, 'knowledge.sqlite');
+  const other = new (await import('../src/owner-store.mjs')).OwnerStore(dbPath);
+  try {
+    const run = makeSandboxRun({ fixture });
+    fixture.store.approveSandboxRun(run.runId, { expectedHash: run.approvalHash });
+    const c = clock();
+    const claim = fixture.store.claimSandboxRun(fixture.projectId, 'worker-a', { now: c.now(), leaseMs: 30000 });
+    assert.equal(claim.claimed, true);
+    fixture.store.attachSandboxProvider(run.runId, {
+      workerId: 'worker-a', provider: 'fake', providerRunId: 'fake-live-1', providerName: 'fake-live-1', now: c.now()
+    });
+    fixture.store.startSandboxRun(run.runId, { workerId: 'worker-a', now: c.now() });
+
+    assert.deepEqual(other.recoverExpiredSandboxRuns({ now: c.now() }), []);
+    assert.equal(other.getSandboxRun(run.runId).status, 'running');
+    other.requestCancelSandboxRun(run.runId, { actor: 'owner-b', now: c.now() });
+    assert.equal(other.getSandboxRun(run.runId).cancel_requested_at !== null, true);
+    assert.equal(fixture.store.getSandboxRun(run.runId).status, 'running');
+    assert.equal(fixture.store.getSandboxRun(run.runId).cancel_requested_at !== null, true);
+
+    c.advanceMs(30001);
+    assert.deepEqual(other.recoverExpiredSandboxRuns({ now: c.now() }), [run.runId]);
+    assert.equal(other.getSandboxRun(run.runId).status, 'needs_reconciliation');
+    assert.throws(() => other.reconcileSandboxRun(run.runId, { decision: 'discard' }),
+      /provider-confirmation attestation/);
+    other.reconcileSandboxRun(run.runId, { decision: 'discard', providerChecked: true });
+    assert.equal(other.getSandboxRun(run.runId).status, 'failed');
+  } finally {
+    other.close();
+    fixture.cleanup();
+  }
+});
+
+test('[sandbox#19] no-ID reconcile/cancel never releases the fence when Docker lookup is unavailable', async () => {
+  const fixture = await makeAppliedSandboxFixture({ key: 'sandbox-no-id-reconcile' });
+  try {
+    const run = makeSandboxRun({ fixture });
+    fixture.store.approveSandboxRun(run.runId, { expectedHash: run.approvalHash });
+    fixture.store.claimSandboxRun(fixture.projectId, 'worker-a', { now: '2026-09-01T00:00:00.000Z' });
+    fixture.store.markSandboxNeedsReconciliation(run.runId, {
+      reason: 'create response lost', errorCode: 'create-unconfirmed', now: '2026-09-01T00:00:00.000Z'
+    });
+    const saved = fixture.store.getSandboxRun(run.runId);
+    assert.equal(saved.provider_run_id, null);
+    assert.equal(saved.status, 'needs_reconciliation');
+
+    const unavailable = {
+      findOwnedContainerStrict: async () => { throw new Error('daemon unavailable'); }
+    };
+    await assert.rejects(
+      () => reconcileSandboxWithProvider(fixture.store, unavailable, saved, { decision: 'discard' }),
+      /daemon unavailable/
+    );
+    assert.equal(fixture.store.getSandboxRun(run.runId).status, 'needs_reconciliation');
+    assert.equal(fs.existsSync(path.join(run.snapshot.snapshotPath, 'input', 'src', 'app.js')), true);
+
+    // A successful authoritative lookup proving no container exists can safely release.
+    const checkedAbsent = { findOwnedContainerStrict: async () => null };
+    const reconciled = await reconcileSandboxWithProvider(fixture.store, checkedAbsent, saved, {
+      decision: 'discard'
+    });
+    assert.equal(reconciled.status, 'failed');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('[sandbox#20] cleanup with no provider ID refuses to delete the snapshot when lookup is unavailable', async () => {
+  const fixture = await makeAppliedSandboxFixture({ key: 'sandbox-no-id-cleanup' });
+  try {
+    const run = makeSandboxRun({ fixture });
+    fixture.store.approveSandboxRun(run.runId, { expectedHash: run.approvalHash });
+    fixture.store.requestCancelSandboxRun(run.runId, { actor: 'owner', now: '2026-09-01T00:00:00.000Z' });
+    const terminal = fixture.store.getSandboxRun(run.runId);
+    assert.equal(terminal.status, 'cancelled');
+    const unavailable = { findOwnedContainerStrict: async () => { throw new Error('daemon unavailable'); } };
+    await assert.rejects(
+      () => cleanupSandboxWithProvider(fixture.store, unavailable, terminal, { sandboxRoot: fixture.sandboxRoot }),
+      /daemon unavailable/
+    );
+    assert.equal(fs.existsSync(path.join(run.snapshot.snapshotPath, 'input', 'src', 'app.js')), true);
+    assert.equal(fixture.store.getSandboxRun(run.runId).snapshot_cleaned_at, null);
   } finally {
     fixture.cleanup();
   }

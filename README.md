@@ -12,7 +12,7 @@
 - **输入不可漂移**：快照只来自 applied Proposal/Workspace + Owner 精确 `--include`，路径/链接/hash 复核；审批后改写快照会使运行失败。
 - **状态分离**：`execution_status` 与 `test_status` 独立；非零测试退出是有效 `completed/fail`，基础设施失败才 `failed`。
 - **安全探针**：真实 Linux CI 运行 `node-probe`，验证非 root、零 capabilities、no-new-privileges、只读 `/workspace`、仅 `/tmp` 可写、无网络、无 Docker socket、无 host root 访问。
-- **崩溃/取消**：未确认停止 → `needs_reconciliation` + 项目 fence；不自动重跑、不盲目删除容器。
+- **崩溃/取消**：未确认停止 → `needs_reconciliation` + 项目 fence；只有显式 `sandbox-recover` 才恢复已过期租约，普通 CLI 读取不会抢占 live run；reconcile 需要 provider 查询确认/attestation，不自动重跑、不盲目删除容器。
 - **证据私有**：stdout/stderr 有上限、UTF-8 清洗、secret 字段脱敏与 hash；Job/Event/oplog 不含日志正文。
 
 ```bash

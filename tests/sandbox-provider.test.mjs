@@ -65,7 +65,42 @@ test('[sandbox-provider#3] preflight rejects unknown cgroup, missing seccomp and
   assert.equal((await trusted.preflight(profile)).reason, 'image-not-trusted');
 });
 
-test('[sandbox-provider#4] create failure after a container id retains the orphan provider identity', async () => {
+test('[sandbox-provider#4] strict reconciliation lookup distinguishes absent, unavailable and foreign containers', async () => {
+  const absent = providerWith((args) => {
+    if (args[0] === 'ps') return { stdout: '' };
+    return {};
+  });
+  assert.equal(await absent.findOwnedContainerStrict({ runId: 'test', projectId: 'proj-a', attempt: 1 }), null);
+
+  const unavailable = providerWith((args) => {
+    if (args[0] === 'ps') return { code: 1, stderr: 'Cannot connect to the Docker daemon' };
+    return {};
+  });
+  await assert.rejects(
+    () => unavailable.findOwnedContainerStrict({ runId: 'test', projectId: 'proj-a', attempt: 1 }),
+    /lookup unavailable/
+  );
+
+  const foreign = providerWith((args) => {
+    if (args[0] === 'ps') return { stdout: 'abcdef123456\n' };
+    if (args[0] === 'inspect') return { stdout: JSON.stringify({ 'owner.sandbox': '1', 'owner.run': 'other' }) };
+    return {};
+  });
+  await assert.rejects(
+    () => foreign.findOwnedContainerStrict({ runId: 'test', projectId: 'proj-a', attempt: 1 }),
+    /foreign container/
+  );
+
+  const found = providerWith((args) => {
+    if (args[0] === 'ps') return { stdout: 'abcdef123456\n' };
+    if (args[0] === 'inspect') return { stdout: labels };
+    return {};
+  });
+  assert.equal((await found.findOwnedContainerStrict({ runId: 'test', projectId: 'proj-a', attempt: 1 })).providerRunId,
+    'abcdef123456');
+});
+
+test('[sandbox-provider#5] create failure after a container id retains the orphan provider identity', async () => {
   const provider = providerWith((args) => {
     if (args[0] === 'create') return { stdout: 'abcdef123456\n' };
     if (args[0] === 'inspect' && args[2] === '{{json .Config.Labels}}') return { stdout: labels };

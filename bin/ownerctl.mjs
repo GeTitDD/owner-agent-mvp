@@ -10,6 +10,7 @@ import { SandboxRunner } from '../src/sandbox-runner.mjs';
 import { DockerSandboxProvider } from '../src/sandbox-provider.mjs';
 import { createInputSnapshot, cleanupInputSnapshot, defaultSandboxRoot, verifyInputSnapshot } from '../src/sandbox-materializer.mjs';
 import { approvalHash, normalizeIncludePaths, resolveTestProfile } from '../src/sandbox-protocol.mjs';
+import { reconcileSandboxWithProvider, cleanupSandboxWithProvider } from '../src/sandbox-control.mjs';
 import { sha256 } from '../src/utils.mjs';
 import { randomUUID } from 'node:crypto';
 import { defaultDbPath } from '../src/storage.mjs';
@@ -47,7 +48,6 @@ try {
   // A fresh CLI process holding an `applying` proposal means a previous apply was
   // interrupted: fail closed into owner reconciliation before serving any command.
   store.recoverInterruptedPatchApplies();
-  store.recoverInterruptedSandboxRuns();
   let result;
   if(command==='register')result=store.registerProject({id:read('--id'),name:read('--name'),root:resolve(read('--root','.' )),primaryDomain:read('--domain','software-engineering'),domains:read('--domains').split(',').filter(Boolean),goal:read('--goal')});
   else if(command==='projects')result=store.listProjects();
@@ -163,42 +163,19 @@ try {
     result=await worker.runOnce({projectId:read('--project')});
   }
   else if(command==='sandbox-cancel')result=store.requestCancelSandboxRun(read('--id'),{actor:'ownerctl'});
+  else if(command==='sandbox-recover')result={recoveredSandboxIds:store.recoverExpiredSandboxRuns()};
   else if(command==='sandbox-reconcile'){
     const run=store.getSandboxRun(read('--id'));if(!run)throw new Error('Unknown sandbox run');
-    if(run.provider_run_id){
-      const provider=sandboxProvider();
-      const handle={providerRunId:run.provider_run_id,name:run.provider_name,runId:run.id,projectId:run.project_id,attempt:run.attempt};
-      let info=await provider.inspect(handle);
-      if(info.state==='running'){
-        const stopped=await provider.stop(handle);
-        if(!stopped.confirmed)throw new Error('sandbox stop could not be confirmed; fence remains');
-        info=await provider.inspect(handle);
-      }
-      if(info.state!=='missing'){
-        const disposed=await provider.dispose(handle);
-        if(!disposed.confirmed)throw new Error('sandbox dispose could not be confirmed; fence remains');
-      }
-    }
-    result=store.reconcileSandboxRun(run.id,{decision:read('--decision'),reason:read('--reason'),actor:'ownerctl'});
+    result=await reconcileSandboxWithProvider(store,sandboxProvider(),run,{
+      decision:read('--decision'),reason:read('--reason'),actor:'ownerctl'
+    });
   }
   else if(command==='sandbox-cleanup'){
     if(read('--confirm')!=='1')throw new Error('sandbox-cleanup requires --confirm 1 (Owner explicit consent)');
     const run=store.getSandboxRun(read('--id'));if(!run)throw new Error('Unknown sandbox run');
-    if(!['completed','failed','cancelled','rejected'].includes(run.status))throw new Error('sandbox run must be terminal before cleanup');
-    if(run.provider_run_id){
-      const provider=sandboxProvider();
-      const handle={providerRunId:run.provider_run_id,name:run.provider_name,runId:run.id,projectId:run.project_id,attempt:run.attempt};
-      const info=await provider.inspect(handle);
-      if(info.state==='running')throw new Error('sandbox container is still running; cancel/reconcile first');
-      if(info.state!=='missing'){
-        const disposed=await provider.dispose(handle);
-        if(!disposed.confirmed)throw new Error('sandbox dispose could not be confirmed');
-      }
-    }
-    const cleanup=cleanupInputSnapshot({snapshotPath:run.snapshot_path,runId:run.id,snapshotHash:run.snapshot_hash,
-      sandboxRoot:read('--sandbox-dir','')||defaultSandboxRoot()});
-    store.markSandboxSnapshotCleaned(run.id);
-    result={...run,cleanup};
+    result=await cleanupSandboxWithProvider(store,sandboxProvider(),run,{
+      sandboxRoot:read('--sandbox-dir','')||defaultSandboxRoot()
+    });
   }
   else if(command==='workspaces')result=store.listWorkspaces({projectId:read('--project'),status:read('--status'),limit:100});
   else if(command==='workspace-inspect')result=await broker().inspect(read('--id'));
@@ -223,7 +200,7 @@ try {
   else if(command==='ask')result=new OwnerAgent(store).answer(args.join(' '));
   else if(command==='ask-pi')result=await new OwnerAgent(store).askPi(args.join(' '));
   else if(command==='events')result=store.listEvents({projectId:read('--project')});
-  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake/pi/patch ... | result --id | results --job | code-submit --project --task --base --paths --key | patches [--project] [--status] | patch-show --id [--content 1] | patch-approve --id --hash | patch-apply --id --hash | patch-reject --id --reason | patch-reconcile --id --decision confirm-applied/discard [--reason] | patch-recover | workspaces [--project] [--status] | workspace-inspect --id | workspace-quarantine --id --reason | workspace-cleanup --id --confirm 1 | sandbox-submit --proposal --profile node-smoke --image-digest sha256:... [--include a,b] | sandbox-approve --id --hash | sandbox-run-once --project | sandboxes [--project] [--status] | sandbox-show --id [--logs 1] | sandbox-cancel --id | sandbox-reconcile --id --decision confirm-stopped/discard [--reason] | sandbox-cleanup --id --confirm 1');
+  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake/pi/patch ... | result --id | results --job | code-submit --project --task --base --paths --key | patches [--project] [--status] | patch-show --id [--content 1] | patch-approve --id --hash | patch-apply --id --hash | patch-reject --id --reason | patch-reconcile --id --decision confirm-applied/discard [--reason] | patch-recover | workspaces [--project] [--status] | workspace-inspect --id | workspace-quarantine --id --reason | workspace-cleanup --id --confirm 1 | sandbox-submit --proposal --profile node-smoke --image-digest sha256:... [--include a,b] | sandbox-approve --id --hash | sandbox-run-once --project | sandboxes [--project] [--status] | sandbox-show --id [--logs 1] | sandbox-cancel --id | sandbox-recover | sandbox-reconcile --id --decision confirm-stopped/discard [--reason] | sandbox-cleanup --id --confirm 1');
   console.log(JSON.stringify(result,null,2));
 }catch(e){console.error(e.message);process.exitCode=1;}
 finally{store.close();}

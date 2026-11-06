@@ -1247,8 +1247,9 @@ export class OwnerStore {
       this.db.exec('COMMIT');return this.getSandboxRun(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
-  reconcileSandboxRun(id,{decision,reason='',actor='owner',now=stamp()}={}){
+  reconcileSandboxRun(id,{decision,reason='',actor='owner',providerChecked=false,now=stamp()}={}){
     check(['confirm-stopped','discard'].includes(decision),'Invalid sandbox reconcile decision');
+    check(providerChecked===true,'Sandbox reconciliation requires a provider-confirmation attestation');
     this.db.exec('BEGIN IMMEDIATE');
     try{
       const row=this.getSandboxRunRow(id);check(!!row,'Unknown sandbox run',404);
@@ -1264,17 +1265,26 @@ export class OwnerStore {
       this.db.exec('COMMIT');return this.getSandboxRun(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
-  recoverInterruptedSandboxRuns({now=stamp()}={}){
+  // Only expired leases are recoverable automatically. A live worker (future lease) must
+  // never be stolen by another CLI process merely because it started and ran recovery.
+  recoverExpiredSandboxRuns({now=stamp()}={}){
     this.db.exec('BEGIN IMMEDIATE');
     try{
-      const rows=this.db.prepare(`SELECT id FROM owner_sandbox_runs WHERE status IN ('provisioning','running','collecting')`).all();
+      const rows=this.db.prepare(`SELECT id,lease_until FROM owner_sandbox_runs
+        WHERE status IN ('provisioning','running','collecting') AND lease_until IS NOT NULL AND lease_until<?
+        ORDER BY lease_until,id`).all(now);
+      const recovered=[];
       for(const row of rows){
-        this.db.prepare(`UPDATE owner_sandbox_runs SET status='needs_reconciliation',execution_status='unknown',
-          test_status='unknown',error_code='interrupted',lease_until=NULL,updated_at=? WHERE id=? AND status IN ('provisioning','running','collecting')`)
-          .run(now,row.id);
-        this.sandboxAudit(row.id,'recovered_interrupted','system','interrupted sandbox run; owner reconciliation required',now);
+        const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET status='needs_reconciliation',execution_status='unknown',
+          test_status='unknown',error_code='expired-lease',lease_until=NULL,updated_at=?
+          WHERE id=? AND status IN ('provisioning','running','collecting') AND lease_until=?`)
+          .run(now,row.id,row.lease_until);
+        if(changed.changes===1){
+          recovered.push(row.id);
+          this.sandboxAudit(row.id,'recovered_expired_lease','system','expired lease; owner reconciliation required',now);
+        }
       }
-      this.db.exec('COMMIT');return rows.map(r=>r.id);
+      this.db.exec('COMMIT');return recovered;
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
   markSandboxSnapshotCleaned(id,{now=stamp()}={}){
