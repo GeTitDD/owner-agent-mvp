@@ -17,10 +17,7 @@
 // clears it in a finally. No handle is ever stored on `this`, so concurrent runOnce calls
 // cannot interfere and no interval outlives the attempt.
 import { DefaultPiSessionFactory } from './pi-session-factory.mjs';
-import { realpath } from 'node:fs/promises';
-import path from 'node:path';
-import { statSync } from 'node:fs';
-import { sha256 } from './utils.mjs';
+import { verifyProjectRoot } from './project-identity.mjs';
 
 // Controlled error taxonomy: fixed summaries only. Upstream error messages may contain
 // endpoints, headers or other sensitive material and are never persisted.
@@ -41,16 +38,6 @@ const buildAnalysisPrompt=({projectId,title,note,focus})=>[
   `分析要点：${focus||'（未指定）'}`
 ].join('\n');
 
-// Root identity marker: a small file inside the registered root whose dev/ino hash pins
-// the directory identity. Unlike directory inodes on some filesystems (where a rename can
-// reassign the id), a FILE keeps its identity across renames and a freshly created one
-// always carries a new one — deterministic on Linux and Windows alike. Best-effort
-// identity check, not adversarial OS fencing (inode reuse after deletion is possible).
-const rootIdentityOf=(root)=>{try{
-  const st=statSync(path.join(root,'.owner-root-identity'),{bigint:true});
-  return sha256(`${st.dev}:${st.ino}`).slice(0,32);
-}catch{return null;}};
-
 export class PiAnalysisWorker {
   // sessionFactory is injectable: production uses DefaultPiSessionFactory (real SDK +
   // isolated per-attempt agentDir); tests/demo inject deterministic fakes. The allow-model
@@ -69,17 +56,11 @@ export class PiAnalysisWorker {
     }
     const project=this.store.getProject(projectId);
     if(!project)return {claimed:false,reason:'unknown-project'};
-    let root;
-    try{root=await realpath(project.root);}catch{return {claimed:false,reason:'project-root-missing'};}
-    // Path-drift rejection: a replaced root (deleted/recreated, or swapped for a link to
-    // another directory) carries a different identity marker than the registered one.
-    // Best-effort identity check, not adversarial OS fencing. Legacy projects registered
-    // without an identity are skipped (backward compatibility).
-    if(project.root_identity){
-      const identity=rootIdentityOf(root);
-      if(identity===null)return {claimed:false,reason:'project-root-missing'};
-      if(identity!==project.root_identity)return {claimed:false,reason:'project-root-moved'};
-    }
+    // Path-drift rejection is shared with the v0.8 workspace broker: a replaced root
+    // (deleted/recreated, or swapped for a link) carries a different identity marker.
+    const rootCheck=verifyProjectRoot(project);
+    if(!rootCheck.ok)return {claimed:false,reason:rootCheck.reason};
+    const root=rootCheck.root;
     // Workers claim only the types they are built to execute (review r2: queue consistency).
     const claim=this.store.claimNextJob(projectId,this.workerId,{now:this.clock(),leaseMs:this.leaseMs,allowedTypes:['pi-analysis']});
     if(!claim.claimed)return claim;
