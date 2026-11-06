@@ -53,6 +53,7 @@ jobs:
         run: |
           DIGEST=$(docker image inspect node:22-alpine --format '{{index .RepoDigests 0}}' | cut -d@ -f2)
           echo "OWNER_AGENT_SANDBOX_IMAGE_DIGEST=$DIGEST" >> "$GITHUB_ENV"
+          echo "OWNER_AGENT_SANDBOX_TRUSTED_DIGESTS=$DIGEST" >> "$GITHUB_ENV"
       - name: Run real sandbox smoke and isolation probes
         run: OWNER_AGENT_SANDBOX_REAL=1 npm run test:sandbox:real
       - name: List sandbox-labelled containers for evidence

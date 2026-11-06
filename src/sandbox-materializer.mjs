@@ -139,6 +139,48 @@ export function verifyInputSnapshot({ snapshotPath, manifest, snapshotHash: expe
   const inputPath = path.join(target, 'input');
   check(Array.isArray(manifest) && manifest.length > 0, 'snapshot manifest is required');
   check(typeof expectedHash === 'string' && /^[0-9a-f]{64}$/.test(expectedHash), 'snapshot hash is required');
+
+  // Snapshot approval binds an exact tree, not just the listed files. Enumerate the
+  // actual input tree and reject extras/links/special files before any bind mount.
+  const targetStat = fs.lstatSync(target);
+  check(!targetStat.isSymbolicLink() && targetStat.isDirectory(), 'snapshot root is not a real directory');
+  const inputStat = fs.lstatSync(inputPath);
+  check(!inputStat.isSymbolicLink() && inputStat.isDirectory(), 'snapshot input is not a real directory');
+  const actualFiles = new Set();
+  const actualDirs = new Set();
+  const walk = (dir, prefix = '') => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const full = path.join(dir, entry.name);
+      const stat = fs.lstatSync(full);
+      if (stat.isSymbolicLink()) throw new SandboxMaterializerError(`snapshot contains a symlink: ${rel}`, 'snapshot-extra-content');
+      if (stat.isDirectory()) {
+        actualDirs.add(rel);
+        walk(full, rel);
+      } else if (stat.isFile()) {
+        check(stat.nlink === 1, `snapshot contains a hard-linked file: ${rel}`, 'snapshot-extra-content');
+        actualFiles.add(rel);
+      } else {
+        throw new SandboxMaterializerError(`snapshot contains a special file: ${rel}`, 'snapshot-extra-content');
+      }
+    }
+  };
+  walk(inputPath);
+  const expectedFiles = new Set();
+  const expectedDirs = new Set();
+  for (const entry of manifest) {
+    const { norm } = normalizeRelPath(entry.path);
+    check(!expectedFiles.has(norm), 'snapshot manifest contains duplicate paths');
+    expectedFiles.add(norm);
+    const parts = norm.split('/');
+    for (let i = 1; i < parts.length; i++) expectedDirs.add(parts.slice(0, i).join('/'));
+  }
+  const sorted = (set) => [...set].sort();
+  check(JSON.stringify(sorted(actualFiles)) === JSON.stringify(sorted(expectedFiles)),
+    'snapshot input contains unapproved files', 'snapshot-extra-content');
+  check(JSON.stringify(sorted(actualDirs)) === JSON.stringify(sorted(expectedDirs)),
+    'snapshot input contains unapproved directories', 'snapshot-extra-content');
+
   const entries = [];
   for (const entry of manifest) {
     const inspected = inspectSafePath({ worktreeRoot: inputPath, relPath: entry.path });

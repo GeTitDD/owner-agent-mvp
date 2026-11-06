@@ -16,9 +16,14 @@ export class SandboxRunner {
     leaseMs = 30000,
     clock = () => new Date().toISOString(),
     pollMs = 1000,
+    providerOpMs = 60000,
     timers = {
+      interval: (fn, ms) => setInterval(fn, ms),
       timeout: (fn, ms) => setTimeout(fn, ms),
-      clear: (handle) => clearTimeout(handle)
+      clear: (handle) => {
+        clearInterval(handle);
+        clearTimeout(handle);
+      }
     }
   } = {}) {
     if (!provider) throw new Error('SandboxRunner requires a provider');
@@ -28,6 +33,7 @@ export class SandboxRunner {
     this.leaseMs = leaseMs;
     this.clock = clock;
     this.pollMs = Math.max(0, pollMs);
+    this.providerOpMs = providerOpMs;
     this.timers = timers;
   }
 
@@ -36,6 +42,24 @@ export class SandboxRunner {
     return new Promise((resolve) => {
       this.timers.timeout(resolve, ms);
     });
+  }
+
+  async withDeadline(promise, ms, code) {
+    let timer = null;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((resolve, reject) => {
+          timer = this.timers.timeout(() => {
+            const error = new Error(code);
+            error.code = code;
+            reject(error);
+          }, ms);
+        })
+      ]);
+    } finally {
+      if (timer !== null) this.timers.clear(timer);
+    }
   }
 
   async runOnce({ projectId } = {}) {
@@ -64,13 +88,38 @@ export class SandboxRunner {
       ? { providerRunId: run.provider_run_id, name: run.provider_name, runId: run.id, projectId: run.project_id, attempt: run.attempt }
       : null;
     let fenced = false;
+    let cancelRequested = false;
     let startedAt = null;
+    let providerName = 'unknown';
+
+    const refresh = () => {
+      const current = this.store.getSandboxRun(run.id);
+      if (current?.cancel_requested_at) cancelRequested = true;
+      return current;
+    };
+    const heartbeat = () => this.store.heartbeatSandboxRun(run.id, {
+      workerId: this.workerId,
+      now: this.clock(),
+      leaseMs: this.leaseMs
+    });
+    const tick = () => {
+      try {
+        heartbeat();
+      } catch {
+        fenced = true;
+      }
+      try {
+        refresh();
+      } catch {
+        // The next heartbeat/refresh decides; an unreadable row is not a license to report.
+      }
+    };
+    const tickTimer = this.timers.interval(tick, Math.max(1000, Math.floor(this.leaseMs / 3)));
 
     const evidenceFor = (collected) => ({
       stdout: sanitizeLog(collected.stdout, { maxBytes: profile.stdoutBytes }),
       stderr: sanitizeLog(collected.stderr, { maxBytes: profile.stderrBytes })
     });
-
     const resultEvidence = (fields) => {
       const text = JSON.stringify({
         finalStatus: fields.finalStatus,
@@ -82,7 +131,6 @@ export class SandboxRunner {
       });
       return { text, bytes: Buffer.byteLength(text, 'utf8'), contentHash: sha256(text), truncated: false };
     };
-
     const finish = (fields) => {
       const evidence = fields.collected ? evidenceFor(fields.collected) : {};
       evidence.result = resultEvidence(fields);
@@ -99,6 +147,94 @@ export class SandboxRunner {
         now: this.clock()
       });
     };
+    const needs = (reason, errorCode) => {
+      try {
+        this.store.markSandboxNeedsReconciliation(run.id, {
+          reason,
+          errorCode,
+          now: this.clock()
+        });
+      } catch {
+        // Preserve the caller-visible outcome; lease expiry/startup recovery still applies.
+      }
+      return { claimed: true, runId: run.id, outcome: 'needs_reconciliation', reason };
+    };
+    const attach = (candidate) => {
+      try {
+        this.store.attachSandboxProvider(run.id, {
+          workerId: this.workerId,
+          provider: providerName,
+          providerRunId: candidate.providerRunId,
+          providerName: candidate.name ?? candidate.providerRunId,
+          now: this.clock()
+        });
+      } catch {
+        // The provider id may still be recoverable by the deterministic name/labels.
+      }
+    };
+    const collect = async () => {
+      this.store.beginSandboxCollect(run.id, { workerId: this.workerId, now: this.clock() });
+      return this.withDeadline(this.provider.collect(handle), this.providerOpMs, 'collect-timeout');
+    };
+
+    const cancelCreated = async () => {
+      // Created but not started: no project code has run. Remove it after inspect confirms
+      // it is not running; otherwise keep the fence for Owner reconciliation.
+      let disposed;
+      try {
+        disposed = await this.withDeadline(this.provider.dispose(handle), this.providerOpMs, 'dispose-timeout');
+      } catch {
+        return needs('cancel could not verify/remove the created container', 'cancel-dispose-unavailable');
+      }
+      if (!disposed.confirmed) return needs('created container cleanup was not confirmed', 'cancel-dispose-unconfirmed');
+      finish({ finalStatus: 'cancelled', executionStatus: 'cancelled', testStatus: 'unknown', errorCode: '' });
+      return { claimed: true, runId: run.id, outcome: 'cancelled' };
+    };
+
+    const stopAndFinish = async ({ finalStatus, executionStatus, errorCode }) => {
+      let stopped;
+      try {
+        stopped = await this.withDeadline(this.provider.stop(handle), this.providerOpMs, 'stop-timeout');
+      } catch {
+        return needs('stop confirmation unavailable', 'stop-unconfirmed');
+      }
+      if (!stopped.confirmed) return needs('stop could not be confirmed', 'stop-unconfirmed');
+      let collected = null;
+      try {
+        collected = await collect();
+      } catch {
+        return needs('stopped container evidence could not be collected', 'collect-failed');
+      }
+      this.store.completeSandboxRun({
+        id: run.id,
+        workerId: this.workerId,
+        finalStatus,
+        executionStatus,
+        testStatus: 'unknown',
+        exitCode: collected?.exitCode ?? null,
+        signal: collected?.signal ?? null,
+        evidence: {
+          ...(collected ? evidenceFor(collected) : {}),
+          result: resultEvidence({
+            finalStatus,
+            executionStatus,
+            testStatus: 'unknown',
+            exitCode: collected?.exitCode ?? null,
+            signal: collected?.signal ?? null,
+            collected
+          })
+        },
+        errorCode,
+        now: this.clock()
+      });
+      try { await this.withDeadline(this.provider.dispose(handle), this.providerOpMs, 'dispose-timeout'); } catch { /* cleanup later */ }
+      return {
+        claimed: true,
+        runId: run.id,
+        outcome: finalStatus === 'cancelled' ? 'cancelled' : executionStatus,
+        unconfirmedStop: false
+      };
+    };
 
     try {
       const manifestEvidence = this.store.getSandboxEvidence(run.id, 'snapshot_manifest');
@@ -109,9 +245,7 @@ export class SandboxRunner {
           outcome: 'failed',
           errorCode: 'snapshot-manifest-missing',
           run: finish({
-            finalStatus: 'failed',
-            executionStatus: 'failed',
-            testStatus: 'unknown',
+            finalStatus: 'failed', executionStatus: 'failed', testStatus: 'unknown',
             errorCode: 'snapshot-manifest-missing'
           })
         };
@@ -129,15 +263,40 @@ export class SandboxRunner {
           outcome: 'failed',
           errorCode: 'snapshot-invalid',
           run: finish({
-            finalStatus: 'failed',
-            executionStatus: 'failed',
-            testStatus: 'unknown',
+            finalStatus: 'failed', executionStatus: 'failed', testStatus: 'unknown',
             errorCode: 'snapshot-invalid'
           })
         };
       }
 
-      const preflight = await this.provider.preflight(profile);
+      if (fenced) return { claimed: true, runId: run.id, outcome: 'fenced' };
+      refresh();
+      if (cancelRequested) {
+        finish({ finalStatus: 'cancelled', executionStatus: 'cancelled', testStatus: 'unknown', errorCode: '' });
+        return { claimed: true, runId: run.id, outcome: 'cancelled' };
+      }
+
+      let preflight;
+      try {
+        preflight = await this.withDeadline(this.provider.preflight(profile), this.providerOpMs, 'preflight-timeout');
+      } catch {
+        return {
+          claimed: true,
+          runId: run.id,
+          outcome: 'unsupported',
+          reason: 'preflight-timeout',
+          run: finish({
+            finalStatus: 'failed', executionStatus: 'failed', testStatus: 'unknown',
+            errorCode: 'preflight-timeout'
+          })
+        };
+      }
+      if (fenced) return { claimed: true, runId: run.id, outcome: 'fenced' };
+      refresh();
+      if (cancelRequested) {
+        finish({ finalStatus: 'cancelled', executionStatus: 'cancelled', testStatus: 'unknown', errorCode: '' });
+        return { claimed: true, runId: run.id, outcome: 'cancelled' };
+      }
       if (!preflight.ok) {
         return {
           claimed: true,
@@ -145,66 +304,71 @@ export class SandboxRunner {
           outcome: 'unsupported',
           reason: preflight.reason,
           run: finish({
-            finalStatus: 'failed',
-            executionStatus: 'failed',
-            testStatus: 'unknown',
+            finalStatus: 'failed', executionStatus: 'failed', testStatus: 'unknown',
             errorCode: `preflight:${String(preflight.reason ?? 'unsupported').slice(0, 60)}`
           })
         };
       }
+      providerName = preflight.provider ?? 'unknown';
 
-      if (!handle) {
-        try {
-          handle = await this.provider.create(spec);
+      if (fenced) return { claimed: true, runId: run.id, outcome: 'fenced' };
+      refresh();
+      if (cancelRequested) {
+        finish({ finalStatus: 'cancelled', executionStatus: 'cancelled', testStatus: 'unknown', errorCode: '' });
+        return { claimed: true, runId: run.id, outcome: 'cancelled' };
+      }
+
+      if (handle) {
+        return needs('queued run already has a provider id', 'ambiguous-resume');
+      }
+      try {
+        handle = await this.withDeadline(this.provider.create(spec), this.providerOpMs, 'create-timeout');
+        attach(handle);
+      } catch (error) {
+        // A create failure may still have produced a container. Look up the deterministic
+        // owner labels; never release the fence on "unknown".
+        let orphan = error?.providerRunId
+          ? { providerRunId: error.providerRunId, name: error.name, runId: run.id, projectId: run.project_id, attempt: run.attempt }
+          : null;
+        if (!orphan && typeof this.provider.findOwnedContainer === 'function') {
           try {
-            this.store.attachSandboxProvider(run.id, {
-              workerId: this.workerId,
-              provider: preflight.provider ?? 'unknown',
-              providerRunId: handle.providerRunId,
-              providerName: handle.name ?? handle.providerRunId,
-              now: this.clock()
+            orphan = await this.provider.findOwnedContainer({
+              runId: run.id, projectId: run.project_id, attempt: run.attempt
             });
-          } catch (error) {
-            let disposed = false;
-            try { disposed = (await this.provider.dispose(handle)).confirmed; } catch { disposed = false; }
-            if (!disposed) {
-              this.store.markSandboxNeedsReconciliation(run.id, {
-                reason: 'provider attach failed and container cleanup was not confirmed',
-                errorCode: 'provider-attach-unconfirmed',
-                now: this.clock()
-              });
-              return { claimed: true, runId: run.id, outcome: 'needs_reconciliation' };
-            }
-            throw error;
+          } catch {
+            orphan = null;
           }
-        } catch (error) {
-          return {
-            claimed: true,
-            runId: run.id,
-            outcome: 'failed',
-            errorCode: 'provider-create-failed',
-            run: finish({
-              finalStatus: 'failed',
-              executionStatus: 'failed',
-              testStatus: 'unknown',
-              errorCode: `provider-create:${String(error?.code ?? 'error').slice(0, 60)}`
-            })
-          };
         }
+        if (orphan) attach(orphan);
+        return needs('provider create outcome could not be confirmed', 'provider-create-unconfirmed');
+      }
+
+      if (fenced) return { claimed: true, runId: run.id, outcome: 'fenced' };
+      refresh();
+      if (cancelRequested) return cancelCreated();
+
+      // Re-check immediately before the irreversible start.
+      if (fenced) return { claimed: true, runId: run.id, outcome: 'fenced' };
+      refresh();
+      if (cancelRequested) return cancelCreated();
+
+      try {
+        await this.withDeadline(this.provider.start(handle), this.providerOpMs, 'start-timeout');
+        startedAt = this.clock();
+        this.store.startSandboxRun(run.id, { workerId: this.workerId, now: startedAt });
+      } catch (error) {
+        let info = null;
         try {
-          await this.provider.start(handle);
-          startedAt = this.clock();
-          this.store.startSandboxRun(run.id, { workerId: this.workerId, now: startedAt });
-        } catch (error) {
-          let disposed = false;
-          try { disposed = (await this.provider.dispose(handle)).confirmed; } catch { disposed = false; }
-          if (!disposed) {
-            this.store.markSandboxNeedsReconciliation(run.id, {
-              reason: 'provider start failed and container cleanup was not confirmed',
-              errorCode: 'provider-start-unconfirmed',
-              now: this.clock()
-            });
-            return { claimed: true, runId: run.id, outcome: 'needs_reconciliation' };
+          info = await this.withDeadline(this.provider.inspect(handle), this.providerOpMs, 'inspect-timeout');
+        } catch {
+          info = null;
+        }
+        if (info && info.state !== 'running') {
+          try {
+            const disposed = await this.withDeadline(this.provider.dispose(handle), this.providerOpMs, 'dispose-timeout');
+            if (!disposed.confirmed) return needs('start failed and cleanup was not confirmed', 'provider-start-unconfirmed');
+          } catch {
+            return needs('start failed and cleanup could not be verified', 'provider-start-unconfirmed');
           }
           return {
             claimed: true,
@@ -212,97 +376,42 @@ export class SandboxRunner {
             outcome: 'failed',
             errorCode: 'provider-start-failed',
             run: finish({
-              finalStatus: 'failed',
-              executionStatus: 'failed',
-              testStatus: 'unknown',
+              finalStatus: 'failed', executionStatus: 'failed', testStatus: 'unknown',
               errorCode: `provider-start:${String(error?.code ?? 'error').slice(0, 60)}`
             })
           };
         }
-      } else {
-        // A queued run with a provider id is ambiguous; startup recovery normally moves
-        // these to needs_reconciliation. Refuse to guess.
-        this.store.markSandboxNeedsReconciliation(run.id, {
-          reason: 'queued run already has a provider id',
-          errorCode: 'ambiguous-resume',
-          now: this.clock()
-        });
-        return { claimed: true, runId: run.id, outcome: 'needs_reconciliation' };
+        return needs('provider start outcome could not be confirmed', 'provider-start-unconfirmed');
       }
+
+      if (fenced) return { claimed: true, runId: run.id, outcome: 'fenced' };
+      refresh();
+      if (cancelRequested) return stopAndFinish({ finalStatus: 'cancelled', executionStatus: 'cancelled', errorCode: '' });
 
       while (true) {
         try {
-          this.store.heartbeatSandboxRun(run.id, {
-            workerId: this.workerId,
-            now: this.clock(),
-            leaseMs: this.leaseMs
-          });
+          heartbeat();
         } catch {
           fenced = true;
           return { claimed: true, runId: run.id, outcome: 'fenced' };
         }
-
-        const current = this.store.getSandboxRun(run.id);
-        if (current.cancel_requested_at) {
-          const stopped = await this.provider.stop(handle);
-          if (!stopped.confirmed) {
-            this.store.markSandboxNeedsReconciliation(run.id, {
-              reason: 'cancel stop could not be confirmed',
-              errorCode: 'unconfirmed-stop',
-              now: this.clock()
-            });
-            return { claimed: true, runId: run.id, outcome: 'fenced', unconfirmedStop: true };
-          }
-          let collected = null;
-          try {
-            this.store.beginSandboxCollect(run.id, { workerId: this.workerId, now: this.clock() });
-            collected = await this.provider.collect(handle);
-          } catch { /* bounded empty evidence */ }
-          this.store.completeSandboxRun({
-            id: run.id,
-            workerId: this.workerId,
-            finalStatus: 'cancelled',
-            executionStatus: 'cancelled',
-            testStatus: 'unknown',
-            exitCode: collected?.exitCode ?? null,
-            signal: collected?.signal ?? null,
-            evidence: {
-              ...(collected ? evidenceFor(collected) : {}),
-              result: resultEvidence({
-                finalStatus: 'cancelled', executionStatus: 'cancelled', testStatus: 'unknown',
-                exitCode: collected?.exitCode ?? null, signal: collected?.signal ?? null, collected
-              })
-            },
-            errorCode: '',
-            now: this.clock()
-          });
-          try { await this.provider.dispose(handle); } catch { /* cleanup is a separate owner action */ }
-          return { claimed: true, runId: run.id, outcome: 'cancelled' };
+        refresh();
+        if (cancelRequested) {
+          return stopAndFinish({ finalStatus: 'cancelled', executionStatus: 'cancelled', errorCode: '' });
         }
 
         let info;
         try {
-          info = await this.provider.inspect(handle);
+          info = await this.withDeadline(this.provider.inspect(handle), this.providerOpMs, 'inspect-timeout');
         } catch {
-          this.store.markSandboxNeedsReconciliation(run.id, {
-            reason: 'provider inspect failed',
-            errorCode: 'inspect-failed',
-            now: this.clock()
-          });
-          return { claimed: true, runId: run.id, outcome: 'needs_reconciliation' };
+          return needs('provider inspect unavailable', 'inspect-unavailable');
         }
         if (info.state === 'exited') {
           let collected;
           try {
-            this.store.beginSandboxCollect(run.id, { workerId: this.workerId, now: this.clock() });
-            collected = await this.provider.collect(handle);
+            collected = await collect();
           } catch {
-            this.store.markSandboxNeedsReconciliation(run.id, {
-              reason: 'provider collect failed',
-              errorCode: 'collect-failed',
-              now: this.clock()
-            });
-            return { claimed: true, runId: run.id, outcome: 'needs_reconciliation' };
+            return needs('provider collect failed', 'collect-failed');
           }
           const testStatus = collected.exitCode === 0 && !collected.oomKilled ? 'pass' : 'fail';
           const completed = finish({
@@ -313,7 +422,7 @@ export class SandboxRunner {
             exitCode: collected.exitCode,
             signal: collected.signal
           });
-          try { await this.provider.dispose(handle); } catch { /* owner can clean later */ }
+          try { await this.withDeadline(this.provider.dispose(handle), this.providerOpMs, 'dispose-timeout'); } catch { /* cleanup later */ }
           return {
             claimed: true,
             runId: run.id,
@@ -324,66 +433,20 @@ export class SandboxRunner {
           };
         }
         if (info.state === 'missing') {
-          this.store.markSandboxNeedsReconciliation(run.id, {
-            reason: 'container disappeared before evidence collection',
-            errorCode: 'container-missing',
-            now: this.clock()
-          });
-          return { claimed: true, runId: run.id, outcome: 'needs_reconciliation' };
+          return needs('container disappeared before evidence collection', 'container-missing');
         }
 
         const started = startedAt ?? this.store.getSandboxRun(run.id).started_at;
         if (started && Date.parse(this.clock()) - Date.parse(started) >= run.timeout_ms) {
-          const stopped = await this.provider.stop(handle);
-          if (!stopped.confirmed) {
-            this.store.markSandboxNeedsReconciliation(run.id, {
-              reason: 'timeout stop could not be confirmed',
-              errorCode: 'timeout-unconfirmed',
-              now: this.clock()
-            });
-            return { claimed: true, runId: run.id, outcome: 'fenced', unconfirmedStop: true };
-          }
-          let collected = null;
-          try {
-            this.store.beginSandboxCollect(run.id, { workerId: this.workerId, now: this.clock() });
-            collected = await this.provider.collect(handle);
-          } catch { /* bounded empty */ }
-          this.store.completeSandboxRun({
-            id: run.id,
-            workerId: this.workerId,
-            finalStatus: 'failed',
-            executionStatus: 'timeout',
-            testStatus: 'unknown',
-            exitCode: collected?.exitCode ?? null,
-            signal: collected?.signal ?? null,
-            evidence: {
-              ...(collected ? evidenceFor(collected) : {}),
-              result: resultEvidence({
-                finalStatus: 'failed', executionStatus: 'timeout', testStatus: 'unknown',
-                exitCode: collected?.exitCode ?? null, signal: collected?.signal ?? null, collected
-              })
-            },
-            errorCode: 'timeout',
-            now: this.clock()
-          });
-          try { await this.provider.dispose(handle); } catch { /* owner can clean later */ }
-          return { claimed: true, runId: run.id, outcome: 'timeout' };
+          return stopAndFinish({ finalStatus: 'failed', executionStatus: 'timeout', errorCode: 'timeout' });
         }
-
         await this.sleep(this.pollMs);
       }
     } catch (error) {
       if (fenced) return { claimed: true, runId: run.id, outcome: 'fenced' };
-      try {
-        this.store.markSandboxNeedsReconciliation(run.id, {
-          reason: 'sandbox runner error',
-          errorCode: `runner:${String(error?.code ?? 'error').slice(0, 60)}`,
-          now: this.clock()
-        });
-      } catch {
-        // Preserve the original failure; owner reconciliation remains required.
-      }
-      return { claimed: true, runId: run.id, outcome: 'needs_reconciliation' };
+      return needs('sandbox runner error', `runner:${String(error?.code ?? 'error').slice(0, 60)}`);
+    } finally {
+      this.timers.clear(tickTimer);
     }
   }
 }

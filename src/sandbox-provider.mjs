@@ -5,6 +5,7 @@
 // Fake provider mirrors the same lifecycle for deterministic, cross-platform tests.
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import fs from 'node:fs';
 
 const execFileP = promisify(execFile);
 
@@ -138,27 +139,62 @@ export class FakeSandboxProvider {
 }
 
 export class DockerSandboxProvider {
-  constructor({ dockerBin = 'docker', stopConfirmMs = 5000, requireRootless = false, captureMaxBytes = 1024 * 1024 } = {}) {
+  constructor({
+    dockerBin = 'docker',
+    stopConfirmMs = 5000,
+    requireRootless = false,
+    captureMaxBytes = 1024 * 1024,
+    dockerExec = null,
+    operationTimeoutMs = 30000,
+    trustedImageDigests = null
+  } = {}) {
     this.dockerBin = dockerBin;
     this.stopConfirmMs = stopConfirmMs;
     this.requireRootless = requireRootless;
     this.captureMaxBytes = captureMaxBytes;
+    this.dockerExec = dockerExec;
+    this.operationTimeoutMs = operationTimeoutMs;
+    this.trustedImageDigests = trustedImageDigests
+      ?? (process.env.OWNER_AGENT_SANDBOX_TRUSTED_DIGESTS
+        ? process.env.OWNER_AGENT_SANDBOX_TRUSTED_DIGESTS.split(',').map((x) => x.trim()).filter(Boolean)
+        : null);
     this.captures = new Map();
   }
 
   async docker(args, { allowExitCodes = [] } = {}) {
+    if (this.dockerExec) {
+      const result = await this.dockerExec(args);
+      if (result.code === 0) return result.stdout;
+      if (allowExitCodes.includes(result.code)) return result.stdout ?? '';
+      const error = new SandboxProviderError('docker command failed', 'docker-command-failed');
+      error.exitCode = result.code;
+      error.stderr = result.stderr ?? '';
+      throw error;
+    }
     try {
       const result = await execFileP(this.dockerBin, args, {
         maxBuffer: 16 * 1024 * 1024,
         windowsHide: true,
+        timeout: this.operationTimeoutMs,
         env: { ...process.env, DOCKER_CLI_HINTS: 'false' }
       });
       return result.stdout;
     } catch (error) {
       if (allowExitCodes.includes(error.code)) return error.stdout ?? '';
-      // Fixed diagnostic only: Docker stderr may contain host paths; never persist it.
-      throw new SandboxProviderError('docker command failed', 'docker-command-failed');
+      const timedOut = error.killed || error.signal === 'SIGTERM' || /timed out/i.test(String(error.message));
+      const wrapped = new SandboxProviderError(
+        timedOut ? 'docker command timed out' : 'docker command failed',
+        timedOut ? 'docker-timeout' : 'docker-command-failed'
+      );
+      wrapped.exitCode = error.code;
+      wrapped.stderr = error.stderr ?? '';
+      throw wrapped;
     }
+  }
+
+  isMissingContainer(error) {
+    return (error?.exitCode === 1 || error?.exitCode === 125)
+      && /no such (container|object)/i.test(String(error?.stderr ?? ''));
   }
 
   async preflight(profile) {
@@ -169,22 +205,27 @@ export class DockerSandboxProvider {
       return { ok: false, reason: 'docker-not-available', provider: 'docker' };
     }
     if (serverOs !== 'linux') return { ok: false, reason: 'docker-os-unsupported', provider: 'docker' };
+    if (this.trustedImageDigests && !this.trustedImageDigests.includes(profile.imageDigest)) {
+      return { ok: false, reason: 'image-not-trusted', provider: 'docker' };
+    }
     try {
       await this.docker(['image', 'inspect', profile.imageDigest, '--format', '{{.Id}}']);
     } catch {
       return { ok: false, reason: 'image-not-available', provider: 'docker' };
     }
-    let securityOptions = [];
-    let cgroupVersion = 'unknown';
+    let securityOptions;
+    let cgroupVersion;
     try {
       securityOptions = JSON.parse((await this.docker(['info', '--format', '{{json .SecurityOptions}}'])).trim());
+      cgroupVersion = (await this.docker(['info', '--format', '{{.CgroupVersion}}'])).trim();
     } catch {
-      securityOptions = [];
+      return { ok: false, reason: 'docker-info-unavailable', provider: 'docker' };
     }
-    try {
-      cgroupVersion = (await this.docker(['info', '--format', '{{.CgroupVersion}}'])).trim() || 'unknown';
-    } catch {
-      cgroupVersion = 'unknown';
+    if (cgroupVersion !== '2') {
+      return { ok: false, reason: 'cgroup-v2-required', provider: 'docker', cgroupVersion };
+    }
+    if (!JSON.stringify(securityOptions).includes('seccomp')) {
+      return { ok: false, reason: 'seccomp-required', provider: 'docker', cgroupVersion };
     }
     const rootless = JSON.stringify(securityOptions).includes('rootless');
     if (this.requireRootless && !rootless) {
@@ -240,11 +281,83 @@ export class DockerSandboxProvider {
       spec.imageDigest,
       ...spec.command.slice(1)
     ];
-    const providerRunId = (await this.docker(args)).trim();
-    check(/^[0-9a-f]{12,64}$/.test(providerRunId), 'docker create returned an invalid id');
-    const handle = { providerRunId, name, runId: spec.runId, projectId: spec.projectId, attempt: spec.attempt };
-    await this.assertOwnership(handle);
-    return handle;
+    let providerRunId = null;
+    try {
+      providerRunId = (await this.docker(args)).trim();
+      check(/^[0-9a-f]{12,64}$/.test(providerRunId), 'docker create returned an invalid id');
+      const handle = { providerRunId, name, runId: spec.runId, projectId: spec.projectId, attempt: spec.attempt };
+      await this.assertOwnership(handle);
+      await this.assertEffectiveConfig(handle, spec);
+      return handle;
+    } catch (error) {
+      if (providerRunId) {
+        error.providerRunId = providerRunId;
+        error.name = name;
+      }
+      throw error;
+    }
+  }
+
+  async assertEffectiveConfig(handle, spec) {
+    let info;
+    try {
+      info = JSON.parse((await this.docker(['inspect', '--format', '{{json .}}', handle.providerRunId])).trim());
+    } catch (error) {
+      if (this.isMissingContainer(error)) {
+        throw new SandboxProviderError('sandbox container disappeared during configuration verification', 'container-missing');
+      }
+      throw new SandboxProviderError('sandbox effective configuration cannot be verified', 'inspect-unavailable');
+    }
+    const hc = info.HostConfig ?? {};
+    const fail = (reason) => {
+      throw new SandboxProviderError(`sandbox effective configuration mismatch: ${reason}`, 'provider-config-mismatch');
+    };
+    if (hc.NetworkMode !== 'none') fail('network');
+    if (hc.ReadonlyRootfs !== true) fail('readonly-rootfs');
+    if (hc.Privileged === true) fail('privileged');
+    if (hc.PidMode === 'host' || hc.IpcMode === 'host') fail('host-namespace');
+    if (!Array.isArray(hc.CapDrop) || !hc.CapDrop.map((x) => x.toUpperCase()).includes('ALL')) fail('cap-drop');
+    if (!Array.isArray(hc.SecurityOpt)
+      || !hc.SecurityOpt.some((x) => /no-new-privileges/.test(String(x)))) fail('no-new-privileges');
+    if (hc.PidsLimit !== spec.pidsLimit) fail('pids-limit');
+    if (hc.Memory !== spec.memoryBytes) fail('memory');
+    if (hc.MemorySwap !== spec.memoryBytes) fail('memory-swap');
+    if (hc.NanoCpus !== Math.round(spec.cpus * 1_000_000_000)) fail('cpus');
+    if ((info.Config?.User ?? '') !== '65534:65534') fail('user');
+    const workspaceMount = (info.Mounts ?? []).find((mount) => mount.Destination === '/workspace');
+    if (!workspaceMount || workspaceMount.RW !== false || workspaceMount.Type !== 'bind') fail('workspace-mount');
+    let sourceReal;
+    let expectedReal;
+    try {
+      sourceReal = fs.realpathSync(workspaceMount.Source);
+      expectedReal = fs.realpathSync(spec.snapshotPath);
+    } catch {
+      fail('workspace-mount-source');
+    }
+    if (sourceReal !== expectedReal) fail('workspace-mount-source');
+    const tmpfs = hc.Tmpfs?.['/tmp'] ?? '';
+    if (!String(tmpfs).includes(`size=${spec.tmpfsBytes}`)) fail('tmpfs');
+    return true;
+  }
+
+  async findOwnedContainer({ runId, projectId, attempt } = {}) {
+    try {
+      const ids = (await this.docker([
+        'ps', '-a', '--filter', `label=owner.run=${runId}`, '--format', '{{.ID}}'
+      ])).trim().split(/\s+/).filter(Boolean);
+      for (const id of ids) {
+        const handle = { providerRunId: id, name: `owner-sandbox-${runId}`, runId, projectId, attempt };
+        try {
+          await this.assertOwnership(handle);
+          return handle;
+        } catch {
+          // Keep searching; a same-label foreign container is not ours.
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   async assertOwnership(handle) {
@@ -296,8 +409,10 @@ export class DockerSandboxProvider {
     let state;
     try {
       state = JSON.parse((await this.docker(['inspect', '--format', '{{json .State}}', handle.providerRunId])).trim());
-    } catch {
-      return { state: 'missing' };
+    } catch (error) {
+      if (this.isMissingContainer(error)) return { state: 'missing' };
+      // Daemon/socket/permission/timeout failures are UNKNOWN, never "missing".
+      throw new SandboxProviderError('sandbox inspect unavailable', 'inspect-unavailable');
     }
     if (state.Running) return { state: 'running', oomKilled: !!state.OOMKilled };
     return {
@@ -309,11 +424,23 @@ export class DockerSandboxProvider {
   }
 
   async stop(handle) {
-    await this.assertOwnership(handle);
+    let ownershipError = null;
+    try {
+      await this.assertOwnership(handle);
+    } catch (error) {
+      ownershipError = error;
+    }
+    if (ownershipError) {
+      // A verified 404 is safe (nothing is running). Any other ownership/inspect failure
+      // is unknown and must never become "stopped".
+      const info = await this.inspect(handle);
+      if (info.state === 'missing') return { confirmed: true };
+      throw ownershipError;
+    }
     try {
       await this.docker(['stop', '--time', '1', handle.providerRunId], { allowExitCodes: [1] });
     } catch {
-      // inspect below decides whether it is really stopped.
+      // inspect below decides whether it is really stopped; an inspect outage is unknown.
     }
     const deadline = Date.now() + this.stopConfirmMs;
     while (Date.now() <= deadline) {

@@ -8,6 +8,11 @@
 
 - **真实后端**：Docker CLI（固定 argv）。不使用 shell，不接受自由命令/网络/挂载/入口参数。
 - 镜像必须用 **digest** 绑定（`sha256:<64 hex>`）；`docker image inspect <digest>` 预检失败即 fail closed；运行使用 `--pull=never`。
+- 可选 **trusted digest allowlist**：`OWNER_AGENT_SANDBOX_TRUSTED_DIGESTS=sha256:...,...`；
+  非空时未列入的 digest 直接拒绝。文档区分“按哈希固定”与“来源可信”。
+- 预检要求 Docker Linux、cgroup v2、seccomp；任一能力不可查询/不满足即 `unsupported`。
+  创建后还会检查 **effective HostConfig/Mounts**（network/readonly/caps/NNP/pids/memory/cpu/
+  user/workspace ro mount/tmpfs size）；不一致或无法核验即 fail closed。
 - 默认接受 rootful Docker（容器内仍为非 root UID），记录 `securityOptions/rootless`；设置
   `OWNER_AGENT_SANDBOX_REQUIRE_ROOTLESS=1` 时非 rootless daemon 直接拒绝。
 - Windows/macOS 没有经验证的隔离后端时只用 Fake；**绝不降级到 host exec**。
@@ -60,7 +65,9 @@ P0 只允许 Owner 侧内置 profile：
 - 快照 = Proposal 变更文件 + Owner `--include` 的精确文件（P0 不接受目录/glob）；上限 50 文件 / 2 MiB，单文件 256 KiB。
 - 每个路径复用 `inspectSafePath`/`readSafeMaterial`：拒绝 symlink/junction/hardlink、大小写别名、绝对路径/`..`、`.git`/`.pi`/`.env`/密钥、非法 UTF-8；先验 hash 再落盘。
 - 快照写入 `~/.owner-agent/sandbox/<runId>/input/`：目录 0555、文件 0444，父目录 0700；`marker.json` + `snapshot_manifest` 绑定 run/hash。
-- 审批与运行前均重新计算 manifest hash；快照被改写则 `failed`/拒绝启动。
+- 审批与运行前均**穷尽枚举** `input/` 实际树：实际文件/目录集合必须与 manifest 完全一致；
+  额外文件/目录、symlink/junction、硬链接、设备/socket 全部拒绝，避免 bind 整棵目录时
+  把审批后注入的内容带进容器。快照被改写则 `failed`/拒绝启动。
 - `sandbox-cleanup --confirm 1` 只有在 marker 匹配时才递归删除快照；被替换的目录不会被删。
 
 ## 5. 状态机
@@ -79,6 +86,14 @@ test_status:      pass | fail | unknown
 - 非零测试退出是有效结果：`status=completed`、`execution_status=completed`、`test_status=fail`。
 - 基础设施失败（preflight/create/start/collect/inspect）才 `status=failed`。
 - cancel/timeout 只停止 RunID 对应容器并等待 `inspect` 确认；未确认 → `needs_reconciliation`，保留容器与证据，同项目新 sandbox/code-patch 均被 fence。
+- **inspect 语义**：只有 Docker 明确返回 `No such container/object` 才算 `missing`；daemon/socket/
+  权限/超时等一律 `inspect-unavailable`，绝不当作停止确认。`stop`/`reconcile`/`cleanup`
+  在 inspect 不可用时拒绝推进。
+- **完整生命周期 watchdog**：claim 后即启动 heartbeat interval，覆盖 preflight/create/start/
+  stop/collect；每个 provider 操作有独立 deadline；Docker CLI 也有单次命令 timeout。
+  deadline 只表示“宿主停止等待”，不表示底层动作已中止；不能据此确认停止。
+- **每个不可逆 side effect 前**重查 cancel/lease：preflight→create、create→start、start 后；
+  cancel 先到则零容器；create 完成后先到则销毁未启动容器且零启动；已启动则走确认停止。
 - 启动时 `recoverInterruptedSandboxRuns()` 把 `provisioning/running/collecting` → `needs_reconciliation`；不自动重跑/删除未知容器。
 - Owner `sandbox-reconcile --decision confirm-stopped|discard` 仅在 provider 确认非运行并 dispose 后落 `failed`。
 
@@ -116,13 +131,14 @@ node bin/ownerctl.mjs sandbox-cleanup --id <RUN_ID> --confirm 1
 ## 8. 测试与 CI
 
 - Fake/协议测试（Ubuntu + Windows）：未批准零 provider 调用、pass/fail 区分、approval/profile/snapshot 漂移、cancel、timeout、未确认停止、lease/崩溃恢复、项目 fence、日志截断/脱敏/哈希、preflight unsupported、快照改写。
-- Linux 实跑（Ubuntu CI `sandbox-real`）：`docker pull node:22-alpine`，解析 digest，运行 `node-smoke` 与 `node-probe`；探针覆盖非 root、零 capabilities、no-new-privileges、只读 `/workspace`、仅 `/tmp` 可写、无网络、无 Docker socket、无 `/root` 访问、cgroup 限制可见。
+- Linux 实跑（Ubuntu CI `sandbox-real`）：`docker pull node:22-alpine`，解析 digest，运行 `node-smoke`、`node-fail`、`node-probe`；探针覆盖非 root、零 capabilities、Seccomp=2、NoNewPrivs=1、只读 `/workspace` mount、仅 `/tmp` 可写、无网络、无 Docker socket、无 `/root` 访问，并**断言 cgroup 的 pids.max / memory.max / cpu.max 等于批准 profile**。
 - 本地：`npm run demo:sandbox`（Fake，零 Docker/模型调用）；真实 backend 可通过
   `OWNER_AGENT_SANDBOX_REAL=1 OWNER_AGENT_SANDBOX_IMAGE_DIGEST=sha256:... npm run test:sandbox:real` 运行。
 
 ## 9. 已知限制 / 明确不做
 
-- 容器不能抵御内核/运行时逃逸；rootful daemon 是残余风险，生产建议 rootless 或隔离宿主机。
+- 容器不能抵御内核/运行时逃逸；rootful daemon 是残余风险，生产建议 rootless 或隔离宿主机，并配置 trusted image digest allowlist。
+- `OwnerStore.reconcileSandboxRun` 仍是 Owner 显式 API；CLI 会先做 provider stop/inspect/dispose，DB 层尚未强制 attestation。后续可引入两阶段 reconcile ticket。
 - Windows 原生沙箱、K8s、分布式调度、多语言依赖构建、npm install、任意测试模板均不做。
 - 不提供模型执行工具；不自动 merge/PR/知识晋升。
 - 单进程 CLI 假设；多进程并发迁移需要额外进程锁。

@@ -45,16 +45,21 @@ const manualTimers = () => {
   let next = 1;
   return {
     handles,
+    interval: (fn, ms) => {
+      const id = next++;
+      handles.set(id, { fn, ms, kind: 'interval' });
+      return id;
+    },
     timeout: (fn, ms) => {
       const id = next++;
-      handles.set(id, { fn, ms });
+      handles.set(id, { fn, ms, kind: 'timeout' });
       return id;
     },
     clear: (id) => handles.delete(id),
     fireByMs: (ms) => {
       for (const [id, handle] of [...handles]) {
         if (handle.ms === ms) {
-          handles.delete(id);
+          if (handle.kind !== 'interval') handles.delete(id);
           handle.fn();
         }
       }
@@ -230,8 +235,7 @@ test('[sandbox#5] an unconfirmed stop fences the project until explicit reconcil
     fixture.store.requestCancelSandboxRun(run.runId, { actor: 'owner' });
     timers.fireByMs(1000);
     const result = await running;
-    assert.equal(result.outcome, 'fenced');
-    assert.equal(result.unconfirmedStop, true);
+    assert.equal(result.outcome, 'needs_reconciliation');
     assert.equal(fixture.store.getSandboxRun(run.runId).status, 'needs_reconciliation');
     const task = fixture.store.createTask({ projectId: fixture.projectId, title: 'blocked by sandbox' });
     const job = fixture.store.createJob({
@@ -395,6 +399,177 @@ test('[sandbox#12] projects cannot claim or borrow another project sandbox run',
   } finally {
     a.cleanup();
     b.cleanup();
+  }
+});
+
+test('[sandbox#13] snapshot verification rejects extra files, directories, symlinks and hardlinks', async () => {
+  const fixture = await makeAppliedSandboxFixture({ key: 'sandbox-extra-content' });
+  try {
+    const run = makeSandboxRun({ fixture });
+    fixture.store.approveSandboxRun(run.runId, { expectedHash: run.approvalHash });
+    const input = path.join(run.snapshot.snapshotPath, 'input');
+    const verify = () => verifyInputSnapshot({
+      snapshotPath: run.snapshot.snapshotPath,
+      manifest: run.snapshot.manifest,
+      snapshotHash: run.snapshot.snapshotHash
+    });
+    // The snapshot is intentionally 0555/0444 for the container; the test must opt in to
+    // writing into it to simulate an attacker injecting extra content.
+    fs.chmodSync(input, 0o755);
+    fs.chmodSync(path.join(input, 'tests'), 0o755);
+    const extraFile = path.join(input, 'tests', 'helper.mjs');
+    fs.writeFileSync(extraFile, '// injected\n');
+    assert.throws(verify, /unapproved files/);
+    fs.rmSync(extraFile, { force: true });
+
+    const extraDir = path.join(input, 'extra-dir');
+    fs.mkdirSync(extraDir);
+    assert.throws(verify, /unapproved directories/);
+    fs.rmdirSync(extraDir);
+
+    try {
+      fs.symlinkSync(path.join(input, 'src', 'app.js'), path.join(input, 'tests', 'link.js'), 'file');
+      assert.throws(verify, /symlink|unapproved/);
+      fs.rmSync(path.join(input, 'tests', 'link.js'), { force: true });
+    } catch (error) {
+      if (error.code !== 'EPERM' && error.code !== 'EACCES') throw error;
+    }
+
+    fs.linkSync(path.join(input, 'src', 'app.js'), path.join(input, 'tests', 'hard.js'));
+    assert.throws(verify, /hard-linked|unapproved/);
+    fs.rmSync(path.join(input, 'tests', 'hard.js'), { force: true });
+
+    assert.equal(verify().ok, true, 'the original exact tree still verifies');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('[sandbox#14] cancel before create prevents any container creation', async () => {
+  const fixture = await makeAppliedSandboxFixture({ key: 'sandbox-cancel-before-create' });
+  try {
+    const run = makeSandboxRun({ fixture });
+    fixture.store.approveSandboxRun(run.runId, { expectedHash: run.approvalHash });
+    const provider = new FakeSandboxProvider();
+    let releasePreflight;
+    const preflight = provider.preflight.bind(provider);
+    provider.preflight = async (profile) => {
+      provider.preflightCalls.push(profile);
+      await new Promise((resolve) => { releasePreflight = resolve; });
+      return preflight(profile);
+    };
+    const timers = manualTimers();
+    const runner = new SandboxRunner(fixture.store, { provider, workerId: 'sandbox-test', pollMs: 1000, timers });
+    const pending = runner.runOnce({ projectId: fixture.projectId });
+    await waitFor(() => provider.preflightCalls.length === 1, 'preflight entered');
+    fixture.store.requestCancelSandboxRun(run.runId, { actor: 'owner' });
+    releasePreflight();
+    const result = await pending;
+    assert.equal(result.outcome, 'cancelled');
+    assert.equal(provider.createCalls.length, 0);
+    assert.equal(provider.startCalls.length, 0);
+    assert.equal(fixture.store.getSandboxRun(run.runId).status, 'cancelled');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('[sandbox#15] cancel after create but before start never starts the container', async () => {
+  const fixture = await makeAppliedSandboxFixture({ key: 'sandbox-cancel-after-create' });
+  try {
+    const run = makeSandboxRun({ fixture });
+    fixture.store.approveSandboxRun(run.runId, { expectedHash: run.approvalHash });
+    const provider = new FakeSandboxProvider();
+    let releaseCreate;
+    const create = provider.create.bind(provider);
+    provider.create = async (spec) => {
+      const created = await create(spec);
+      await new Promise((resolve) => { releaseCreate = resolve; });
+      return created;
+    };
+    const timers = manualTimers();
+    const runner = new SandboxRunner(fixture.store, { provider, workerId: 'sandbox-test', pollMs: 1000, timers });
+    const pending = runner.runOnce({ projectId: fixture.projectId });
+    await waitFor(() => provider.createCalls.length === 1, 'create entered');
+    fixture.store.requestCancelSandboxRun(run.runId, { actor: 'owner' });
+    releaseCreate();
+    const result = await pending;
+    assert.equal(result.outcome, 'cancelled');
+    assert.equal(provider.startCalls.length, 0);
+    assert.equal(provider.disposeCalls.length, 1);
+    assert.equal(fixture.store.getSandboxRun(run.runId).status, 'cancelled');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('[sandbox#16] a create failure with an orphan id enters reconciliation instead of failed', async () => {
+  const fixture = await makeAppliedSandboxFixture({ key: 'sandbox-create-orphan' });
+  try {
+    const run = makeSandboxRun({ fixture });
+    fixture.store.approveSandboxRun(run.runId, { expectedHash: run.approvalHash });
+    const provider = new FakeSandboxProvider();
+    provider.createError = Object.assign(new Error('create ownership inspect failed'), {
+      code: 'inspect-unavailable',
+      providerRunId: 'fake-orphan-1',
+      name: `owner-sandbox-${run.runId}`
+    });
+    const runner = new SandboxRunner(fixture.store, { provider, workerId: 'sandbox-test', pollMs: 0 });
+    const result = await runner.runOnce({ projectId: fixture.projectId });
+    assert.equal(result.outcome, 'needs_reconciliation');
+    const saved = fixture.store.getSandboxRun(run.runId);
+    assert.equal(saved.status, 'needs_reconciliation');
+    assert.equal(saved.provider_run_id, 'fake-orphan-1');
+    const task = fixture.store.createTask({ projectId: fixture.projectId, title: 'blocked by orphan' });
+    const job = fixture.store.createJob({
+      projectId: fixture.projectId,
+      jobType: 'code-patch',
+      title: 'blocked orphan patch',
+      payload: { baseSha: fixture.base, allowedPaths: 'src/' },
+      idempotencyKey: 'blocked-by-orphan',
+      ownerTaskId: task.id
+    });
+    assert.throws(() => fixture.store.approveJob(job.id), /unresolved sandbox run/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('[sandbox#17] a stop that never returns is bounded and stays fenced', async () => {
+  const fixture = await makeAppliedSandboxFixture({ key: 'sandbox-stop-forever' });
+  try {
+    const run = makeSandboxRun({ fixture });
+    fixture.store.approveSandboxRun(run.runId, { expectedHash: run.approvalHash });
+    const provider = new FakeSandboxProvider();
+    provider.stop = async () => new Promise(() => {});
+    const timers = manualTimers();
+    const runner = new SandboxRunner(fixture.store, {
+      provider, workerId: 'sandbox-test', pollMs: 1000, providerOpMs: 1000, timers
+    });
+    const pending = runner.runOnce({ projectId: fixture.projectId });
+    await waitFor(() => provider.startCalls.length === 1, 'sandbox start');
+    fixture.store.requestCancelSandboxRun(run.runId, { actor: 'owner' });
+    timers.fireByMs(1000);
+    await waitFor(() => [...timers.handles.values()].some((handle) => handle.ms === 1000),
+      'stop operation deadline');
+    timers.fireByMs(1000);
+    const result = await pending;
+    assert.equal(result.outcome, 'needs_reconciliation');
+    assert.equal(fixture.store.getSandboxRun(run.runId).status, 'needs_reconciliation');
+    assert.equal(fs.existsSync(path.join(run.snapshot.snapshotPath, 'input', 'src', 'app.js')), true,
+      'snapshot is retained while the stop is unconfirmed');
+    const task = fixture.store.createTask({ projectId: fixture.projectId, title: 'blocked by stop-forever' });
+    const job = fixture.store.createJob({
+      projectId: fixture.projectId,
+      jobType: 'code-patch',
+      title: 'blocked stop-forever patch',
+      payload: { baseSha: fixture.base, allowedPaths: 'src/' },
+      idempotencyKey: 'blocked-by-stop-forever',
+      ownerTaskId: task.id
+    });
+    assert.throws(() => fixture.store.approveJob(job.id), /unresolved sandbox run/);
+  } finally {
+    fixture.cleanup();
   }
 });
 

@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 test('real sandbox assertion failure', () => assert.equal(1, 2));
 `;
 
-const probe = `import test from 'node:test';
+const buildProbe = (limits) => `import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -29,15 +29,20 @@ test('runs as a non-root uid', () => {
   assert.notEqual(process.getuid(), 0);
 });
 
-test('has no effective capabilities and no-new-privileges', () => {
+test('has no effective capabilities, seccomp, and no-new-privileges', () => {
   const status = fs.readFileSync('/proc/self/status', 'utf8');
   const cap = status.match(/^CapEff:\\s*([0-9a-f]+)$/m)?.[1] ?? '';
   assert.equal(Number.parseInt(cap || '0', 16), 0);
   assert.match(status, /^NoNewPrivs:\\s*1$/m);
+  assert.match(status, /^Seccomp:\\s*2$/m);
 });
 
-test('cannot write the read-only workspace', () => {
+test('cannot write the read-only workspace and its mount is ro', () => {
   assert.throws(() => fs.writeFileSync('/workspace/forbidden.txt', 'x'));
+  const mount = fs.readFileSync('/proc/mounts', 'utf8').split('\\n')
+    .find((line) => line.includes(' /workspace '));
+  assert.ok(mount, 'workspace mount is visible');
+  assert.ok(mount.split(/\\s+/)[3].split(',').includes('ro'), 'workspace mount is read-only');
 });
 
 test('can write only the tmpfs scratch directory', () => {
@@ -59,13 +64,10 @@ test('has no network route', async () => {
   }));
 });
 
-test('cgroup limits are visible when the host exposes them', () => {
-  for (const file of ['/sys/fs/cgroup/pids.max', '/sys/fs/cgroup/memory.max']) {
-    if (fs.existsSync(file)) {
-      const value = fs.readFileSync(file, 'utf8').trim();
-      assert.notEqual(value, '');
-    }
-  }
+test('cgroup limits equal the approved profile', () => {
+  assert.equal(fs.readFileSync('/sys/fs/cgroup/pids.max', 'utf8').trim(), '${limits.pidsLimit}');
+  assert.equal(fs.readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim(), '${limits.memoryBytes}');
+  assert.equal(fs.readFileSync('/sys/fs/cgroup/cpu.max', 'utf8').trim(), '${limits.cpus * 100000} 100000');
 });
 `;
 
@@ -73,6 +75,8 @@ test('[sandbox-real] Linux Docker smoke and isolation probes', {
   skip: !real || !imageDigest
 }, async () => {
   assert.match(imageDigest, /^sha256:[0-9a-f]{64}$/, 'OWNER_AGENT_SANDBOX_IMAGE_DIGEST must be sha256:<64 hex>');
+  const baseProfile = resolveTestProfile('node-smoke', { imageDigest });
+  const probe = buildProbe(baseProfile);
   const fixture = await makeAppliedSandboxFixture({
     key: 'sandbox-real',
     patchFiles: [
