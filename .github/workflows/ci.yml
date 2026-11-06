@@ -33,3 +33,28 @@ jobs:
       - run: npm run demo:jobs
       - run: npm run demo:pi
       - run: npm run demo:patch
+      - run: npm run demo:sandbox
+
+  sandbox-real:
+    # The only job allowed to run project test code: inside a locked-down Linux container.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Record Docker security options
+        run: docker info --format 'rootless/security={{json .SecurityOptions}} cgroup={{.CgroupVersion}}'
+      - run: docker pull node:22-alpine
+      - name: Resolve trusted image digest
+        run: |
+          DIGEST=$(docker image inspect node:22-alpine --format '{{index .RepoDigests 0}}' | cut -d@ -f2)
+          echo "OWNER_AGENT_SANDBOX_IMAGE_DIGEST=$DIGEST" >> "$GITHUB_ENV"
+      - name: Run real sandbox smoke and isolation probes
+        run: OWNER_AGENT_SANDBOX_REAL=1 npm run test:sandbox:real
+      - name: List sandbox-labelled containers for evidence
+        if: always()
+        run: docker ps -a --filter label=owner.sandbox=1

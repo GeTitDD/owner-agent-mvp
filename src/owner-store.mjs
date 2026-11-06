@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { defaultDbPath } from './storage.mjs';
 import { sha256 } from './utils.mjs';
 import { canonicalProposalHash } from './patch-protocol.mjs';
+import { SANDBOX_STATUSES, approvalHash as computeSandboxApprovalHash } from './sandbox-protocol.mjs';
 import { PersonalKnowledgeStore } from './personal-store.mjs';
 
 export class OwnerInputError extends Error { constructor(message,status=400){super(message);this.status=status;} }
@@ -29,6 +30,7 @@ const safeArray=(v,label)=>{check(Array.isArray(v)&&v.length<=30&&v.every(x=>typ
 const entry=row=>row?{...row,domains:parse(row.domains),imports:parse(row.imports)}:null;
 const suggestion=row=>row?{...row,evidenceRefs:parse(row.evidence_refs)}:null;
 const jobRow=row=>row?{...row,payload:parse(row.payload)}:null;
+const sandboxRow=row=>row?{...row,profile:parse(row.profile_json),includePaths:parse(row.include_paths)}:null;
 // Flat primitive-only payload: no nested structures, no unbounded strings, control chars rejected.
 const cleanPayload=v=>{check(v!==null&&typeof v==='object'&&!Array.isArray(v),'Payload must be a flat JSON object');
   const keys=Object.keys(v);check(keys.length<=10,'Too many payload keys');const out={};
@@ -188,6 +190,59 @@ export class OwnerStore {
         detail TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS owner_patch_oplog_proposal ON owner_patch_oplog(proposal_id,seq);
+      CREATE TABLE IF NOT EXISTS owner_sandbox_runs(
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES owner_projects(id),
+        job_id TEXT NOT NULL REFERENCES owner_jobs(id) ON DELETE CASCADE,
+        attempt INTEGER NOT NULL,
+        workspace_id TEXT NOT NULL REFERENCES owner_workspaces(id),
+        proposal_id TEXT NOT NULL REFERENCES owner_patch_proposals(id),
+        approved_hash TEXT NOT NULL,
+        base_sha TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        profile_hash TEXT NOT NULL,
+        test_plan_hash TEXT NOT NULL,
+        approval_hash TEXT NOT NULL,
+        profile_json TEXT NOT NULL,
+        image_digest TEXT NOT NULL,
+        snapshot_hash TEXT NOT NULL,
+        snapshot_path TEXT NOT NULL,
+        include_paths TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending_approval','queued','provisioning','running','collecting','completed','failed','cancelled','rejected','needs_reconciliation')),
+        execution_status TEXT NOT NULL DEFAULT 'unknown',
+        test_status TEXT NOT NULL DEFAULT 'unknown',
+        exit_code INTEGER, signal TEXT,
+        timeout_ms INTEGER NOT NULL, memory_bytes INTEGER NOT NULL, cpus REAL NOT NULL,
+        pids_limit INTEGER NOT NULL, tmpfs_bytes INTEGER NOT NULL,
+        stdout_bytes INTEGER NOT NULL DEFAULT 0, stderr_bytes INTEGER NOT NULL DEFAULT 0,
+        stdout_hash TEXT, stderr_hash TEXT,
+        stdout_truncated INTEGER NOT NULL DEFAULT 0, stderr_truncated INTEGER NOT NULL DEFAULT 0,
+        provider TEXT NOT NULL DEFAULT 'fake', provider_run_id TEXT, provider_name TEXT,
+        worker_id TEXT, lease_until TEXT, cancel_requested_at TEXT,
+        error_code TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL, approved_at TEXT, started_at TEXT, finished_at TEXT, updated_at TEXT,
+        reconcile_decision TEXT NOT NULL DEFAULT '', reconcile_reason TEXT NOT NULL DEFAULT '',
+        snapshot_cleaned_at TEXT,
+        UNIQUE(proposal_id,profile_id)
+      );
+      CREATE INDEX IF NOT EXISTS owner_sandbox_runs_project ON owner_sandbox_runs(project_id,status,created_at);
+      CREATE TABLE IF NOT EXISTS owner_sandbox_evidence(
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES owner_sandbox_runs(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        content TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        truncated INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        UNIQUE(run_id,kind)
+      );
+      CREATE TABLE IF NOT EXISTS owner_sandbox_oplog(
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES owner_sandbox_runs(id) ON DELETE CASCADE,
+        at TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS owner_sandbox_oplog_run ON owner_sandbox_oplog(run_id,seq);
     `);
     // Re-entrant v0.8 migrations: tolerate databases created by an earlier WIP build.
     const workspaceColumns=this.db.prepare('PRAGMA table_info(owner_workspaces)').all().map(c=>c.name);
@@ -409,6 +464,14 @@ export class OwnerStore {
   // scheduling entry points must honor this fence.
   unresolvedPatchForProject(projectId){
     return this.db.prepare(`SELECT id,status FROM owner_patch_proposals WHERE project_id=? AND status IN ('applying','needs_reconciliation') ORDER BY created_at,id LIMIT 1`).get(projectId)??null;}
+  unresolvedSandboxForProject(projectId,{includeQueued=true,excludeId=null}={}){
+    const statuses=includeQueued?['queued','provisioning','running','collecting','needs_reconciliation']:['provisioning','running','collecting','needs_reconciliation'];
+    const placeholders=statuses.map(()=>'?').join(',');
+    const params=[projectId,...statuses];
+    let sql=`SELECT id,status FROM owner_sandbox_runs WHERE project_id=? AND status IN (${placeholders})`;
+    if(excludeId){sql+=' AND id<>?';params.push(excludeId);}
+    sql+=' ORDER BY created_at,id LIMIT 1';
+    return this.db.prepare(sql).get(...params)??null;}
   approveJob(id,{actor='owner',now=stamp()}={}){
     this.db.exec('BEGIN IMMEDIATE');
     try{
@@ -418,6 +481,8 @@ export class OwnerStore {
       check(!stuck,'Project has an unresolved needs_reconciliation job; reconcile it before approving new work',409);
       const unresolvedPatch=this.unresolvedPatchForProject(row.project_id);
       check(!unresolvedPatch,'Project has an unresolved patch proposal; reconcile it before approving new work',409);
+      const unresolvedSandbox=this.unresolvedSandboxForProject(row.project_id);
+      check(!unresolvedSandbox,'Project has an unresolved sandbox run; reconcile it before approving new work',409);
       const active=this.db.prepare(`SELECT COUNT(*) AS n FROM owner_jobs WHERE project_id=? AND status IN ('queued','leased','running','cancel_requested')`).get(row.project_id).n;
       check(active<this.maxActiveJobsPerProject,'Project already has an active job; per-project limit blocks approval',409);
       const changed=this.db.prepare(`UPDATE owner_jobs SET status='queued',approved_at=?,approved_by=?,updated_at=? WHERE id=? AND status='pending_approval'`).run(now,txt(actor,'actor',80),now,id);
@@ -483,6 +548,8 @@ export class OwnerStore {
       if(stuck){this.db.exec('COMMIT');return {claimed:false,reason:'project-quarantined',quarantinedJobId:stuck.id};}
       const unresolvedPatch=this.unresolvedPatchForProject(projectId);
       if(unresolvedPatch){this.db.exec('COMMIT');return {claimed:false,reason:'project-patch-quarantined',quarantinedProposalId:unresolvedPatch.id};}
+      const unresolvedSandbox=this.unresolvedSandboxForProject(projectId);
+      if(unresolvedSandbox){this.db.exec('COMMIT');return {claimed:false,reason:'project-sandbox-quarantined',quarantinedSandboxId:unresolvedSandbox.id};}
       const activeCount=this.db.prepare(`SELECT COUNT(*) AS n FROM owner_jobs WHERE project_id=? AND status IN ('leased','running','cancel_requested')`).get(projectId).n;
       if(activeCount>=this.maxActiveJobsPerProject){
         const busy=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status IN ('leased','running','cancel_requested') LIMIT 1`).get(projectId);
@@ -948,10 +1015,279 @@ export class OwnerStore {
       return rows.map(r=>r.id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
+  // ---- Sandboxed Test Runner (v0.9) ----
+  sandboxAudit(runId,action,actor,detail='',at=stamp()){
+    this.db.prepare('INSERT INTO owner_sandbox_oplog(run_id,at,actor,action,detail) VALUES(?,?,?,?,?)')
+      .run(runId,at,txt(actor,'actor',80),txt(action,'action',80),txt(detail,'detail',400,false));}
+  createSandboxRun({id,projectId,jobId,attempt,workspaceId,proposalId,approvedHash,baseSha,profile,approvalHash,snapshotHash,snapshotPath,includePaths,now=stamp()}={}){
+    id=ident(id,'sandbox run id');
+    check(!!this.getProject(projectId),'Unknown project',404);
+    const job=this.getJobRow(jobId);check(!!job,'Unknown job',404);
+    check(job.project_id===projectId,'Sandbox job belongs to a different project');
+    check(Number.isSafeInteger(attempt)&&attempt>=1&&attempt===job.last_attempt,'Invalid sandbox attempt');
+    const ws=this.getWorkspace(workspaceId);check(!!ws,'Unknown workspace',404);
+    check(ws.project_id===projectId&&ws.job_id===jobId&&ws.attempt===attempt,'Workspace does not match sandbox job attempt');
+    check(ws.status==='active','Workspace is not active');
+    const proposal=this.getPatchProposalRow(proposalId);check(!!proposal,'Unknown proposal',404);
+    check(proposal.project_id===projectId&&proposal.job_id===jobId&&proposal.attempt===attempt,'Proposal does not match sandbox job attempt');
+    check(proposal.workspace_id===workspaceId,'Proposal does not belong to the workspace');
+    check(proposal.status==='applied','Sandbox input requires an applied proposal');
+    check(proposal.approved_hash===approvedHash,'Sandbox approved hash does not match the proposal');
+    check(proposal.base_sha===baseSha,'Sandbox base SHA does not match the proposal');
+    check(!!profile&&typeof profile==='object','Sandbox profile is required');
+    check(typeof profile.id==='string'&&profile.id.length<=60,'Invalid sandbox profile id');
+    check(typeof profile.profileHash==='string'&&/^[0-9a-f]{64}$/.test(profile.profileHash),'Invalid profile hash');
+    check(typeof profile.testPlanHash==='string'&&/^[0-9a-f]{64}$/.test(profile.testPlanHash),'Invalid test plan hash');
+    check(typeof profile.imageDigest==='string'&&/^sha256:[0-9a-f]{64}$/.test(profile.imageDigest),'Invalid image digest');
+    check(Array.isArray(profile.command)&&profile.command.length>0&&profile.command[0]==='node','Invalid sandbox command');
+    check(typeof approvalHash==='string'&&/^[0-9a-f]{64}$/.test(approvalHash),'Invalid approval hash');
+    check(typeof snapshotHash==='string'&&/^[0-9a-f]{64}$/.test(snapshotHash),'Invalid snapshot hash');
+    const expectedApproval=computeSandboxApprovalHash({projectId,workspaceId,proposalId,approvedHash,baseSha,profile,snapshotHash,includePaths});
+    check(expectedApproval===approvalHash,'Sandbox approval hash does not match the frozen spec');
+    check(typeof snapshotPath==='string'&&snapshotPath.length>0&&snapshotPath.length<=1500,'Invalid snapshot path');
+    check(Array.isArray(includePaths)&&includePaths.length<=50,'Invalid include paths');
+    for(const p of includePaths)txt(p,'include path',200);
+    try{
+      this.db.prepare(`INSERT INTO owner_sandbox_runs(
+        id,project_id,job_id,attempt,workspace_id,proposal_id,approved_hash,base_sha,
+        profile_id,profile_hash,test_plan_hash,approval_hash,profile_json,image_digest,
+        snapshot_hash,snapshot_path,include_paths,status,timeout_ms,memory_bytes,cpus,pids_limit,tmpfs_bytes,
+        created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_approval',?,?,?,?,?,?,?)`)
+        .run(id,projectId,jobId,attempt,workspaceId,proposalId,approvedHash,baseSha,
+          profile.id,profile.profileHash,profile.testPlanHash,approvalHash,json(profile),profile.imageDigest,
+          snapshotHash,snapshotPath,json(includePaths),profile.timeoutMs,profile.memoryBytes,profile.cpus,
+          profile.pidsLimit,profile.tmpfsBytes,now,now);
+    }catch(e){if(/UNIQUE constraint/.test(e.message))throw new OwnerInputError('A sandbox run already exists for this proposal/profile',409);throw e;}
+    this.sandboxAudit(id,'created','owner','pending_approval',now);
+    return this.getSandboxRun(id);
+  }
+  getSandboxRunRow(id){return this.db.prepare('SELECT * FROM owner_sandbox_runs WHERE id=?').get(id)??null;}
+  getSandboxRun(id){const row=this.getSandboxRunRow(id);if(!row)return null;
+    const base=sandboxRow(row);
+    return {...base,
+      evidence:this.db.prepare('SELECT id,kind,content_hash,bytes,truncated,created_at FROM owner_sandbox_evidence WHERE run_id=? ORDER BY kind').all(id),
+      oplog:this.db.prepare('SELECT seq,at,actor,action,detail FROM owner_sandbox_oplog WHERE run_id=? ORDER BY seq').all(id)};}
+  listSandboxRuns({projectId='',status='',limit=100}={}){
+    check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
+    check(!status||SANDBOX_STATUSES.has(status),'Invalid sandbox status');
+    const where=[];const params=[];
+    if(projectId){where.push('project_id=?');params.push(projectId);}
+    if(status){where.push('status=?');params.push(status);}
+    return this.db.prepare(`SELECT * FROM owner_sandbox_runs ${where.length?`WHERE ${where.join(' AND ')}`:''} ORDER BY created_at DESC,id DESC LIMIT ?`)
+      .all(...params,limit).map(sandboxRow);
+  }
+  getSandboxEvidence(runId,kind){return this.db.prepare('SELECT * FROM owner_sandbox_evidence WHERE run_id=? AND kind=?').get(runId,kind)??null;}
+  saveSandboxEvidence(runId,kind,{content,contentHash,bytes,truncated=false,now=stamp()}={}){
+    check(!!this.getSandboxRunRow(runId),'Unknown sandbox run',404);
+    check(typeof content==='string'&&content.length<=200000,'Invalid evidence content');
+    check(typeof contentHash==='string'&&/^[0-9a-f]{64}$/.test(contentHash),'Invalid evidence hash');
+    check(Number.isSafeInteger(bytes)&&bytes>=0,'Invalid evidence bytes');
+    const existing=this.getSandboxEvidence(runId,kind);
+    if(existing)return existing;
+    const id=randomUUID();
+    this.db.prepare(`INSERT INTO owner_sandbox_evidence(id,run_id,kind,content,content_hash,bytes,truncated,created_at)
+      VALUES(?,?,?,?,?,?,?,?)`).run(id,runId,kind,content,contentHash,bytes,truncated?1:0,now);
+    return this.getSandboxEvidence(runId,kind);
+  }
+  approveSandboxRun(id,{expectedHash,actor='owner',now=stamp()}={}){
+    check(typeof expectedHash==='string'&&/^[0-9a-f]{64}$/.test(expectedHash),'An explicit sandbox approval hash is required');
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getSandboxRunRow(id);check(!!row,'Unknown sandbox run',404);
+      check(row.status==='pending_approval',`Sandbox run in status ${row.status} cannot be approved`,409);
+      check(expectedHash===row.approval_hash,'Sandbox approval hash does not match the frozen run spec',409);
+      const other=this.unresolvedSandboxForProject(row.project_id,{excludeId:id});
+      check(!other,'Project has another unresolved sandbox run; reconcile it before approving new work',409);
+      const proposal=this.getPatchProposalRow(row.proposal_id);
+      check(proposal?.status==='applied','Sandbox proposal is no longer applied',409);
+      const ws=this.getWorkspace(row.workspace_id);check(ws?.status==='active','Sandbox workspace is not active',409);
+      const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET status='queued',approved_at=?,updated_at=? WHERE id=? AND status='pending_approval'`)
+        .run(now,now,id);
+      check(changed.changes===1,'Sandbox status changed concurrently',409);
+      this.sandboxAudit(id,'approved',actor,`sha:${row.approval_hash.slice(0,8)}`,now);
+      this.db.exec('COMMIT');return this.getSandboxRun(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  rejectSandboxRun(id,{reason='',actor='owner',now=stamp()}={}){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getSandboxRunRow(id);check(!!row,'Unknown sandbox run',404);
+      check(row.status==='pending_approval',`Sandbox run in status ${row.status} cannot be rejected`,409);
+      const safeReason=txt(reason,'reject reason',400,false);
+      const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET status='rejected',error_code=?,updated_at=? WHERE id=? AND status='pending_approval'`)
+        .run('rejected',now,id);
+      check(changed.changes===1,'Sandbox status changed concurrently',409);
+      this.sandboxAudit(id,'rejected',actor,safeReason,now);
+      this.db.exec('COMMIT');return this.getSandboxRun(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  claimSandboxRun(projectId,workerId,{now=stamp(),leaseMs=30000}={}){
+    check(!!this.getProject(projectId),'Unknown project',404);
+    workerId=ident(workerId,'worker id');
+    check(Number.isSafeInteger(leaseMs)&&leaseMs>=1000&&leaseMs<=3_600_000,'Invalid lease duration');
+    const leaseUntil=new Date(Date.parse(now)+leaseMs).toISOString();
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const existing=this.unresolvedSandboxForProject(projectId,{includeQueued:false});
+      if(existing){this.db.exec('COMMIT');return {claimed:false,reason:'project-sandbox-quarantined',quarantinedSandboxId:existing.id};}
+      const row=this.db.prepare(`SELECT * FROM owner_sandbox_runs WHERE project_id=? AND status='queued' ORDER BY created_at,id LIMIT 1`).get(projectId);
+      if(!row){this.db.exec('COMMIT');return {claimed:false,reason:'no-queued-sandbox-run'};}
+      const other=this.unresolvedSandboxForProject(projectId,{excludeId:row.id});
+      if(other){this.db.exec('COMMIT');return {claimed:false,reason:'project-sandbox-quarantined',quarantinedSandboxId:other.id};}
+      const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET status='provisioning',worker_id=?,lease_until=?,updated_at=? WHERE id=? AND status='queued'`)
+        .run(workerId,leaseUntil,now,row.id);
+      check(changed.changes===1,'Sandbox status changed concurrently',409);
+      this.sandboxAudit(row.id,'claimed',workerId,`lease:${leaseUntil}`,now);
+      this.db.exec('COMMIT');return {claimed:true,run:this.getSandboxRun(row.id)};
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  attachSandboxProvider(id,{workerId,provider,providerRunId,providerName,now=stamp()}={}){
+    const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET provider=?,provider_run_id=?,provider_name=?,updated_at=?
+      WHERE id=? AND status='provisioning' AND worker_id=?`)
+      .run(txt(provider,'provider',40),txt(providerRunId,'provider run id',180),txt(providerName,'provider name',180),now,id,txt(workerId,'worker id',90));
+    check(changed.changes===1,'Sandbox provider cannot be attached in the current state',409);
+    this.sandboxAudit(id,'provider_created',workerId,`provider:${provider}`,now);
+    return this.getSandboxRun(id);
+  }
+  startSandboxRun(id,{workerId,now=stamp()}={}){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getSandboxRunRow(id);check(!!row,'Unknown sandbox run',404);
+      check(row.status==='provisioning',`Sandbox run in status ${row.status} cannot start`,409);
+      check(row.worker_id===workerId,'Sandbox run belongs to a different worker',403);
+      check(row.lease_until&&row.lease_until>=now,'Sandbox lease expired; explicit reconciliation is required',409);
+      const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET status='running',started_at=?,updated_at=? WHERE id=? AND status='provisioning'`)
+        .run(now,now,id);
+      check(changed.changes===1,'Sandbox status changed concurrently',409);
+      this.sandboxAudit(id,'started',workerId,'',now);
+      this.db.exec('COMMIT');return this.getSandboxRun(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  beginSandboxCollect(id,{workerId,now=stamp()}={}){
+    const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET status='collecting',updated_at=?
+      WHERE id=? AND worker_id=? AND status='running'`)
+      .run(now,id,txt(workerId,'worker id',90));
+    check(changed.changes===1,'Sandbox run cannot enter collecting',409);
+    this.sandboxAudit(id,'collecting',workerId,'',now);
+    return this.getSandboxRun(id);
+  }
+  heartbeatSandboxRun(id,{workerId,now=stamp(),leaseMs=30000}={}){
+    check(Number.isSafeInteger(leaseMs)&&leaseMs>=1000&&leaseMs<=3_600_000,'Invalid lease duration');
+    const leaseUntil=new Date(Date.parse(now)+leaseMs).toISOString();
+    const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET lease_until=?,updated_at=?
+      WHERE id=? AND worker_id=? AND status IN ('provisioning','running','collecting') AND lease_until>=?`)
+      .run(leaseUntil,now,id,txt(workerId,'worker id',90),now);
+    check(changed.changes===1,'Sandbox heartbeat rejected',409);
+    return this.getSandboxRun(id);
+  }
+  requestCancelSandboxRun(id,{actor='owner',now=stamp()}={}){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getSandboxRunRow(id);check(!!row,'Unknown sandbox run',404);
+      if(row.status==='pending_approval'||row.status==='queued'){
+        const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET status='cancelled',cancel_requested_at=?,finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status IN ('pending_approval','queued')`)
+          .run(now,now,now,id);
+        check(changed.changes===1,'Sandbox status changed concurrently',409);
+        this.sandboxAudit(id,'cancelled',actor,'cancelled before execution',now);
+      }else if(['provisioning','running','collecting'].includes(row.status)){
+        if(!row.cancel_requested_at){
+          this.db.prepare('UPDATE owner_sandbox_runs SET cancel_requested_at=?,updated_at=? WHERE id=?').run(now,now,id);
+          this.sandboxAudit(id,'cancel_requested',actor,'stop requested; awaiting confirmation',now);
+        }
+      }else check(false,`Sandbox run in status ${row.status} cannot be cancelled`,409);
+      this.db.exec('COMMIT');return this.getSandboxRun(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  completeSandboxRun({id,workerId,finalStatus,executionStatus,testStatus,exitCode=null,signal=null,evidence={},errorCode='',now=stamp()}={}){
+    check(['completed','failed','cancelled'].includes(finalStatus),'Invalid final sandbox status');
+    check(['completed','timeout','cancelled','failed','unknown'].includes(executionStatus),'Invalid execution status');
+    check(['pass','fail','unknown'].includes(testStatus),'Invalid test status');
+    check(exitCode===null||Number.isSafeInteger(exitCode),'Invalid exit code');
+    check(signal===null||(typeof signal==='string'&&signal.length<=40),'Invalid signal');
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getSandboxRunRow(id);check(!!row,'Unknown sandbox run',404);
+      check(row.worker_id===workerId,'Sandbox run belongs to a different worker',403);
+      check(['provisioning','running','collecting'].includes(row.status),`Sandbox run in status ${row.status} cannot complete`,409);
+      check(row.lease_until&&row.lease_until>=now,'Sandbox lease expired; result rejected pending reconciliation',409);
+      if(row.cancel_requested_at)check(finalStatus!=='completed','A cancelled sandbox run cannot complete as success',409);
+      for(const kind of ['stdout','stderr','result']){
+        const item=evidence[kind];
+        if(!item)continue;
+        check(typeof item.text==='string'&&item.text.length<=200000,`Invalid ${kind} evidence`);
+        check(Number.isSafeInteger(item.bytes)&&item.bytes>=0,`Invalid ${kind} bytes`);
+        check(typeof item.contentHash==='string'&&/^[0-9a-f]{64}$/.test(item.contentHash),`Invalid ${kind} hash`);
+        this.db.prepare(`INSERT INTO owner_sandbox_evidence(id,run_id,kind,content,content_hash,bytes,truncated,created_at)
+          VALUES(?,?,?,?,?,?,?,?)`).run(randomUUID(),id,kind,item.text,item.contentHash,item.bytes,item.truncated?1:0,now);
+      }
+      const stdout=evidence.stdout;const stderr=evidence.stderr;
+      const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET status=?,execution_status=?,test_status=?,exit_code=?,signal=?,
+        stdout_bytes=?,stderr_bytes=?,stdout_hash=?,stderr_hash=?,stdout_truncated=?,stderr_truncated=?,
+        error_code=?,finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status IN ('provisioning','running','collecting')`)
+        .run(finalStatus,executionStatus,testStatus,exitCode,signal,
+          stdout?.bytes??0,stderr?.bytes??0,stdout?.contentHash??null,stderr?.contentHash??null,
+          stdout?.truncated?1:0,stderr?.truncated?1:0,txt(errorCode,'error code',80,false),now,now,id);
+      check(changed.changes===1,'Sandbox status changed concurrently',409);
+      this.sandboxAudit(id,finalStatus,workerId,`execution:${executionStatus}; test:${testStatus}`,now);
+      this.db.exec('COMMIT');return this.getSandboxRun(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  markSandboxNeedsReconciliation(id,{reason='',errorCode='needs-reconciliation',now=stamp()}={}){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getSandboxRunRow(id);check(!!row,'Unknown sandbox run',404);
+      if(row.status==='needs_reconciliation'){this.db.exec('COMMIT');return this.getSandboxRun(id);}
+      check(['provisioning','running','collecting'].includes(row.status),`Sandbox run in status ${row.status} cannot need reconciliation`,409);
+      const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET status='needs_reconciliation',execution_status='unknown',
+        test_status='unknown',error_code=?,lease_until=NULL,updated_at=? WHERE id=? AND status IN ('provisioning','running','collecting')`)
+        .run(txt(errorCode,'error code',80,false),now,id);
+      check(changed.changes===1,'Sandbox status changed concurrently',409);
+      this.sandboxAudit(id,'needs_reconciliation','system',txt(reason,'reason',400,false),now);
+      this.db.exec('COMMIT');return this.getSandboxRun(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  reconcileSandboxRun(id,{decision,reason='',actor='owner',now=stamp()}={}){
+    check(['confirm-stopped','discard'].includes(decision),'Invalid sandbox reconcile decision');
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getSandboxRunRow(id);check(!!row,'Unknown sandbox run',404);
+      check(['provisioning','running','collecting','needs_reconciliation'].includes(row.status),
+        `Sandbox run in status ${row.status} cannot be reconciled`,409);
+      const safeReason=txt(reason,'reconcile reason',400,false);
+      const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET status='failed',execution_status='cancelled',test_status='unknown',
+        error_code='reconciled',lease_until=NULL,reconcile_decision=?,reconcile_reason=?,finished_at=?,updated_at=?
+        WHERE id=? AND status IN ('provisioning','running','collecting','needs_reconciliation')`)
+        .run(decision,safeReason,now,now,id);
+      check(changed.changes===1,'Sandbox status changed concurrently',409);
+      this.sandboxAudit(id,`reconcile_${decision}`,actor,safeReason,now);
+      this.db.exec('COMMIT');return this.getSandboxRun(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  recoverInterruptedSandboxRuns({now=stamp()}={}){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const rows=this.db.prepare(`SELECT id FROM owner_sandbox_runs WHERE status IN ('provisioning','running','collecting')`).all();
+      for(const row of rows){
+        this.db.prepare(`UPDATE owner_sandbox_runs SET status='needs_reconciliation',execution_status='unknown',
+          test_status='unknown',error_code='interrupted',lease_until=NULL,updated_at=? WHERE id=? AND status IN ('provisioning','running','collecting')`)
+          .run(now,row.id);
+        this.sandboxAudit(row.id,'recovered_interrupted','system','interrupted sandbox run; owner reconciliation required',now);
+      }
+      this.db.exec('COMMIT');return rows.map(r=>r.id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  markSandboxSnapshotCleaned(id,{now=stamp()}={}){
+    const changed=this.db.prepare(`UPDATE owner_sandbox_runs SET snapshot_cleaned_at=?,updated_at=? WHERE id=? AND snapshot_cleaned_at IS NULL`)
+      .run(now,now,id);
+    return changed.changes===1;
+  }
   summary(){const projects=this.listProjects();const tasks=this.listTasks();const runs=this.listRuns();const pending=this.listSuggestions('pending');
     const counts=this.jobStatusCounts();
     const patchCounts={};let patchTotal=0;
     for(const r of this.db.prepare('SELECT status,COUNT(*) AS n FROM owner_patch_proposals GROUP BY status').all()){patchCounts[r.status]=r.n;patchTotal+=r.n;}
+    const sandboxCounts={};let sandboxTotal=0;
+    for(const r of this.db.prepare('SELECT status,COUNT(*) AS n FROM owner_sandbox_runs GROUP BY status').all()){sandboxCounts[r.status]=r.n;sandboxTotal+=r.n;}
     return {projectCount:projects.length,activeRuns:runs.filter(r=>r.status==='running').length,
       blockedTasks:tasks.filter(t=>t.status==='blocked').length,pendingSuggestions:pending.length,
       activeJobs:['queued','leased','running','cancel_requested'].reduce((sum,st)=>sum+(counts[st]??0),0),
@@ -960,6 +1296,9 @@ export class OwnerStore {
       totalJobs:Object.values(counts).reduce((sum,n)=>sum+n,0),
       patchProposals:patchTotal,
       pendingPatchApprovals:patchCounts['proposed']??0,
+      sandboxRuns:sandboxTotal,
+      pendingSandboxApprovals:sandboxCounts['pending_approval']??0,
+      unresolvedSandboxRuns:['provisioning','running','collecting','needs_reconciliation'].reduce((sum,st)=>sum+(sandboxCounts[st]??0),0),
       projects:projects.map(p=>({...p,tasks:tasks.filter(t=>t.project_id===p.id),
         runs:runs.filter(r=>r.project_id===p.id).slice(0,8),knowledgeLinks:this.knowledgeLinks(p.id),
         jobs:this.listJobs({projectId:p.id,limit:8})}))};}
