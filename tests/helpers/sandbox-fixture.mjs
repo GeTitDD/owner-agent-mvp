@@ -13,6 +13,20 @@ export const git = (cwd, args) => execFileSync('git', args, {
   stdio: ['ignore', 'pipe', 'pipe']
 }).trim();
 
+// Snapshot directories are intentionally 0555/0444 for the Linux container. Restore
+// owner write bits before deleting test fixtures (POSIX cannot unlink inside 0555 dirs).
+const makeWritable = (target) => {
+  let stat;
+  try { stat = fs.lstatSync(target); } catch { return; }
+  if (stat.isSymbolicLink()) return;
+  if (stat.isDirectory()) {
+    try { fs.chmodSync(target, 0o755); } catch { /* best effort */ }
+    for (const entry of fs.readdirSync(target)) makeWritable(path.join(target, entry));
+  } else if (stat.isFile()) {
+    try { fs.chmodSync(target, 0o644); } catch { /* best effort */ }
+  }
+};
+
 export const defaultPatchFiles = () => [
   { path: 'src/app.js', action: 'modify', content: 'export const x = 2;\n' },
   {
@@ -82,6 +96,7 @@ export const makeAppliedSandboxFixture = async ({
     sandboxRoot: path.join(root, 'sandbox'),
     cleanup() {
       try { store.close(); } catch { /* already closed */ }
+      makeWritable(root);
       fs.rmSync(root, { recursive: true, force: true });
     }
   };

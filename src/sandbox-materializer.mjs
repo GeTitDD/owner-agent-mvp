@@ -42,6 +42,22 @@ const chmodDirsReadOnly = (dir) => {
   }
 };
 
+const makeWritable = (target) => {
+  let stat;
+  try {
+    stat = fs.lstatSync(target);
+  } catch {
+    return;
+  }
+  if (stat.isSymbolicLink()) return;
+  if (stat.isDirectory()) {
+    try { fs.chmodSync(target, 0o755); } catch { /* best effort */ }
+    for (const entry of fs.readdirSync(target)) makeWritable(path.join(target, entry));
+  } else if (stat.isFile()) {
+    try { fs.chmodSync(target, 0o644); } catch { /* best effort */ }
+  }
+};
+
 // Create <sandboxRoot>/<runId>/{input,marker.json}. `snapshotPath` is the run root; the
 // provider mounts `<snapshotPath>/input` read-only at /workspace.
 export function createInputSnapshot({
@@ -106,6 +122,7 @@ export function createInputSnapshot({
     return { snapshotPath: runRoot, inputPath, snapshotHash: hash, manifest, totalBytes };
   } catch (error) {
     try {
+      makeWritable(runRoot);
       fs.rmSync(runRoot, { recursive: true, force: true });
     } catch {
       // Best effort cleanup of a path this function just created.
@@ -154,6 +171,7 @@ export function cleanupInputSnapshot({ snapshotPath, runId, snapshotHash: hash, 
   }
   check(marker.runId === runId && marker.snapshotHash === hash,
     'snapshot marker does not match the run; refusing to remove', 'snapshot-identity');
+  makeWritable(target);
   fs.rmSync(target, { recursive: true, force: true });
   return { cleaned: true, missing: false };
 }
