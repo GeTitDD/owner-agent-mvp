@@ -1,10 +1,28 @@
 # Owner Agent × Domain Knowledge Workbench — v0.5
 
-> 当前开发分支含 **v0.9 Sandboxed Test Runner**、**v0.8 Patch-first Coding Worker**、**v0.7 Pi Analysis Worker** 与 **v0.6 Durable Task Coordinator**（均为 WIP），已合入能力见下方「功能状态」。
+> 当前开发分支含 **v1.0 Patch–Test–Repair**（WIP）；**v0.9 Sandboxed Test Runner** 已合并到 main。v0.8/v0.7/v0.6 能力见下方「功能状态」。
 
 **以 Owner 为中心的多项目管理 Agent + 个人领域知识资产工作台 + 可选桌面宠物。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
 
-## v0.9 WIP：Sandboxed Test Runner（分支 `feat/v0.9-sandboxed-test-runner`）
+## v1.0 WIP：Patch–Test–Repair（分支 `feat/v1.0-patch-test-repair`）
+
+从一次**已完成且失败**的 SandboxRun 出发，Owner 显式批准一次有界修复：新的 `code-patch` Job 在原 base 上创建全新 Worktree，模型收到上一补丁 diff 与脱敏失败证据（明确标记为不可信数据），输出完整替换提案；Owner 再次审批 apply，并再次审批 sandbox 测试。**不做自动循环、自动 apply/test/merge，也不改 OwnerTask。**
+
+- 不可变证据链：source run/proposal/workspace/evidence/diff/snapshot/base/profile/image/includePaths + repair scope + context hash 绑定 approval hash；evidence 与 diff 内容均实际重算 sha256。
+- 只允许 completed/fail；timeout/cancel/infra fail/unknown stop 不触发修复。
+- 修复复测必须复用源 TestProfile/image/资源预算/includePaths，只允许快照变化。
+- 最多 1 次 repair iteration；repair-of-repair 拒绝；scope 必须是源 allowlist 子集。
+- `repair-approve` 的创建/批准/绑定是单个事务；Worker 调用模型前重新校验冻结 context、源证据链与 Job scope/base，失败零模型调用。
+- 日志/堆栈作为 `UNTRUSTED TEST EVIDENCE` 注入，Job/Event/oplog 不写原文。
+- 崩溃/取消沿用 v0.6/v0.9 的 lease/fence/reconcile；不自动重放。
+
+```bash
+npm run demo:repair   # Fake patch + Fake sandbox 端到端演示（零真实模型/Docker 调用）
+```
+
+完整 schema、哈希链、审批断点、CLI 与测试矩阵见 **[Patch–Test–Repair 文档](docs/PATCH_TEST_REPAIR.md)**。
+
+## v0.9（已合并）：Sandboxed Test Runner
 
 把已 applied 的补丁接到**受限测试执行**：Owner 批准固定 TestProfile + 镜像 digest + 有界输入快照后，可信宿主只构造固定 Docker argv，项目测试在非 root、无网络、只读 rootfs、drop caps 的 Linux 容器内运行；宿主进程不执行项目测试。
 
@@ -74,6 +92,7 @@ npm run demo:jobs   # 临时库 + fake clock 的端到端演示（审批/并发/
 - `npm test` — 运行全部自动化测试（无需模型 API）。
 - `npm run demo:patch` — v0.8 受控 Worktree/提案/二次审批/应用/清理演示（fake agent）。
 - `npm run demo:sandbox` — v0.9 输入快照/审批/Fake 执行/证据/清理演示（零 Docker 真实调用）。
+- `npm run demo:repair` — v1.0 失败证据 → 修复提案 → apply → 复测的审批断点演示（Fake，零真实调用）。
 - `npm run demo:owner` — 两个临时项目的注册、事件、知识迁移提案、审核演示。
 - `npm run workbench` — 打开 `http://127.0.0.1:4317`。进入 **Owner Agent** 页面登记项目、任务，右下角可打开伴侣对话窗。
 - `node bin/ownerctl.mjs register --id demo --name Demo --root /absolute/path/to/project --domain pi-sdk` — 登记现有本地项目。
@@ -84,7 +103,7 @@ npm run demo:jobs   # 临时库 + fake clock 的端到端演示（审批/并发/
 
 ### 本版交付边界
 
-- 已实现：Owner Project/Task Registry、事件日志和投影、轻量常驻监控、只读智能查询、跨项目知识建议/审批、Web 管理面板、可选 Electron 桌面壳；v0.6 持久化 Job 生命周期；v0.7 只读 Pi 分析；v0.8 受控 Worktree 补丁提案/二次审批/应用；v0.9 Linux 容器沙箱测试与私有证据。
+- 已实现：Owner Project/Task Registry、事件日志和投影、轻量常驻监控、只读智能查询、跨项目知识建议/审批、Web 管理面板、可选 Electron 桌面壳；v0.6 持久化 Job 生命周期；v0.7 只读 Pi 分析；v0.8 受控 Worktree 补丁提案/二次审批/应用；v0.9 Linux 容器沙箱测试与私有证据；v1.0 单轮 Patch–Test–Repair 证据驱动修复。
 - 默认推理模式：**无模型的确定性查询**。可通过 `ownerctl ask-pi` 明确调用工具禁用的 Pi SDK 认知会话（需要额外安装、配置模型；仅模拟集成测试）。
 - 暂未实现：自动启动的 OS 守护进程、项目 Agent 实际调度、自动跨项目知识迁移、生产级权限认证、真实 Pi/Electron GUI 端到端测试。
 - 安全原则：项目必须显式登记；Pi 采集默认关闭，只记元数据；知识建议不自动更改项目；Workbench 仅绑定 loopback。**请勿公网开放。**

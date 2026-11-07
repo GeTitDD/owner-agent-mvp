@@ -34,6 +34,7 @@ jobs:
       - run: npm run demo:pi
       - run: npm run demo:patch
       - run: npm run demo:sandbox
+      - run: npm run demo:repair
 
   sandbox-real:
     # The only job allowed to run project test code: inside a locked-down Linux container.
