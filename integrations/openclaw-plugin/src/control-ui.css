@@ -1,0 +1,124 @@
+.owner-page {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+  color: inherit;
+  font: inherit;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.owner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.owner-header h1 {
+  font-size: 22px;
+  font-weight: 650;
+  margin: 0;
+}
+
+.owner-muted {
+  color: color-mix(in srgb, currentColor 62%, transparent);
+  font-size: 13px;
+  margin: 0;
+}
+
+.owner-error {
+  color: #c2410c;
+  font-size: 13px;
+  margin: 0;
+  min-height: 18px;
+  white-space: pre-wrap;
+}
+
+.owner-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.owner-card {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 10px;
+}
+
+.owner-card-value {
+  font-size: 22px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.owner-card-label {
+  font-size: 12px;
+  color: color-mix(in srgb, currentColor 62%, transparent);
+}
+
+.owner-sections {
+  display: grid;
+  gap: 22px;
+}
+
+.owner-section h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.owner-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.owner-table th,
+.owner-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  vertical-align: middle;
+}
+
+.owner-table th {
+  font-weight: 600;
+  color: color-mix(in srgb, currentColor 62%, transparent);
+  font-size: 12px;
+}
+
+.owner-table td:last-child {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.owner-button {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  color: inherit;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.owner-button:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.owner-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.owner-button-danger {
+  border-color: color-mix(in srgb, #c2410c 45%, transparent);
+  color: #c2410c;
+}
