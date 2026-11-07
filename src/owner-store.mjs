@@ -19,7 +19,22 @@ const json= v=>JSON.stringify(v);
 const parse=v=>JSON.parse(v);
 const statuses=new Set(['planned','active','blocked','paused','done','archived']);
 const taskStatuses=new Set(['todo','doing','blocked','done','cancelled']);
-const kinds=new Set(['run_started','tool_finished','run_settled','project_note','test_result']);
+const kinds=new Set(['run_started','tool_finished','run_settled','project_note','test_result','api_call']);
+// v1.1：记录 OpenClaw 侧发起的写入来源（网关实例 / 会话 / run / 操作员）。
+// 只进入事件 payload，不新增表或列。
+const originKeys=new Set(['gatewayInstanceId','sessionKey','runId','operatorId','pluginVersion']);
+const originShape=(value)=>{
+  check(value&&typeof value==='object'&&!Array.isArray(value),'Invalid origin');
+  const out={};
+  for(const [key,item] of Object.entries(value)){
+    check(originKeys.has(key),'Invalid origin field');
+    if(item===null||item===undefined||item==='')continue;
+    out[key]=txt(item,`origin ${key}`,200);
+  }
+  check(Object.keys(out).length>=1,'Origin must not be empty');
+  check(json(out).length<=1024,'Origin is too large');
+  return out;
+};
 // Job coordination (P0 control plane): explicit state machine, whitelisted job types only.
 const jobStatuses=new Set(['pending_approval','queued','leased','running','cancel_requested','succeeded','failed','cancelled','rejected','needs_reconciliation']);
 const activeJobStatuses=new Set(['queued','leased','running','cancel_requested']);
@@ -357,7 +372,7 @@ export class OwnerStore {
     return this.getTask(id);
   }
   // Only a strict whitelist of metadata may be persisted. Unknown keys are deliberately dropped.
-  recordEvent({sourceEventId=randomUUID(),projectId,kind,sessionId='',branchLeafId='',toolName='',isError=false,aborted=false,durationMs=null,note='',passed=null}={}){
+  recordEvent({sourceEventId=randomUUID(),projectId,kind,sessionId='',branchLeafId='',toolName='',isError=false,aborted=false,durationMs=null,note='',passed=null,origin=null}={}){
     ident(sourceEventId,'event id');check(!!this.getProject(projectId),'Unregistered project',404);check(kinds.has(kind),'Invalid event kind');
     const event={};
     if(['run_started','tool_finished','run_settled'].includes(kind)){
@@ -370,6 +385,10 @@ export class OwnerStore {
     }
     if(kind==='run_settled')event.aborted=!!aborted;
     if(kind==='project_note')event.note=txt(note,'note',1000);
+    if(kind==='api_call'){
+      event.note=txt(note,'note',300);
+      event.origin=originShape(origin);
+    }
     if(kind==='test_result'){
       event.note=txt(note,'test ref',500);check(typeof passed==='boolean','Test result must be boolean');event.passed=passed;
     }
