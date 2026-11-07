@@ -15,6 +15,7 @@ import {
 import { PatchProposalAgent } from './patch-proposal-agent.mjs';
 import { WorkspaceBroker } from './workspace-broker.mjs';
 import { verifyProjectRoot } from './project-identity.mjs';
+import { verifyRepairCycleForJob } from './repair-service.mjs';
 
 const checkBase = (value) => {
   if (typeof value !== 'string' || !/^[0-9a-f]{40}$/.test(value)) {
@@ -197,6 +198,18 @@ export class PatchCodingWorker {
         return fail('invalid code-patch payload');
       }
 
+      // ---- v1.0 repair: trusted host re-verification before any workspace/model side effect ----
+      const repairCycleId = typeof job.payload.repairCycleId === 'string' ? job.payload.repairCycleId : null;
+      let repairContext = null;
+      if (repairCycleId) {
+        try {
+          repairContext = verifyRepairCycleForJob(this.store, job);
+        } catch {
+          // fail closed: no worktree, no model call, no cost.
+          return fail('repair context verification failed');
+        }
+      }
+
       // ---- isolated worktree from the approved base ----
       let ws;
       try {
@@ -238,16 +251,6 @@ export class PatchCodingWorker {
       } catch {
         return fail('approved material could not be read');
       }
-      const repairCycleId = typeof job.payload.repairCycleId === 'string' ? job.payload.repairCycleId : null;
-      let repairContext = null;
-      if (repairCycleId) {
-        try {
-          repairContext = this.store.getRepairContextForJob(job);
-        } catch {
-          return fail('repair context unavailable');
-        }
-      }
-
       const generation = Promise.resolve()
         .then(() => this.proposalAgent.generate({
           cwd: workspace.path,

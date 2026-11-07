@@ -77,7 +77,13 @@ export function sourceChainHash({ run, proposal, workspace, evidenceHash, snapsh
     sourceSandboxRunId: run.id,
     sourceSnapshotHash: snapshotHash,
     sourceBaseSha: run.base_sha,
-    sourceEvidenceHash: evidenceHash
+    sourceEvidenceHash: evidenceHash,
+    sourceProfileId: run.profile_id,
+    sourceProfileHash: run.profile_hash,
+    sourceTestPlanHash: run.test_plan_hash,
+    sourceImageDigest: run.image_digest,
+    sourceProfile: run.profile_json,
+    sourceIncludePaths: run.include_paths
   }));
 }
 

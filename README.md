@@ -8,9 +8,11 @@
 
 从一次**已完成且失败**的 SandboxRun 出发，Owner 显式批准一次有界修复：新的 `code-patch` Job 在原 base 上创建全新 Worktree，模型收到上一补丁 diff 与脱敏失败证据（明确标记为不可信数据），输出完整替换提案；Owner 再次审批 apply，并再次审批 sandbox 测试。**不做自动循环、自动 apply/test/merge，也不改 OwnerTask。**
 
-- 不可变证据链：source run/proposal/workspace/evidence/snapshot/base + repair scope + context hash 绑定 approval hash。
+- 不可变证据链：source run/proposal/workspace/evidence/diff/snapshot/base/profile/image/includePaths + repair scope + context hash 绑定 approval hash；evidence 与 diff 内容均实际重算 sha256。
 - 只允许 completed/fail；timeout/cancel/infra fail/unknown stop 不触发修复。
+- 修复复测必须复用源 TestProfile/image/资源预算/includePaths，只允许快照变化。
 - 最多 1 次 repair iteration；repair-of-repair 拒绝；scope 必须是源 allowlist 子集。
+- `repair-approve` 的创建/批准/绑定是单个事务；Worker 调用模型前重新校验冻结 context、源证据链与 Job scope/base，失败零模型调用。
 - 日志/堆栈作为 `UNTRUSTED TEST EVIDENCE` 注入，Job/Event/oplog 不写原文。
 - 崩溃/取消沿用 v0.6/v0.9 的 lease/fence/reconcile；不自动重放。
 

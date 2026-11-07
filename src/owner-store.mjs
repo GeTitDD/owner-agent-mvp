@@ -1093,6 +1093,26 @@ export class OwnerStore {
   sandboxAudit(runId,action,actor,detail='',at=stamp()){
     this.db.prepare('INSERT INTO owner_sandbox_oplog(run_id,at,actor,action,detail) VALUES(?,?,?,?,?)')
       .run(runId,at,txt(actor,'actor',80),txt(action,'action',80),txt(detail,'detail',400,false));}
+  assertRepairSandboxMatch({repairCycleId,proposalId,baseSha,profile,includePaths}={}){
+    const cycle=this.getRepairCycleRow(repairCycleId);check(!!cycle,'Unknown repair cycle',404);
+    check(cycle.repair_proposal_id===proposalId,'Repair cycle does not own this proposal',409);
+    check(cycle.status==='proposal_ready'||cycle.status==='applied','Repair cycle cannot start a sandbox test',409);
+    check(cycle.source_base_sha===baseSha,'Repair cycle base SHA mismatch',409);
+    const source=this.getSandboxRunRow(cycle.source_sandbox_run_id);check(!!source,'Repair source sandbox run is missing',404);
+    check(source.profile_id===profile.id,'Repaired test profile differs from the source run',409);
+    check(source.profile_hash===profile.profileHash,'Repaired profile hash differs from the source run',409);
+    check(source.test_plan_hash===profile.testPlanHash,'Repaired test plan differs from the source run',409);
+    check(source.image_digest===profile.imageDigest,'Repaired image digest differs from the source run',409);
+    let sourceProfile;
+    try{sourceProfile=parse(source.profile_json);}catch{throw new OwnerInputError('Source sandbox profile is malformed',409);}
+    for(const key of ['command','timeoutMs','memoryBytes','cpus','pidsLimit','tmpfsBytes','stdoutBytes','stderrBytes','network','readOnlyRootfs','user','workdir']){
+      check(JSON.stringify(sourceProfile[key])===JSON.stringify(profile[key]),`Repaired test setting differs from the source run: ${key}`,409);
+    }
+    const sourceInclude=[...parse(source.include_paths)].sort();
+    const nextInclude=[...includePaths].sort();
+    check(JSON.stringify(sourceInclude)===JSON.stringify(nextInclude),'Repaired include paths differ from the source run',409);
+    return cycle;
+  }
   createSandboxRun({id,projectId,jobId,attempt,workspaceId,proposalId,approvedHash,baseSha,profile,approvalHash,snapshotHash,snapshotPath,includePaths,repairCycleId=null,now=stamp()}={}){
     id=ident(id,'sandbox run id');
     check(!!this.getProject(projectId),'Unknown project',404);
@@ -1124,9 +1144,7 @@ export class OwnerStore {
     if(repairCycleId){
       const cycle=this.getRepairCycleRow(repairCycleId);check(!!cycle,'Unknown repair cycle',404);
       check(cycle.project_id===projectId,'Repair cycle belongs to a different project',409);
-      check(cycle.repair_proposal_id===proposalId,'Repair cycle does not own this proposal',409);
-      check(cycle.status==='proposal_ready'||cycle.status==='applied','Repair cycle cannot start a sandbox test',409);
-      check(cycle.source_base_sha===baseSha,'Repair cycle base SHA mismatch',409);
+      this.assertRepairSandboxMatch({repairCycleId,proposalId,baseSha,profile,includePaths});
     }
     this.db.exec('BEGIN IMMEDIATE');
     try{
@@ -1472,28 +1490,83 @@ export class OwnerStore {
     return this.db.prepare(`SELECT * FROM owner_repair_cycles ${where.length?`WHERE ${where.join(' AND ')}`:''} ORDER BY created_at DESC,id DESC LIMIT ?`)
       .all(...params,limit).map(repairRow);
   }
-  getRepairContextForJob(jobOrId){
-    const job=typeof jobOrId==='string'?this.getJob(jobOrId):jobOrId;
-    check(!!job,'Unknown repair job',404);
-    const cycleId=job.payload?.repairCycleId;
-    check(typeof cycleId==='string'&&cycleId.length>0,'Job is not a repair job');
-    const cycle=this.getRepairCycleRow(cycleId);check(!!cycle,'Unknown repair cycle',404);
-    check(cycle.job_id===job.id,'Repair cycle is not bound to this job',409);
-    check(['queued','running'].includes(cycle.status),`Repair cycle in status ${cycle.status} cannot provide context`,409);
-    return {cycleId,contextText:cycle.context_text,contextHash:cycle.context_hash};
-  }
-  markRepairCycleQueued(id,{jobId,expectedHash,actor='owner',now=stamp()}={}){
+  // v1.0 blocker 3: the single repair Job is created, approved and bound to the cycle in
+  // one IMMEDIATE transaction. A repair Job can never be claimable while its cycle is
+  // invisible/unbound, and a crash rolls back all three writes together.
+  approveRepairCycleJob({cycleId,expectedHash,actor='owner',now=stamp()}={}){
     this.db.exec('BEGIN IMMEDIATE');
     try{
-      const row=this.getRepairCycleRow(id);check(!!row,'Unknown repair cycle',404);
-      check(row.status==='pending_approval',`Repair cycle in status ${row.status} cannot be queued`,409);
-      check(expectedHash===row.approval_hash,'Repair approval hash does not match the frozen cycle',409);
-      check(!!this.getJobRow(jobId),'Unknown repair job',404);
-      const changed=this.db.prepare(`UPDATE owner_repair_cycles SET status='queued',job_id=?,approved_at=?,approved_by=?,updated_at=?
-        WHERE id=? AND status='pending_approval'`).run(jobId,now,txt(actor,'actor',80),now,id);
-      check(changed.changes===1,'Repair cycle status changed concurrently',409);
-      this.repairAudit(id,'queued',actor,`job:${jobId}`,now);
-      this.db.exec('COMMIT');return this.getRepairCycle(id);
+      const cycle=this.getRepairCycleRow(cycleId);check(!!cycle,'Unknown repair cycle',404);
+      check(typeof expectedHash==='string'&&/^[0-9a-f]{64}$/.test(expectedHash),
+        'An explicit 64-hex repair approval hash is required');
+      check(expectedHash===cycle.approval_hash,'Repair approval hash does not match the frozen cycle',409);
+      if(cycle.job_id&&cycle.status!=='pending_approval'){
+        // Crash-safe retry: the atomic commit already bound this exact job.
+        this.db.exec('COMMIT');
+        return {...this.getRepairCycle(cycleId),duplicate:true};
+      }
+      check(cycle.status==='pending_approval',`Repair cycle in status ${cycle.status} cannot be approved`,409);
+      check(!!this.getProject(cycle.project_id),'Unknown project',404);
+      const ownerTask=this.getTask(cycle.owner_task_id);check(!!ownerTask,'Unknown owner task',404);
+      check(ownerTask.project_id===cycle.project_id,'Owner task belongs to a different project');
+      const repairScope=parse(cycle.repair_scope);
+      check(Array.isArray(repairScope)&&repairScope.length>=1&&repairScope.length<=5,'Invalid repair scope');
+      const payload={
+        baseSha:cycle.source_base_sha,
+        allowedPaths:repairScope.join(','),
+        focus:`bounded repair ${cycleId}`.slice(0,300),
+        repairCycleId:cycleId
+      };
+      check(typeof payload.baseSha==='string'&&/^[0-9a-f]{40}$/.test(payload.baseSha),
+        'code-patch payload.baseSha must be an explicit 40-hex commit SHA');
+      check(typeof payload.allowedPaths==='string'&&payload.allowedPaths.length<=300,
+        'code-patch payload.allowedPaths is required');
+      const digest=canonical(cleanPayload(payload));
+      const idempotencyKey=`repair-${cycleId}`;
+      let row=this.db.prepare('SELECT * FROM owner_jobs WHERE project_id=? AND idempotency_key=?')
+        .get(cycle.project_id,idempotencyKey);
+      if(row){
+        check(row.job_type==='code-patch'&&row.payload===digest,
+          'Idempotency key reused with a different repair request',409);
+        check((row.owner_task_id??null)===cycle.owner_task_id,
+          'Idempotency key reused with a different target owner task',409);
+        check(row.status==='pending_approval'||row.status==='queued',
+          `Repair job is in status ${row.status}`,409);
+      }else{
+        const jobId=randomUUID();
+        this.db.prepare(`INSERT INTO owner_jobs(id,project_id,owner_task_id,job_type,title,payload,status,idempotency_key,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,'pending_approval',?,?,?)`)
+          .run(jobId,cycle.project_id,cycle.owner_task_id,'code-patch',
+            txt(`Repair cycle ${cycleId}`.slice(0,200),'job title',200),digest,idempotencyKey,now,now);
+        this.jobAudit(jobId,'created',actor,'code-patch',now);
+        row=this.getJobRow(jobId);
+      }
+      if(row.status==='pending_approval'){
+        // Same scheduling fences as approveJob, evaluated inside this transaction.
+        const stuck=this.db.prepare(`SELECT id FROM owner_jobs WHERE project_id=? AND status='needs_reconciliation' LIMIT 1`).get(cycle.project_id);
+        check(!stuck,'Project has an unresolved needs_reconciliation job; reconcile it before approving new work',409);
+        const unresolvedPatch=this.unresolvedPatchForProject(cycle.project_id);
+        check(!unresolvedPatch,'Project has an unresolved patch proposal; reconcile it before approving new work',409);
+        const unresolvedSandbox=this.unresolvedSandboxForProject(cycle.project_id);
+        check(!unresolvedSandbox,'Project has an unresolved sandbox run; reconcile it before approving new work',409);
+        const active=this.db.prepare(`SELECT COUNT(*) AS n FROM owner_jobs WHERE project_id=? AND status IN ('queued','leased','running','cancel_requested')`).get(cycle.project_id).n;
+        check(active<this.maxActiveJobsPerProject,'Project already has an active job; per-project limit blocks approval',409);
+        const changed=this.db.prepare(`UPDATE owner_jobs SET status='queued',approved_at=?,approved_by=?,updated_at=? WHERE id=? AND status='pending_approval'`)
+          .run(now,txt(actor,'actor',80),now,row.id);
+        check(changed.changes===1,'Job status changed concurrently',409);
+        if(row.owner_task_id){
+          const task=this.getTask(row.owner_task_id);
+          if(task)this.db.prepare('UPDATE owner_jobs SET input_snapshot=? WHERE id=?')
+            .run(json({title:String(task.title).slice(0,200),note:String(task.note).slice(0,500)}),row.id);
+        }
+        this.jobAudit(row.id,'approved',actor,'',now);
+      }
+      const bound=this.db.prepare(`UPDATE owner_repair_cycles SET status='queued',job_id=?,approved_at=?,approved_by=?,updated_at=?
+        WHERE id=? AND status='pending_approval'`).run(row.id,now,txt(actor,'actor',80),now,cycleId);
+      check(bound.changes===1,'Repair cycle status changed concurrently',409);
+      this.repairAudit(cycleId,'queued',actor,`job:${row.id}`,now);
+      this.db.exec('COMMIT');
+      return this.getRepairCycle(cycleId);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
   setRepairCycleForProposal(proposalId,status,{reason='',now=stamp()}={}){

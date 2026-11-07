@@ -3,6 +3,7 @@
 // The service only assembles bounded context and creates frozen records. It never mutates
 // the source worktree, never applies a patch and never starts a sandbox test.
 import { randomUUID } from 'node:crypto';
+import { sha256 } from './utils.mjs';
 import {
   buildRepairContext,
   normalizeRepairScope,
@@ -17,6 +18,22 @@ const check = (ok, message, status = 400) => {
     error.status = status;
     throw error;
   }
+};
+
+const MAX_DIFF_BYTES = 1_048_576;
+
+// v1.0 blocker 2: never trust the stored hash field. Re-hash the actual artifact
+// content so a row whose content changed while metadata stayed intact is rejected.
+const loadVerifiedProposalDiff = (store, proposalId) => {
+  const artifact = store.getPatchArtifact(proposalId, 'proposal_diff');
+  check(!!artifact, 'Source proposal diff artifact is missing', 409);
+  check(typeof artifact.content === 'string' && artifact.content.length > 0,
+    'Source proposal diff is empty', 409);
+  check(Buffer.byteLength(artifact.content, 'utf8') <= MAX_DIFF_BYTES,
+    'Source proposal diff exceeds the size limit', 409);
+  check(sha256(artifact.content) === artifact.content_hash,
+    'Source proposal diff content hash mismatch', 409);
+  return artifact.content;
 };
 
 const loadSource = (store, sandboxRunId) => {
@@ -40,6 +57,13 @@ const loadSource = (store, sandboxRunId) => {
     result: store.getSandboxEvidence(run.id, 'result')
   };
   check(!!evidence.result, 'Source test result evidence is missing', 409);
+  for (const kind of ['stdout', 'stderr', 'result']) {
+    const row = evidence[kind];
+    if (!row) continue;
+    check(typeof row.content === 'string', `Source ${kind} evidence content is missing`, 409);
+    check(sha256(row.content) === row.content_hash, `Source ${kind} evidence content hash mismatch`, 409);
+    check(Buffer.byteLength(row.content, 'utf8') <= 200000, `Source ${kind} evidence exceeds the size limit`, 409);
+  }
   for (const kind of ['stdout', 'stderr']) {
     const row = evidence[kind];
     if (!row) {
@@ -49,7 +73,8 @@ const loadSource = (store, sandboxRunId) => {
     check(run[`${kind}_bytes`] === row.bytes, `Source ${kind} evidence size mismatch`, 409);
     check(run[`${kind}_hash`] === row.content_hash, `Source ${kind} evidence hash mismatch`, 409);
   }
-  return { run, proposal, workspace, job, task, evidence };
+  const diff = loadVerifiedProposalDiff(store, proposal.id);
+  return { run, proposal, workspace, job, task, evidence, diff };
 };
 
 export function submitRepairCycle(store, {
@@ -68,12 +93,11 @@ export function submitRepairCycle(store, {
     evidenceHash,
     snapshotHash: source.run.snapshot_hash
   });
-  const proposalDiff = store.getPatchArtifactContent(source.proposal.id, 'proposal_diff') ?? '';
   const context = buildRepairContext({
     run: { ...source.run, owner_task_id: source.job.owner_task_id },
     evidence: source.evidence,
     proposal: source.proposal,
-    proposalDiff,
+    proposalDiff: source.diff,
     scope: normalizedScope
   });
   const approvalHash = repairApprovalHash({
@@ -141,33 +165,62 @@ export function approveRepairCycle(store, {
   });
   check(evidenceHash === cycle.source_evidence_hash, 'Source evidence changed; repair approval is stale', 409);
   check(chain === cycle.source_chain_hash, 'Source chain changed; repair approval is stale', 409);
-  const proposalDiff = store.getPatchArtifactContent(source.proposal.id, 'proposal_diff') ?? '';
   const rebuiltContext = buildRepairContext({
     run: { ...source.run, owner_task_id: source.job.owner_task_id },
     evidence: source.evidence,
     proposal: source.proposal,
-    proposalDiff,
+    proposalDiff: source.diff,
     scope: cycle.repairScope
   });
   check(rebuiltContext.contextHash === cycle.context_hash, 'Repair context changed; approval is stale', 409);
 
-  const idempotencyKey = `repair-${id}`;
-  let job = store.createJob({
-    projectId: cycle.project_id,
-    jobType: 'code-patch',
-    title: `Repair cycle ${id}`.slice(0, 200),
-    payload: {
-      baseSha: cycle.source_base_sha,
-      allowedPaths: cycle.repairScope.join(','),
-      focus: `bounded repair ${id}`.slice(0, 300),
-      repairCycleId: id
-    },
-    idempotencyKey,
-    ownerTaskId: cycle.owner_task_id,
-    actor
+  // v1.0 blocker 3: create + approve + bind happen in one IMMEDIATE transaction, so the
+  // repair job can never be claimed before the cycle points at it.
+  return store.approveRepairCycleJob({ cycleId: id, expectedHash, actor, now });
+}
+
+// v1.0 blocker 4: trusted host-side re-verification before any model call. The frozen
+// context, source evidence/chain and the repair job scope/base must all still match.
+export function verifyRepairCycleForJob(store, job) {
+  const cycleId = typeof job?.payload?.repairCycleId === 'string' ? job.payload.repairCycleId : '';
+  check(!!cycleId, 'Job is not a repair job', 409);
+  const cycle = store.getRepairCycle(cycleId);
+  check(!!cycle, 'Unknown repair cycle', 404);
+  check(job.job_type === 'code-patch', 'Repair job type is invalid', 409);
+  check(job.project_id === cycle.project_id, 'Repair job belongs to a different project', 409);
+  check(job.owner_task_id === cycle.owner_task_id, 'Repair job belongs to a different owner task', 409);
+  check(cycle.job_id === job.id, 'Repair cycle is not bound to this job', 409);
+  check(['queued', 'running'].includes(cycle.status),
+    `Repair cycle in status ${cycle.status} cannot run`, 409);
+  check(cycle.iteration === 1 && cycle.max_iterations === 1, 'Repair cycle iteration budget is invalid', 409);
+  check(job.payload.baseSha === cycle.source_base_sha, 'Repair job base does not match the frozen source', 409);
+  check(job.payload.allowedPaths === cycle.repairScope.join(','),
+    'Repair job scope does not match the frozen repair scope', 409);
+  check(typeof cycle.context_text === 'string' && cycle.context_text.length > 0,
+    'Repair context is missing', 409);
+  check(sha256(cycle.context_text) === cycle.context_hash, 'Repair context hash mismatch', 409);
+
+  const source = loadSource(store, cycle.source_sandbox_run_id);
+  const evidenceHash = sourceEvidenceHash(source.run, source.evidence);
+  check(evidenceHash === cycle.source_evidence_hash,
+    'Source evidence changed after approval; repair run is refused', 409);
+  const chain = sourceChainHash({
+    run: { ...source.run, owner_task_id: source.job.owner_task_id },
+    proposal: source.proposal,
+    workspace: source.workspace,
+    evidenceHash,
+    snapshotHash: source.run.snapshot_hash
   });
-  if (job.status === 'pending_approval') job = store.approveJob(job.id, { actor, now });
-  check(['queued', 'leased', 'running'].includes(job.status), `Repair job is in status ${job.status}`, 409);
-  const queued = store.markRepairCycleQueued(id, { jobId: job.id, expectedHash, actor, now });
-  return queued;
+  check(chain === cycle.source_chain_hash,
+    'Source chain changed after approval; repair run is refused', 409);
+  const rebuilt = buildRepairContext({
+    run: { ...source.run, owner_task_id: source.job.owner_task_id },
+    evidence: source.evidence,
+    proposal: source.proposal,
+    proposalDiff: source.diff,
+    scope: cycle.repairScope
+  });
+  check(rebuilt.contextHash === cycle.context_hash, 'Rebuilt repair context differs from the approved one', 409);
+  check(rebuilt.text === cycle.context_text, 'Frozen repair context differs from the approved source', 409);
+  return { cycleId, contextText: cycle.context_text, contextHash: cycle.context_hash };
 }

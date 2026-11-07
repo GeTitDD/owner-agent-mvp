@@ -128,6 +128,8 @@ try {
     const imageDigest=read('--image-digest',process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST);
     const profile=resolveTestProfile(read('--profile','node-smoke'),{imageDigest});
     const includePaths=normalizeIncludePaths(read('--include').split(',').map(s=>s.trim()).filter(Boolean));
+    const repairCycleId=proposal.repair_cycle_id||read('--repair-cycle','')||null;
+    if(repairCycleId)store.assertRepairSandboxMatch({repairCycleId,proposalId:proposal.id,baseSha:proposal.base_sha,profile,includePaths});
     const runId=randomUUID();
     const snapshotRoot=read('--sandbox-dir','')||defaultSandboxRoot();
     const snapshot=createInputSnapshot({runId,workspacePath:workspace.path,proposal,includePaths,sandboxRoot:snapshotRoot});
@@ -137,7 +139,7 @@ try {
       result=store.createSandboxRun({id:runId,projectId:proposal.project_id,jobId:proposal.job_id,attempt:proposal.attempt,
         workspaceId:workspace.id,proposalId:proposal.id,approvedHash:proposal.approved_hash,baseSha:proposal.base_sha,
         profile,approvalHash:approval,snapshotHash:snapshot.snapshotHash,snapshotPath:snapshot.snapshotPath,includePaths,
-        repairCycleId:proposal.repair_cycle_id||read('--repair-cycle','')||null});
+        repairCycleId});
       const manifest=JSON.stringify(snapshot.manifest);
       store.saveSandboxEvidence(runId,'snapshot_manifest',{content:manifest,contentHash:sha256(manifest),bytes:Buffer.byteLength(manifest)});
       result={...result,approvalHash:approval,snapshotHash:snapshot.snapshotHash};
