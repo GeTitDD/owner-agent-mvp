@@ -160,5 +160,17 @@ try {
   }
 } finally {
   store.close();
+  const makeWritable = (target) => {
+    let stat;
+    try { stat = fs.lstatSync(target); } catch { return; }
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) {
+      try { fs.chmodSync(target, 0o755); } catch { /* best effort */ }
+      for (const entry of fs.readdirSync(target)) makeWritable(path.join(target, entry));
+    } else if (stat.isFile()) {
+      try { fs.chmodSync(target, 0o644); } catch { /* best effort */ }
+    }
+  };
+  makeWritable(dir);
   fs.rmSync(dir, { recursive: true, force: true });
 }
