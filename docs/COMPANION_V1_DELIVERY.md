@@ -42,6 +42,27 @@ Electron 桌宠 + 进程内 Owner Runtime：
 
 未验证：多显示器实机（当前环境单屏）；缩放/DPI 仅按 Electron 默认处理。
 
+### 3.1 三轮真实 UX 迭代
+
+每一轮都在真实 Electron 窗口/打包产物上运行，记录问题后修复并回归。
+
+**第 1 轮：首次启动与面板**
+- 发现：`.setup { display:grid }` 覆盖 `[hidden]`，已有项目时仍显示「先添加项目」。
+- 发现：Worker 状态直接显示英文 kind；「聊天」按钮语义与 L2 不符。
+- 修复：统一 `[hidden]` 优先级；Worker 状态中文化；按钮改为「工作台」；无项目时隐藏交办区并展示 Docker/模型自检。
+
+**第 2 轮：完整业务闭环**
+- 发现：应用补丁后自动创建 Sandbox 调用了未定义函数，异常被吞掉，用户卡在“下一项”。
+- 发现：任务文案为“Add a clarifying comment”时，真实 Pi 只加注释，复测 `tested_fail`；界面当时只展示成功结果。
+- 修复：补上 `createSandbox`；失败结果也进入结果卡并展示 `tested_fail`；E2E 改用真实意图文案并保留失败现场截图。
+
+**第 3 轮：打包产物与长期状态**
+- 发现：打包后 `domains/` 未包含在 asar，L2 Workbench 打不开。
+- 发现：很久以前的失败/成功会让桌宠永久停在异常/完成状态；可选 Gateway 未连接被标成错误色。
+- 修复：`files` 增加 `domains/`、`examples/`；状态只反映最近 30 分钟；Gateway 未连接改为警示色并标注“L2 可选”；结果弹窗增加自然语言摘要。
+
+三轮后回归：桌面 SOP-1..4、外壳、打包启动均通过；无已知阻断四条 SOP 的 P0/P1。
+
 ## 4. 打包
 
 ```bash
@@ -60,7 +81,7 @@ npm run desktop:pack   # Windows x64 portable
 - **未签名**（无代码签名证书），Windows 可能提示未知发布者；
 - 使用 Electron 默认图标；
 - 未生成 NSIS 安装器（portable 单文件可运行）；
-- **macOS 未构建/未验证**：当前环境无 Apple Silicon/签名与 notarization 条件。构建命令与所需条件见下。
+- **macOS 未构建/未验证**：当前环境无 Apple Silicon/签名与 notarization 条件。可运行替代物：在 macOS 上 `npm install && npm run desktop` 从源码运行（未在本机验证）。
 
 macOS（未执行）：
 
