@@ -22,6 +22,10 @@ npm run demo:repair   # Fake patch + Fake sandbox 端到端演示（零真实模
 
 完整 schema、哈希链、审批断点、CLI 与测试矩阵见 **[Patch–Test–Repair 文档](docs/PATCH_TEST_REPAIR.md)**。
 
+## v1.1 方向：OpenClaw-first 客户端复用（设计评审中）
+
+v1.1 改为复用 OpenClaw 的 Gateway、Control UI、会话、通知与桌面壳，Owner 只保留任务执行与审批权威。方案、模块级复用清单、许可证/依赖分析与两套集成方案的工作量比较见 **[OpenClaw-first 设计评审稿](docs/V1.1_OPENCLAW_FIRST.md)**。该方案**待 Owner 批准，尚未实施**。
+
 ## 真实项目端到端验收（v1.1 / #14）
 
 现有自动化测试与 demo 使用 Fake 模型 + Fake provider；真实 Pi + 真实 Docker + Repair 的组合由验收脚本单独执行：
