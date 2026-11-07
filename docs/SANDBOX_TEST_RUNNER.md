@@ -149,3 +149,5 @@ node bin/ownerctl.mjs sandbox-cleanup --id <RUN_ID> --confirm 1
 - 不提供模型执行工具；不自动 merge/PR/知识晋升。
 - 单进程 CLI 假设；多进程并发迁移需要额外进程锁。
 - 镜像必须预先存在（`--pull=never`）；CI 负责拉取可信镜像，沙箱内不联网。
+
+[#7]: https://github.com/GeTitDD/owner-agent-mvp/issues/7
