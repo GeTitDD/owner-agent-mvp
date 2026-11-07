@@ -79,6 +79,10 @@ const run = () => {
         primaryDomain: 'software-engineering'
       });
     }
+    if (process.env.P31_SKIP_JOB === '1') {
+      console.log(JSON.stringify({ projectId: 'p31', baseSha: base, jobStatus: 'none' }, null, 2));
+      return;
+    }
     const task = store.createTask({
       projectId: 'p31',
       title: 'Fix the failing retry test'

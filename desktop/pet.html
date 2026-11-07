@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Owner Companion</title>
+  <link rel="stylesheet" href="./pet.css" />
+</head>
+<body>
+  <div class="stage">
+    <button id="pet" class="pet state-idle" type="button" aria-label="Owner Companion">
+      <span class="ring"></span>
+      <span class="face" aria-hidden="true">
+        <span class="eye eye-left"></span>
+        <span class="eye eye-right"></span>
+        <span class="mouth"></span>
+      </span>
+      <span class="badge" id="badge" hidden>0</span>
+      <span class="mark" id="mark" aria-hidden="true"></span>
+    </button>
+    <div class="hint" id="hint">Owner</div>
+  </div>
+  <script src="./pet.js"></script>
+</body>
+</html>

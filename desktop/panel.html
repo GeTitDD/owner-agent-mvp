@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Owner Companion</title>
+  <link rel="stylesheet" href="./panel.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="brand">
+        <span class="state-dot" id="stateDot"></span>
+        <div>
+          <strong>Owner Companion</strong>
+          <small id="stateText">空闲</small>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="openFull" class="ghost" title="打开完整工作台">完整工作台</button>
+        <button id="openSettings" class="ghost" title="设置">设置</button>
+        <button id="hidePanel" class="ghost" title="收起">×</button>
+      </div>
+    </header>
+
+    <div class="scroll">
+      <section class="stage-card">
+        <div class="stage-line">
+          <span id="stage" class="stage-text">正在读取状态…</span>
+        </div>
+        <div class="stage-meta">
+          <span id="workerLabel">Worker 空闲</span>
+          <span id="pendingCount">0 项待决定</span>
+        </div>
+      </section>
+
+      <section id="setup" class="setup" hidden>
+        <h3>先添加一个项目</h3>
+        <p>选择本地 Git 仓库目录。桌宠会从这里读取项目并创建任务；L1 不依赖 OpenClaw，完整工作台才需要它。</p>
+        <div id="setupServices" class="service-grid"></div>
+        <button id="addProject" class="primary">选择项目目录</button>
+      </section>
+
+      <section class="compose" id="composeSection">
+        <div class="compose-row">
+          <select id="projectSelect" aria-label="项目"></select>
+          <button id="openFullInline" class="ghost small" title="完整工作台">工作台</button>
+        </div>
+        <textarea id="taskInput" rows="2" maxlength="1200"
+          placeholder="交办一件事：例如“帮我修复这个项目里的 Bug”"></textarea>
+        <div class="compose-actions">
+          <span class="compose-hint">会先创建任务，等你批准后才执行。</span>
+          <button id="submitTask" class="primary">交办</button>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-title">
+          <h3>需要你决定</h3>
+          <span id="pendingBadge" class="count">0</span>
+        </div>
+        <div id="pendingList" class="pending-list"></div>
+      </section>
+
+      <section id="resultSection" hidden>
+        <div class="section-title"><h3>最近结果</h3></div>
+        <div id="resultCard" class="result-card"></div>
+      </section>
+    </div>
+
+    <footer class="footer">
+      <span id="footerStatus">本地服务已启动</span>
+      <button id="quit" class="link">退出</button>
+    </footer>
+  </div>
+
+  <div id="settings" class="overlay" hidden>
+    <div class="sheet">
+      <div class="sheet-head">
+        <h2>设置</h2>
+        <button id="closeSettings" class="ghost">×</button>
+      </div>
+      <div class="sheet-body">
+        <label class="field">
+          <span>OpenClaw Gateway 地址</span>
+          <input id="gatewayUrl" placeholder="http://127.0.0.1:18789" />
+        </label>
+        <label class="field">
+          <span>模型（留空使用 Pi 默认）</span>
+          <input id="model" placeholder="provider/model" />
+        </label>
+        <label class="field">
+          <span>允许修改的路径</span>
+          <input id="allowedPaths" placeholder="src/" />
+        </label>
+        <label class="field">
+          <span>沙箱测试包含的文件（逗号分隔）</span>
+          <input id="includePaths" placeholder="package.json,tests/sandbox-smoke.test.mjs" />
+        </label>
+        <div class="service-grid" id="serviceGrid"></div>
+        <div class="sheet-actions">
+          <button id="saveSettings" class="primary">保存</button>
+          <button id="addProjectSettings" class="ghost">添加项目</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal" class="overlay" hidden>
+    <div class="sheet modal-sheet">
+      <div class="sheet-head">
+        <h2 id="modalTitle">详情</h2>
+        <button id="closeModal" class="ghost">×</button>
+      </div>
+      <div class="sheet-body" id="modalBody"></div>
+      <div class="sheet-foot" id="modalFoot"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="./panel.js"></script>
+</body>
+</html>

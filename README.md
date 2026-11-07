@@ -4,6 +4,18 @@
 
 **以 Owner 为中心的多项目管理 Agent + 个人领域知识资产工作台 + 可选桌面宠物。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
 
+## 桌面宠物 Owner Companion（v1.0）
+
+![Owner Companion](docs/assets/companion/shell-panel.png)
+
+桌宠是产品入口：自然语言交办、处理决策、异常恢复、查看成果。它启动进程内 Owner Runtime（sidecar + Worker），审批令牌只留在主进程；L1 不依赖 OpenClaw，L2 完整工作台才连接 OpenClaw Control UI。
+
+- 运行：`npm install && npm run desktop`
+- Windows 打包：`npm run desktop:pack`
+- 桌面 E2E：`npm run e2e:desktop`（真实 Docker + 真实 Pi）
+- 交付报告：[docs/COMPANION_V1_DELIVERY.md](docs/COMPANION_V1_DELIVERY.md)
+- Release Notes：[docs/RELEASE_NOTES_V1.0.md](docs/RELEASE_NOTES_V1.0.md)
+
 ## v1.0（已合并）：Patch–Test–Repair
 
 从一次**已完成且失败**的 SandboxRun 出发，Owner 显式批准一次有界修复：新的 `code-patch` Job 在原 base 上创建全新 Worktree，模型收到上一补丁 diff 与脱敏失败证据（明确标记为不可信数据），输出完整替换提案；Owner 再次审批 apply，并再次审批 sandbox 测试。**不做自动循环、自动 apply/test/merge，也不改 OwnerTask。**

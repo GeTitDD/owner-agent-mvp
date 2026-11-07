@@ -1,61 +1,950 @@
-// Optional Electron desktop host. Runs loopback Workbench; starts no model.
-// No remote pages, no node integration in the renderer, no project access without registration.
-const {app,BrowserWindow,Tray,Menu,screen,ipcMain,nativeImage}=require('electron');
-const path=require('node:path');
-const {pathToFileURL}=require('node:url');
-let workbench,pet,tray,mainWindow,monitor,closing=false;
-let baseUrl='';
-function safeWindow(win){
-  win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
-  win.webContents.on('will-navigate',(event,url)=>{if(!url.startsWith(baseUrl+'/'))event.preventDefault();});
-  win.webContents.on('will-attach-webview',event=>event.preventDefault());
+// Owner Companion desktop host.
+//
+// 进程内启动 Owner sidecar + 常驻 Worker；审批令牌只留在主进程。
+// 渲染进程（桌宠/面板）只能通过受控 IPC 读取视图模型与触发操作。
+const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, dialog, Notification, shell } =
+  require('electron');
+const path = require('node:path');
+const fs = require('node:fs');
+const { execFileSync } = require('node:child_process');
+
+const PET_SIZE = 136;
+const PANEL_WIDTH = 440;
+const PANEL_HEIGHT = 640;
+const COMPANION_VERSION = '1.0.0';
+const screenshotArg = process.argv.find((arg) => arg.startsWith('--screenshot-dir='));
+const screenshotDir = screenshotArg ? screenshotArg.slice('--screenshot-dir='.length) : '';
+const userDataArg = process.argv.find((arg) => arg.startsWith('--user-data-dir='));
+if (userDataArg) app.setPath('userData', path.resolve(userDataArg.slice('--user-data-dir='.length)));
+
+let pet = null;
+let panel = null;
+let fullWindow = null;
+let tray = null;
+let store = null;
+let broker = null;
+let sidecar = null;
+let workbench = null;
+let worker = null;
+let workerTimer = null;
+let baseUrl = '';
+let workbenchUrl = '';
+let readToken = '';
+let approvalToken = '';
+let quitting = false;
+let dragState = null;
+let dragTimer = null;
+let lastNoticeKey = '';
+let serviceCache = { at: 0, value: null };
+
+const configPath = () => path.join(app.getPath('userData'), 'companion.json');
+const defaults = () => ({
+  pet: null,
+  projectId: '',
+  allowedPaths: 'src/',
+  includePaths: ['package.json', 'tests/sandbox-smoke.test.mjs'],
+  gatewayUrl: 'http://127.0.0.1:18789',
+  model: '',
+  panelPinned: false
+});
+let config = defaults();
+
+const loadConfig = () => {
+  try {
+    const raw = JSON.parse(fs.readFileSync(configPath(), 'utf8'));
+    config = { ...defaults(), ...raw };
+    if (!Array.isArray(config.includePaths)) config.includePaths = defaults().includePaths;
+  } catch {
+    config = defaults();
+  }
+};
+const saveConfig = () => {
+  try {
+    fs.mkdirSync(path.dirname(configPath()), { recursive: true });
+    fs.writeFileSync(configPath(), JSON.stringify(config, null, 2), 'utf8');
+  } catch (error) {
+    console.error('save config failed:', error.message);
+  }
+};
+
+const importEsm = (relative) =>
+  import(require('node:url').pathToFileURL(path.join(__dirname, relative)).href);
+
+const dbPath = () =>
+  process.env.OWNER_AGENT_DB || path.join(app.getPath('userData'), 'owner.sqlite');
+
+const resolveDigest = () => {
+  const explicit = process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST;
+  if (/^sha256:[0-9a-f]{64}$/u.test(explicit ?? '')) return explicit;
+  try {
+    const ref = execFileSync('docker', [
+      'image', 'inspect', 'node:22-alpine', '--format', '{{index .RepoDigests 0}}'
+    ], { encoding: 'utf8', timeout: 5000 }).trim();
+    const digest = ref.split('@')[1];
+    return /^sha256:[0-9a-f]{64}$/u.test(digest ?? '') ? digest : '';
+  } catch {
+    return '';
+  }
+};
+
+const fakeSourceAgent = async () => {
+  if (process.env.OWNER_COMPANION_FAKE_SOURCE !== '1') return null;
+  const { FakePatchProposalAgent, PatchProposalAgent } = await importEsm(
+    '../src/patch-proposal-agent.mjs'
+  );
+  const buggy = `export function withRetry(fn, { attempts = 3 } = {}) {
+  let lastError;
+  // 真实 bug：off-by-one，只尝试 attempts - 1 次。
+  for (let i = 0; i < attempts - 1; i += 1) {
+    try {
+      return fn();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
-function movePet(expanded){
-  if(!pet||pet.isDestroyed())return;
-  const {workArea}=screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const w=expanded?486:134,h=expanded?390:112;
-  const x=Math.floor(workArea.x+workArea.width-w-20),y=Math.floor(workArea.y+workArea.height-h-26);
-  pet.setBounds({x,y,width:w,height:h},true);
+`;
+  const fake = new FakePatchProposalAgent({
+    files: [{ path: 'src/retry.js', action: 'modify', content: `${buggy}\n// touched by companion source patch\n` }]
+  });
+  const real = new PatchProposalAgent({ timeoutMs: 300000 });
+  return {
+    requiresModel: false,
+    async generate(input) {
+      if (String(input.repairContext ?? '').trim()) return real.generate(input);
+      return fake.generate(input);
+    }
+  };
+};
+
+async function startServices() {
+  const { OwnerStore } = await importEsm('../src/owner-store.mjs');
+  const { WorkspaceBroker } = await importEsm('../src/workspace-broker.mjs');
+  const { DockerSandboxProvider } = await importEsm('../src/sandbox-provider.mjs');
+  const { OwnerWorker } = await importEsm('../src/worker-agent.mjs');
+  const {
+    startSidecar, resolveSidecarToken, resolveApprovalToken
+  } = await importEsm('../src/sidecar-server.mjs');
+
+  const file = dbPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  store = new OwnerStore(file);
+  broker = new WorkspaceBroker(store, {
+    workspacesRoot: path.join(app.getPath('userData'), 'workspaces')
+  });
+  const provider = new DockerSandboxProvider({ requireRootless: false });
+  const proposalAgent = await fakeSourceAgent();
+  worker = new OwnerWorker(store, {
+    broker,
+    provider,
+    proposalAgent,
+    model: config.model || '',
+    timeoutMs: 300000,
+    leaseMs: 180000,
+    allowModel: true
+  });
+  readToken = resolveSidecarToken({ dbPath: file });
+  approvalToken = resolveApprovalToken({ dbPath: file });
+  sidecar = await startSidecar({
+    store,
+    brokerFactory: () => broker,
+    worker,
+    token: readToken,
+    approvalToken,
+    imageDigest: resolveDigest(),
+    sandboxRoot: path.join(app.getPath('userData'), 'sandbox'),
+    port: 0,
+    version: COMPANION_VERSION
+  });
+  baseUrl = `http://127.0.0.1:${sidecar.port}`;
+
+  // 常驻 Worker：批准后的步骤自动推进；没有批准对象时保持空闲。
+  workerTimer = setInterval(() => {
+    if (worker && !worker.running) worker.start({ wait: false });
+  }, 2000);
+  workerTimer.unref?.();
+
+  try {
+    const { createWorkbenchServer } = await importEsm('../src/workbench-server.mjs');
+    workbench = await createWorkbenchServer({ port: 0, dbPath: file });
+    const address = await workbench.listen();
+    workbenchUrl = `http://127.0.0.1:${address.port}`;
+  } catch (error) {
+    console.error('workbench unavailable:', error.message);
+  }
 }
-function openWorkbench(){
-  if(mainWindow&&!mainWindow.isDestroyed()){mainWindow.show();mainWindow.focus();return;}
-  mainWindow=new BrowserWindow({width:1140,height:800,minWidth:780,minHeight:580,title:'Owner Knowledge Workbench',
-    webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,devTools:false}});
-  safeWindow(mainWindow);mainWindow.loadURL(baseUrl+'/');
-  mainWindow.on('closed',()=>{mainWindow=null;});
+
+const api = async (route, { method = 'GET', body, decision = false } = {}) => {
+  const headers = { authorization: `Bearer ${readToken}` };
+  if (decision) headers['x-owner-approval-token'] = approvalToken;
+  if (method !== 'GET') {
+    headers['content-type'] = 'application/json';
+    headers['x-owner-origin'] = JSON.stringify({
+      gatewayInstanceId: 'owner-companion',
+      operatorId: 'owner',
+      pluginVersion: COMPANION_VERSION
+    });
+  }
+  const response = await fetch(`${baseUrl}${route}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) throw new Error(data?.error ?? `HTTP ${response.status}`);
+  return data;
+};
+
+const stateOf = (summary) => summary;
+
+const createSandbox = (proposalId) => api('/owner/v1/sandbox-runs', {
+  method: 'POST',
+  body: {
+    proposalId,
+    includePaths: config.includePaths
+  }
+});
+
+const toPending = ({ jobs, patches, sandboxes, repairs }) => {
+  const pending = [];
+  for (const job of jobs) {
+    if (job.status === 'pending_approval') {
+      pending.push({
+        kind: 'job', id: job.id, hash: '',
+        title: job.title,
+        summary: `${job.job_type} · 等待你批准后才会开始`
+      });
+    }
+  }
+  for (const patch of patches) {
+    if (patch.status === 'proposed') {
+      pending.push({
+        kind: 'patch', id: patch.id, hash: patch.proposal_hash,
+        title: `补丁 ${patch.id.slice(0, 8)}`,
+        summary: (patch.files ?? []).map((file) => file.path).join(', ') || '等待审阅冻结 Diff'
+      });
+    } else if (patch.status === 'approved') {
+      pending.push({
+        kind: 'patch-apply', id: patch.id, hash: patch.proposal_hash,
+        title: `已批准补丁 ${patch.id.slice(0, 8)}`,
+        summary: '下一步：应用到 Worktree，然后请求沙箱测试'
+      });
+    }
+  }
+  const cycleSources = new Set(repairs.map((cycle) => cycle.source_sandbox_run_id));
+  for (const run of sandboxes) {
+    if (run.status === 'pending_approval') {
+      pending.push({
+        kind: 'sandbox', id: run.id, hash: run.approval_hash,
+        title: `测试 ${run.id.slice(0, 8)}`,
+        summary: `${run.profile?.id ?? 'node-smoke'} · 等待你批准后运行`
+      });
+    } else if (
+      run.status === 'completed' && run.test_status === 'fail' && !cycleSources.has(run.id)
+      && !run.repair_cycle_id
+    ) {
+      pending.push({
+        kind: 'repair-create', id: run.id, hash: '',
+        title: `测试失败 ${run.id.slice(0, 8)}`,
+        summary: '可以先创建一个修复周期，再决定是否批准'
+      });
+    }
+  }
+  for (const cycle of repairs) {
+    if (cycle.status === 'pending_approval') {
+      const scope = Array.isArray(cycle.repairScope)
+        ? cycle.repairScope
+        : Array.isArray(cycle.repair_scope) ? cycle.repair_scope : [];
+      pending.push({
+        kind: 'repair', id: cycle.id, hash: cycle.approval_hash,
+        title: `修复 ${cycle.id.slice(0, 8)}`,
+        summary: `范围 ${scope.join(', ') || '—'} · 等待你批准`
+      });
+    }
+  }
+  return pending.slice(0, 12);
+};
+
+const stageText = (chain) => {
+  const { job, patch, sandbox, cycle } = chain;
+  if (cycle) {
+    if (cycle.status === 'pending_approval') return '有一个修复周期等你的决定';
+    if (cycle.status === 'queued') return '修复任务已批准，正在生成新的补丁';
+    if (cycle.status === 'proposal_ready') return '修复补丁已生成，等待你审阅';
+    if (circleSafe(cycle.status, 'applied')) return '修复补丁已应用，准备复测';
+    if (cycle.status === 'test_pending') return '修复补丁正在复测';
+    if (cycle.status === 'tested_pass') return '修复完成，复测通过';
+    if (cycle.status === 'tested_fail') return '修复后测试仍未通过';
+  }
+  if (sandbox) {
+    if (sandbox.status === 'pending_approval') return '测试运行等你的批准';
+    if (sandbox.status === 'queued') return '测试已批准，正在启动';
+    if (['running', 'provisioning', 'collecting'].includes(sandbox.status)) return '测试正在运行';
+    if (sandbox.status === 'completed') {
+      return sandbox.test_status === 'pass' ? '测试通过' : '测试失败，可以创建修复';
+    }
+  }
+  if (patch) {
+    if (patch.status === 'proposed') return '补丁已生成，等待你审阅';
+    if (patch.status === 'approved') return '补丁已批准，等待应用';
+    if (patch.status === 'applied') return '补丁已应用，等待测试';
+  }
+  if (job) {
+    if (job.status === 'pending_approval') return '任务等你的批准';
+    if (['queued', 'leased', 'running'].includes(job.status)) return '正在生成补丁';
+    if (job.status === 'succeeded') return '补丁提案已完成';
+    if (job.status === 'failed') return '生成补丁时遇到问题';
+  }
+  return '暂时没有进行中的任务';
+};
+
+const circleSafe = (value, expected) => value === expected;
+
+const buildView = async () => {
+  const [summary, workerState, projects, jobs, patches, sandboxes, repairs] = await Promise.all([
+    api('/owner/v1/summary'),
+    api('/owner/v1/worker/status'),
+    api('/owner/v1/projects'),
+    api('/owner/v1/jobs?limit=20'),
+    api('/owner/v1/patches?limit=20'),
+    api('/owner/v1/sandbox-runs?limit=20'),
+    api('/owner/v1/repair-cycles?limit=20')
+  ]);
+  const pending = toPending({
+    jobs: jobs.items ?? [],
+    patches: patches.items ?? [],
+    sandboxes: sandboxes.items ?? [],
+    repairs: repairs.items ?? []
+  });
+  const activeJob = (jobs.items ?? []).find((job) =>
+    ['pending_approval', 'queued', 'leased', 'running', 'cancel_requested'].includes(job.status)
+  );
+  const activeCycle = (repairs.items ?? []).find((cycle) =>
+    ['pending_approval', 'queued', 'proposal_ready', 'applied', 'test_pending'].includes(cycle.status)
+  );
+  const activeSandbox = (sandboxes.items ?? []).find((run) =>
+    ['pending_approval', 'queued', 'provisioning', 'running', 'collecting'].includes(run.status)
+  );
+  const latestPatch = (patches.items ?? [])[0] ?? null;
+  const chain = {
+    job: activeJob ?? (jobs.items ?? [])[0] ?? null,
+    patch: latestPatch,
+    sandbox: activeSandbox ?? (sandboxes.items ?? [])[0] ?? null,
+    cycle: activeCycle ?? (repairs.items ?? [])[0] ?? null
+  };
+  // 状态只反映“最近一次结果”，避免很久以前的失败/成功让桌宠永久变色。
+  const nowMs = Date.now();
+  const recent = (value, windowMs = 30 * 60 * 1000) => {
+    const at = Date.parse(String(value ?? ''));
+    return Number.isFinite(at) && nowMs - at < windowMs;
+  };
+  const latestCycle = (repairs.items ?? [])[0] ?? null;
+  const latestJob = (jobs.items ?? [])[0] ?? null;
+  let state = 'idle';
+  if (pending.length > 0) state = 'waiting';
+  else if (workerState.running || activeJob || activeSandbox || activeCycle
+    || (sandboxes.items ?? []).some((run) => ['queued', 'running'].includes(run.status))) {
+    state = 'working';
+  } else if (latestCycle && ['tested_fail', 'failed'].includes(latestCycle.status)
+    && recent(latestCycle.updated_at ?? latestCycle.created_at)) {
+    state = 'error';
+  } else if (latestJob && ['failed', 'needs_reconciliation'].includes(latestJob.status)
+    && recent(latestJob.updated_at ?? latestJob.created_at)) {
+    state = 'error';
+  } else if (latestCycle && latestCycle.status === 'tested_pass'
+    && recent(latestCycle.updated_at ?? latestCycle.created_at)) {
+    state = 'done';
+  }
+  const finalCycle = (repairs.items ?? []).find((cycle) =>
+    ['tested_pass', 'tested_fail'].includes(cycle.status)) ?? null;
+  const services = await serviceStatus();
+  return {
+    version: COMPANION_VERSION,
+    state,
+    pending,
+    stage: stageText(chain),
+    worker: {
+      running: Boolean(workerState.running),
+      label: workerState.running
+        ? `工作中${workerState.current?.kind ? ` · ${workerState.current.kind}` : ''}`
+        : workerState.last
+          ? `上次 ${({ idle: '空闲', patch: '生成补丁', sandbox: '运行测试', error: '异常' })[workerState.last.kind] ?? workerState.last.kind}`
+          : '空闲'
+    },
+    summary,
+    projects: (projects.items ?? []).map((project) => ({
+      id: project.id,
+      name: project.name,
+      baseSha: project.baseSha ?? ''
+    })),
+    config: {
+      projectId: config.projectId,
+      allowedPaths: config.allowedPaths,
+      includePaths: config.includePaths,
+      gatewayUrl: config.gatewayUrl,
+      model: config.model
+    },
+    services,
+    result: finalCycle
+      ? {
+        cycleId: finalCycle.id,
+        status: finalCycle.status,
+        testStatus: finalCycle.status === 'tested_pass' ? 'pass' : 'fail',
+        label: finalCycle.status === 'tested_pass'
+          ? `修复 ${finalCycle.id.slice(0, 8)} 已通过复测`
+          : `修复 ${finalCycle.id.slice(0, 8)} 复测未通过`
+      }
+      : null
+  };
+};
+
+const serviceStatus = async () => {
+  const now = Date.now();
+  if (serviceCache.value && now - serviceCache.at < 10000) return serviceCache.value;
+  let docker = false;
+  try {
+    execFileSync('docker', ['version', '--format', '{{.Server.Version}}'], {
+      encoding: 'utf8', timeout: 2500
+    });
+    docker = true;
+  } catch { docker = false; }
+  let gateway = false;
+  try {
+    const response = await fetch(config.gatewayUrl, {
+      signal: AbortSignal.timeout(1500),
+      redirect: 'manual'
+    });
+    gateway = response.status > 0;
+  } catch { gateway = false; }
+  let pi = false;
+  try {
+    fs.accessSync(path.join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.pi', 'agent'));
+    pi = true;
+  } catch { pi = false; }
+  const value = { docker, gateway, pi, model: config.model || 'Pi 默认模型' };
+  serviceCache = { at: now, value };
+  return value;
+};
+
+const notifyIfNeeded = (view) => {
+  if (process.env.OWNER_AGENT_NOTIFICATIONS === '0') return;
+  if (!view.pending.length) { lastNoticeKey = ''; return; }
+  const key = view.pending.map((item) => `${item.kind}:${item.id}`).join('|');
+  if (key === lastNoticeKey) return;
+  lastNoticeKey = key;
+  if (!Notification.isSupported()) return;
+  const first = view.pending[0];
+  new Notification({
+    title: 'Owner Companion',
+    body: view.pending.length === 1 ? first.title : `${view.pending.length} 项需要你决定`
+  }).show();
+};
+
+const clampToWorkArea = (x, y, width, height) => {
+  const point = { x: x + width / 2, y: y + height / 2 };
+  const display = screen.getDisplayNearestPoint(point);
+  const area = display.workArea;
+  return {
+    x: Math.min(Math.max(x, area.x), area.x + Math.max(0, area.width - width)),
+    y: Math.min(Math.max(y, area.y), area.y + Math.max(0, area.height - height))
+  };
+};
+
+const positionPet = () => {
+  if (!pet) return;
+  const display = screen.getPrimaryDisplay();
+  const fallback = {
+    x: display.workArea.x + display.workArea.width - PET_SIZE - 24,
+    y: display.workArea.y + display.workArea.height - PET_SIZE - 40
+  };
+  const target = config.pet ?? fallback;
+  const { x, y } = clampToWorkArea(target.x, target.y, PET_SIZE, PET_SIZE);
+  pet.setBounds({ x: Math.round(x), y: Math.round(y), width: PET_SIZE, height: PET_SIZE });
+};
+
+const positionPanel = () => {
+  if (!panel || !pet) return;
+  const petBounds = pet.getBounds();
+  const display = screen.getDisplayNearestPoint({
+    x: petBounds.x + petBounds.width / 2,
+    y: petBounds.y + petBounds.height / 2
+  });
+  const area = display.workArea;
+  let x = petBounds.x - PANEL_WIDTH - 10;
+  if (x < area.x) x = petBounds.x + petBounds.width + 10;
+  if (x + PANEL_WIDTH > area.x + area.width) {
+    x = area.x + area.width - PANEL_WIDTH - 10;
+  }
+  let y = petBounds.y + petBounds.height - PANEL_HEIGHT;
+  if (y < area.y) y = area.y + 10;
+  if (y + PANEL_HEIGHT > area.y + area.height) {
+    y = area.y + area.height - PANEL_HEIGHT - 10;
+  }
+  panel.setBounds({
+    x: Math.round(Math.max(area.x, x)),
+    y: Math.round(Math.max(area.y, y)),
+    width: PANEL_WIDTH,
+    height: PANEL_HEIGHT
+  });
+};
+
+const safeWindow = (window) => {
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('file://')) event.preventDefault();
+  });
+  window.webContents.on('will-attach-webview', (event) => event.preventDefault());
+};
+
+const createPet = () => {
+  pet = new BrowserWindow({
+    width: PET_SIZE,
+    height: PET_SIZE,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      devTools: false
+    }
+  });
+  safeWindow(pet);
+  positionPet();
+  pet.setAlwaysOnTop(true, 'floating');
+  pet.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  pet.loadFile(path.join(__dirname, 'pet.html'));
+  pet.on('closed', () => { pet = null; });
+};
+
+const createPanel = () => {
+  panel = new BrowserWindow({
+    width: PANEL_WIDTH,
+    height: PANEL_HEIGHT,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    show: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: true,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      devTools: false
+    }
+  });
+  safeWindow(panel);
+  panel.loadFile(path.join(__dirname, 'panel.html'));
+  panel.on('closed', () => { panel = null; });
+};
+
+const showPanel = () => {
+  if (!panel) createPanel();
+  positionPanel();
+  panel.show();
+  panel.focus();
+};
+
+const hidePanel = () => {
+  if (panel && !panel.isDestroyed()) panel.hide();
+};
+
+const openFull = async () => {
+  if (fullWindow && !fullWindow.isDestroyed()) {
+    fullWindow.show();
+    fullWindow.focus();
+    return;
+  }
+  let target = '';
+  try {
+    const response = await fetch(config.gatewayUrl, { signal: AbortSignal.timeout(1500) });
+    if (response.status > 0) target = config.gatewayUrl;
+  } catch { target = ''; }
+  if (!target && workbenchUrl) target = workbenchUrl;
+  if (!target) {
+    throw new Error('OpenClaw Gateway 和 Workbench 都不可用，请先在设置里配置 Gateway 地址。');
+  }
+  fullWindow = new BrowserWindow({
+    width: 1180,
+    height: 820,
+    minWidth: 800,
+    minHeight: 600,
+    title: 'Owner Companion · 完整工作台',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      devTools: false
+    }
+  });
+  fullWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  fullWindow.loadURL(target);
+  fullWindow.on('closed', () => { fullWindow = null; });
+};
+
+const createTray = () => {
+  const image = nativeImage.createFromPath(path.join(__dirname, 'tray.png'));
+  tray = new Tray(image);
+  tray.setToolTip('Owner Companion');
+  const rebuild = () => {
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: '显示桌宠', click: () => { if (pet) { pet.show(); positionPet(); } } },
+      { label: '打开面板', click: showPanel },
+      { label: '完整工作台', click: () => { void openFull().catch(() => showPanel()); } },
+      { type: 'separator' },
+      { label: '设置', click: () => { showPanel(); panel?.webContents.send('companion:open-settings'); } },
+      { type: 'separator' },
+      { label: '退出', click: () => { quitting = true; app.quit(); } }
+    ]));
+  };
+  rebuild();
+  tray.on('double-click', () => { if (pet) { pet.show(); positionPet(); } });
+  tray.on('click', showPanel);
+};
+
+const registerIpc = () => {
+  const fromCompanion = (event) =>
+    [pet?.webContents, panel?.webContents].filter(Boolean).includes(event.sender);
+
+  ipcMain.handle('companion:snapshot', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const view = await buildView();
+    notifyIfNeeded(view);
+    return view;
+  });
+
+  ipcMain.handle('companion:create-job', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const text = String(input?.text ?? '').trim();
+    if (!text) throw new Error('请先输入要交办的事情。');
+    const projects = (await api('/owner/v1/projects')).items ?? [];
+    const project = projects.find((item) => item.id === input?.projectId)
+      ?? projects.find((item) => item.id === config.projectId)
+      ?? projects[0];
+    if (!project) throw new Error('还没有项目，请先在设置里添加一个项目目录。');
+    const task = await api('/owner/v1/tasks', {
+      method: 'POST',
+      body: { projectId: project.id, title: text.slice(0, 200) }
+    });
+    const baseSha = project.baseSha ?? '';
+    if (!/^[0-9a-f]{40}$/u.test(baseSha)) {
+      throw new Error('项目目录不是有效的 Git 仓库，无法确定 base commit。');
+    }
+    const job = await api('/owner/v1/jobs', {
+      method: 'POST',
+      body: {
+        projectId: project.id,
+        jobType: 'code-patch',
+        title: text.slice(0, 200),
+        payload: {
+          baseSha,
+          allowedPaths: config.allowedPaths || 'src/',
+          focus: text.slice(0, 300)
+        },
+        idempotencyKey: `companion-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        ownerTaskId: task.id
+      }
+    });
+    config.projectId = project.id;
+    saveConfig();
+    return { jobId: job.id, status: job.status };
+  });
+
+  ipcMain.handle('companion:decide', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const kind = String(input?.kind ?? '');
+    const id = String(input?.id ?? '');
+    const action = String(input?.action ?? 'approve');
+    const hash = String(input?.hash ?? '');
+    if (!id) throw new Error('Missing id');
+    if (kind === 'job') {
+      if (action === 'reject') {
+        return api(`/owner/v1/jobs/${encodeURIComponent(id)}/reject`, {
+          method: 'POST', body: { reason: String(input?.reason ?? '') }, decision: true
+        });
+      }
+      return api(`/owner/v1/jobs/${encodeURIComponent(id)}/approve`, {
+        method: 'POST', body: {}, decision: true
+      });
+    }
+    if (kind === 'patch' || kind === 'patch-apply') {
+      if (action === 'reject') {
+        return api(`/owner/v1/patches/${encodeURIComponent(id)}/reject`, {
+          method: 'POST', body: { reason: String(input?.reason ?? '') }, decision: true
+        });
+      }
+      if (kind === 'patch') {
+        return api(`/owner/v1/patches/${encodeURIComponent(id)}/approve`, {
+          method: 'POST', body: { hash }, decision: true
+        });
+      }
+      const applied = await api(`/owner/v1/patches/${encodeURIComponent(id)}/apply`, {
+        method: 'POST', body: { hash }, decision: true
+      });
+      // 应用后自动创建待批准的沙箱运行，让用户只做一个决定。
+      try {
+        await createSandbox(id);
+      } catch (error) {
+        console.error('auto sandbox request failed:', error.message);
+      }
+      return applied;
+    }
+    if (kind === 'sandbox') {
+      return api(`/owner/v1/sandbox-runs/${encodeURIComponent(id)}/approve`, {
+        method: 'POST', body: { hash }, decision: true
+      });
+    }
+    if (kind === 'repair') {
+      return api(`/owner/v1/repair-cycles/${encodeURIComponent(id)}/approve`, {
+        method: 'POST', body: { hash }, decision: true
+      });
+    }
+    if (kind === 'repair-create') {
+      return api('/owner/v1/repair-cycles', {
+        method: 'POST',
+        body: { sandboxRunId: id, idempotencyKey: `companion-${id}` }
+      });
+    }
+    throw new Error(`Unknown decision kind: ${kind}`);
+  });
+
+  ipcMain.handle('companion:patch-detail', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return api(`/owner/v1/patches/${encodeURIComponent(String(input?.id ?? ''))}?content=1`);
+  });
+
+  ipcMain.handle('companion:result', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const cycleId = String(input?.cycleId ?? '');
+    const cycle = await api(`/owner/v1/repair-cycles/${encodeURIComponent(cycleId)}`);
+    const runs = await api(`/owner/v1/sandbox-runs?projectId=${encodeURIComponent(cycle.project_id)}&limit=200`);
+    const runList = runs.items ?? [];
+    const source = runList.find((run) => run.id === cycle.source_sandbox_run_id);
+    const repairRun = runList.find((run) => run.repair_cycle_id === cycle.id);
+    const evidence = async (run) => {
+      if (!run) return null;
+      const data = await api(`/owner/v1/sandbox-runs/${encodeURIComponent(run.id)}?logs=1`);
+      return {
+        id: run.id,
+        status: run.status,
+        execution: run.execution_status,
+        test: run.test_status,
+        stdout: String(data.stdout ?? '').slice(0, 12000),
+        stderr: String(data.stderr ?? '').slice(0, 12000),
+        result: String(data.result ?? '').slice(0, 4000)
+      };
+    };
+    const proposal = async (run) => {
+      if (!run) return null;
+      const patch = await api(`/owner/v1/patches/${encodeURIComponent(run.proposal_id)}?content=1`);
+      return {
+        id: patch.id,
+        status: patch.status,
+        hash: patch.proposal_hash,
+        paths: (patch.files ?? []).map((file) => file.path),
+        diff: String(patch.proposal_diff ?? '').slice(0, 30000)
+      };
+    };
+    return {
+      cycle: {
+        id: cycle.id,
+        status: cycle.status,
+        scope: Array.isArray(cycle.repairScope)
+          ? cycle.repairScope
+          : Array.isArray(cycle.repair_scope) ? cycle.repair_scope : [],
+        approvalHash: cycle.approval_hash
+      },
+      sourceRun: await evidence(source),
+      repairRun: await evidence(repairRun),
+      sourcePatch: await proposal(source),
+      repairPatch: await proposal(repairRun)
+    };
+  });
+
+  ipcMain.handle('companion:create-sandbox', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return createSandbox(String(input?.proposalId ?? ''));
+  });
+
+  ipcMain.handle('companion:settings:get', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return { ...config, services: await serviceStatus() };
+  });
+
+  ipcMain.handle('companion:settings:set', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (typeof input?.allowedPaths === 'string') config.allowedPaths = input.allowedPaths.trim() || 'src/';
+    if (Array.isArray(input?.includePaths)) {
+      config.includePaths = input.includePaths.map((item) => String(item).trim()).filter(Boolean);
+    } else if (typeof input?.includePaths === 'string') {
+      config.includePaths = input.includePaths.split(',').map((item) => item.trim()).filter(Boolean);
+    }
+    if (typeof input?.gatewayUrl === 'string') config.gatewayUrl = input.gatewayUrl.trim();
+    if (typeof input?.model === 'string') config.model = input.model.trim();
+    if (typeof input?.projectId === 'string') config.projectId = input.projectId;
+    saveConfig();
+    serviceCache = { at: 0, value: null };
+    return { ...config, services: await serviceStatus() };
+  });
+
+  ipcMain.handle('companion:add-project', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const result = await dialog.showOpenDialog({
+      title: '选择项目目录',
+      properties: ['openDirectory']
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    const root = result.filePaths[0];
+    const name = path.basename(root) || 'project';
+    const id = name.toLowerCase().replace(/[^a-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 40)
+      || `project-${Date.now()}`;
+    await api('/owner/v1/projects', {
+      method: 'POST',
+      body: { id, name, root, primaryDomain: 'software-engineering' }
+    }).catch(async (error) => {
+      if (!/already|exists|UNIQUE/iu.test(error.message)) throw error;
+    });
+    const projects = (await api('/owner/v1/projects')).items ?? [];
+    const project = projects.find((item) => item.id === id);
+    config.projectId = project?.id ?? config.projectId;
+    saveConfig();
+    return project ?? null;
+  });
+
+  ipcMain.handle('companion:open-full', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    await openFull();
+  });
+
+  ipcMain.on('companion:show-panel', (event) => { if (fromCompanion(event)) showPanel(); });
+  ipcMain.on('companion:hide-panel', (event) => { if (fromCompanion(event)) hidePanel(); });
+  ipcMain.on('companion:hide-pet', (event) => { if (fromCompanion(event)) pet?.hide(); });
+  ipcMain.on('companion:show-pet', (event) => {
+    if (fromCompanion(event) && pet) { pet.show(); positionPet(); }
+  });
+  ipcMain.on('companion:quit', (event) => {
+    if (fromCompanion(event)) { quitting = true; app.quit(); }
+  });
+  ipcMain.on('companion:drag-start', (event, input) => {
+    if (!fromCompanion(event) || !pet) return;
+    const offsetX = Math.max(0, Math.min(PET_SIZE, Number(input?.offsetX ?? PET_SIZE / 2)));
+    const offsetY = Math.max(0, Math.min(PET_SIZE, Number(input?.offsetY ?? PET_SIZE / 2)));
+    dragState = { offsetX, offsetY };
+    if (dragTimer) clearInterval(dragTimer);
+    dragTimer = setInterval(() => {
+      if (!dragState || !pet) return;
+      const point = screen.getCursorScreenPoint();
+      const { x, y } = clampToWorkArea(
+        point.x - dragState.offsetX,
+        point.y - dragState.offsetY,
+        PET_SIZE,
+        PET_SIZE
+      );
+      pet.setPosition(Math.round(x), Math.round(y));
+    }, 16);
+  });
+  ipcMain.on('companion:drag-end', (event) => {
+    if (!fromCompanion(event)) return;
+    if (dragTimer) clearInterval(dragTimer);
+    dragTimer = null;
+    dragState = null;
+    if (pet) {
+      const bounds = pet.getBounds();
+      config.pet = { x: bounds.x, y: bounds.y };
+      saveConfig();
+      if (panel && panel.isVisible()) positionPanel();
+    }
+  });
+};
+
+const registerDisplayHandlers = () => {
+  const clampAll = () => {
+    if (pet) {
+      const bounds = pet.getBounds();
+      const { x, y } = clampToWorkArea(bounds.x, bounds.y, PET_SIZE, PET_SIZE);
+      pet.setPosition(Math.round(x), Math.round(y));
+    }
+    if (panel && panel.isVisible()) positionPanel();
+  };
+  screen.on('display-added', clampAll);
+  screen.on('display-removed', clampAll);
+  screen.on('display-metrics-changed', clampAll);
+};
+
+async function boot() {
+  loadConfig();
+  registerIpc();
+  await startServices();
+  createPet();
+  createPanel();
+  createTray();
+  registerDisplayHandlers();
+  app.on('second-instance', () => {
+    if (pet) { pet.show(); positionPet(); }
+    showPanel();
+  });
+
+  // 自动化视觉验收：启动后截图并退出。
+  if (screenshotDir) {
+    setTimeout(async () => {
+      try {
+        fs.mkdirSync(screenshotDir, { recursive: true });
+        showPanel();
+        await new Promise((resolve) => setTimeout(resolve, 1800));
+        if (pet) {
+          const image = await pet.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'pet.png'), image.toPNG());
+        }
+        if (panel) {
+          const image = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'panel.png'), image.toPNG());
+        }
+        console.log(`screenshots written to ${screenshotDir}`);
+      } catch (error) {
+        console.error('screenshot failed:', error);
+      }
+      setTimeout(() => { quitting = true; app.quit(); }, 600);
+    }, 6000);
+  }
 }
-async function init(){
-  const {createWorkbenchServer}=await import(pathToFileURL(path.resolve(__dirname,'../src/workbench-server.mjs')).href);
-  workbench=await createWorkbenchServer({port:0,dbPath:process.env.OWNER_AGENT_DB});const address=await workbench.listen();baseUrl=`http://127.0.0.1:${address.port}`;
-  pet=new BrowserWindow({width:134,height:112,frame:false,transparent:true,alwaysOnTop:true,skipTaskbar:true,
-    resizable:false,hasShadow:false,backgroundColor:'#00000000',
-    webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,devTools:false}});
-  safeWindow(pet);movePet(false);pet.loadURL(baseUrl+'/companion.html');
-  pet.on('close',event=>{if(!closing){event.preventDefault();pet.hide();}});
-  const image=nativeImage.createFromPath(path.join(__dirname,'tray.png'));
-  tray=new Tray(image);
-  tray.setToolTip('Owner Agent · 个人项目与知识管理');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    {label:'显示桌宠',click:()=>pet?.show()},
-    {label:'打开知识工作台',click:openWorkbench},
-    {type:'separator'},{label:'退出',click:()=>{closing=true;app.quit();}}
-  ]));
-  tray.on('double-click',()=>pet?.show());
-  const {OwnerStore}=await import(pathToFileURL(path.resolve(__dirname,'../src/owner-store.mjs')).href);
-  const {OwnerResidentRuntime}=await import(pathToFileURL(path.resolve(__dirname,'../src/owner-resident.mjs')).href);
-  const {Notification}=require('electron');
-  const owner=new OwnerStore(process.env.OWNER_AGENT_DB);
-  monitor=new OwnerResidentRuntime(owner,{onAttention:item=>{
-    tray.setToolTip(`Owner Agent · ${item.title.slice(0,90)}`);
-    if(process.env.OWNER_AGENT_NOTIFICATIONS==='1'&&Notification.isSupported())
-      new Notification({title:'Owner Agent',body:item.title}).show();
-  }});
-  monitor.start();
-  app.on('will-quit',()=>{monitor?.stop();owner.close();});
-  ipcMain.on('owner:resize',(evt,value)=>{if(evt.sender===pet?.webContents)movePet(value===true);});
-  ipcMain.on('owner:open-workbench',evt=>{if(evt.sender===pet?.webContents)openWorkbench();});
+
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.whenReady().then(boot).catch((error) => {
+    console.error('Owner Companion failed:', error);
+    dialog.showErrorBox('Owner Companion 启动失败', String(error?.stack ?? error));
+    app.quit();
+  });
 }
-app.whenReady().then(init).catch(err=>{console.error('Owner desktop failed:',err);app.quit();});
-app.on('window-all-closed',()=>{}); // Tray keeps resident runtime alive.
-app.on('before-quit',()=>{closing=true;});
-app.on('will-quit',()=>{if(workbench)void workbench.close();tray?.destroy();});
+
+app.on('window-all-closed', () => { /* tray keeps the app alive */ });
+app.on('before-quit', () => {
+  quitting = true;
+  if (dragTimer) clearInterval(dragTimer);
+  if (workerTimer) clearInterval(workerTimer);
+  saveConfig();
+});
+app.on('will-quit', () => {
+  try { tray?.destroy(); } catch { /* best effort */ }
+  try { if (workbench) void workbench.close(); } catch { /* best effort */ }
+  try { if (sidecar) void sidecar.close(); } catch { /* best effort */ }
+  try { store?.close(); } catch { /* best effort */ }
+});

@@ -4,13 +4,14 @@
   "private": true,
   "type": "module",
   "description": "Owner-centric resident multi-project agent with composable knowledge workbench and opt-in Pi event capture",
+  "author": "Owner Companion",
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "demo": "node bin/domainctl.mjs demo",
-    "check": "node --check adapters/pi/extension.mjs && node --check src/loader.mjs && node --check src/applicability.mjs && node --check src/compiler.mjs && node --check src/evolution.mjs && node --check src/publisher.mjs && node --check bin/domainctl.mjs && node --check src/personal-store.mjs && node --check src/workbench-server.mjs && node --check src/workspace-overlay.mjs && node --check web/workbench/app.js && node --check src/owner-store.mjs && node --check src/owner-agent.mjs && node --check adapters/pi/owner-extension.mjs && node --check bin/ownerctl.mjs && node --check examples/owner-demo.mjs && node --check desktop/main.cjs && node --check desktop/preload.cjs && node --check web/workbench/companion.js && node --check src/owner-resident.mjs && node --check src/job-worker.mjs && node --check examples/task-coordinator-demo.mjs && node --check src/pi-session-factory.mjs && node --check src/pi-analysis-worker.mjs && node --check examples/pi-worker-demo.mjs && node --check src/project-identity.mjs && node --check src/patch-protocol.mjs && node --check src/workspace-broker.mjs && node --check src/patch-proposal-agent.mjs && node --check src/patch-coding-worker.mjs && node --check examples/patch-worker-demo.mjs && node --check src/sandbox-protocol.mjs && node --check src/sandbox-provider.mjs && node --check src/sandbox-materializer.mjs && node --check src/sandbox-runner.mjs && node --check src/sandbox-control.mjs && node --check src/repair-protocol.mjs && node --check src/repair-service.mjs && node --check examples/sandbox-demo.mjs && node --check examples/repair-demo.mjs && node --check scripts/acceptance/make-fixture.mjs && node --check scripts/acceptance/e2e-repair.mjs && node --check src/patch-service.mjs && node --check src/sandbox-service.mjs && node --check src/sidecar-server.mjs && node --check src/worker-agent.mjs && node --check scripts/e2e/openclaw-smoke.mjs && node --check scripts/e2e/openclaw-ui.mjs && node --check scripts/e2e/seed-owner.mjs && node --check scripts/e2e/openclaw-ui-p31.mjs && node --check scripts/e2e/seed-p31.mjs",
+    "check": "node --check adapters/pi/extension.mjs && node --check src/loader.mjs && node --check src/applicability.mjs && node --check src/compiler.mjs && node --check src/evolution.mjs && node --check src/publisher.mjs && node --check bin/domainctl.mjs && node --check src/personal-store.mjs && node --check src/workbench-server.mjs && node --check src/workspace-overlay.mjs && node --check web/workbench/app.js && node --check src/owner-store.mjs && node --check src/owner-agent.mjs && node --check adapters/pi/owner-extension.mjs && node --check bin/ownerctl.mjs && node --check examples/owner-demo.mjs && node --check desktop/main.cjs && node --check desktop/preload.cjs && node --check desktop/pet.js && node --check desktop/panel.js && node --check src/owner-resident.mjs && node --check src/job-worker.mjs && node --check examples/task-coordinator-demo.mjs && node --check src/pi-session-factory.mjs && node --check src/pi-analysis-worker.mjs && node --check examples/pi-worker-demo.mjs && node --check src/project-identity.mjs && node --check src/patch-protocol.mjs && node --check src/workspace-broker.mjs && node --check src/patch-proposal-agent.mjs && node --check src/patch-coding-worker.mjs && node --check examples/patch-worker-demo.mjs && node --check src/sandbox-protocol.mjs && node --check src/sandbox-provider.mjs && node --check src/sandbox-materializer.mjs && node --check src/sandbox-runner.mjs && node --check src/sandbox-control.mjs && node --check src/repair-protocol.mjs && node --check src/repair-service.mjs && node --check examples/sandbox-demo.mjs && node --check examples/repair-demo.mjs && node --check scripts/acceptance/make-fixture.mjs && node --check scripts/acceptance/e2e-repair.mjs && node --check src/patch-service.mjs && node --check src/sandbox-service.mjs && node --check src/sidecar-server.mjs && node --check src/worker-agent.mjs && node --check scripts/e2e/openclaw-smoke.mjs && node --check scripts/e2e/openclaw-ui.mjs && node --check scripts/e2e/seed-owner.mjs && node --check scripts/e2e/openclaw-ui-p31.mjs && node --check scripts/e2e/seed-p31.mjs && node --check scripts/e2e/desktop-companion.mjs && node --check scripts/e2e/desktop-shell.mjs",
     "demo:evolution": "node examples/evolution-demo.mjs",
     "demo:layered": "node examples/layered-demo.mjs",
     "workbench": "node bin/workbench.mjs",
@@ -26,7 +27,41 @@
     "e2e:openclaw": "node scripts/e2e/openclaw-smoke.mjs",
     "e2e:openclaw:ui": "node scripts/e2e/openclaw-ui.mjs",
     "e2e:openclaw:p31": "node scripts/e2e/openclaw-ui-p31.mjs",
-    "test:sandbox:real": "node --test tests/sandbox-real.test.mjs"
+    "e2e:desktop": "node scripts/e2e/desktop-companion.mjs",
+    "e2e:desktop:shell": "node scripts/e2e/desktop-shell.mjs",
+    "test:sandbox:real": "node --test tests/sandbox-real.test.mjs",
+    "desktop:dir": "electron-builder --win dir --x64",
+    "desktop:pack": "electron-builder --win portable --x64"
+  },
+  "main": "desktop/main.cjs",
+  "build": {
+    "appId": "com.owner.companion",
+    "productName": "Owner Companion",
+    "asar": true,
+    "files": [
+      "desktop/**/*",
+      "src/**/*",
+      "web/**/*",
+      "domains/**/*",
+      "examples/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist-companion"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "OwnerCompanion-${version}-portable.exe"
+    }
   },
   "bin": {
     "domainctl": "./bin/domainctl.mjs",
@@ -35,5 +70,9 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^1.5.0",
     "typebox": "^1.0.0"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0"
   }
 }

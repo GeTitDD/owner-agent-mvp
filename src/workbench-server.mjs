@@ -84,7 +84,7 @@ export async function createWorkbenchServer({host='127.0.0.1',port=4317,dbPath=d
       const hostname=req.headers.host??'';
       if(!/^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(hostname)) {json(res,{error:'Invalid Host header'},403);return;}
       const url=new URL(req.url,`http://${hostname}`);
-      if(req.method==='GET' && ['/', '/app.js','/styles.css','/companion.html','/companion.js','/companion.css'].includes(url.pathname)) {
+      if(req.method==='GET' && ['/', '/app.js','/styles.css'].includes(url.pathname)) {
         const name=url.pathname==='/'?'index.html':url.pathname.slice(1);
         const data=await readFile(path.join(WEB,name));
         res.writeHead(200,{'content-type':name.endsWith('.js')?'application/javascript; charset=utf-8':name.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8',
