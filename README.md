@@ -1,10 +1,10 @@
-# Owner Agent × Domain Knowledge Workbench — v0.5
+# Owner Agent × Domain Knowledge Workbench — v1.0
 
-> 当前开发分支含 **v1.0 Patch–Test–Repair**（WIP）；**v0.9 Sandboxed Test Runner** 已合并到 main。v0.8/v0.7/v0.6 能力见下方「功能状态」。
+> **v1.0 Patch–Test–Repair** 与 v0.6–v0.9 全部能力均已合并到 main。真实 Pi + 真实 Docker 的全链路已通过首轮 L3 验收（见 [v1.1 验收报告](docs/ACCEPTANCE_REPORT_V1.1.md)）；更大范围的真实仓库与多轮可靠性验收见 [#14](https://github.com/GeTitDD/owner-agent-mvp/issues/14)。
 
 **以 Owner 为中心的多项目管理 Agent + 个人领域知识资产工作台 + 可选桌面宠物。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
 
-## v1.0 WIP：Patch–Test–Repair（分支 `feat/v1.0-patch-test-repair`）
+## v1.0（已合并）：Patch–Test–Repair
 
 从一次**已完成且失败**的 SandboxRun 出发，Owner 显式批准一次有界修复：新的 `code-patch` Job 在原 base 上创建全新 Worktree，模型收到上一补丁 diff 与脱敏失败证据（明确标记为不可信数据），输出完整替换提案；Owner 再次审批 apply，并再次审批 sandbox 测试。**不做自动循环、自动 apply/test/merge，也不改 OwnerTask。**
 
@@ -21,6 +21,18 @@ npm run demo:repair   # Fake patch + Fake sandbox 端到端演示（零真实模
 ```
 
 完整 schema、哈希链、审批断点、CLI 与测试矩阵见 **[Patch–Test–Repair 文档](docs/PATCH_TEST_REPAIR.md)**。
+
+## 真实项目端到端验收（v1.1 / #14）
+
+现有自动化测试与 demo 使用 Fake 模型 + Fake provider；真实 Pi + 真实 Docker + Repair 的组合由验收脚本单独执行：
+
+```bash
+npm run acceptance:repair -- --level 1   # 确定性提案 + 真实 Docker，验证状态链
+npm run acceptance:repair -- --level 2   # 真实 Pi 提案 + Fake provider，验证协议兼容
+npm run acceptance:repair -- --level 3   # 真实 Pi 修复 + 真实 Docker，验证 fail -> pass
+```
+
+验收 fixture 的 bug 与失败测试都提交在 base，repair scope 排除 `tests/`，复测时额外校验测试文件 hash 未变，避免"改弱测试"得到 `tested_pass`。完整步骤、判据与限制见 **[端到端验收手册](docs/ACCEPTANCE_E2E.md)**；首轮 L1/L2/L3 实测结果见 **[v1.1 验收报告](docs/ACCEPTANCE_REPORT_V1.1.md)**。
 
 ## v0.9（已合并）：Sandboxed Test Runner
 
@@ -40,7 +52,7 @@ npm run test:sandbox:real  # 需要 Linux Docker + OWNER_AGENT_SANDBOX_IMAGE_DIG
 
 完整 SandboxProvider 接口、TestProfile、状态机、证据协议与安全边界见 **[Sandboxed Test Runner 设计文档](docs/SANDBOX_TEST_RUNNER.md)**。
 
-## v0.8 WIP：Patch-first Coding Worker（分支 `feat/v0.8-patch-coding-worker`）
+## v0.8（已合并）：Patch-first Coding Worker
 
 在 v0.7 的隔离 Pi 会话之上，新增**受控代码补丁闭环**：Owner 为指定项目/任务/文件范围批准一次 `code-patch` Job，Pi 只生成**结构化补丁提案**（无工具、无 Shell、无 Git），宿主验证后进入**二次审批**；只有 Owner 用固定 `proposal_hash` 批准后，才在从批准 base 创建的**独立 Git Worktree** 中应用，并产出只读 Diff 证据。
 
@@ -58,7 +70,7 @@ npm run demo:patch     # fake agent 端到端：worktree → proposal → approv
 
 完整工作区边界、补丁协议、三条状态机与崩溃恢复见 **[Patch Coding Worker 设计文档](docs/PATCH_CODING_WORKER.md)**。
 
-## v0.7 WIP：Pi Analysis Worker（分支 `feat/v0.7-pi-analysis-worker`）
+## v0.7（已合并）：Pi Analysis Worker
 
 首个**真实执行闭环**：审批通过的 `pi-analysis` Job 在显式 `--allow-model` 下获得一个**项目级隔离、无工具、只读**的 Pi Session，产出有界、带 sha256 的项目私有分析产物。
 
@@ -73,7 +85,7 @@ OWNER_AGENT_REAL_PI_TEST=1 npm test   # 可选真实 Pi 冒烟（需凭据；跳
 
 完整生命周期、隔离边界、取消/心跳策略与手动真实冒烟指南见 **[Pi Worker 设计文档](docs/PI_WORKER.md)**。
 
-## v0.6 WIP：Durable Task Coordinator（分支 `feat/v0.6-durable-task-coordinator`）
+## v0.6（已合并）：Durable Task Coordinator
 
 在 v0.5 基础上新增**可持久化、可审核、崩溃可恢复的 Job 生命周期**（控制面 + FakeWorker，无真实执行器）：
 
@@ -105,7 +117,7 @@ npm run demo:jobs   # 临时库 + fake clock 的端到端演示（审批/并发/
 
 - 已实现：Owner Project/Task Registry、事件日志和投影、轻量常驻监控、只读智能查询、跨项目知识建议/审批、Web 管理面板、可选 Electron 桌面壳；v0.6 持久化 Job 生命周期；v0.7 只读 Pi 分析；v0.8 受控 Worktree 补丁提案/二次审批/应用；v0.9 Linux 容器沙箱测试与私有证据；v1.0 单轮 Patch–Test–Repair 证据驱动修复。
 - 默认推理模式：**无模型的确定性查询**。可通过 `ownerctl ask-pi` 明确调用工具禁用的 Pi SDK 认知会话（需要额外安装、配置模型；仅模拟集成测试）。
-- 暂未实现：自动启动的 OS 守护进程、项目 Agent 实际调度、自动跨项目知识迁移、生产级权限认证、真实 Pi/Electron GUI 端到端测试。
+- 暂未实现：自动启动的 OS 守护进程、项目 Agent 实际调度、自动跨项目知识迁移、生产级权限认证、真实仓库与多轮可靠性验收（[#14](https://github.com/GeTitDD/owner-agent-mvp/issues/14)，L1/L2/L3 脚手架已提供）、Electron GUI 端到端测试。
 - 安全原则：项目必须显式登记；Pi 采集默认关闭，只记元数据；知识建议不自动更改项目；Workbench 仅绑定 loopback。**请勿公网开放。**
 
 ---
@@ -185,8 +197,9 @@ node bin/domainctl.mjs lock --project examples/pi-local-research --out /tmp/pi-c
 | 双快照标识与 Context Lock | **已实现（v0.3）** |
 | 个人知识 Web UI / 人工笔记 CRUD | **已实现（v0.4，本地原型）** |
 | Owner 项目/任务/事件 Registry 与只读问答 | **已实现（v0.5，本地原型）** |
-| Durable Job 生命周期（审批/原子承领/租约/裁定/幂等，FakeWorker） | **已实现（v0.6 WIP，控制面）** |
-| 真实 Pi/Shell 执行器接入与自动调度 | **未实现（下一 Issue）** |
+| Durable Job 生命周期（审批/原子承领/租约/裁定/幂等，FakeWorker） | **已实现（v0.6，已合并）** |
+| 真实 Pi 只读分析执行器（opt-in） | **已实现（v0.7，已合并）** |
+| 自动调度与常驻执行器 | **未实现（后续）** |
 | Provider prompt cache 命中率统计 / KV Cache 复用 | **未实现（后续）** |
 
 ## 运行环境

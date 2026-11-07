@@ -72,7 +72,7 @@ approval_hash = sha256(canonical({sourceChainHash, repairScope, contextHash,
 ## 5. 权限与预算
 
 - Pi 仍 `noTools`/无 extensions，`--allow-model` 仍显式。
-- 修复测试的 profile/plan/image/command/资源预算/includePaths 在 `createSandboxRun` 事务内与源 Run 强制比对；CLI `sandbox-submit` 会在生成快照前预检，漂移时不会留下误挂的快照目录。修复测试仍必须重新走 `sandbox-submit` + `sandbox-approve`。
+- 修复测试的 profile/plan/image/command/资源预算/includePaths 在创建 Run 前与源 Run 强制比对；CLI `sandbox-submit` 会在生成快照前预检，`createSandboxRun` 内也会再次比对（当前位于 `BEGIN IMMEDIATE` 之前，见 [#11](https://github.com/GeTitDD/owner-agent-mvp/issues/11)），漂移时不会留下误挂的快照目录。修复测试仍必须重新走 `sandbox-submit` + `sandbox-approve`。
 - 修复 scope 不能扩大 source Proposal allowlist；额外文件/更高预算/新镜像/网络都需要新的 Owner 决策。
 - 最多 1 个 repair iteration；context/diff/evidence 均有字节上限；不自动多轮。
 
@@ -137,3 +137,5 @@ node bin/ownerctl.mjs repair-show --id <CYCLE_ID>
 - `UNIQUE(source_sandbox_run_id)` 是 P0 的一次性决定：Owner 拒绝/取消某个 cycle 后，不能从同一个 source Run 直接重新提交；需要新的失败测试 Run。若要重试同一失败证据，应新增 Owner 决策并在后续版本放宽该唯一约束。
 - 修复 context 与 bind mount 的 TOCTOU、容器内核逃逸风险沿用 v0.9 的限制。
 - 真实 Pi 输出可靠性不保证；解析/校验失败即失败。
+
+[#9]: https://github.com/GeTitDD/owner-agent-mvp/issues/9

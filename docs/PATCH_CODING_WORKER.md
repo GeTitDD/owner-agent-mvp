@@ -249,3 +249,5 @@ OWNER_AGENT_REAL_PATCH_TEST=1 npm test   # 需要已配置的 Pi 凭据，会产
   需额外的进程锁（未在本 Issue 范围）。
 - `.owner-root-identity` 仍由 v0.7 登记写入项目根；Broker 的干净检查排除它，不新增主工作区
   写入。是否迁移到 Owner 侧留待后续 Issue。
+
+[#5]: https://github.com/GeTitDD/owner-agent-mvp/issues/5
