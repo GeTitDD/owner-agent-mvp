@@ -1,9 +1,9 @@
 {
   "name": "@owner/openclaw-owner-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "private": true,
-  "description": "OpenClaw feature plugin that surfaces Owner Agent jobs, patches and repair cycles",
+  "description": "OpenClaw feature plugin that surfaces Owner Agent jobs and frozen patch/sandbox/repair decisions",
   "files": [
     "dist",
     "openclaw.plugin.json",

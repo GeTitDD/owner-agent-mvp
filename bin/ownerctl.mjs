@@ -14,7 +14,7 @@ import { reconcileSandboxWithProvider, cleanupSandboxWithProvider } from '../src
 import { submitRepairCycle, approveRepairCycle } from '../src/repair-service.mjs';
 import { approveAndApplyPatch, applyApprovedPatch } from '../src/patch-service.mjs';
 import { approveSandboxRun, submitSandboxRun } from '../src/sandbox-service.mjs';
-import { startSidecar, resolveSidecarToken, sidecarTokenPath, SIDECAR_DEFAULT_PORT } from '../src/sidecar-server.mjs';
+import { startSidecar, resolveSidecarToken, resolveApprovalToken, sidecarTokenPath, approvalTokenPath, SIDECAR_DEFAULT_PORT } from '../src/sidecar-server.mjs';
 import { defaultDbPath } from '../src/storage.mjs';
 const store=new OwnerStore(process.env.OWNER_AGENT_DB??defaultDbPath());
 const args=process.argv.slice(2);const command=args.shift();
@@ -181,14 +181,18 @@ try {
     if(!Number.isSafeInteger(port)||port<0||port>65535)throw new Error('Invalid --port');
     const explicit=read('--token','');
     const token=resolveSidecarToken({dbPath:store.dbPath,explicit});
-    const handle=await startSidecar({store,brokerFactory:()=>broker(),token,port,
+    // 审批令牌只交给操作员；插件后端不读取它。
+    const approvalToken=resolveApprovalToken({dbPath:store.dbPath,explicit:read('--approval-token','')});
+    const handle=await startSidecar({store,brokerFactory:()=>broker(),token,approvalToken,port,
       version:'1.1.0-poc',
       sandboxRoot:read('--sandbox-dir','')||defaultSandboxRoot(),
       imageDigest:process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST||''});
     console.error(`owner sidecar listening on http://127.0.0.1:${handle.port}`);
-    console.error(explicit||process.env.OWNER_AGENT_SIDECAR_TOKEN
-      ?'sidecar token: supplied via flag/env'
-      :`sidecar token file: ${sidecarTokenPath(store.dbPath)}`);
+    console.error(explicit? 'read token: supplied via flag/env'
+      :`read token file: ${sidecarTokenPath(store.dbPath)}`);
+    console.error(read('--approval-token','')||process.env.OWNER_AGENT_APPROVAL_TOKEN
+      ?'approval token: supplied via flag/env'
+      :`approval token file: ${approvalTokenPath(store.dbPath)} (enter it in the Control UI)`);
     await new Promise((done)=>{process.once('SIGINT',done);process.once('SIGTERM',done);});
     await handle.close();
     result={stopped:true,port:handle.port};

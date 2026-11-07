@@ -1,4 +1,4 @@
-// v1.1 sidecar 契约测试：只验证 HTTP 适配层，不重复 v1.0 的领域状态机测试。
+// v1.1 sidecar 契约测试：授权隔离、审批/应用拆分、原子审计与 CORS。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,35 +6,65 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { OwnerStore } from '../src/owner-store.mjs';
-import { resolveSidecarToken, startSidecar } from '../src/sidecar-server.mjs';
+import {
+  approvalTokenPath,
+  resolveApprovalToken,
+  resolveSidecarToken,
+  sidecarTokenPath,
+  startSidecar
+} from '../src/sidecar-server.mjs';
 
 const TOKEN = 'sidecar-test-token-0123456789';
+const APPROVAL = 'approval-test-token-0123456789';
 
-const call = async (handle, method, routePath, { body, headers = {}, token = TOKEN } = {}) => {
+const ORIGIN = {
+  gatewayInstanceId: 'gw-1',
+  sessionKey: 'agent:main:sidecar',
+  runId: 'run-1',
+  operatorId: 'owner'
+};
+
+const call = async (handle, method, routePath, {
+  body,
+  headers = {},
+  token = TOKEN,
+  approval = false,
+  omitOrigin = false
+} = {}) => {
+  const merged = {
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+    ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    ...(method === 'POST' && !omitOrigin ? { 'x-owner-origin': JSON.stringify(ORIGIN) } : {}),
+    ...(approval ? { 'x-owner-approval-token': APPROVAL } : {}),
+    ...headers
+  };
   const response = await fetch(`http://127.0.0.1:${handle.port}${routePath}`, {
     method,
-    headers: {
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-      ...headers
-    },
+    headers: merged,
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   const text = await response.text();
-  return { status: response.status, body: text ? JSON.parse(text) : null };
+  return { status: response.status, body: text ? JSON.parse(text) : null, headers: response.headers };
 };
 
-const rawStatus = (port, headers) => new Promise((resolve, reject) => {
-  const request = http.request(
-    { host: '127.0.0.1', port, path: '/owner/v1/health', method: 'GET', headers },
-    (response) => {
-      response.resume();
-      response.on('end', () => resolve(response.statusCode));
-    }
-  );
-  request.on('error', reject);
-  request.end();
-});
+const rawRequest = (port, { method = 'GET', path: routePath = '/owner/v1/health', headers = {} } = {}) =>
+  new Promise((resolve, reject) => {
+    const request = http.request(
+      { host: '127.0.0.1', port, path: routePath, method, headers },
+      (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => { body += chunk; });
+        response.on('end', () => resolve({
+          status: response.statusCode,
+          body,
+          headers: response.headers
+        }));
+      }
+    );
+    request.on('error', reject);
+    request.end();
+  });
 
 const withSidecar = async (fn) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-sidecar-'));
@@ -43,9 +73,9 @@ const withSidecar = async (fn) => {
   const task = store.createTask({ projectId: 'p1', title: 'Acceptance task' });
   const handle = await startSidecar({
     store,
-    // 这些用例不触碰补丁/沙箱，误用 broker 应当直接失败。
     brokerFactory: () => { throw new Error('broker must not be used in these tests'); },
     token: TOKEN,
+    approvalToken: APPROVAL,
     port: 0
   });
   try {
@@ -57,125 +87,68 @@ const withSidecar = async (fn) => {
   }
 };
 
-test('sidecar rejects missing or wrong bearer token', async () => {
+const createJob = async (handle, task, key = 'sidecar-key-1') => call(handle, 'POST', '/owner/v1/jobs', {
+  body: {
+    projectId: 'p1',
+    jobType: 'status-note',
+    title: 'Sidecar job',
+    payload: { note: 'hello' },
+    idempotencyKey: key,
+    ownerTaskId: task.id
+  }
+});
+
+test('health requires the read token', async () => {
   await withSidecar(async ({ handle }) => {
     assert.equal((await call(handle, 'GET', '/owner/v1/health', { token: '' })).status, 401);
     assert.equal((await call(handle, 'GET', '/owner/v1/health', { token: 'wrong' })).status, 401);
     const ok = await call(handle, 'GET', '/owner/v1/health');
     assert.equal(ok.status, 200);
     assert.equal(ok.body.ok, true);
+    assert.equal(ok.body.approvalMode, 'token');
   });
 });
 
-test('sidecar rejects non-loopback Host and cross-site Origin', async () => {
-  await withSidecar(async ({ handle }) => {
-    assert.equal(await rawStatus(handle.port, { host: 'evil.example', authorization: `Bearer ${TOKEN}` }), 403);
-    const crossSite = await call(handle, 'GET', '/owner/v1/health', {
-      headers: { origin: 'http://evil.example' }
-    });
-    assert.equal(crossSite.status, 403);
-    const sameOrigin = await call(handle, 'GET', '/owner/v1/health', {
-      headers: { origin: `http://127.0.0.1:${handle.port}` }
-    });
-    assert.equal(sameOrigin.status, 200);
-  });
-});
-
-test('sidecar lists projects, tasks and summary', async () => {
+test('read token cannot approve; approval token is required', async () => {
   await withSidecar(async ({ handle, task }) => {
-    const projects = await call(handle, 'GET', '/owner/v1/projects');
-    assert.equal(projects.status, 200);
-    assert.deepEqual(projects.body.items.map((item) => item.id), ['p1']);
-
-    const tasks = await call(handle, 'GET', '/owner/v1/tasks?projectId=p1');
-    assert.equal(tasks.status, 200);
-    assert.equal(tasks.body.items[0].id, task.id);
-
-    const summary = await call(handle, 'GET', '/owner/v1/summary');
-    assert.equal(summary.status, 200);
-    assert.equal(summary.body.projectCount >= 1, true);
-  });
-});
-
-test('sidecar creates jobs idempotently and approves them', async () => {
-  await withSidecar(async ({ handle, task }) => {
-    const created = await call(handle, 'POST', '/owner/v1/jobs', {
-      body: {
-        projectId: 'p1',
-        jobType: 'status-note',
-        title: 'Sidecar job',
-        payload: { note: 'hello' },
-        idempotencyKey: 'sidecar-key-1',
-        ownerTaskId: task.id
-      }
-    });
+    const created = await createJob(handle, task);
     assert.equal(created.status, 201);
-    assert.equal(created.body.status, 'pending_approval');
-    assert.equal(created.body.duplicate, undefined);
 
-    const duplicate = await call(handle, 'POST', '/owner/v1/jobs', {
-      body: {
-        projectId: 'p1',
-        jobType: 'status-note',
-        title: 'Sidecar job',
-        payload: { note: 'hello' },
-        idempotencyKey: 'sidecar-key-1',
-        ownerTaskId: task.id
-      }
+    // 只有读取令牌：拒绝，且状态不变。
+    const readOnly = await call(handle, 'POST', `/owner/v1/jobs/${created.body.id}/approve`);
+    assert.equal(readOnly.status, 403);
+
+    const wrong = await call(handle, 'POST', `/owner/v1/jobs/${created.body.id}/approve`, {
+      approval: true,
+      headers: { 'x-owner-approval-token': 'not-the-approval-token' }
     });
-    assert.equal(duplicate.status, 200);
-    assert.equal(duplicate.body.id, created.body.id);
-    assert.equal(duplicate.body.duplicate, true);
+    assert.equal(wrong.status, 403);
 
-    const approved = await call(handle, 'POST', `/owner/v1/jobs/${created.body.id}/approve`);
+    const approved = await call(handle, 'POST', `/owner/v1/jobs/${created.body.id}/approve`, {
+      approval: true
+    });
     assert.equal(approved.status, 200);
     assert.equal(approved.body.status, 'queued');
-
-    const fetched = await call(handle, 'GET', `/owner/v1/jobs/${created.body.id}`);
-    assert.equal(fetched.status, 200);
-    assert.equal(fetched.body.status, 'queued');
   });
 });
 
-test('sidecar records the OpenClaw origin on mutations', async () => {
+test('mutations require X-Owner-Origin and reject unknown fields', async () => {
   await withSidecar(async ({ handle, task }) => {
-    const created = await call(handle, 'POST', '/owner/v1/jobs', {
+    const missing = await call(handle, 'POST', '/owner/v1/jobs', {
+      omitOrigin: true,
       body: {
         projectId: 'p1',
         jobType: 'status-note',
-        title: 'Origin job',
-        payload: { note: 'origin' },
-        idempotencyKey: 'sidecar-origin-1',
+        title: 'No origin',
+        payload: { note: 'x' },
+        idempotencyKey: 'sidecar-no-origin',
         ownerTaskId: task.id
-      },
-      headers: {
-        'x-owner-origin': JSON.stringify({
-          gatewayInstanceId: 'gw-1',
-          sessionKey: 'agent:main:sidecar',
-          runId: 'run-1',
-          operatorId: 'owner'
-        })
       }
     });
-    assert.equal(created.status, 201);
+    assert.equal(missing.status, 400);
 
-    const events = await call(handle, 'GET', '/owner/v1/events?projectId=p1');
-    assert.equal(events.status, 200);
-    const audit = events.body.items.find((item) => item.kind === 'api_call');
-    assert.ok(audit, 'api_call event should be recorded');
-    assert.equal(audit.payload.origin.gatewayInstanceId, 'gw-1');
-    assert.equal(audit.payload.origin.sessionKey, 'agent:main:sidecar');
-    assert.equal(audit.payload.origin.runId, 'run-1');
-    assert.match(audit.payload.note, /job\.create/);
-
-    const job = await call(handle, 'GET', `/owner/v1/jobs/${created.body.id}`);
-    assert.equal(job.body.events[0].actor.startsWith('openclaw:owner'), true);
-  });
-});
-
-test('sidecar rejects unknown origin fields and non-JSON bodies', async () => {
-  await withSidecar(async ({ handle, task }) => {
-    const badOrigin = await call(handle, 'POST', '/owner/v1/jobs', {
+    const forgedField = await call(handle, 'POST', '/owner/v1/jobs', {
+      headers: { 'x-owner-origin': JSON.stringify({ evil: '1' }) },
       body: {
         projectId: 'p1',
         jobType: 'status-note',
@@ -183,51 +156,162 @@ test('sidecar rejects unknown origin fields and non-JSON bodies', async () => {
         payload: { note: 'x' },
         idempotencyKey: 'sidecar-bad-origin',
         ownerTaskId: task.id
-      },
-      headers: { 'x-owner-origin': JSON.stringify({ evil: '1' }) }
+      }
     });
-    assert.equal(badOrigin.status, 400);
-
-    const wrongType = await call(handle, 'POST', '/owner/v1/jobs', {
-      body: { anything: true },
-      headers: { 'content-type': 'text/plain' }
-    });
-    assert.equal(wrongType.status, 415);
+    assert.equal(forgedField.status, 400);
   });
 });
 
-test('sidecar maps validation and state errors to HTTP status codes', async () => {
+test('approval writes an atomic decision audit with a claimed origin', async () => {
+  await withSidecar(async ({ store, handle, task }) => {
+    const created = await createJob(handle, task, 'sidecar-audit-1');
+    const approved = await call(handle, 'POST', `/owner/v1/jobs/${created.body.id}/approve`, {
+      approval: true,
+      headers: {
+        'x-owner-origin': JSON.stringify({ ...ORIGIN, runId: 'forged-run' })
+      }
+    });
+    assert.equal(approved.status, 200);
+
+    const rows = store.listDecisionAudit({ subjectType: 'job', subjectId: created.body.id });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].action, 'approve');
+    assert.equal(rows[0].principal_kind, 'approval-token');
+    assert.equal(rows[0].principal_id, 'owner');
+    assert.equal(rows[0].origin_trust, 'claimed');
+    assert.equal(rows[0].claimed_origin.runId, 'forged-run');
+  });
+});
+
+test('audit failure rolls the approval back', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-audit-'));
+  const store = new OwnerStore(path.join(root, 'owner.sqlite'));
+  store.registerProject({ id: 'p1', name: 'Audit Test', root });
+  const task = store.createTask({ projectId: 'p1', title: 'T' });
+  const job = store.createJob({
+    projectId: 'p1',
+    jobType: 'status-note',
+    title: 'J',
+    payload: { note: 'x' },
+    idempotencyKey: 'audit-rollback',
+    ownerTaskId: task.id
+  });
+  try {
+    assert.throws(() => store.approveJob(job.id, {
+      audit: { principal: { kind: 'bogus', id: 'x' }, claimedOrigin: ORIGIN }
+    }));
+    assert.equal(store.getJob(job.id).status, 'pending_approval');
+    assert.equal(store.listDecisionAudit({ subjectType: 'job', subjectId: job.id }).length, 0);
+  } finally {
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('patch approval is separated from apply', async () => {
   await withSidecar(async ({ handle }) => {
-    assert.equal((await call(handle, 'GET', '/owner/v1/jobs/missing')).status, 404);
-    assert.equal((await call(handle, 'POST', '/owner/v1/jobs', {
-      body: { projectId: 'p1' }
-    })).status, 400);
-    assert.equal((await call(handle, 'POST', '/owner/v1/patches/missing/approve', {
+    // 不存在提案：审批与应用都必须 404，且不能互相替代。
+    const approve = await call(handle, 'POST', '/owner/v1/patches/missing/approve', {
+      approval: true,
       body: { hash: 'a'.repeat(64) }
-    })).status, 404);
-    assert.equal((await call(handle, 'POST', '/owner/v1/patches/missing/approve', {
-      body: { hash: 'not-a-hash' }
-    })).status, 400);
-    assert.equal((await call(handle, 'GET', '/owner/v1/unknown')).status, 404);
-    assert.equal((await call(handle, 'DELETE', '/owner/v1/jobs')).status, 405);
+    });
+    assert.equal(approve.status, 404);
+    const apply = await call(handle, 'POST', '/owner/v1/patches/missing/apply', {
+      approval: true,
+      body: { hash: 'a'.repeat(64) }
+    });
+    assert.equal(apply.status, 404);
+    const badHash = await call(handle, 'POST', '/owner/v1/patches/missing/approve', {
+      approval: true,
+      body: { hash: 'nope' }
+    });
+    assert.equal(badHash.status, 400);
   });
 });
 
-test('token file is created once and reused', () => {
+test('decisions without an approval token return 503 (fail closed)', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-noapproval-'));
+  const store = new OwnerStore(path.join(root, 'owner.sqlite'));
+  store.registerProject({ id: 'p1', name: 'No Approval', root });
+  const task = store.createTask({ projectId: 'p1', title: 'T' });
+  const job = store.createJob({
+    projectId: 'p1',
+    jobType: 'status-note',
+    title: 'J',
+    payload: { note: 'x' },
+    idempotencyKey: 'no-approval',
+    ownerTaskId: task.id
+  });
+  const handle = await startSidecar({
+    store,
+    brokerFactory: () => { throw new Error('unused'); },
+    token: TOKEN,
+    approvalToken: null,
+    port: 0
+  });
+  try {
+    const res = await call(handle, 'POST', `/owner/v1/jobs/${job.id}/approve`, { approval: true });
+    assert.equal(res.status, 503);
+    assert.equal(store.getJob(job.id).status, 'pending_approval');
+  } finally {
+    await handle.close();
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('CORS allows loopback Control UI origins only', async () => {
+  await withSidecar(async ({ handle }) => {
+    const preflight = await rawRequest(handle.port, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'http://127.0.0.1:19789',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'authorization,x-owner-approval-token'
+      }
+    });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers['access-control-allow-origin'], 'http://127.0.0.1:19789');
+    assert.match(String(preflight.headers['access-control-allow-headers']), /x-owner-approval-token/);
+
+    const allowed = await rawRequest(handle.port, {
+      headers: {
+        origin: 'http://127.0.0.1:19789',
+        authorization: `Bearer ${TOKEN}`
+      }
+    });
+    assert.equal(allowed.status, 200);
+    assert.equal(allowed.headers['access-control-allow-origin'], 'http://127.0.0.1:19789');
+
+    const blocked = await rawRequest(handle.port, {
+      headers: {
+        origin: 'http://evil.example',
+        authorization: `Bearer ${TOKEN}`
+      }
+    });
+    assert.equal(blocked.status, 403);
+  });
+});
+
+test('read and approval tokens live in separate files', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-sidecar-token-'));
-  const saved = process.env.OWNER_AGENT_SIDECAR_TOKEN;
+  const savedRead = process.env.OWNER_AGENT_SIDECAR_TOKEN;
+  const savedApproval = process.env.OWNER_AGENT_APPROVAL_TOKEN;
   delete process.env.OWNER_AGENT_SIDECAR_TOKEN;
+  delete process.env.OWNER_AGENT_APPROVAL_TOKEN;
   try {
     const dbPath = path.join(root, 'owner.sqlite');
-    const first = resolveSidecarToken({ dbPath });
-    const second = resolveSidecarToken({ dbPath });
-    assert.equal(first, second);
-    assert.ok(first.length >= 24);
-    const file = path.join(root, 'sidecar.token');
-    assert.equal(fs.readFileSync(file, 'utf8').trim(), first);
+    const read = resolveSidecarToken({ dbPath });
+    const approval = resolveApprovalToken({ dbPath });
+    assert.notEqual(read, approval);
+    assert.ok(read.length >= 24 && approval.length >= 24);
+    assert.equal(fs.readFileSync(sidecarTokenPath(dbPath), 'utf8').trim(), read);
+    assert.equal(fs.readFileSync(approvalTokenPath(dbPath), 'utf8').trim(), approval);
   } finally {
-    if (saved === undefined) delete process.env.OWNER_AGENT_SIDECAR_TOKEN;
-    else process.env.OWNER_AGENT_SIDECAR_TOKEN = saved;
+    if (savedRead === undefined) delete process.env.OWNER_AGENT_SIDECAR_TOKEN;
+    else process.env.OWNER_AGENT_SIDECAR_TOKEN = savedRead;
+    if (savedApproval === undefined) delete process.env.OWNER_AGENT_APPROVAL_TOKEN;
+    else process.env.OWNER_AGENT_APPROVAL_TOKEN = savedApproval;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

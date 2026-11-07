@@ -127,7 +127,7 @@ export async function submitSandboxRun(store, broker, {
  * @param {{runId: string, hash: string, actor?: string}} input
  * @returns {object}
  */
-export function approveSandboxRun(store, { runId, hash, actor = 'owner' }) {
+export function approveSandboxRun(store, { runId, hash, actor = 'owner', audit = null }) {
   const run = store.getSandboxRun(runId);
   if (!run) throw new OwnerInputError('Unknown sandbox run', 404);
   const manifest = store.getSandboxEvidence(runId, 'snapshot_manifest');
@@ -137,5 +137,5 @@ export function approveSandboxRun(store, { runId, hash, actor = 'owner' }) {
     manifest: JSON.parse(manifest.content),
     snapshotHash: run.snapshot_hash
   });
-  return store.approveSandboxRun(runId, { expectedHash: hash, actor });
+  return store.approveSandboxRun(runId, { expectedHash: hash, actor, audit });
 }

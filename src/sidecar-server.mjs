@@ -1,17 +1,20 @@
-// Owner Agent sidecar：给 OpenClaw 插件使用的本机 HTTP 适配层。
+// Owner Agent sidecar：给 OpenClaw 插件与 Control UI 使用的本机 HTTP 适配层。
 //
-// 设计约束（与 v1.1 方案一致）：
-// - 只监听 127.0.0.1，必须携带 bearer token；
-// - 审批接口必须显式携带 Owner 冻结的 64-hex 哈希；
-// - 写操作把 OpenClaw 的来源（gateway/session/run/operator）记入 Owner 事件流；
-// - 不在本层放宽任何 OwnerStore 的状态机与不变量。
+// 授权模型（v1.1，对应 PR #17 第一轮 Review）：
+// - 读取令牌（sidecar.token）：GET、提交 Job、创建沙箱运行。插件后端持有。
+// - 审批令牌（approval.token）：所有 approve / apply / reject 决策。**插件后端不读取**，
+//   只由操作员在 Control UI 中粘贴，浏览器直接调用 sidecar。这样即使模型工具能读到
+//   读取令牌，也无法单独完成审批。
+// - 审计：审批决策与业务状态变更写在同一事务（OwnerStore.insertDecisionAudit）；
+//   自报的 X-Owner-Origin 标记为 claimed，不当作已验证身份。
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { OwnerInputError } from './owner-store.mjs';
-import { approveAndApplyPatch } from './patch-service.mjs';
+import { applyApprovedPatch } from './patch-service.mjs';
+import { approveRepairCycle } from './repair-service.mjs';
 import { approveSandboxRun, submitSandboxRun } from './sandbox-service.mjs';
 
 export const SIDECAR_DEFAULT_PORT = 47830;
@@ -25,20 +28,27 @@ const ORIGIN_KEYS = new Set([
   'pluginVersion'
 ]);
 
-/** sidecar token 的默认文件位置：与 Owner 数据库同目录。 */
+const defaultStateDir = (dbPath = '') =>
+  dbPath ? path.dirname(path.resolve(dbPath)) : path.join(os.homedir(), '.domain-context');
+
+/** 读取令牌：插件后端使用，只允许读取与非审批提交。 */
 export function sidecarTokenPath(dbPath = '') {
   if (process.env.OWNER_AGENT_SIDECAR_TOKEN_FILE) {
     return path.resolve(process.env.OWNER_AGENT_SIDECAR_TOKEN_FILE);
   }
-  const dir = dbPath ? path.dirname(path.resolve(dbPath)) : path.join(os.homedir(), '.domain-context');
-  return path.join(dir, 'sidecar.token');
+  return path.join(defaultStateDir(dbPath), 'sidecar.token');
 }
 
-/** 解析 token：显式参数 > 环境变量 > 已有文件 > 新建文件（0600）。 */
-export function resolveSidecarToken({ dbPath = '', explicit = '' } = {}) {
-  if (explicit) return explicit.trim();
-  if (process.env.OWNER_AGENT_SIDECAR_TOKEN) return process.env.OWNER_AGENT_SIDECAR_TOKEN.trim();
-  const file = sidecarTokenPath(dbPath);
+/** 审批令牌：操作员使用，绝不进入插件进程。 */
+export function approvalTokenPath(dbPath = '') {
+  if (process.env.OWNER_AGENT_APPROVAL_TOKEN_FILE) {
+    return path.resolve(process.env.OWNER_AGENT_APPROVAL_TOKEN_FILE);
+  }
+  return path.join(defaultStateDir(dbPath), 'approval.token');
+}
+
+const readOrCreateToken = (file, envValue) => {
+  if (envValue) return envValue.trim();
   try {
     const existing = fs.readFileSync(file, 'utf8').trim();
     if (existing) return existing;
@@ -50,6 +60,24 @@ export function resolveSidecarToken({ dbPath = '', explicit = '' } = {}) {
     fs.chmodSync(file, 0o600);
   } catch { /* Windows 上是尽力而为 */ }
   return token;
+};
+
+/** 解析读取令牌：显式参数 > 环境变量 > 已有文件 > 新建文件（0600）。 */
+export function resolveSidecarToken({ dbPath = '', explicit = '' } = {}) {
+  if (explicit) return explicit.trim();
+  return readOrCreateToken(
+    sidecarTokenPath(dbPath),
+    process.env.OWNER_AGENT_SIDECAR_TOKEN
+  );
+}
+
+/** 解析审批令牌。插件不应调用这个函数。 */
+export function resolveApprovalToken({ dbPath = '', explicit = '' } = {}) {
+  if (explicit) return explicit.trim();
+  return readOrCreateToken(
+    approvalTokenPath(dbPath),
+    process.env.OWNER_AGENT_APPROVAL_TOKEN
+  );
 }
 
 const digest = (value) => crypto.createHash('sha256').update(String(value)).digest();
@@ -59,8 +87,12 @@ const tokenMatches = (header, token) => {
   if (!raw.startsWith('Bearer ')) return false;
   const provided = raw.slice('Bearer '.length).trim();
   if (!provided) return false;
-  // 先做等长摘要再比较，避免长度/前缀时序泄漏。
   return crypto.timingSafeEqual(digest(provided), digest(token));
+};
+
+const tokenValueMatches = (value, token) => {
+  if (typeof value !== 'string' || !value) return false;
+  return crypto.timingSafeEqual(digest(value.trim()), digest(token));
 };
 
 const isLoopbackHost = (header, expectedPort) => {
@@ -71,8 +103,7 @@ const isLoopbackHost = (header, expectedPort) => {
   } catch {
     return false;
   }
-  const hostname = parsed.hostname;
-  if (!['127.0.0.1', 'localhost', '[::1]'].includes(hostname)) return false;
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname)) return false;
   if (expectedPort) {
     const port = parsed.port ? Number(parsed.port) : 80;
     if (port !== Number(expectedPort)) return false;
@@ -80,15 +111,28 @@ const isLoopbackHost = (header, expectedPort) => {
   return true;
 };
 
-const isSameOrigin = (origin, expectedPort) => {
-  // 非浏览器调用（插件后端）不会带 Origin；带了就必须是同源页面。
-  if (!origin) return true;
-  if (!expectedPort) return false;
-  return [
-    `http://127.0.0.1:${expectedPort}`,
-    `http://localhost:${expectedPort}`,
-    `http://[::1]:${expectedPort}`
-  ].includes(origin);
+/** 只允许本机 Control UI 跨域调用 sidecar。 */
+const isLoopbackOrigin = (origin) => {
+  if (typeof origin !== 'string' || !origin) return false;
+  let parsed;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  return parsed.protocol === 'http:'
+    && ['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname);
+};
+
+const applyCors = (res, origin) => {
+  res.setHeader('access-control-allow-origin', origin);
+  res.setHeader('vary', 'Origin');
+  res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
+  res.setHeader(
+    'access-control-allow-headers',
+    'authorization,content-type,x-owner-origin,x-owner-approval-token'
+  );
+  res.setHeader('access-control-max-age', '600');
 };
 
 const send = (res, status, payload) => {
@@ -180,12 +224,18 @@ const parseOrigin = (raw) => {
   return origin;
 };
 
-const actorFrom = (origin) => {
-  if (!origin) return 'openclaw';
-  const who = origin.operatorId || 'operator';
-  const session = origin.sessionKey ? `/${origin.sessionKey}` : '';
-  return `openclaw:${who}${session}`.slice(0, 80);
+const actorFrom = (origin, principalKind = 'approval-token') => {
+  const who = origin?.operatorId || 'owner';
+  const session = origin?.sessionKey ? `/${origin.sessionKey}` : '';
+  return `${principalKind}:${who}${session}`.slice(0, 80);
 };
+
+/** 审批决策审计：principal 是令牌持有者，origin 只是自报线索。 */
+const decisionAudit = (origin) => ({
+  principal: { kind: 'approval-token', id: 'owner' },
+  claimedOrigin: origin,
+  originTrust: 'claimed'
+});
 
 const requireMethod = (actual, expected) => {
   if (actual !== expected) throw new OwnerInputError(`Method ${actual} is not allowed`, 405);
@@ -201,16 +251,29 @@ const limitOf = (url, fallback = 100) => {
   return value;
 };
 
+/** 这些路径是“决策”，必须使用审批令牌，读取令牌无效。 */
+const isDecisionRoute = (rest, method) => {
+  if (method !== 'POST' || rest.length !== 3) return false;
+  const [head, , action] = rest;
+  if (head === 'jobs') return action === 'approve' || action === 'reject';
+  if (head === 'patches') return ['approve', 'apply', 'reject'].includes(action);
+  if (head === 'repair-cycles') return action === 'approve';
+  if (head === 'sandbox-runs') return action === 'approve';
+  return false;
+};
+
 /**
  * 构建 sidecar 的 HTTP 处理器（便于单测直接使用）。
  *
- * @param {{store: object, brokerFactory: () => object, token: string, version?: string,
- *          imageDigest?: string, sandboxRoot?: string, getExpectedPort?: () => number|null}} options
+ * @param {{store: object, brokerFactory: () => object, token: string,
+ *          approvalToken?: string|null, version?: string, imageDigest?: string,
+ *          sandboxRoot?: string, getExpectedPort?: () => number|null}} options
  */
 export function createSidecarHandler({
   store,
   brokerFactory,
   token,
+  approvalToken = null,
   version = '1.0.0',
   imageDigest = '',
   sandboxRoot = '',
@@ -229,20 +292,26 @@ export function createSidecarHandler({
   };
 
   const handle = async (req, res) => {
+    const requestOrigin = req.headers.origin;
+    if (requestOrigin && !isLoopbackOrigin(requestOrigin)) {
+      send(res, 403, { error: 'Only loopback browser origins are accepted' });
+      return;
+    }
+    if (requestOrigin) applyCors(res, requestOrigin);
+
+    const method = req.method || 'GET';
+    if (method === 'OPTIONS') {
+      // 预检请求不带 Authorization，必须在鉴权前处理。
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     const expectedPort = getExpectedPort();
     if (!isLoopbackHost(req.headers.host, expectedPort)) {
       send(res, 403, { error: 'Only loopback Host headers are accepted' });
       return;
     }
-    if (!tokenMatches(req.headers.authorization, token)) {
-      send(res, 401, { error: 'Unauthorized' });
-      return;
-    }
-    if (!isSameOrigin(req.headers.origin, expectedPort)) {
-      send(res, 403, { error: 'Cross-site requests are rejected' });
-      return;
-    }
-
     const url = new URL(req.url, 'http://127.0.0.1');
     const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
     if (segments.length < 3 || segments[0] !== 'owner' || segments[1] !== 'v1') {
@@ -250,25 +319,48 @@ export function createSidecarHandler({
       return;
     }
     const rest = segments.slice(2);
-    const method = req.method || 'GET';
-    const origin = parseOrigin(req.headers['x-owner-origin']);
+    const decision = isDecisionRoute(rest, method);
 
-    // 写操作成功后把来源写入 Owner 事件流；失败不阻断主操作。
-    const audit = (projectId, action) => {
+    if (decision) {
+      // 审批只认审批令牌；读取令牌（插件后端持有）不能替代。
+      if (!approvalToken) {
+        send(res, 503, {
+          error: 'Approval token is not configured; run `ownerctl serve` to create one'
+        });
+        return;
+      }
+      if (!tokenValueMatches(req.headers['x-owner-approval-token'], approvalToken)) {
+        send(res, 403, { error: 'Approval token is required for decisions' });
+        return;
+      }
+    } else if (!tokenMatches(req.headers.authorization, token)) {
+      send(res, 401, { error: 'Unauthorized' });
+      return;
+    }
+
+    // 写操作必须声明来源；缺失即失败（fail closed）。来源仍标记为 claimed。
+    const origin = parseOrigin(req.headers['x-owner-origin']);
+    if (method === 'POST' && !origin) {
+      throw new OwnerInputError('X-Owner-Origin is required for mutations', 400);
+    }
+
+    const audit = decisionAudit(origin);
+    const [head, id, action] = rest;
+
+    // 读取/提交类操作保留一条补充事件；决策的权威审计在业务事务内。
+    const noteCall = (projectId, actionName) => {
       if (!origin || !projectId) return;
       try {
         store.recordEvent({
           projectId,
           kind: 'api_call',
-          note: `${action} ${method} ${url.pathname}`.slice(0, 300),
+          note: `${actionName} ${method} ${url.pathname}`.slice(0, 300),
           origin
         });
       } catch (error) {
-        console.error(`[sidecar] failed to record origin: ${error.message}`);
+        console.error(`[sidecar] failed to record api_call: ${error.message}`);
       }
     };
-
-    const [head, id, action] = rest;
 
     if (rest.length === 1 && head === 'health') {
       requireMethod(method, 'GET');
@@ -277,6 +369,7 @@ export function createSidecarHandler({
         version,
         pid: process.pid,
         db: store.dbPath ? path.basename(store.dbPath) : null,
+        approvalMode: approvalToken ? 'token' : 'unconfigured',
         time: new Date().toISOString()
       });
       return;
@@ -306,6 +399,18 @@ export function createSidecarHandler({
         items: store.listEvents({
           projectId: url.searchParams.get('projectId') ?? '',
           limit: limitOf(url, 40)
+        })
+      });
+      return;
+    }
+
+    if (rest.length === 1 && head === 'decisions') {
+      requireMethod(method, 'GET');
+      send(res, 200, {
+        items: store.listDecisionAudit({
+          subjectType: url.searchParams.get('subjectType') ?? '',
+          subjectId: url.searchParams.get('subjectId') ?? '',
+          limit: limitOf(url, 50)
         })
       });
       return;
@@ -343,9 +448,9 @@ export function createSidecarHandler({
         payload: body.payload ?? {},
         idempotencyKey: str(body.idempotencyKey, 'idempotencyKey', 89),
         ownerTaskId: body.ownerTaskId ? str(body.ownerTaskId, 'ownerTaskId', 90) : '',
-        actor: actorFrom(origin)
+        actor: actorFrom(origin, 'openclaw')
       });
-      audit(job.project_id, 'job.create');
+      noteCall(job.project_id, 'job.create');
       send(res, job.duplicate ? 200 : 201, job);
       return;
     }
@@ -360,9 +465,8 @@ export function createSidecarHandler({
 
     if (rest.length === 3 && head === 'jobs' && action === 'approve') {
       requireMethod(method, 'POST');
-      await readBody(req); // 拒绝意外的超大 body，同时允许空 body
-      const job = store.approveJob(id, { actor: actorFrom(origin) });
-      audit(job.project_id, 'job.approve');
+      await readBody(req);
+      const job = store.approveJob(id, { actor: actorFrom(origin), audit });
       send(res, 200, job);
       return;
     }
@@ -374,7 +478,6 @@ export function createSidecarHandler({
         actor: actorFrom(origin),
         reason: str(body.reason, 'reason', 500, false)
       });
-      audit(job.project_id, 'job.reject');
       send(res, 200, job);
       return;
     }
@@ -407,20 +510,31 @@ export function createSidecarHandler({
       return;
     }
 
+    // 审批与应用分离：approve 只冻结批准，不写文件；apply 必须再带同一个 hash。
     if (rest.length === 3 && head === 'patches' && action === 'approve') {
+      requireMethod(method, 'POST');
+      const body = await readJson(req);
+      const hash = str(body.hash, 'hash', 64);
+      if (!/^[0-9a-f]{64}$/.test(hash)) throw new OwnerInputError('hash must be 64 lowercase hex', 400);
+      const proposal = store.approvePatchProposal(id, {
+        expectedHash: hash,
+        reviewer: actorFrom(origin),
+        audit
+      });
+      send(res, 200, { proposal, applied: false });
+      return;
+    }
+
+    if (rest.length === 3 && head === 'patches' && action === 'apply') {
       requireMethod(method, 'POST');
       const body = await readJson(req);
       const hash = str(body.hash, 'hash', 64);
       if (!/^[0-9a-f]{64}$/.test(hash)) throw new OwnerInputError('hash must be 64 lowercase hex', 400);
       const proposal = store.getPatchProposal(id);
       if (!proposal) throw new OwnerInputError('Unknown proposal', 404);
-      const result = await approveAndApplyPatch(store, broker(), {
-        proposalId: id,
-        hash,
-        reviewer: actorFrom(origin)
-      });
-      audit(proposal.project_id, 'patch.approve');
-      send(res, 200, result);
+      const result = await applyApprovedPatch(store, broker(), { proposalId: id, hash });
+      noteCall(proposal.project_id, 'patch.apply');
+      send(res, 200, { ...result, applied: result.outcome === 'applied' });
       return;
     }
 
@@ -433,7 +547,6 @@ export function createSidecarHandler({
         reason: str(body.reason, 'reason', 500, false),
         reviewer: actorFrom(origin)
       });
-      audit(proposal.project_id, 'patch.reject');
       send(res, 200, result);
       return;
     }
@@ -463,13 +576,12 @@ export function createSidecarHandler({
       const body = await readJson(req);
       const hash = str(body.hash, 'hash', 64);
       if (!/^[0-9a-f]{64}$/.test(hash)) throw new OwnerInputError('hash must be 64 lowercase hex', 400);
-      const { approveRepairCycle } = await import('./repair-service.mjs');
       const result = approveRepairCycle(store, {
         id,
         expectedHash: hash,
-        actor: actorFrom(origin)
+        actor: actorFrom(origin),
+        audit
       });
-      audit(result.project_id, 'repair.approve');
       send(res, 200, result);
       return;
     }
@@ -495,7 +607,7 @@ export function createSidecarHandler({
         repairCycleId: str(body.repairCycleId, 'repairCycleId', 90, false),
         sandboxRoot
       });
-      audit(run.project_id, 'sandbox.submit');
+      noteCall(run.project_id, 'sandbox.submit');
       send(res, 201, run);
       return;
     }
@@ -520,8 +632,12 @@ export function createSidecarHandler({
       const body = await readJson(req);
       const hash = str(body.hash, 'hash', 64);
       if (!/^[0-9a-f]{64}$/.test(hash)) throw new OwnerInputError('hash must be 64 lowercase hex', 400);
-      const run = approveSandboxRun(store, { runId: id, hash, actor: actorFrom(origin) });
-      audit(run.project_id, 'sandbox.approve');
+      const run = approveSandboxRun(store, {
+        runId: id,
+        hash,
+        actor: actorFrom(origin),
+        audit
+      });
       send(res, 200, run);
       return;
     }
@@ -548,6 +664,7 @@ export async function startSidecar({
   store,
   brokerFactory,
   token,
+  approvalToken = null,
   host = '127.0.0.1',
   port = SIDECAR_DEFAULT_PORT,
   version = '1.0.0',
@@ -560,6 +677,7 @@ export async function startSidecar({
     store,
     brokerFactory,
     token,
+    approvalToken,
     version,
     imageDigest,
     sandboxRoot,

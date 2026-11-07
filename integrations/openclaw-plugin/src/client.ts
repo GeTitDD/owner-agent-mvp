@@ -85,6 +85,10 @@ export class OwnerSidecarClient {
     return payload;
   }
 
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
   get(path: string): Promise<any> {
     return this.request("GET", path);
   }

@@ -145,7 +145,8 @@ export function approveRepairCycle(store, {
   id,
   expectedHash,
   actor = 'owner',
-  now = new Date().toISOString()
+  now = new Date().toISOString(),
+  audit = null
 } = {}) {
   let cycle = store.getRepairCycle(id);
   check(!!cycle, 'Unknown repair cycle', 404);
@@ -176,7 +177,7 @@ export function approveRepairCycle(store, {
 
   // v1.0 blocker 3: create + approve + bind happen in one IMMEDIATE transaction, so the
   // repair job can never be claimed before the cycle points at it.
-  return store.approveRepairCycleJob({ cycleId: id, expectedHash, actor, now });
+  return store.approveRepairCycleJob({ cycleId: id, expectedHash, actor, now, audit });
 }
 
 // v1.0 blocker 4: trusted host-side re-verification before any model call. The frozen

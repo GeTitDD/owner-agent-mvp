@@ -2,7 +2,8 @@ import { Type } from "typebox";
 import { defineFeatureContract } from "openclaw/plugin-sdk/feature-contract";
 
 // 只暴露三个工具给模型：读取摘要、列 Job、提交 Job。
-// 所有“批准/应用/提交沙箱”操作都不带 tool 声明，只能由 Control UI 的操作员触发。
+// 审批/应用/沙箱批准不在这里注册：它们由 Control UI 直接带“审批令牌”调用 sidecar，
+// 插件后端与模型都拿不到该令牌。
 const jobSummary = Type.Object({
   id: Type.String(),
   projectId: Type.String(),
@@ -50,6 +51,12 @@ const statusSummary = Type.Object({
   pendingSandboxApprovals: Type.Number()
 });
 
+const listInput = Type.Object({
+  projectId: Type.Optional(Type.String({ maxLength: 90 })),
+  status: Type.Optional(Type.String({ maxLength: 40 })),
+  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200 }))
+}, { additionalProperties: false });
+
 export const contract = defineFeatureContract({
   pluginId: "owner-agent",
   operations: {
@@ -63,11 +70,7 @@ export const contract = defineFeatureContract({
     "jobs.list": {
       kind: "query",
       description: "List Owner Agent jobs. Read-only.",
-      input: Type.Object({
-        projectId: Type.Optional(Type.String({ maxLength: 90 })),
-        status: Type.Optional(Type.String({ maxLength: 40 })),
-        limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200 }))
-      }, { additionalProperties: false }),
+      input: listInput,
       output: Type.Object({ items: Type.Array(jobSummary) }),
       tool: { name: "owner_jobs_list", label: "List Owner jobs" }
     },
@@ -85,63 +88,83 @@ export const contract = defineFeatureContract({
       output: jobSummary,
       tool: { name: "owner_job_submit", label: "Submit Owner job" }
     },
-    "job.approve": {
-      kind: "action",
-      description: "Approve a pending Owner job. UI only; never exposed as a model tool.",
-      input: Type.Object({ id: Type.String({ maxLength: 90 }) }, { additionalProperties: false }),
-      output: Type.Object({ id: Type.String(), status: Type.String() })
-    },
+
+    // 以下均为 UI 只读查询（不带 tool），用于审批前展示冻结内容。
     "patch.list": {
       kind: "query",
       description: "List patch proposals. UI only.",
-      input: Type.Object({
-        projectId: Type.Optional(Type.String({ maxLength: 90 })),
-        status: Type.Optional(Type.String({ maxLength: 40 })),
-        limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200 }))
-      }, { additionalProperties: false }),
+      input: listInput,
       output: Type.Object({ items: Type.Array(patchSummary) })
     },
-    "patch.approve": {
-      kind: "action",
-      description: "Approve and apply a patch proposal using its frozen hash. UI only.",
-      input: Type.Object({
-        proposalId: Type.String({ maxLength: 90 }),
-        hash: Type.String({ maxLength: 64 })
-      }, { additionalProperties: false }),
-      output: Type.Object({ outcome: Type.String(), status: Type.String() })
+    "patch.detail": {
+      kind: "query",
+      description: "Read one patch proposal with its frozen diff. UI only.",
+      input: Type.Object({ proposalId: Type.String({ maxLength: 90 }) }, { additionalProperties: false }),
+      output: Type.Object({
+        id: Type.String(),
+        projectId: Type.String(),
+        status: Type.String(),
+        baseSha: Type.String(),
+        proposalHash: Type.String(),
+        approvedHash: Type.String(),
+        paths: Type.Array(Type.String()),
+        diff: Type.String(),
+        appliedDiff: Type.String(),
+        rejectionReason: Type.String()
+      })
     },
     "repair.list": {
       kind: "query",
       description: "List repair cycles. UI only.",
-      input: Type.Object({
-        projectId: Type.Optional(Type.String({ maxLength: 90 })),
-        status: Type.Optional(Type.String({ maxLength: 40 })),
-        limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200 }))
-      }, { additionalProperties: false }),
+      input: listInput,
       output: Type.Object({ items: Type.Array(repairSummary) })
     },
-    "repair.approve": {
-      kind: "action",
-      description: "Approve a frozen repair cycle using its hash. UI only.",
-      input: Type.Object({
-        cycleId: Type.String({ maxLength: 90 }),
-        hash: Type.String({ maxLength: 64 })
-      }, { additionalProperties: false }),
-      output: Type.Object({ id: Type.String(), status: Type.String() })
+    "repair.detail": {
+      kind: "query",
+      description: "Read one repair cycle with its frozen scope. UI only.",
+      input: Type.Object({ cycleId: Type.String({ maxLength: 90 }) }, { additionalProperties: false }),
+      output: Type.Object({
+        id: Type.String(),
+        projectId: Type.String(),
+        status: Type.String(),
+        approvalHash: Type.String(),
+        repairScope: Type.Array(Type.String()),
+        sourceSandboxRunId: Type.String(),
+        sourceBaseSha: Type.String(),
+        contextHash: Type.String(),
+        iteration: Type.Number(),
+        maxIterations: Type.Number()
+      })
     },
     "sandbox.list": {
       kind: "query",
       description: "List sandbox runs. UI only.",
-      input: Type.Object({
-        projectId: Type.Optional(Type.String({ maxLength: 90 })),
-        status: Type.Optional(Type.String({ maxLength: 40 })),
-        limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200 }))
-      }, { additionalProperties: false }),
+      input: listInput,
       output: Type.Object({ items: Type.Array(sandboxSummary) })
+    },
+    "sandbox.detail": {
+      kind: "query",
+      description: "Read one sandbox run with its frozen profile and snapshot. UI only.",
+      input: Type.Object({ runId: Type.String({ maxLength: 90 }) }, { additionalProperties: false }),
+      output: Type.Object({
+        id: Type.String(),
+        projectId: Type.String(),
+        proposalId: Type.String(),
+        status: Type.String(),
+        executionStatus: Type.String(),
+        testStatus: Type.String(),
+        profileId: Type.String(),
+        imageDigest: Type.String(),
+        profileHash: Type.String(),
+        testPlanHash: Type.String(),
+        snapshotHash: Type.String(),
+        approvalHash: Type.String(),
+        includePaths: Type.Array(Type.String())
+      })
     },
     "sandbox.submit": {
       kind: "action",
-      description: "Create a pending sandbox run for an applied proposal. UI only.",
+      description: "Create a pending sandbox run for an applied proposal. UI only; the run still needs a hash-bound approval.",
       input: Type.Object({
         proposalId: Type.String({ maxLength: 90 }),
         profile: Type.Optional(Type.String({ maxLength: 40 })),
@@ -149,14 +172,14 @@ export const contract = defineFeatureContract({
       }, { additionalProperties: false }),
       output: Type.Object({ id: Type.String(), status: Type.String(), approvalHash: Type.String() })
     },
-    "sandbox.approve": {
-      kind: "action",
-      description: "Approve a pending sandbox run using its snapshot hash. UI only.",
-      input: Type.Object({
-        runId: Type.String({ maxLength: 90 }),
-        hash: Type.String({ maxLength: 64 })
-      }, { additionalProperties: false }),
-      output: Type.Object({ id: Type.String(), status: Type.String() })
+    "sidecar.info": {
+      kind: "query",
+      description: "Read the sidecar base URL used by the Control UI. UI only.",
+      input: Type.Object({}, { additionalProperties: false }),
+      output: Type.Object({
+        baseUrl: Type.String(),
+        approvalRequired: Type.Boolean()
+      })
     }
   },
   events: {}

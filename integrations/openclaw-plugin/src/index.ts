@@ -3,6 +3,7 @@ import { contract } from "./contract.js";
 import { encodeId, OwnerSidecarClient, type OwnerSidecarConfig } from "./client.js";
 
 const num = (value: unknown): number => (typeof value === "number" ? value : 0);
+const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
 const mapJob = (job: any) => ({
   id: String(job.id),
@@ -43,10 +44,8 @@ const parsePayload = (json?: string): Record<string, unknown> => {
 export default defineFeaturePlugin({
   contract,
   name: "Owner Agent",
-  description: "Read Owner jobs and approve patches, repair cycles and sandbox runs.",
+  description: "Read Owner jobs and review frozen patches, sandbox runs and repair cycles.",
   setup(api) {
-    // Feature Plugin 的 configSchema 由宿主生成（无法自定义），因此 PoC 用环境变量配置。
-    // api.pluginConfig 仍然优先，方便未来宿主支持后再切换。
     const fromPlugin = (api.pluginConfig ?? {}) as OwnerSidecarConfig;
     const config: OwnerSidecarConfig = {
       baseUrl: fromPlugin.baseUrl ?? process.env.OWNER_AGENT_SIDECAR_URL,
@@ -54,7 +53,6 @@ export default defineFeaturePlugin({
       tokenFile: fromPlugin.tokenFile ?? process.env.OWNER_AGENT_SIDECAR_TOKEN_FILE,
       operatorId: fromPlugin.operatorId ?? process.env.OWNER_AGENT_OPERATOR_ID
     };
-    // 延迟创建：Owner sidecar 没起时不要拖垮 OpenClaw 的插件加载。
     let client: OwnerSidecarClient | null = null;
     const owner = (): OwnerSidecarClient => {
       client ??= new OwnerSidecarClient({
@@ -62,7 +60,7 @@ export default defineFeaturePlugin({
         token: config.token,
         tokenFile: config.tokenFile,
         operatorId: config.operatorId,
-        pluginVersion: "0.1.0"
+        pluginVersion: "0.2.0"
       });
       return client;
     };
@@ -112,11 +110,7 @@ export default defineFeaturePlugin({
         return mapJob(job);
       },
 
-      // ---- 仅 Control UI 可达：不带 tool 声明 ----
-      "job.approve": async ({ id }: { id: string }) => {
-        const job = await owner().post(`/owner/v1/jobs/${encodeId(id)}/approve`);
-        return { id: String(job.id), status: String(job.status) };
-      },
+      // ---- UI 只读：审批前展示冻结内容 ----
       "patch.list": async ({ projectId, status, limit }: {
         projectId?: string;
         status?: string;
@@ -126,14 +120,21 @@ export default defineFeaturePlugin({
         const payload = await owner().get(`/owner/v1/patches?${params}`);
         return { items: (payload.items ?? []).map(mapPatch) };
       },
-      "patch.approve": async ({ proposalId, hash }: { proposalId: string; hash: string }) => {
-        const result = await owner().post(
-          `/owner/v1/patches/${encodeId(proposalId)}/approve`,
-          { hash }
-        );
+      "patch.detail": async ({ proposalId }: { proposalId: string }) => {
+        const proposal = await owner().get(`/owner/v1/patches/${encodeId(proposalId)}?content=1`);
         return {
-          outcome: String(result.outcome ?? "applied"),
-          status: String(result.proposal?.status ?? "")
+          id: String(proposal.id),
+          projectId: String(proposal.project_id),
+          status: String(proposal.status),
+          baseSha: String(proposal.base_sha),
+          proposalHash: String(proposal.proposal_hash),
+          approvedHash: text(proposal.approved_hash),
+          paths: Array.isArray(proposal.files)
+            ? proposal.files.map((file: any) => String(file.path))
+            : [],
+          diff: text(proposal.proposal_diff),
+          appliedDiff: text(proposal.applied_diff),
+          rejectionReason: text(proposal.reject_reason ?? proposal.rejection_reason)
         };
       },
       "repair.list": async ({ projectId, status, limit }: {
@@ -152,12 +153,24 @@ export default defineFeaturePlugin({
           }))
         };
       },
-      "repair.approve": async ({ cycleId, hash }: { cycleId: string; hash: string }) => {
-        const cycle = await owner().post(
-          `/owner/v1/repair-cycles/${encodeId(cycleId)}/approve`,
-          { hash }
-        );
-        return { id: String(cycle.id), status: String(cycle.status) };
+      "repair.detail": async ({ cycleId }: { cycleId: string }) => {
+        const cycle = await owner().get(`/owner/v1/repair-cycles/${encodeId(cycleId)}`);
+        return {
+          id: String(cycle.id),
+          projectId: String(cycle.project_id),
+          status: String(cycle.status),
+          approvalHash: String(cycle.approval_hash),
+          repairScope: Array.isArray(cycle.repair_scope)
+            ? cycle.repair_scope.map(String)
+            : Array.isArray(cycle.repairScope)
+              ? cycle.repairScope.map(String)
+              : [],
+          sourceSandboxRunId: String(cycle.source_sandbox_run_id),
+          sourceBaseSha: String(cycle.source_base_sha),
+          contextHash: String(cycle.context_hash),
+          iteration: num(cycle.iteration),
+          maxIterations: num(cycle.max_iterations)
+        };
       },
       "sandbox.list": async ({ projectId, status, limit }: {
         projectId?: string;
@@ -171,10 +184,29 @@ export default defineFeaturePlugin({
             id: String(run.id),
             projectId: String(run.project_id),
             status: String(run.status),
-            executionStatus: String(run.execution_status ?? ""),
-            testStatus: String(run.test_status ?? ""),
+            executionStatus: text(run.execution_status),
+            testStatus: text(run.test_status),
             approvalHash: String(run.approval_hash)
           }))
+        };
+      },
+      "sandbox.detail": async ({ runId }: { runId: string }) => {
+        const run = await owner().get(`/owner/v1/sandbox-runs/${encodeId(runId)}`);
+        const profile = (run.profile ?? {}) as Record<string, unknown>;
+        return {
+          id: String(run.id),
+          projectId: String(run.project_id),
+          proposalId: String(run.proposal_id),
+          status: String(run.status),
+          executionStatus: text(run.execution_status),
+          testStatus: text(run.test_status),
+          profileId: text(profile.id),
+          imageDigest: text(profile.imageDigest),
+          profileHash: text(profile.profileHash),
+          testPlanHash: text(profile.testPlanHash),
+          snapshotHash: String(run.snapshot_hash),
+          approvalHash: String(run.approval_hash),
+          includePaths: Array.isArray(run.includePaths) ? run.includePaths.map(String) : []
         };
       },
       "sandbox.submit": async (input: {
@@ -193,13 +225,10 @@ export default defineFeaturePlugin({
           approvalHash: String(run.approval_hash ?? run.approvalHash ?? "")
         };
       },
-      "sandbox.approve": async ({ runId, hash }: { runId: string; hash: string }) => {
-        const run = await owner().post(
-          `/owner/v1/sandbox-runs/${encodeId(runId)}/approve`,
-          { hash }
-        );
-        return { id: String(run.id), status: String(run.status) };
-      }
+      "sidecar.info": async () => ({
+        baseUrl: owner().getBaseUrl(),
+        approvalRequired: true
+      })
     };
   }
 });
