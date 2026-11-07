@@ -50,3 +50,21 @@ PR #17 的客户端 PoC 验收已通过；以下为明确保留、本轮不扩�
 20. **适用范围**：当前只适用于单机可信开发 PoC；不要标注为多用户/公网安全方案。
 21. **合并依赖**：#15 是 #16/#17 的 base；必须先合并 #15，再显式核对 #16/#17 对 `main` 的最终差异并重跑 CI，
     不假设 GitHub 自动改基。
+
+## P3.1 进展（2026-11-08）
+
+已交付（本阶段，Issue #20）：
+
+- Owner Worker（`src/worker-agent.mjs`）与 `ownerctl worker` / `serve --worker`；
+- sidecar 的 worker / repair / tasks 入口；
+- 插件页面 **Advance**、2s 轮询、Repair 创建、结果面板（时间线 + Diff + 测试输出）；
+- 对话创建所需的 `owner_projects` / `owner_tasks` 工具；
+- 浏览器 E2E：从待审批 Job 跑到 `tested_pass`（修复补丁走真实 Pi）。
+
+仍未做（转入 P3.2 / P3.3）：
+
+- `feature.watch` 事件与聊天内卡片/通知；
+- 完整“对话创建 Job”的自动化断言（当前工具面已具备，E2E 从待审批 Job 开始）；
+- Worker 崩溃/租约的浏览器级恢复测试；
+- E2E 断言稳健性（写死 hash、状态选择）与 CI 落地；
+- 发布前录屏/截图证据的归档。

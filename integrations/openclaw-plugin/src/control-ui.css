@@ -320,3 +320,25 @@
   gap: 6px;
   justify-content: flex-end;
 }
+
+.owner-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.owner-worker-state {
+  font-size: 12px;
+  color: color-mix(in srgb, currentColor 62%, transparent);
+  white-space: nowrap;
+}
+
+.owner-worker-busy {
+  color: #b45309;
+}
+
+.owner-button-primary {
+  border-color: color-mix(in srgb, #15803d 50%, transparent);
+  color: #15803d;
+  font-weight: 600;
+}

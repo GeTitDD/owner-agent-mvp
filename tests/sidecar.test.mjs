@@ -293,6 +293,22 @@ test('CORS allows loopback Control UI origins only', async () => {
   });
 });
 
+test('worker endpoints fail closed when no worker is configured', async () => {
+  await withSidecar(async ({ handle }) => {
+    const status = await call(handle, 'GET', '/owner/v1/worker/status');
+    assert.equal(status.status, 200);
+    assert.equal(status.body.configured, false);
+
+    const tick = await call(handle, 'POST', '/owner/v1/worker/tick', { body: {} });
+    assert.equal(tick.status, 503);
+
+    const repair = await call(handle, 'POST', '/owner/v1/repair-cycles', {
+      body: { sandboxRunId: 'missing', idempotencyKey: 'repair-missing' }
+    });
+    assert.equal(repair.status, 404);
+  });
+});
+
 test('read and approval tokens live in separate files', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-sidecar-token-'));
   const savedRead = process.env.OWNER_AGENT_SIDECAR_TOKEN;

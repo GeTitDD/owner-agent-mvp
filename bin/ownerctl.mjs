@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import { resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { OwnerStore } from '../src/owner-store.mjs';
 import { OwnerAgent } from '../src/owner-agent.mjs';
 import { FakeWorker, FakeWorkerCrash } from '../src/job-worker.mjs';
 import { PiAnalysisWorker } from '../src/pi-analysis-worker.mjs';
 import { PatchCodingWorker } from '../src/patch-coding-worker.mjs';
+import { FakePatchProposalAgent, PatchProposalAgent } from '../src/patch-proposal-agent.mjs';
+import { OwnerWorker } from '../src/worker-agent.mjs';
 import { WorkspaceBroker } from '../src/workspace-broker.mjs';
 import { SandboxRunner } from '../src/sandbox-runner.mjs';
 import { DockerSandboxProvider } from '../src/sandbox-provider.mjs';
@@ -30,6 +33,33 @@ const demoBehavior=(name)=>({
 }[name]);
 const broker=()=>new WorkspaceBroker(store,{workspacesRoot:read('--workspaces-dir','')||process.env.OWNER_AGENT_WORKSPACES_DIR});
 const sandboxProvider=()=>new DockerSandboxProvider({requireRootless:process.env.OWNER_AGENT_SANDBOX_REQUIRE_ROOTLESS==='1'});
+// Worker 复用现有 PatchCodingWorker / SandboxRunner；--fake-patch-file 仅供 E2E/测试注入提案。
+const ownerWorker=()=>{
+  const fakeFile=read('--fake-patch-file','');
+  let proposalAgent=null;
+  if(fakeFile){
+    const parsed=JSON.parse(readFileSync(fakeFile,'utf8'));
+    if(!parsed||!Array.isArray(parsed.files))throw new Error('--fake-patch-file must be {"files":[{"path","action","content"}]}');
+    proposalAgent=new FakePatchProposalAgent({files:parsed.files});
+  }
+  // 测试注入：源补丁用确定性文件，修复补丁仍走真实 Pi（repairContext 非空）。
+  const fakeSourceFile=read('--fake-source-file','');
+  if(fakeSourceFile){
+    const parsed=JSON.parse(readFileSync(fakeSourceFile,'utf8'));
+    if(!parsed||!Array.isArray(parsed.files))throw new Error('--fake-source-file must be {"files":[...]}');
+    const timeoutMs=Math.max(5000,Number(read('--timeout','180000'))||180000);
+    const real=new PatchProposalAgent({model:read('--model',''),timeoutMs});
+    proposalAgent={requiresModel:false,async generate(input){
+      if(String(input.repairContext??'').trim())return real.generate(input);
+      return {files:parsed.files,model:'fake/source'};
+    }};
+  }
+  return new OwnerWorker(store,{broker:broker(),provider:sandboxProvider(),proposalAgent,
+    model:read('--model',''),
+    timeoutMs:Math.max(5000,Number(read('--timeout','180000'))||180000),
+    workerId:read('--worker-name','owner-worker'),
+    allowModel:!args.includes('--no-model')});
+};
 const showProposal=(id)=>{
   const proposal=store.getPatchProposal(id);
   if(!proposal)throw new Error('Unknown proposal');
@@ -175,6 +205,20 @@ try {
   else if(command==='ask')result=new OwnerAgent(store).answer(args.join(' '));
   else if(command==='ask-pi')result=await new OwnerAgent(store).askPi(args.join(' '));
   else if(command==='events')result=store.listEvents({projectId:read('--project')});
+  else if(command==='worker'){
+    const worker=ownerWorker();
+    if(args.includes('--once')){
+      result=await worker.start({wait:true,projectId:read('--project','')});
+    }else{
+      const interval=Math.max(1000,Number(read('--interval','2000'))||2000);
+      const timer=setInterval(()=>{if(!worker.running)worker.start({wait:false});},interval);
+      timer.unref?.();
+      console.error(`owner worker loop: every ${interval}ms`);
+      await new Promise((done)=>{process.once('SIGINT',done);process.once('SIGTERM',done);});
+      clearInterval(timer);
+      result={stopped:true};
+    }
+  }
   else if(command==='serve'){
     // v1.1：给 OpenClaw 插件用的本机适配层。只监听 loopback，必须带 bearer token。
     const port=Number(read('--port',String(SIDECAR_DEFAULT_PORT)));
@@ -183,8 +227,9 @@ try {
     const token=resolveSidecarToken({dbPath:store.dbPath,explicit});
     // 审批令牌只交给操作员；插件后端不读取它。
     const approvalToken=resolveApprovalToken({dbPath:store.dbPath,explicit:read('--approval-token','')});
-    const handle=await startSidecar({store,brokerFactory:()=>broker(),token,approvalToken,port,
-      version:'1.1.0-poc',
+    const worker=ownerWorker();
+    const handle=await startSidecar({store,brokerFactory:()=>broker(),token,approvalToken,worker,port,
+      version:'1.2.0-p3',
       sandboxRoot:read('--sandbox-dir','')||defaultSandboxRoot(),
       imageDigest:process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST||''});
     console.error(`owner sidecar listening on http://127.0.0.1:${handle.port}`);
@@ -193,11 +238,21 @@ try {
     console.error(read('--approval-token','')||process.env.OWNER_AGENT_APPROVAL_TOKEN
       ?'approval token: supplied via flag/env'
       :`approval token file: ${approvalTokenPath(store.dbPath)} (enter it in the Control UI)`);
+    let loop=null;
+    if(args.includes('--worker')){
+      const interval=Math.max(1000,Number(read('--interval','2000'))||2000);
+      loop=setInterval(()=>{if(!worker.running)worker.start({wait:false});},interval);
+      loop.unref?.();
+      console.error(`worker loop: every ${interval}ms`);
+    }else{
+      console.error('worker: manual advance (POST /owner/v1/worker/tick) or restart with --worker');
+    }
     await new Promise((done)=>{process.once('SIGINT',done);process.once('SIGTERM',done);});
+    if(loop)clearInterval(loop);
     await handle.close();
     result={stopped:true,port:handle.port};
   }
-  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake/pi/patch ... | result --id | results --job | code-submit --project --task --base --paths --key | patches [--project] [--status] | patch-show --id [--content 1] | patch-approve --id --hash | patch-apply --id --hash | patch-reject --id --reason | patch-reconcile --id --decision confirm-applied/discard [--reason] | patch-recover | workspaces [--project] [--status] | workspace-inspect --id | workspace-quarantine --id --reason | workspace-cleanup --id --confirm 1 | sandbox-submit --proposal --profile node-smoke --image-digest sha256:... [--include a,b] | sandbox-approve --id --hash | sandbox-run-once --project | sandboxes [--project] [--status] | sandbox-show --id [--logs 1] | sandbox-cancel --id | sandbox-recover | sandbox-reconcile --id --decision confirm-stopped/discard [--reason] | sandbox-cleanup --id --confirm 1 | repair-submit --sandbox-run --scope a,b --key | repair-approve --id --hash | repair-show --id | repairs [--project] [--status] | serve [--port 47830] [--token ...]');
+  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake/pi/patch ... | result --id | results --job | code-submit --project --task --base --paths --key | patches [--project] [--status] | patch-show --id [--content 1] | patch-approve --id --hash | patch-apply --id --hash | patch-reject --id --reason | patch-reconcile --id --decision confirm-applied/discard [--reason] | patch-recover | workspaces [--project] [--status] | workspace-inspect --id | workspace-quarantine --id --reason | workspace-cleanup --id --confirm 1 | sandbox-submit --proposal --profile node-smoke --image-digest sha256:... [--include a,b] | sandbox-approve --id --hash | sandbox-run-once --project | sandboxes [--project] [--status] | sandbox-show --id [--logs 1] | sandbox-cancel --id | sandbox-recover | sandbox-reconcile --id --decision confirm-stopped/discard [--reason] | sandbox-cleanup --id --confirm 1 | repair-submit --sandbox-run --scope a,b --key | repair-approve --id --hash | repair-show --id | repairs [--project] [--status] | worker --once [--project] | serve [--port 47830] [--worker] [--fake-patch-file ...]');
   console.log(JSON.stringify(result,null,2));
 }catch(e){console.error(e.message);process.exitCode=1;}
 finally{store.close();}

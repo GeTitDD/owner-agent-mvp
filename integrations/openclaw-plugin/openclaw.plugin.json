@@ -12,16 +12,18 @@
     "onStartup": true
   },
   "controlUi": {
-    "entry": "dist/control-ui/29e282d61a67676da966065c347bef1c3bc014f5cc86dd70c28a5d88cbee22d9/index.js",
+    "entry": "dist/control-ui/e6e3dda531a9d92b30f54030524d916cd6ddaede73b796050f009151c48d6dd5/index.js",
     "styles": [
-      "dist/control-ui/29e282d61a67676da966065c347bef1c3bc014f5cc86dd70c28a5d88cbee22d9/index.css"
+      "dist/control-ui/e6e3dda531a9d92b30f54030524d916cd6ddaede73b796050f009151c48d6dd5/index.css"
     ]
   },
   "contracts": {
     "tools": [
       "owner_job_submit",
       "owner_jobs_list",
-      "owner_status"
+      "owner_projects",
+      "owner_status",
+      "owner_tasks"
     ]
   }
 }

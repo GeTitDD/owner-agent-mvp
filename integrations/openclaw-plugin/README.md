@@ -65,18 +65,37 @@ openclaw gateway
    - 修复：展示 source run、source base、scope、context hash。
 4. 勾选“已审阅”后才可确认。
 5. 补丁是两步：**Approve patch (no apply)** → 再次 Review → **Apply approved patch**。
+6. 审批后点 **Advance** 让 Worker 推进一步；有活动任务时页面每 2s 自动刷新。
 
 审批令牌不经过 Gateway：页面直接 `fetch` 到 sidecar。
+
+## Worker 与自动刷新
+
+- `node bin/ownerctl.mjs serve --worker`：常驻 Worker，每 2s 尝试推进一步；
+- 不带 `--worker`：页面上的 **Advance** 手动推进；
+- Worker 只处理**已批准**的 Job / Sandbox / Repair，不会自动审批或自动 apply；
+- P3.1 的自动刷新是页面 2s 轮询；P3.2 再替换为 OpenClaw `feature.watch`。
+
+```bash
+# 与 sidecar 同进程启动 Worker（推荐）
+node bin/ownerctl.mjs serve --port 47830 --worker --interval 2000
+```
 
 ## 模型可见的工具
 
 | 工具 | 作用 |
 | --- | --- |
 | `owner_status` | 读取 Owner 汇总计数 |
+| `owner_projects` | 列出项目及其当前 git base SHA（对话创建 Job 用） |
+| `owner_tasks` | 列出项目的 OwnerTask（code-patch 必须绑定 task） |
 | `owner_jobs_list` | 列出 Job |
 | `owner_job_submit` | 提交 Job（进入 `pending_approval`，不会自动执行） |
 
-没有审批工具。`approve` / `apply` 不在 feature contract 里，浏览器直接调用 sidecar 并要求审批令牌。
+没有审批工具。`approve` / `apply` / `Advance` 不在模型工具面里：审批由浏览器带审批令牌直接调用 sidecar，
+Advance 由页面触发 Worker。`task.create` 也是 UI 动作，不暴露给模型。
+
+对话创建 Job 的典型顺序：`owner_projects` → `owner_tasks` → `owner_job_submit`
+（`payloadJson` 里带 `baseSha` 与 `allowedPaths`）。
 
 ## 安全边界
 
@@ -112,11 +131,25 @@ npm run e2e:openclaw:ui
 4. 审批 Job、查看补丁 Diff、审批 Repair，并断言状态与提示；
 5. 输出截图（`EVIDENCE_DIR`，默认临时目录）。
 
+另有完整 P3.1 闭环（源补丁确定性、修复补丁走真实 Pi）：
+
+```bash
+OPENCLAW_RUNTIME=/path/to/openclaw-runtime \
+OPENCLAW_NODE=/path/to/node24/bin/node \
+OPENCLAW_PROFILE=ownerpoc \
+npm run e2e:openclaw:p31
+```
+
+它会从「一个待审批的 code-patch Job」开始，依次完成：
+Job 审批 → Advance → Patch 审批/应用 → Sandbox 审批/运行 → fail →
+Create repair → Repair 审批 → Advance（真实 Pi 生成修复补丁）→ 应用 →
+Sandbox 复测 → pass → 结果展示。
+
 另有不依赖浏览器的冒烟：`npm run e2e:openclaw`。
 
 ## 范围外（PoC）
 
-- 不做事件订阅/推送，页面靠手动 Refresh。
+- P3.1 仍是页面 2s 轮询；`feature.watch`/推送在 P3.2。
 - 不做 job 创建表单（提交走聊天工具）。
 - 不做品牌替换，只在 Control UI 内增加一个页面。
 - 浏览器直连要求 loopback HTTP；HTTPS Gateway 需要额外方案。

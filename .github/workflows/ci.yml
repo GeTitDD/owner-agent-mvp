@@ -64,7 +64,7 @@ jobs:
             const fs = require("node:fs");
             const manifest = JSON.parse(fs.readFileSync("openclaw.plugin.json", "utf8"));
             const tools = [...(manifest.contracts?.tools ?? [])].sort();
-            const expected = ["owner_job_submit", "owner_jobs_list", "owner_status"];
+            const expected = ["owner_job_submit", "owner_jobs_list", "owner_projects", "owner_status", "owner_tasks"];
             if (JSON.stringify(tools) !== JSON.stringify(expected)) {
               console.error("unexpected tool surface:", tools);
               process.exit(1);
