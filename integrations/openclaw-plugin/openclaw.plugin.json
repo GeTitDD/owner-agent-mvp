@@ -11,17 +11,17 @@
   "activation": {
     "onStartup": true
   },
+  "controlUi": {
+    "entry": "dist/control-ui/29e282d61a67676da966065c347bef1c3bc014f5cc86dd70c28a5d88cbee22d9/index.js",
+    "styles": [
+      "dist/control-ui/29e282d61a67676da966065c347bef1c3bc014f5cc86dd70c28a5d88cbee22d9/index.css"
+    ]
+  },
   "contracts": {
     "tools": [
       "owner_job_submit",
       "owner_jobs_list",
       "owner_status"
-    ]
-  },
-  "controlUi": {
-    "entry": "dist/control-ui/69fe49ba35fc2dde360a5b5ab61ec33eadf632341e35ea9e6cd9ee7b933f70a2/index.js",
-    "styles": [
-      "dist/control-ui/69fe49ba35fc2dde360a5b5ab61ec33eadf632341e35ea9e6cd9ee7b933f70a2/index.css"
     ]
   }
 }

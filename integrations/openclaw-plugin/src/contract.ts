@@ -32,6 +32,7 @@ const repairSummary = Type.Object({
 const sandboxSummary = Type.Object({
   id: Type.String(),
   projectId: Type.String(),
+  proposalId: Type.String(),
   status: Type.String(),
   executionStatus: Type.String(),
   testStatus: Type.String(),
@@ -178,7 +179,9 @@ export const contract = defineFeatureContract({
       input: Type.Object({}, { additionalProperties: false }),
       output: Type.Object({
         baseUrl: Type.String(),
-        approvalRequired: Type.Boolean()
+        approvalRequired: Type.Boolean(),
+        connected: Type.Boolean(),
+        error: Type.String()
       })
     }
   },

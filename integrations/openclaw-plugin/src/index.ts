@@ -183,6 +183,7 @@ export default defineFeaturePlugin({
           items: (payload.items ?? []).map((run: any) => ({
             id: String(run.id),
             projectId: String(run.project_id),
+            proposalId: String(run.proposal_id),
             status: String(run.status),
             executionStatus: text(run.execution_status),
             testStatus: text(run.test_status),
@@ -225,10 +226,26 @@ export default defineFeaturePlugin({
           approvalHash: String(run.approval_hash ?? run.approvalHash ?? "")
         };
       },
-      "sidecar.info": async () => ({
-        baseUrl: owner().getBaseUrl(),
-        approvalRequired: true
-      })
+      "sidecar.info": async () => {
+        const baseUrl = (config.baseUrl ?? process.env.OWNER_AGENT_SIDECAR_URL
+          ?? "http://127.0.0.1:47830").replace(/\/+$/u, "");
+        try {
+          const health = await owner().get("/owner/v1/health");
+          return {
+            baseUrl,
+            approvalRequired: health.approvalMode === "token",
+            connected: true,
+            error: ""
+          };
+        } catch (error) {
+          return {
+            baseUrl,
+            approvalRequired: true,
+            connected: false,
+            error: String((error as Error)?.message ?? error)
+          };
+        }
+      }
     };
   }
 });

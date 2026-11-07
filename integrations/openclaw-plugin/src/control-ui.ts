@@ -16,9 +16,14 @@ const el = <K extends keyof HTMLElementTagNameMap>(
   return node;
 };
 
-const cell = (text: string): HTMLTableCellElement => {
-  const td = el("td", undefined, text);
-  td.title = text;
+const cell = (content: string | HTMLElement): HTMLTableCellElement => {
+  const td = el("td");
+  if (typeof content === "string") {
+    td.textContent = content;
+    td.title = content;
+  } else {
+    td.append(content);
+  }
   return td;
 };
 
@@ -31,7 +36,7 @@ const table = (headers: string[], rows: Array<Array<string | HTMLElement>>): HTM
   const body = el("tbody");
   for (const row of rows) {
     const tr = el("tr");
-    for (const value of row) tr.append(typeof value === "string" ? cell(value) : value);
+    for (const value of row) tr.append(cell(value));
     body.append(tr);
   }
   node.append(head, body);
@@ -43,6 +48,16 @@ const mono = (value: string): HTMLElement => {
   code.title = value;
   return code;
 };
+
+const statusTone = (status: string): string => {
+  if (["applied", "tested_pass", "succeeded", "completed"].includes(status)) return "ok";
+  if (["failed", "rejected", "tested_fail", "cancelled"].includes(status)) return "bad";
+  if (["pending_approval", "proposed", "queued", "running"].includes(status)) return "warn";
+  return "neutral";
+};
+
+const statusChip = (status: string, tone?: string): HTMLElement =>
+  el("span", `owner-status owner-status--${tone ?? statusTone(status)}`, status);
 
 export default defineControlUiPlugin({
   id: contract.pluginId,
@@ -73,6 +88,7 @@ export default defineControlUiPlugin({
         tokenInput.type = "password";
         tokenInput.autocomplete = "off";
         tokenInput.placeholder = "paste the contents of approval.token";
+        tokenInput.setAttribute("aria-label", "Approval token");
         const tokenSave = el("button", "owner-button", "Save");
         const tokenClear = el("button", "owner-button", "Clear");
         const tokenState = el("span", "owner-token-state");
@@ -83,17 +99,22 @@ export default defineControlUiPlugin({
           "owner-muted",
           "Approvals are executed by your browser directly against the Owner sidecar with a separate approval token. The model and the plugin backend never receive it."
         );
+        const notice = el("p", "owner-notice");
         const error = el("p", "owner-error");
         const status = el("div", "owner-cards");
         const sections = el("div", "owner-sections");
-        root.append(header, tokenBar, note, error, status, sections);
-        container.append(root);
-
         const dialog = el("dialog", "owner-dialog");
+        root.append(header, tokenBar, note, notice, error, status, sections, dialog);
+        container.append(root);
 
         let disposed = false;
         let loading = false;
-        let sidecar = { baseUrl: "http://127.0.0.1:47830", approvalRequired: true };
+        let sidecar = {
+          baseUrl: "http://127.0.0.1:47830",
+          approvalRequired: true,
+          connected: true,
+          error: ""
+        };
         let approvalToken = window.sessionStorage.getItem(TOKEN_KEY) ?? "";
 
         const updateTokenState = (): void => {
@@ -116,8 +137,22 @@ export default defineControlUiPlugin({
           updateTokenState();
         };
 
+        const friendly = (cause: unknown): string => {
+          const message = String((cause as Error)?.message ?? cause);
+          if (/sidecar token is missing/i.test(message)) {
+            return "Owner sidecar token is missing. Set OWNER_AGENT_SIDECAR_TOKEN_FILE or place sidecar.token in ~/.domain-context.";
+          }
+          if (/ECONNREFUSED|fetch failed|failed to fetch/i.test(message)) {
+            return `Cannot reach the Owner sidecar at ${sidecar.baseUrl}. Start it with: node bin/ownerctl.mjs serve`;
+          }
+          if (/plugin session action failed/i.test(message)) {
+            return "The Owner plugin could not reach its sidecar. Check the sidecar URL and token, then retry.";
+          }
+          return message;
+        };
+
         const report = (cause: unknown): void => {
-          if (!disposed) error.textContent = String(cause);
+          if (!disposed) error.textContent = friendly(cause);
         };
 
         /** 决策请求：只带审批令牌，不经过 Gateway 或插件后端。 */
@@ -137,7 +172,12 @@ export default defineControlUiPlugin({
             body: JSON.stringify(payload)
           });
           const data = await response.json().catch(() => null);
-          if (!response.ok) throw new Error(data?.error ?? `HTTP ${response.status}`);
+          if (!response.ok) {
+            if (response.status === 403) {
+              throw new Error("Approval token was rejected. Paste the current approval.token and try again.");
+            }
+            throw new Error(data?.error ?? `HTTP ${response.status}`);
+          }
           return data;
         };
 
@@ -150,13 +190,17 @@ export default defineControlUiPlugin({
           rows,
           diff,
           confirmLabel,
+          success,
+          readOnly = false,
           onConfirm
         }: {
           title: string;
           rows: Array<[string, string | HTMLElement]>;
           diff?: string;
-          confirmLabel: string;
-          onConfirm: () => Promise<unknown>;
+          confirmLabel?: string;
+          success?: string;
+          readOnly?: boolean;
+          onConfirm?: () => Promise<unknown>;
         }): void => {
           const panel = el("div", "owner-review");
           panel.append(el("h2", undefined, title));
@@ -174,42 +218,55 @@ export default defineControlUiPlugin({
             panel.append(el("pre", "owner-diff", diff));
           }
 
-          const confirmRow = el("label", "owner-confirm");
-          const checkbox = el("input");
-          checkbox.type = "checkbox";
-          confirmRow.append(checkbox, el("span", undefined,
-            "I reviewed the IDs, hashes and content above."));
-
+          const reviewError = el("p", "owner-error");
           const actions = el("div", "owner-review-actions");
-          const cancel = el("button", "owner-button", "Cancel");
-          const confirm = el("button", "owner-button owner-button-danger", confirmLabel);
-          confirm.disabled = true;
-          actions.append(cancel, confirm);
-          panel.append(confirmRow, actions);
 
-          checkbox.onchange = () => { confirm.disabled = !checkbox.checked || !approvalToken; };
-          if (!approvalToken) {
-            panel.append(el("p", "owner-warning",
-              "Approval token is not set for this tab; decisions are disabled."));
-          }
+          if (readOnly) {
+            const close = el("button", "owner-button", "Close");
+            close.onclick = () => dialog.close();
+            actions.append(close);
+            panel.append(reviewError, actions);
+          } else {
+            const confirmRow = el("label", "owner-confirm");
+            const checkbox = el("input");
+            checkbox.type = "checkbox";
+            confirmRow.append(checkbox, el("span", undefined,
+              "I reviewed the IDs, hashes and content above."));
 
-          cancel.onclick = () => panel.remove();
-          confirm.onclick = async () => {
+            const cancel = el("button", "owner-button", "Cancel");
+            const confirm = el("button", "owner-button owner-button-danger", confirmLabel ?? "Confirm");
             confirm.disabled = true;
-            error.textContent = "";
-            try {
-              await onConfirm();
-              panel.remove();
-              await load();
-            } catch (cause) {
-              report(cause);
-              if (!disposed) confirm.disabled = !checkbox.checked;
+            actions.append(cancel, confirm);
+            panel.append(reviewError, confirmRow, actions);
+
+            checkbox.onchange = () => { confirm.disabled = !checkbox.checked || !approvalToken; };
+            if (!approvalToken) {
+              panel.append(el("p", "owner-warning",
+                "Approval token is not set for this tab; decisions are disabled."));
             }
-          };
+
+            cancel.onclick = () => dialog.close();
+            confirm.onclick = async () => {
+              confirm.disabled = true;
+              cancel.disabled = true;
+              confirm.textContent = "Working…";
+              reviewError.textContent = "";
+              try {
+                await onConfirm?.();
+                dialog.close();
+                await load();
+                notice.textContent = success ?? "";
+              } catch (cause) {
+                reviewError.textContent = friendly(cause);
+                confirm.textContent = confirmLabel ?? "Confirm";
+                cancel.disabled = false;
+                if (!disposed) confirm.disabled = !checkbox.checked;
+              }
+            };
+          }
 
           dialog.replaceChildren(panel);
           if (!dialog.open) dialog.showModal();
-          dialog.onclose = () => { if (!disposed) dialog.replaceChildren(); };
         };
 
         const actionButton = (label: string, run: () => void): HTMLButtonElement => {
@@ -228,14 +285,15 @@ export default defineControlUiPlugin({
         }): void => {
           status.replaceChildren(
             ...([
-              ["Projects", summary.projectCount],
-              ["Jobs", summary.totalJobs],
-              ["Pending job approvals", summary.pendingJobApprovals],
-              ["Pending patch approvals", summary.pendingPatchApprovals],
-              ["Pending repair approvals", summary.pendingRepairApprovals],
-              ["Pending sandbox approvals", summary.pendingSandboxApprovals]
-            ] as Array<[string, number]>).map(([label, value]) => {
-              const card = el("div", "owner-card");
+              ["Projects", summary.projectCount, false],
+              ["Jobs", summary.totalJobs, false],
+              ["Pending job approvals", summary.pendingJobApprovals, true],
+              ["Pending patch approvals", summary.pendingPatchApprovals, true],
+              ["Pending repair approvals", summary.pendingRepairApprovals, true],
+              ["Pending sandbox approvals", summary.pendingSandboxApprovals, true]
+            ] as Array<[string, number, boolean]>).map(([label, value, pending]) => {
+              const card = el("div",
+                `owner-card${pending && value > 0 ? " owner-card--attention" : ""}`);
               card.append(
                 el("span", "owner-card-value", String(value)),
                 el("span", "owner-card-label", label)
@@ -253,6 +311,16 @@ export default defineControlUiPlugin({
 
         const empty = (text: string): HTMLElement => el("p", "owner-muted", text);
 
+        const connectionPanel = (): HTMLElement => {
+          const panel = el("div", "owner-connect");
+          panel.append(el("h2", undefined, "Owner sidecar is not connected"));
+          panel.append(el("p", "owner-muted",
+            `Target: ${sidecar.baseUrl}. Start it with "node bin/ownerctl.mjs serve".`));
+          if (sidecar.error) panel.append(el("pre", "owner-detail", sidecar.error));
+          panel.append(actionButton("Retry", () => { void load(); }));
+          return panel;
+        };
+
         const reviewJob = (job: any): void => openReview({
           title: `Approve job ${job.id.slice(0, 8)}`,
           rows: [
@@ -263,6 +331,7 @@ export default defineControlUiPlugin({
             ["Status", job.status]
           ],
           confirmLabel: "Approve job",
+          success: `Job ${job.id.slice(0, 8)} approved.`,
           onConfirm: () => decision(`/owner/v1/jobs/${encodeURIComponent(job.id)}/approve`, {})
         });
 
@@ -282,10 +351,31 @@ export default defineControlUiPlugin({
             ],
             diff: detail.diff || "(no diff recorded)",
             confirmLabel: applying ? "Apply approved patch" : "Approve patch (no apply)",
+            success: applying
+              ? `Patch ${detail.id.slice(0, 8)} applied.`
+              : `Patch ${detail.id.slice(0, 8)} approved. Review it again to apply.`,
             onConfirm: () => decision(
               `/owner/v1/patches/${encodeURIComponent(detail.id)}/${applying ? "apply" : "approve"}`,
               { hash: detail.proposalHash }
             )
+          });
+        };
+
+        const viewPatch = async (patch: any): Promise<void> => {
+          const detail = await feature.invoke("patch.detail", { proposalId: patch.id });
+          openReview({
+            title: `Patch ${detail.id.slice(0, 8)}`,
+            rows: [
+              ["Proposal id", detail.id],
+              ["Status", detail.status],
+              ["Project", detail.projectId],
+              ["Base", detail.baseSha],
+              ["Proposal hash", detail.proposalHash],
+              ["Approved hash", detail.approvedHash || "(not approved)"],
+              ["Paths", detail.paths.join(", ") || "-"]
+            ],
+            diff: detail.diff || "(no diff recorded)",
+            readOnly: true
           });
         };
 
@@ -307,6 +397,7 @@ export default defineControlUiPlugin({
               ["Include paths", detail.includePaths.join(", ") || "(none)"]
             ],
             confirmLabel: "Approve sandbox",
+            success: `Sandbox ${detail.id.slice(0, 8)} approved.`,
             onConfirm: () => decision(
               `/owner/v1/sandbox-runs/${encodeURIComponent(detail.id)}/approve`,
               { hash: detail.approvalHash }
@@ -330,6 +421,7 @@ export default defineControlUiPlugin({
               ["Iteration", `${detail.iteration}/${detail.maxIterations}`]
             ],
             confirmLabel: "Approve repair",
+            success: `Repair ${detail.id.slice(0, 8)} approved.`,
             onConfirm: () => decision(
               `/owner/v1/repair-cycles/${encodeURIComponent(detail.id)}/approve`,
               { hash: detail.approvalHash }
@@ -342,8 +434,12 @@ export default defineControlUiPlugin({
             `Create a pending sandbox run for proposal ${patch.id.slice(0, 8)}?\n`
             + `hash: ${patch.proposalHash}\nIt still needs a separate hash-bound approval.`
           )) return;
+          error.textContent = "";
           void feature.invoke("sandbox.submit", { proposalId: patch.id })
-            .then(() => load())
+            .then(async () => {
+              await load();
+              notice.textContent = "Sandbox run created; review it below.";
+            })
             .catch(report);
         };
 
@@ -352,9 +448,18 @@ export default defineControlUiPlugin({
           loading = true;
           refresh.disabled = true;
           error.textContent = "";
+          sections.replaceChildren(empty("Loading Owner data…"));
           try {
-            const [info, summary, jobs, patches, repairs, sandboxes] = await Promise.all([
-              feature.invoke("sidecar.info", {}),
+            const info = await feature.invoke("sidecar.info", {});
+            if (disposed) return;
+            sidecar = info;
+            if (!info.connected) {
+              status.replaceChildren();
+              sections.replaceChildren(connectionPanel());
+              return;
+            }
+
+            const [summary, jobs, patches, repairs, sandboxes] = await Promise.all([
               feature.invoke("status", {}),
               feature.invoke("jobs.list", { limit: 20 }),
               feature.invoke("patch.list", { limit: 20 }),
@@ -362,8 +467,23 @@ export default defineControlUiPlugin({
               feature.invoke("sandbox.list", { limit: 20 })
             ]);
             if (disposed) return;
-            sidecar = info;
             renderStatus(summary);
+            const sandboxByProposal = new Set(sandboxes.items.map((run) => run.proposalId));
+            const patchActions = (patch: any): HTMLElement => {
+              const wrap = el("span", "owner-row-actions");
+              if (patch.status === "proposed") {
+                wrap.append(actionButton("Review", () => { void reviewPatch(patch).catch(report); }));
+              } else if (patch.status === "approved") {
+                wrap.append(actionButton("Review & apply", () => { void reviewPatch(patch).catch(report); }));
+                wrap.append(actionButton("View diff", () => { void viewPatch(patch).catch(report); }));
+              } else {
+                wrap.append(actionButton("View diff", () => { void viewPatch(patch).catch(report); }));
+                if (patch.status === "applied" && !sandboxByProposal.has(patch.id)) {
+                  wrap.append(actionButton("Create sandbox run", () => createSandbox(patch)));
+                }
+              }
+              return wrap;
+            };
 
             sections.replaceChildren(
               section(
@@ -375,7 +495,7 @@ export default defineControlUiPlugin({
                     jobs.items.map((job) => [
                       job.title,
                       job.jobType,
-                      job.status,
+                      statusChip(job.status),
                       job.status === "pending_approval"
                         ? actionButton("Review", () => reviewJob(job))
                         : ""
@@ -390,15 +510,9 @@ export default defineControlUiPlugin({
                     ["Proposal", "Status", "Paths", ""],
                     patches.items.map((patch) => [
                       patch.id.slice(0, 8),
-                      patch.status,
+                      statusChip(patch.status),
                       patch.paths.join(", ") || "-",
-                      patch.status === "proposed"
-                        ? actionButton("Review", () => { void reviewPatch(patch).catch(report); })
-                        : patch.status === "approved"
-                          ? actionButton("Review & apply", () => { void reviewPatch(patch).catch(report); })
-                          : patch.status === "applied"
-                            ? actionButton("Create sandbox run", () => createSandbox(patch))
-                            : ""
+                      patchActions(patch)
                     ])
                   )
               ),
@@ -410,7 +524,10 @@ export default defineControlUiPlugin({
                     ["Run", "Status", "Execution", "Tests", ""],
                     sandboxes.items.map((run) => [
                       run.id.slice(0, 8),
-                      run.status,
+                      statusChip(
+                        run.status,
+                        run.testStatus === "fail" ? "bad" : run.testStatus === "pass" ? "ok" : undefined
+                      ),
                       run.executionStatus || "-",
                       run.testStatus || "-",
                       run.status === "pending_approval"
@@ -427,7 +544,7 @@ export default defineControlUiPlugin({
                     ["Cycle", "Status", ""],
                     repairs.items.map((cycle) => [
                       cycle.id.slice(0, 8),
-                      cycle.status,
+                      statusChip(cycle.status),
                       cycle.status === "pending_approval"
                         ? actionButton("Review", () => { void reviewRepair(cycle).catch(report); })
                         : ""
@@ -437,20 +554,20 @@ export default defineControlUiPlugin({
             );
           } catch (cause) {
             report(cause);
+            sections.replaceChildren(empty("Could not load Owner data."));
           } finally {
             loading = false;
             if (!disposed) refresh.disabled = false;
           }
         };
 
-        refresh.onclick = () => { void load(); };
+        refresh.onclick = () => { notice.textContent = ""; void load(); };
         void load();
 
         return {
           dispose: () => {
             disposed = true;
             root.remove();
-            dialog.remove();
           }
         };
       }

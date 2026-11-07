@@ -40,6 +40,21 @@ openclaw plugins enable owner-agent
 openclaw gateway
 ```
 
+用户安装插件的原生 UI 还需要在 profile 配置里显式打开（OpenClaw `2026.11.1` 的
+`isControlUiPluginAllowed` 只对 bundled 插件默认放行）：
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      experimental: { customPlugins: true }
+    }
+  }
+}
+```
+
+设置后重启 Gateway；否则插件已加载，但不会出现在 Control UI 的「页面」菜单里。
+
 ## 使用
 
 1. 打开 Control UI → 侧边栏 **Owner**。
@@ -80,9 +95,29 @@ openclaw gateway
 
   这会阻止模型读取 `~/.domain-context` 下的文件。即使读到读取令牌，也无法审批。
 
+## 浏览器 E2E
+
+```bash
+OPENCLAW_RUNTIME=/path/to/openclaw-runtime \
+OPENCLAW_NODE=/path/to/node24/bin/node \
+OPENCLAW_PROFILE=ownerpoc \
+npm run e2e:openclaw:ui
+```
+
+脚本会：
+
+1. 用真实产品 API 造出 Job → Patch → Sandbox(fail) → Repair(pending)；
+2. 启动真实 Gateway 与 sidecar；
+3. 用 Playwright 打开 Control UI，进入「页面 → Owner」；
+4. 审批 Job、查看补丁 Diff、审批 Repair，并断言状态与提示；
+5. 输出截图（`EVIDENCE_DIR`，默认临时目录）。
+
+另有不依赖浏览器的冒烟：`npm run e2e:openclaw`。
+
 ## 范围外（PoC）
 
 - 不做事件订阅/推送，页面靠手动 Refresh。
 - 不做 job 创建表单（提交走聊天工具）。
 - 不做品牌替换，只在 Control UI 内增加一个页面。
 - 浏览器直连要求 loopback HTTP；HTTPS Gateway 需要额外方案。
+- 非关键的审计/隔离加固记录在 `docs/TECH_DEBT.md`。
