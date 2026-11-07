@@ -8,12 +8,13 @@ import { PatchCodingWorker } from '../src/patch-coding-worker.mjs';
 import { WorkspaceBroker } from '../src/workspace-broker.mjs';
 import { SandboxRunner } from '../src/sandbox-runner.mjs';
 import { DockerSandboxProvider } from '../src/sandbox-provider.mjs';
-import { createInputSnapshot, cleanupInputSnapshot, defaultSandboxRoot, verifyInputSnapshot } from '../src/sandbox-materializer.mjs';
-import { approvalHash, normalizeIncludePaths, resolveTestProfile } from '../src/sandbox-protocol.mjs';
+import { defaultSandboxRoot } from '../src/sandbox-materializer.mjs';
+import { resolveTestProfile } from '../src/sandbox-protocol.mjs';
 import { reconcileSandboxWithProvider, cleanupSandboxWithProvider } from '../src/sandbox-control.mjs';
 import { submitRepairCycle, approveRepairCycle } from '../src/repair-service.mjs';
-import { sha256 } from '../src/utils.mjs';
-import { randomUUID } from 'node:crypto';
+import { approveAndApplyPatch, applyApprovedPatch } from '../src/patch-service.mjs';
+import { approveSandboxRun, submitSandboxRun } from '../src/sandbox-service.mjs';
+import { startSidecar, resolveSidecarToken, resolveApprovalToken, sidecarTokenPath, approvalTokenPath, SIDECAR_DEFAULT_PORT } from '../src/sidecar-server.mjs';
 import { defaultDbPath } from '../src/storage.mjs';
 const store=new OwnerStore(process.env.OWNER_AGENT_DB??defaultDbPath());
 const args=process.argv.slice(2);const command=args.shift();
@@ -38,13 +39,7 @@ const showProposal=(id)=>{
     applied_diff:store.getPatchArtifactContent(id,'applied_diff'),
     ...(includeContent?{proposal_content:store.getPatchArtifactContent(id,'proposal')}:{})};
 };
-const applyApprovedProposal=async(id,hash)=>{
-  const check=store.assertPatchApplyAllowed(id,{expectedHash:hash});
-  if(check.alreadyApplied)return {outcome:'already-applied',proposal:check.proposal};
-  const record=store.getWorkspaceForAttempt(check.proposal.job_id,check.proposal.attempt);
-  checkRecord(record);
-  return broker().applyProposal(record,check.proposal);
-};
+const applyApprovedProposal=async(id,hash)=>applyApprovedPatch(store,broker(),{proposalId:id,hash});
 try {
   // A fresh CLI process holding an `applying` proposal means a previous apply was
   // interrupted: fail closed into owner reconciliation before serving any command.
@@ -78,14 +73,9 @@ try {
   else if(command==='patches')result=store.listPatchProposals({projectId:read('--project'),status:read('--status'),limit:100});
   else if(command==='patch-show')result=showProposal(read('--id'));
   else if(command==='patch-approve'){
-    const id=read('--id');
-    const hash=read('--hash');
-    const before=store.getPatchProposal(id);
-    if(!before)throw new Error('Unknown proposal');
-    // Re-running patch-approve after a crash between approve and apply resumes the same
-    // hash-bound approval instead of leaving the proposal permanently stuck in approved.
-    if(before.status==='proposed')store.approvePatchProposal(id,{expectedHash:hash,reviewer:read('--reviewer','owner')});
-    result=await applyApprovedProposal(id,hash);
+    // 崩溃后重跑 patch-approve 会复用同一哈希绑定审批，不会让提案卡在 approved。
+    result=await approveAndApplyPatch(store,broker(),{proposalId:read('--id'),hash:read('--hash'),
+      reviewer:read('--reviewer','owner')});
     if(result.outcome&&!['applied','already-applied'].includes(result.outcome))process.exitCode=2;
   }
   else if(command==='patch-apply'){
@@ -118,35 +108,14 @@ try {
   else if(command==='repair-show')result=store.getRepairCycle(read('--id'));
   else if(command==='repairs')result=store.listRepairCycles({projectId:read('--project'),status:read('--status'),limit:100});
   else if(command==='sandbox-submit'){
-    const proposal=store.getPatchProposal(read('--proposal'));
-    if(!proposal)throw new Error('Unknown proposal');
-    if(proposal.status!=='applied')throw new Error(`Proposal in status ${proposal.status} cannot be sandboxed`);
-    const workspace=store.getWorkspace(proposal.workspace_id);
-    checkRecord(workspace);
-    const verify=await broker().verifyApplied(workspace,proposal);
-    checkVerify(verify);
-    const imageDigest=read('--image-digest',process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST);
-    const profile=resolveTestProfile(read('--profile','node-smoke'),{imageDigest});
-    const includePaths=normalizeIncludePaths(read('--include').split(',').map(s=>s.trim()).filter(Boolean));
-    const repairCycleId=proposal.repair_cycle_id||read('--repair-cycle','')||null;
-    if(repairCycleId)store.assertRepairSandboxMatch({repairCycleId,proposalId:proposal.id,baseSha:proposal.base_sha,profile,includePaths});
-    const runId=randomUUID();
-    const snapshotRoot=read('--sandbox-dir','')||defaultSandboxRoot();
-    const snapshot=createInputSnapshot({runId,workspacePath:workspace.path,proposal,includePaths,sandboxRoot:snapshotRoot});
-    const approval=approvalHash({projectId:proposal.project_id,workspaceId:workspace.id,proposalId:proposal.id,
-      approvedHash:proposal.approved_hash,baseSha:proposal.base_sha,profile,snapshotHash:snapshot.snapshotHash,includePaths});
-    try{
-      result=store.createSandboxRun({id:runId,projectId:proposal.project_id,jobId:proposal.job_id,attempt:proposal.attempt,
-        workspaceId:workspace.id,proposalId:proposal.id,approvedHash:proposal.approved_hash,baseSha:proposal.base_sha,
-        profile,approvalHash:approval,snapshotHash:snapshot.snapshotHash,snapshotPath:snapshot.snapshotPath,includePaths,
-        repairCycleId});
-      const manifest=JSON.stringify(snapshot.manifest);
-      store.saveSandboxEvidence(runId,'snapshot_manifest',{content:manifest,contentHash:sha256(manifest),bytes:Buffer.byteLength(manifest)});
-      result={...result,approvalHash:approval,snapshotHash:snapshot.snapshotHash};
-    }catch(e){
-      try{cleanupInputSnapshot({snapshotPath:snapshot.snapshotPath,runId,snapshotHash:snapshot.snapshotHash,sandboxRoot:snapshotRoot});}catch{/* best effort */}
-      throw e;
-    }
+    result=await submitSandboxRun(store,broker(),{
+      proposalId:read('--proposal'),
+      profileId:read('--profile','node-smoke'),
+      includePaths:read('--include').split(',').map(s=>s.trim()).filter(Boolean),
+      imageDigest:read('--image-digest',process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST),
+      repairCycleId:read('--repair-cycle',''),
+      sandboxRoot:read('--sandbox-dir','')||defaultSandboxRoot()
+    });
   }
   else if(command==='sandbox-preflight'){
     const imageDigest=read('--image-digest',process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST);
@@ -160,12 +129,7 @@ try {
     if(read('--logs')==='1')result={...run,stdout:store.getSandboxEvidence(run.id,'stdout')?.content??'',stderr:store.getSandboxEvidence(run.id,'stderr')?.content??''};
   }
   else if(command==='sandbox-approve'){
-    const id=read('--id');
-    const run=store.getSandboxRun(id);if(!run)throw new Error('Unknown sandbox run');
-    const manifest=store.getSandboxEvidence(id,'snapshot_manifest');
-    if(!manifest)throw new Error('Sandbox snapshot manifest is missing');
-    verifyInputSnapshot({snapshotPath:run.snapshot_path,manifest:JSON.parse(manifest.content),snapshotHash:run.snapshot_hash});
-    result=store.approveSandboxRun(id,{expectedHash:read('--hash'),actor:'ownerctl'});
+    result=approveSandboxRun(store,{runId:read('--id'),hash:read('--hash'),actor:'ownerctl'});
   }
   else if(command==='sandbox-reject')result=store.rejectSandboxRun(read('--id'),{reason:read('--reason'),actor:'ownerctl'});
   else if(command==='sandbox-run-once'){
@@ -211,7 +175,29 @@ try {
   else if(command==='ask')result=new OwnerAgent(store).answer(args.join(' '));
   else if(command==='ask-pi')result=await new OwnerAgent(store).askPi(args.join(' '));
   else if(command==='events')result=store.listEvents({projectId:read('--project')});
-  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake/pi/patch ... | result --id | results --job | code-submit --project --task --base --paths --key | patches [--project] [--status] | patch-show --id [--content 1] | patch-approve --id --hash | patch-apply --id --hash | patch-reject --id --reason | patch-reconcile --id --decision confirm-applied/discard [--reason] | patch-recover | workspaces [--project] [--status] | workspace-inspect --id | workspace-quarantine --id --reason | workspace-cleanup --id --confirm 1 | sandbox-submit --proposal --profile node-smoke --image-digest sha256:... [--include a,b] | sandbox-approve --id --hash | sandbox-run-once --project | sandboxes [--project] [--status] | sandbox-show --id [--logs 1] | sandbox-cancel --id | sandbox-recover | sandbox-reconcile --id --decision confirm-stopped/discard [--reason] | sandbox-cleanup --id --confirm 1 | repair-submit --sandbox-run --scope a,b --key | repair-approve --id --hash | repair-show --id | repairs [--project] [--status]');
+  else if(command==='serve'){
+    // v1.1：给 OpenClaw 插件用的本机适配层。只监听 loopback，必须带 bearer token。
+    const port=Number(read('--port',String(SIDECAR_DEFAULT_PORT)));
+    if(!Number.isSafeInteger(port)||port<0||port>65535)throw new Error('Invalid --port');
+    const explicit=read('--token','');
+    const token=resolveSidecarToken({dbPath:store.dbPath,explicit});
+    // 审批令牌只交给操作员；插件后端不读取它。
+    const approvalToken=resolveApprovalToken({dbPath:store.dbPath,explicit:read('--approval-token','')});
+    const handle=await startSidecar({store,brokerFactory:()=>broker(),token,approvalToken,port,
+      version:'1.1.0-poc',
+      sandboxRoot:read('--sandbox-dir','')||defaultSandboxRoot(),
+      imageDigest:process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST||''});
+    console.error(`owner sidecar listening on http://127.0.0.1:${handle.port}`);
+    console.error(explicit? 'read token: supplied via flag/env'
+      :`read token file: ${sidecarTokenPath(store.dbPath)}`);
+    console.error(read('--approval-token','')||process.env.OWNER_AGENT_APPROVAL_TOKEN
+      ?'approval token: supplied via flag/env'
+      :`approval token file: ${approvalTokenPath(store.dbPath)} (enter it in the Control UI)`);
+    await new Promise((done)=>{process.once('SIGINT',done);process.once('SIGTERM',done);});
+    await handle.close();
+    result={stopped:true,port:handle.port};
+  }
+  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake/pi/patch ... | result --id | results --job | code-submit --project --task --base --paths --key | patches [--project] [--status] | patch-show --id [--content 1] | patch-approve --id --hash | patch-apply --id --hash | patch-reject --id --reason | patch-reconcile --id --decision confirm-applied/discard [--reason] | patch-recover | workspaces [--project] [--status] | workspace-inspect --id | workspace-quarantine --id --reason | workspace-cleanup --id --confirm 1 | sandbox-submit --proposal --profile node-smoke --image-digest sha256:... [--include a,b] | sandbox-approve --id --hash | sandbox-run-once --project | sandboxes [--project] [--status] | sandbox-show --id [--logs 1] | sandbox-cancel --id | sandbox-recover | sandbox-reconcile --id --decision confirm-stopped/discard [--reason] | sandbox-cleanup --id --confirm 1 | repair-submit --sandbox-run --scope a,b --key | repair-approve --id --hash | repair-show --id | repairs [--project] [--status] | serve [--port 47830] [--token ...]');
   console.log(JSON.stringify(result,null,2));
 }catch(e){console.error(e.message);process.exitCode=1;}
 finally{store.close();}

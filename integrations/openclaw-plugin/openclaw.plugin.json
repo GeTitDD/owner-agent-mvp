@@ -1,0 +1,27 @@
+{
+  "id": "owner-agent",
+  "name": "Owner Agent",
+  "description": "Read Owner jobs and review frozen patches, sandbox runs and repair cycles.",
+  "version": "0.2.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/29e282d61a67676da966065c347bef1c3bc014f5cc86dd70c28a5d88cbee22d9/index.js",
+    "styles": [
+      "dist/control-ui/29e282d61a67676da966065c347bef1c3bc014f5cc86dd70c28a5d88cbee22d9/index.css"
+    ]
+  },
+  "contracts": {
+    "tools": [
+      "owner_job_submit",
+      "owner_jobs_list",
+      "owner_status"
+    ]
+  }
+}
