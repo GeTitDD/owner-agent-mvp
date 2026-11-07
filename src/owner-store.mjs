@@ -19,7 +19,22 @@ const json= v=>JSON.stringify(v);
 const parse=v=>JSON.parse(v);
 const statuses=new Set(['planned','active','blocked','paused','done','archived']);
 const taskStatuses=new Set(['todo','doing','blocked','done','cancelled']);
-const kinds=new Set(['run_started','tool_finished','run_settled','project_note','test_result']);
+const kinds=new Set(['run_started','tool_finished','run_settled','project_note','test_result','api_call']);
+// v1.1：记录 OpenClaw 侧发起的写入来源（网关实例 / 会话 / run / 操作员）。
+// 只进入事件 payload，不新增表或列。
+const originKeys=new Set(['gatewayInstanceId','sessionKey','runId','operatorId','pluginVersion']);
+const originShape=(value)=>{
+  check(value&&typeof value==='object'&&!Array.isArray(value),'Invalid origin');
+  const out={};
+  for(const [key,item] of Object.entries(value)){
+    check(originKeys.has(key),'Invalid origin field');
+    if(item===null||item===undefined||item==='')continue;
+    out[key]=txt(item,`origin ${key}`,200);
+  }
+  check(Object.keys(out).length>=1,'Origin must not be empty');
+  check(json(out).length<=1024,'Origin is too large');
+  return out;
+};
 // Job coordination (P0 control plane): explicit state machine, whitelisted job types only.
 const jobStatuses=new Set(['pending_approval','queued','leased','running','cancel_requested','succeeded','failed','cancelled','rejected','needs_reconciliation']);
 const activeJobStatuses=new Set(['queued','leased','running','cancel_requested']);
@@ -247,6 +262,22 @@ export class OwnerStore {
         at TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS owner_sandbox_oplog_run ON owner_sandbox_oplog(run_id,seq);
+      -- v1.1：审批决策审计。与业务状态变更写在同一个事务里，失败即回滚。
+      -- claimed_origin 是调用方自报的来源，只作为线索；principal 才是授权主体。
+      CREATE TABLE IF NOT EXISTS owner_decision_audit(
+        id TEXT PRIMARY KEY,
+        subject_type TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        decision_hash TEXT NOT NULL DEFAULT '',
+        principal_kind TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        claimed_origin TEXT NOT NULL DEFAULT '{}',
+        origin_trust TEXT NOT NULL DEFAULT 'claimed',
+        at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS owner_decision_audit_subject
+        ON owner_decision_audit(subject_type,subject_id,at);
       CREATE TABLE IF NOT EXISTS owner_repair_cycles(
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL REFERENCES owner_projects(id),
@@ -357,7 +388,7 @@ export class OwnerStore {
     return this.getTask(id);
   }
   // Only a strict whitelist of metadata may be persisted. Unknown keys are deliberately dropped.
-  recordEvent({sourceEventId=randomUUID(),projectId,kind,sessionId='',branchLeafId='',toolName='',isError=false,aborted=false,durationMs=null,note='',passed=null}={}){
+  recordEvent({sourceEventId=randomUUID(),projectId,kind,sessionId='',branchLeafId='',toolName='',isError=false,aborted=false,durationMs=null,note='',passed=null,origin=null}={}){
     ident(sourceEventId,'event id');check(!!this.getProject(projectId),'Unregistered project',404);check(kinds.has(kind),'Invalid event kind');
     const event={};
     if(['run_started','tool_finished','run_settled'].includes(kind)){
@@ -370,6 +401,10 @@ export class OwnerStore {
     }
     if(kind==='run_settled')event.aborted=!!aborted;
     if(kind==='project_note')event.note=txt(note,'note',1000);
+    if(kind==='api_call'){
+      event.note=txt(note,'note',300);
+      event.origin=originShape(origin);
+    }
     if(kind==='test_result'){
       event.note=txt(note,'test ref',500);check(typeof passed==='boolean','Test result must be boolean');event.passed=passed;
     }
@@ -440,6 +475,35 @@ export class OwnerStore {
   knowledgeLinks(projectId){return this.db.prepare('SELECT * FROM owner_project_knowledge_links WHERE project_id=? ORDER BY approved_at DESC').all(projectId);}
   // ---- Durable task coordination (P0): every transition is transactional, audited and time-injectable. ----
   jobAudit(jobId,action,actor,detail='',at=stamp()){this.db.prepare('INSERT INTO owner_job_events(job_id,at,actor,action,detail) VALUES(?,?,?,?,?)').run(jobId,at,txt(actor,'actor',80),action,txt(detail,'detail',400,false));}
+  // 必须在调用方已有的 BEGIN IMMEDIATE 事务内使用：任何一个字段非法都会抛出，
+  // 由外层 catch 回滚，绝不允许“状态已变但审计没写”。
+  insertDecisionAudit({subjectType,subjectId,action,decisionHash='',principal={},claimedOrigin=null,originTrust='claimed',now=stamp()}={}){
+    const type=txt(subjectType,'subject type',20);
+    check(['job','patch','sandbox','repair'].includes(type),'Invalid audit subject type');
+    const id=txt(subjectId,'subject id',90);
+    const act=txt(action,'audit action',20);
+    check(['approve','apply','reject'].includes(act),'Invalid audit action');
+    const hash=decisionHash?txt(decisionHash,'decision hash',64):'';
+    check(!hash||/^[0-9a-f]{64}$/.test(hash),'Invalid decision hash');
+    const kind=txt(principal.kind??'','principal kind',40);
+    const principalId=txt(principal.id??'','principal id',120);
+    check(['approval-token','local-cli'].includes(kind),'Invalid principal kind');
+    const origin=claimedOrigin?originShape(claimedOrigin):{};
+    check(originTrust==='claimed'||originTrust==='verified','Invalid origin trust');
+    this.db.prepare(`INSERT INTO owner_decision_audit
+      (id,subject_type,subject_id,action,decision_hash,principal_kind,principal_id,claimed_origin,origin_trust,at)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`)
+      .run(randomUUID(),type,id,act,hash,kind,principalId,json(origin),originTrust,now);
+  }
+  listDecisionAudit({subjectType='',subjectId='',limit=50}={}){
+    check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
+    const rows=subjectType&&subjectId
+      ? this.db.prepare('SELECT * FROM owner_decision_audit WHERE subject_type=? AND subject_id=? ORDER BY at DESC,id DESC LIMIT ?').all(subjectType,subjectId,limit)
+      : subjectType
+        ? this.db.prepare('SELECT * FROM owner_decision_audit WHERE subject_type=? ORDER BY at DESC,id DESC LIMIT ?').all(subjectType,limit)
+        : this.db.prepare('SELECT * FROM owner_decision_audit ORDER BY at DESC,id DESC LIMIT ?').all(limit);
+    return rows.map(row=>({...row,claimed_origin:parse(row.claimed_origin)}));
+  }
   createJob({projectId,jobType,title,payload={},idempotencyKey,ownerTaskId='',actor='owner',now=stamp()}={}){
     check(!!this.getProject(projectId),'Unknown project',404);
     check(jobTypes.has(jobType),'Unsupported job type; only whitelisted types are accepted');
@@ -513,7 +577,7 @@ export class OwnerStore {
     if(excludeId){sql+=' AND id<>?';params.push(excludeId);}
     sql+=' ORDER BY created_at,id LIMIT 1';
     return this.db.prepare(sql).get(...params)??null;}
-  approveJob(id,{actor='owner',now=stamp()}={}){
+  approveJob(id,{actor='owner',now=stamp(),audit=null}={}){
     this.db.exec('BEGIN IMMEDIATE');
     try{
       const row=this.getJobRow(id);check(!!row,'Unknown job',404);check(row.status==='pending_approval',`Job in status ${row.status} cannot be approved`,409);
@@ -536,6 +600,7 @@ export class OwnerStore {
           .run(json({title:String(task.title).slice(0,200),note:String(task.note).slice(0,500)}),id);
       }
       this.jobAudit(id,'approved',actor,'',now);
+      if(audit)this.insertDecisionAudit({subjectType:'job',subjectId:id,action:'approve',...audit,now});
       this.db.exec('COMMIT');return this.getJob(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -921,7 +986,7 @@ export class OwnerStore {
   patchAudit(proposalId,action,actor,detail='',at=stamp()){
     this.db.prepare('INSERT INTO owner_patch_oplog(proposal_id,at,actor,action,detail) VALUES(?,?,?,?,?)')
       .run(proposalId,at,txt(actor,'actor',80),txt(action,'action',80),txt(detail,'detail',400,false));}
-  approvePatchProposal(id,{expectedHash,reviewer='owner',now=stamp()}={}){
+  approvePatchProposal(id,{expectedHash,reviewer='owner',now=stamp(),audit=null}={}){
     check(typeof expectedHash==='string'&&/^[0-9a-f]{64}$/.test(expectedHash),'An explicit 64-hex proposal hash is required for approval');
     this.db.exec('BEGIN IMMEDIATE');
     try{
@@ -934,6 +999,8 @@ export class OwnerStore {
         .run(now,txt(reviewer,'reviewer',80),row.proposal_hash,now,id);
       check(changed.changes===1,'Proposal status changed concurrently',409);
       this.patchAudit(id,'approved',reviewer,`sha:${row.proposal_hash.slice(0,8)}`,now);
+      if(audit)this.insertDecisionAudit({subjectType:'patch',subjectId:id,action:'approve',
+        decisionHash:row.proposal_hash,...audit,now});
       this.db.exec('COMMIT');return this.getPatchProposal(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -1201,7 +1268,7 @@ export class OwnerStore {
       VALUES(?,?,?,?,?,?,?,?)`).run(id,runId,kind,content,contentHash,bytes,truncated?1:0,now);
     return this.getSandboxEvidence(runId,kind);
   }
-  approveSandboxRun(id,{expectedHash,actor='owner',now=stamp()}={}){
+  approveSandboxRun(id,{expectedHash,actor='owner',now=stamp(),audit=null}={}){
     check(typeof expectedHash==='string'&&/^[0-9a-f]{64}$/.test(expectedHash),'An explicit sandbox approval hash is required');
     this.db.exec('BEGIN IMMEDIATE');
     try{
@@ -1217,6 +1284,8 @@ export class OwnerStore {
         .run(now,now,id);
       check(changed.changes===1,'Sandbox status changed concurrently',409);
       this.sandboxAudit(id,'approved',actor,`sha:${row.approval_hash.slice(0,8)}`,now);
+      if(audit)this.insertDecisionAudit({subjectType:'sandbox',subjectId:id,action:'approve',
+        decisionHash:row.approval_hash,...audit,now});
       this.db.exec('COMMIT');return this.getSandboxRun(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -1493,7 +1562,7 @@ export class OwnerStore {
   // v1.0 blocker 3: the single repair Job is created, approved and bound to the cycle in
   // one IMMEDIATE transaction. A repair Job can never be claimable while its cycle is
   // invisible/unbound, and a crash rolls back all three writes together.
-  approveRepairCycleJob({cycleId,expectedHash,actor='owner',now=stamp()}={}){
+  approveRepairCycleJob({cycleId,expectedHash,actor='owner',now=stamp(),audit=null}={}){
     this.db.exec('BEGIN IMMEDIATE');
     try{
       const cycle=this.getRepairCycleRow(cycleId);check(!!cycle,'Unknown repair cycle',404);
@@ -1565,6 +1634,8 @@ export class OwnerStore {
         WHERE id=? AND status='pending_approval'`).run(row.id,now,txt(actor,'actor',80),now,cycleId);
       check(bound.changes===1,'Repair cycle status changed concurrently',409);
       this.repairAudit(cycleId,'queued',actor,`job:${row.id}`,now);
+      if(audit)this.insertDecisionAudit({subjectType:'repair',subjectId:cycleId,action:'approve',
+        decisionHash:cycle.approval_hash,...audit,now});
       this.db.exec('COMMIT');
       return this.getRepairCycle(cycleId);
     }catch(e){this.db.exec('ROLLBACK');throw e;}

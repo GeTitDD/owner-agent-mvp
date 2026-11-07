@@ -5,8 +5,8 @@ name: CI
 on:
   push:
     branches: [main]
+  # Run for every pull request, including stacked PRs whose base is not main.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -35,6 +35,46 @@ jobs:
       - run: npm run demo:patch
       - run: npm run demo:sandbox
       - run: npm run demo:repair
+
+  plugin:
+    # Independent evidence for the OpenClaw feature plugin: pinned host version,
+    # real build, manifest validation. No model calls and no network at runtime.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: integrations/openclaw-plugin/package-lock.json
+      - name: Install pinned OpenClaw host
+        working-directory: integrations/openclaw-plugin
+        run: npm ci
+      - name: Build plugin (tsc + control UI bundle)
+        working-directory: integrations/openclaw-plugin
+        run: npm run build
+      - name: Validate manifest and UI assets
+        working-directory: integrations/openclaw-plugin
+        run: node node_modules/openclaw/openclaw.mjs plugins validate --json
+      - name: Assert the model surface has no approval tools
+        working-directory: integrations/openclaw-plugin
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const manifest = JSON.parse(fs.readFileSync("openclaw.plugin.json", "utf8"));
+            const tools = [...(manifest.contracts?.tools ?? [])].sort();
+            const expected = ["owner_job_submit", "owner_jobs_list", "owner_status"];
+            if (JSON.stringify(tools) !== JSON.stringify(expected)) {
+              console.error("unexpected tool surface:", tools);
+              process.exit(1);
+            }
+            if (/(approve|apply|repair|sandbox)/.test(tools.join(","))) {
+              console.error("approval tool leaked into the model surface:", tools);
+              process.exit(1);
+            }
+            console.log("model tool surface OK:", tools.join(", "));
+          '
 
   sandbox-real:
     # The only job allowed to run project test code: inside a locked-down Linux container.
