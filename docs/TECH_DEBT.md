@@ -32,3 +32,21 @@
 13. **浏览器 E2E 未进 CI**：需要浏览器 channel + 安装 276 MB 插件；当前作为本地/发布前证据。
 14. **Sidecar 关闭是尽力而为**：Windows 下 Ctrl+C 不保证 SQLite 优雅关闭；依赖 WAL 恢复。
 15. **插件安装体积**：路径安装会复制 `node_modules`（约 276 MB）；后续可提供精简包或 `--link` 的稳定支持。
+
+## 第三轮 Review（5813975671，2026-11-07）新增
+
+PR #17 的客户端 PoC 验收已通过；以下为明确保留、本轮不扩展的非阻断项：
+
+16. **完整 P3 用户旅程未跑通**：当前浏览器 E2E 从“预置项目”开始，覆盖 Job 审批 → 已应用 Patch 的只读 Diff → 失败 Sandbox 展示 → Repair 批准。
+    尚未在浏览器中从聊天实际创建 `code-patch` Job、审批/应用新 Patch、发起并审批 Sandbox、
+    驱动 Repair Worker 生成新补丁并复测至 pass。下一阶段以这条真实旅程验收。
+17. **状态更新体验**：页面仍是手动 Refresh；Repair `queued` 后没有 Worker 进度、测试日志与最终结果。
+    优先复用 OpenClaw 现有 feature/event/订阅能力，或短期轻量轮询，不重写 WebSocket/Gateway。
+18. **E2E 断言稳健性**：`scripts/e2e/openclaw-ui.mjs` 写死了 proposal hash `6185af42`；
+    页面内任意 `queued` 也可能被 Job 的 `queued` 误满足。下一轮改为从 seed/API 返回实际 hash，
+    并精确核对 repair cycle id/status 或直接查询 sidecar 数据。
+19. **发布前证据**：浏览器 E2E 目前只在本地运行，GitHub CI 尚未执行该脚本，也没有 CI 可核验的截图/录屏。
+    下一阶段在目标开发机保留产物并演示，不把“脚本存在”当作“发布质量独立验收完成”。
+20. **适用范围**：当前只适用于单机可信开发 PoC；不要标注为多用户/公网安全方案。
+21. **合并依赖**：#15 是 #16/#17 的 base；必须先合并 #15，再显式核对 #16/#17 对 `main` 的最终差异并重跑 CI，
+    不假设 GitHub 自动改基。
