@@ -11,6 +11,7 @@ import { DockerSandboxProvider } from '../src/sandbox-provider.mjs';
 import { createInputSnapshot, cleanupInputSnapshot, defaultSandboxRoot, verifyInputSnapshot } from '../src/sandbox-materializer.mjs';
 import { approvalHash, normalizeIncludePaths, resolveTestProfile } from '../src/sandbox-protocol.mjs';
 import { reconcileSandboxWithProvider, cleanupSandboxWithProvider } from '../src/sandbox-control.mjs';
+import { submitRepairCycle, approveRepairCycle } from '../src/repair-service.mjs';
 import { sha256 } from '../src/utils.mjs';
 import { randomUUID } from 'node:crypto';
 import { defaultDbPath } from '../src/storage.mjs';
@@ -109,6 +110,13 @@ try {
     }
   }
   else if(command==='patch-recover')result={recoveredProposalIds:store.recoverInterruptedPatchApplies()};
+  else if(command==='repair-submit'){
+    const scope=read('--scope').split(',').map(s=>s.trim()).filter(Boolean);
+    result=await submitRepairCycle(store,{sandboxRunId:read('--sandbox-run'),scope,idempotencyKey:read('--key')});
+  }
+  else if(command==='repair-approve')result=approveRepairCycle(store,{id:read('--id'),expectedHash:read('--hash'),actor:'ownerctl'});
+  else if(command==='repair-show')result=store.getRepairCycle(read('--id'));
+  else if(command==='repairs')result=store.listRepairCycles({projectId:read('--project'),status:read('--status'),limit:100});
   else if(command==='sandbox-submit'){
     const proposal=store.getPatchProposal(read('--proposal'));
     if(!proposal)throw new Error('Unknown proposal');
@@ -128,7 +136,8 @@ try {
     try{
       result=store.createSandboxRun({id:runId,projectId:proposal.project_id,jobId:proposal.job_id,attempt:proposal.attempt,
         workspaceId:workspace.id,proposalId:proposal.id,approvedHash:proposal.approved_hash,baseSha:proposal.base_sha,
-        profile,approvalHash:approval,snapshotHash:snapshot.snapshotHash,snapshotPath:snapshot.snapshotPath,includePaths});
+        profile,approvalHash:approval,snapshotHash:snapshot.snapshotHash,snapshotPath:snapshot.snapshotPath,includePaths,
+        repairCycleId:proposal.repair_cycle_id||read('--repair-cycle','')||null});
       const manifest=JSON.stringify(snapshot.manifest);
       store.saveSandboxEvidence(runId,'snapshot_manifest',{content:manifest,contentHash:sha256(manifest),bytes:Buffer.byteLength(manifest)});
       result={...result,approvalHash:approval,snapshotHash:snapshot.snapshotHash};
@@ -200,7 +209,7 @@ try {
   else if(command==='ask')result=new OwnerAgent(store).answer(args.join(' '));
   else if(command==='ask-pi')result=await new OwnerAgent(store).askPi(args.join(' '));
   else if(command==='events')result=store.listEvents({projectId:read('--project')});
-  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake/pi/patch ... | result --id | results --job | code-submit --project --task --base --paths --key | patches [--project] [--status] | patch-show --id [--content 1] | patch-approve --id --hash | patch-apply --id --hash | patch-reject --id --reason | patch-reconcile --id --decision confirm-applied/discard [--reason] | patch-recover | workspaces [--project] [--status] | workspace-inspect --id | workspace-quarantine --id --reason | workspace-cleanup --id --confirm 1 | sandbox-submit --proposal --profile node-smoke --image-digest sha256:... [--include a,b] | sandbox-approve --id --hash | sandbox-run-once --project | sandboxes [--project] [--status] | sandbox-show --id [--logs 1] | sandbox-cancel --id | sandbox-recover | sandbox-reconcile --id --decision confirm-stopped/discard [--reason] | sandbox-cleanup --id --confirm 1');
+  else throw new Error('Use: register --id --name --root | projects | summary | attention | task --project --title | task-status --id --status | project-status --id --status | suggest --from --to --knowledge --why | suggestions | review --id --decision approved/rejected | note --project --text | ask QUESTION | ask-pi QUESTION | events | job-submit --project --type --title --payload --key [--task] | job-approve --id | job-reject --id --reason | jobs [--project] [--status] | job --id | job-cancel --id | jobs-reconcile | job-reconcile --id --decision requeue/cancel/fail [--reason] | run-once --worker fake/pi/patch ... | result --id | results --job | code-submit --project --task --base --paths --key | patches [--project] [--status] | patch-show --id [--content 1] | patch-approve --id --hash | patch-apply --id --hash | patch-reject --id --reason | patch-reconcile --id --decision confirm-applied/discard [--reason] | patch-recover | workspaces [--project] [--status] | workspace-inspect --id | workspace-quarantine --id --reason | workspace-cleanup --id --confirm 1 | sandbox-submit --proposal --profile node-smoke --image-digest sha256:... [--include a,b] | sandbox-approve --id --hash | sandbox-run-once --project | sandboxes [--project] [--status] | sandbox-show --id [--logs 1] | sandbox-cancel --id | sandbox-recover | sandbox-reconcile --id --decision confirm-stopped/discard [--reason] | sandbox-cleanup --id --confirm 1 | repair-submit --sandbox-run --scope a,b --key | repair-approve --id --hash | repair-show --id | repairs [--project] [--status]');
   console.log(JSON.stringify(result,null,2));
 }catch(e){console.error(e.message);process.exitCode=1;}
 finally{store.close();}

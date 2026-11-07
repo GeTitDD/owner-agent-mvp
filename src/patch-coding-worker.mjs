@@ -238,6 +238,15 @@ export class PatchCodingWorker {
       } catch {
         return fail('approved material could not be read');
       }
+      const repairCycleId = typeof job.payload.repairCycleId === 'string' ? job.payload.repairCycleId : null;
+      let repairContext = null;
+      if (repairCycleId) {
+        try {
+          repairContext = this.store.getRepairContextForJob(job);
+        } catch {
+          return fail('repair context unavailable');
+        }
+      }
 
       const generation = Promise.resolve()
         .then(() => this.proposalAgent.generate({
@@ -246,7 +255,8 @@ export class PatchCodingWorker {
           taskTitle: String(snapshot.title ?? job.title).slice(0, 200),
           taskNote: String(snapshot.note ?? '').slice(0, 500),
           focus: String(job.payload.focus ?? '').slice(0, 300),
-          material
+          material,
+          repairContext: repairContext?.contextText ?? ''
         }))
         .then((value) => ({ value }))
         .catch((error) => ({ error }));
@@ -424,6 +434,7 @@ export class PatchCodingWorker {
           proposalHash: validated.proposalHash,
           proposalArtifact: artifact,
           proposalDiff,
+          repairCycleId,
           note,
           now: this.clock()
         });

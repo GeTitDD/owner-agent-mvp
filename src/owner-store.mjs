@@ -31,6 +31,8 @@ const entry=row=>row?{...row,domains:parse(row.domains),imports:parse(row.import
 const suggestion=row=>row?{...row,evidenceRefs:parse(row.evidence_refs)}:null;
 const jobRow=row=>row?{...row,payload:parse(row.payload)}:null;
 const sandboxRow=row=>row?{...row,profile:parse(row.profile_json),includePaths:parse(row.include_paths)}:null;
+const repairRow=row=>row?{...row,repairScope:parse(row.repair_scope)}:null;
+const repairCycleIdFromJob=row=>{try{const payload=parse(row?.payload??'{}');return typeof payload.repairCycleId==='string'?payload.repairCycleId:null;}catch{return null;}};
 // Flat primitive-only payload: no nested structures, no unbounded strings, control chars rejected.
 const cleanPayload=v=>{check(v!==null&&typeof v==='object'&&!Array.isArray(v),'Payload must be a flat JSON object');
   const keys=Object.keys(v);check(keys.length<=10,'Too many payload keys');const out={};
@@ -170,6 +172,7 @@ export class OwnerStore {
         rejected_at TEXT, reject_reason TEXT NOT NULL DEFAULT '',
         reconciled_at TEXT, reconcile_decision TEXT NOT NULL DEFAULT '',
         apply_error TEXT NOT NULL DEFAULT '',
+        repair_cycle_id TEXT,
         UNIQUE(job_id,attempt)
       );
       CREATE TABLE IF NOT EXISTS owner_patch_artifacts(
@@ -223,6 +226,7 @@ export class OwnerStore {
         created_at TEXT NOT NULL, approved_at TEXT, started_at TEXT, finished_at TEXT, updated_at TEXT,
         reconcile_decision TEXT NOT NULL DEFAULT '', reconcile_reason TEXT NOT NULL DEFAULT '',
         snapshot_cleaned_at TEXT,
+        repair_cycle_id TEXT,
         UNIQUE(proposal_id,profile_id)
       );
       CREATE INDEX IF NOT EXISTS owner_sandbox_runs_project ON owner_sandbox_runs(project_id,status,created_at);
@@ -243,12 +247,49 @@ export class OwnerStore {
         at TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS owner_sandbox_oplog_run ON owner_sandbox_oplog(run_id,seq);
+      CREATE TABLE IF NOT EXISTS owner_repair_cycles(
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES owner_projects(id),
+        owner_task_id TEXT NOT NULL REFERENCES owner_tasks(id),
+        source_proposal_id TEXT NOT NULL REFERENCES owner_patch_proposals(id),
+        source_workspace_id TEXT NOT NULL REFERENCES owner_workspaces(id),
+        source_sandbox_run_id TEXT NOT NULL REFERENCES owner_sandbox_runs(id),
+        source_evidence_hash TEXT NOT NULL,
+        source_snapshot_hash TEXT NOT NULL,
+        source_base_sha TEXT NOT NULL,
+        source_chain_hash TEXT NOT NULL,
+        repair_scope TEXT NOT NULL,
+        context_text TEXT NOT NULL,
+        context_hash TEXT NOT NULL,
+        approval_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending_approval','queued','proposal_ready','applied','test_pending','tested_pass','tested_fail','failed','cancelled','rejected','needs_reconciliation')),
+        iteration INTEGER NOT NULL DEFAULT 1,
+        max_iterations INTEGER NOT NULL DEFAULT 1,
+        job_id TEXT REFERENCES owner_jobs(id),
+        repair_proposal_id TEXT REFERENCES owner_patch_proposals(id),
+        repair_sandbox_run_id TEXT REFERENCES owner_sandbox_runs(id),
+        idempotency_key TEXT NOT NULL,
+        created_at TEXT NOT NULL, approved_at TEXT, approved_by TEXT, updated_at TEXT NOT NULL,
+        error_code TEXT NOT NULL DEFAULT '', completed_at TEXT,
+        UNIQUE(project_id,idempotency_key),
+        UNIQUE(source_sandbox_run_id)
+      );
+      CREATE INDEX IF NOT EXISTS owner_repair_cycles_project ON owner_repair_cycles(project_id,status,created_at);
+      CREATE TABLE IF NOT EXISTS owner_repair_oplog(
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES owner_repair_cycles(id) ON DELETE CASCADE,
+        at TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS owner_repair_oplog_run ON owner_repair_oplog(run_id,seq);
     `);
     // Re-entrant v0.8 migrations: tolerate databases created by an earlier WIP build.
     const workspaceColumns=this.db.prepare('PRAGMA table_info(owner_workspaces)').all().map(c=>c.name);
     if(!workspaceColumns.includes('quarantine_reason'))this.db.exec(`ALTER TABLE owner_workspaces ADD COLUMN quarantine_reason TEXT NOT NULL DEFAULT ''`);
     const proposalColumns=this.db.prepare('PRAGMA table_info(owner_patch_proposals)').all().map(c=>c.name);
     if(!proposalColumns.includes('apply_error'))this.db.exec(`ALTER TABLE owner_patch_proposals ADD COLUMN apply_error TEXT NOT NULL DEFAULT ''`);
+    if(!proposalColumns.includes('repair_cycle_id'))this.db.exec(`ALTER TABLE owner_patch_proposals ADD COLUMN repair_cycle_id TEXT`);
+    const sandboxRunColumns=this.db.prepare('PRAGMA table_info(owner_sandbox_runs)').all().map(c=>c.name);
+    if(!sandboxRunColumns.includes('repair_cycle_id'))this.db.exec(`ALTER TABLE owner_sandbox_runs ADD COLUMN repair_cycle_id TEXT`);
     const oplogColumns=this.db.prepare('PRAGMA table_info(owner_patch_oplog)').all().map(c=>c.name);
     if(!oplogColumns.includes('actor'))this.db.exec(`ALTER TABLE owner_patch_oplog ADD COLUMN actor TEXT NOT NULL DEFAULT 'system'`);
     // v0.7: re-entrant column migration for Pi session metadata on attempts.
@@ -506,6 +547,7 @@ export class OwnerStore {
         .run(now,txt(actor,'actor',80),txt(reason,'reject reason',400,false),now,now,id);
       check(changed.changes===1,'Job status changed concurrently',409);
       this.jobAudit(id,'rejected',actor,reason,now);
+      this.markRepairCycleFailedForJob(id,{reason:'repair job rejected',now});
       this.db.exec('COMMIT');return this.getJob(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -518,6 +560,7 @@ export class OwnerStore {
         const changed=this.db.prepare(`UPDATE owner_jobs SET status='cancelled',cancel_requested_at=?,finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status IN ('pending_approval','queued')`).run(now,now,now,id);
         check(changed.changes===1,'Job status changed concurrently',409);
         this.jobAudit(id,'cancelled',actor,'cancelled before execution',now);
+        this.markRepairCycleCancelledForJob(id,{reason:'repair job cancelled before execution',now});
       }else if(row.status==='leased'||row.status==='running'){
         const changed=this.db.prepare(`UPDATE owner_jobs SET status='cancel_requested',cancel_requested_at=?,updated_at=? WHERE id=? AND status IN ('leased','running')`).run(now,now,id);
         check(changed.changes===1,'Job status changed concurrently',409);
@@ -622,6 +665,7 @@ export class OwnerStore {
       const changed=this.db.prepare(`UPDATE owner_jobs SET status=?,finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status IN ('running','cancel_requested')`).run(outcome,now,now,jobId);
       check(changed.changes===1,'Job status changed concurrently',409);
       this.jobAudit(jobId,outcome,workerId,safeNote,now);
+      if(outcome==='failed')this.markRepairCycleFailedForJob(jobId,{reason:'repair job failed',now});
       this.db.exec('COMMIT');return this.getJob(jobId);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -641,6 +685,7 @@ export class OwnerStore {
       const changed=this.db.prepare(`UPDATE owner_jobs SET status='cancelled',finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status='cancel_requested'`).run(now,now,jobId);
       check(changed.changes===1,'Job status changed concurrently',409);
       this.jobAudit(jobId,'worker_cancelled',workerId,safeNote,now);
+      this.markRepairCycleCancelledForJob(jobId,{reason:'repair job cancelled',now});
       this.db.exec('COMMIT');return this.getJob(jobId);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -654,6 +699,7 @@ export class OwnerStore {
         if(changed.changes===1){
           this.db.prepare(`UPDATE owner_job_attempts SET status='orphaned' WHERE job_id=? AND status IN ('claimed','running')`).run(id);
           this.jobAudit(id,'lease_expired','system','marked needs_reconciliation; no automatic re-execution',now);
+          this.markRepairCycleNeedsForJob(id,{reason:'repair job lease expired',now});
         }
       }
       this.db.exec('COMMIT');return expired.map(r=>r.id);
@@ -673,12 +719,17 @@ export class OwnerStore {
         const changed=this.db.prepare(`UPDATE owner_jobs SET status='queued',lease_until=NULL,cancel_requested_at=NULL,finished_at=NULL,updated_at=? WHERE id=? AND status='needs_reconciliation'`).run(now,id);
         check(changed.changes===1,'Job status changed concurrently',409);
         this.jobAudit(id,'requeued',actor,safeReason,now);
+        const repair=this.getJobRow(id);const repairCycleId=repair?repairCycleIdFromJob(repair):null;
+        if(repairCycleId)this.db.prepare(`UPDATE owner_repair_cycles SET status='queued',error_code='',updated_at=?
+          WHERE id=? AND job_id=? AND status='needs_reconciliation'`).run(now,repairCycleId,id);
       }else{
         const safeReason=txt(reason,'reason',400,false);
         const target=decision==='cancel'?'cancelled':'failed';
         const changed=this.db.prepare(`UPDATE owner_jobs SET status=?,finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status='needs_reconciliation'`).run(target,now,now,id);
         check(changed.changes===1,'Job status changed concurrently',409);
         this.jobAudit(id,decision==='cancel'?'reconcile_cancelled':'reconcile_failed',actor,safeReason,now);
+        if(decision==='cancel')this.markRepairCycleCancelledForJob(id,{reason:'repair job reconcile cancel',now});
+        else this.markRepairCycleFailedForJob(id,{reason:'repair job reconcile fail',now});
       }
       this.db.exec('COMMIT');return this.getJob(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
@@ -782,7 +833,7 @@ export class OwnerStore {
   // Atomic success commit for code-patch: proposal row + private artifacts + job/attempt
   // success in ONE transaction. Job succeeded means exactly "proposal stored", never
   // "code changed". Source content lives only in owner_patch_artifacts.
-  completeJobWithProposal({jobId,attemptNo,workerId,projectId,ownerTaskId='',workspaceId,baseSha,allowedPaths,files,proposalHash,proposalArtifact,proposalDiff,note='',now=stamp()}={}){
+  completeJobWithProposal({jobId,attemptNo,workerId,projectId,ownerTaskId='',workspaceId,baseSha,allowedPaths,files,proposalHash,proposalArtifact,proposalDiff,repairCycleId=null,note='',now=stamp()}={}){
     check(Array.isArray(allowedPaths)&&allowedPaths.length>=1&&allowedPaths.length<=5,'Invalid allowed paths');
     for(const p of allowedPaths)txt(p,'allowed path',200);
     check(Array.isArray(files)&&files.length>=1&&files.length<=5,'Invalid proposal files');
@@ -812,15 +863,30 @@ export class OwnerStore {
       check(ws.project_id===projectId&&ws.job_id===jobId&&ws.attempt===attemptNo,'Workspace does not match the job attempt');
       check(ws.status==='active','Workspace is not active');
       check(ws.base_sha===baseSha,'Workspace base SHA mismatch');
+      let repairCycle=null;
+      if(repairCycleId){
+        repairCycle=this.getRepairCycleRow(repairCycleId);check(!!repairCycle,'Unknown repair cycle',404);
+        check(repairCycle.project_id===projectId,'Repair cycle belongs to a different project',409);
+        check(repairCycle.job_id===jobId,'Repair cycle does not belong to this job',409);
+        check(repairCycle.status==='queued',`Repair cycle in status ${repairCycle.status} cannot store a proposal`,409);
+        check(repairCycle.source_base_sha===baseSha,'Repair cycle base SHA mismatch',409);
+        check(JSON.stringify(parse(repairCycle.repair_scope))===JSON.stringify(allowedPaths),'Repair cycle scope mismatch',409);
+      }
       const id=randomUUID();
-      this.db.prepare(`INSERT INTO owner_patch_proposals(id,project_id,job_id,attempt,workspace_id,owner_task_id,base_sha,allowed_paths,files,proposal_hash,status,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,'proposed',?,?)`)
-        .run(id,projectId,jobId,attemptNo,workspaceId,ownerTaskId||null,baseSha,json(allowedPaths),json(files),proposalHash,now,now);
+      this.db.prepare(`INSERT INTO owner_patch_proposals(id,project_id,job_id,attempt,workspace_id,owner_task_id,base_sha,allowed_paths,files,proposal_hash,status,created_at,updated_at,repair_cycle_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?,'proposed',?,?,?)`)
+        .run(id,projectId,jobId,attemptNo,workspaceId,ownerTaskId||null,baseSha,json(allowedPaths),json(files),proposalHash,now,now,repairCycleId||null);
       this.db.prepare(`INSERT INTO owner_patch_artifacts(id,proposal_id,kind,content,content_hash,created_at) VALUES(?,?,'proposal',?,?,?)`)
         .run(randomUUID(),id,proposalArtifact,sha256(proposalArtifact),now);
       this.db.prepare(`INSERT INTO owner_patch_artifacts(id,proposal_id,kind,content,content_hash,created_at) VALUES(?,?,'proposal_diff',?,?,?)`)
         .run(randomUUID(),id,proposalDiff,sha256(proposalDiff),now);
       this.patchAudit(id,'proposed',workerId,`sha:${proposalHash.slice(0,8)}; files:${files.length}`,now);
+      if(repairCycleId){
+        const cycleChanged=this.db.prepare(`UPDATE owner_repair_cycles SET status='proposal_ready',repair_proposal_id=?,updated_at=? WHERE id=? AND status='queued'`)
+          .run(id,now,repairCycleId);
+        check(cycleChanged.changes===1,'Repair cycle status changed concurrently',409);
+        this.repairAudit(repairCycleId,'proposal_ready',workerId,`proposal:${id}`,now);
+      }
       this.db.prepare(`UPDATE owner_job_attempts SET status='succeeded',finished_at=?,result_note=? WHERE id=? AND status='running'`)
         .run(now,safeNote,att.id);
       const changed=this.db.prepare(`UPDATE owner_jobs SET status='succeeded',finished_at=?,lease_until=NULL,updated_at=? WHERE id=? AND status='running'`)
@@ -900,6 +966,7 @@ export class OwnerStore {
         .run(now,safeReason,now,id);
       check(changed.changes===1,'Proposal status changed concurrently',409);
       this.patchAudit(id,'rejected',reviewer,safeReason,now);
+      this.setRepairCycleForProposal(id,'failed',{reason:'repair proposal rejected',now});
       this.db.exec('COMMIT');return this.getPatchProposal(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -927,6 +994,7 @@ export class OwnerStore {
         .run(safeReason,now,id);
       check(changed.changes===1,'Proposal status changed concurrently',409);
       this.patchAudit(id,'apply_precheck_failed','host',safeReason,now);
+      this.setRepairCycleForProposal(id,'failed',{reason:'repair apply precheck failed',now});
       this.db.exec('COMMIT');return this.getPatchProposal(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -944,6 +1012,7 @@ export class OwnerStore {
       const changed=this.db.prepare(`UPDATE owner_patch_proposals SET status='applied',apply_error='',updated_at=? WHERE id=? AND status='applying'`).run(now,id);
       check(changed.changes===1,'Proposal status changed concurrently',409);
       this.patchAudit(id,'applied','host',`sha:${sha256(diffContent).slice(0,8)}`,now);
+      this.setRepairCycleForProposal(id,'applied',{now});
       this.db.exec('COMMIT');return this.getPatchProposal(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -955,6 +1024,7 @@ export class OwnerStore {
       if(row.status==='needs_reconciliation'){
         this.db.prepare('UPDATE owner_patch_proposals SET apply_error=?,updated_at=? WHERE id=?').run(safeReason,now,id);
         this.quarantineWorkspaceInTx(row.workspace_id,{reason:'apply evidence retained',now});
+        this.setRepairCycleForProposal(id,'needs_reconciliation',{reason:'repair apply interrupted',now});
         this.db.exec('COMMIT');return this.getPatchProposal(id);
       }
       check(row.status==='applying',`Proposal in status ${row.status} cannot need reconciliation`,409);
@@ -963,6 +1033,7 @@ export class OwnerStore {
       check(changed.changes===1,'Proposal status changed concurrently',409);
       this.patchAudit(id,'needs_reconciliation','system',safeReason,now);
       this.quarantineWorkspaceInTx(row.workspace_id,{reason:'apply evidence retained',now});
+      this.setRepairCycleForProposal(id,'needs_reconciliation',{reason:'repair apply interrupted',now});
       this.db.exec('COMMIT');return this.getPatchProposal(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -984,12 +1055,14 @@ export class OwnerStore {
           .run(now,now,decision,id);
         check(changed.changes===1,'Proposal status changed concurrently',409);
         this.patchAudit(id,'reconcile_confirm_applied',actor,safeReason,now);
+        this.setRepairCycleForProposal(id,'applied',{now});
       }else{
         const changed=this.db.prepare(`UPDATE owner_patch_proposals SET status='apply_failed',apply_error=?,updated_at=?,reconciled_at=?,reconcile_decision=? WHERE id=? AND status IN ('applying','needs_reconciliation')`)
           .run(safeReason,now,now,decision,id);
         check(changed.changes===1,'Proposal status changed concurrently',409);
         this.patchAudit(id,'reconcile_discard',actor,safeReason,now);
         this.quarantineWorkspaceInTx(row.workspace_id,{reason:'owner discarded the interrupted apply',now});
+        this.setRepairCycleForProposal(id,'failed',{reason:'repair apply discarded',now});
       }
       this.db.exec('COMMIT');return this.getPatchProposal(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
@@ -1005,6 +1078,7 @@ export class OwnerStore {
         this.db.prepare(`UPDATE owner_patch_proposals SET status='needs_reconciliation',apply_error=?,updated_at=? WHERE id=? AND status='applying'`)
           .run(reason,now,row.id);
         this.patchAudit(row.id,'recovered_interrupted_apply','system',reason,now);
+        this.setRepairCycleForProposal(row.id,'needs_reconciliation',{reason:'repair apply interrupted',now});
         const ws=this.getWorkspace(row.workspace_id);
         if(ws&&ws.status==='active'){
           this.db.prepare(`UPDATE owner_workspaces SET status='quarantined',quarantined_at=?,quarantine_reason=? WHERE id=? AND status='active'`)
@@ -1019,7 +1093,7 @@ export class OwnerStore {
   sandboxAudit(runId,action,actor,detail='',at=stamp()){
     this.db.prepare('INSERT INTO owner_sandbox_oplog(run_id,at,actor,action,detail) VALUES(?,?,?,?,?)')
       .run(runId,at,txt(actor,'actor',80),txt(action,'action',80),txt(detail,'detail',400,false));}
-  createSandboxRun({id,projectId,jobId,attempt,workspaceId,proposalId,approvedHash,baseSha,profile,approvalHash,snapshotHash,snapshotPath,includePaths,now=stamp()}={}){
+  createSandboxRun({id,projectId,jobId,attempt,workspaceId,proposalId,approvedHash,baseSha,profile,approvalHash,snapshotHash,snapshotPath,includePaths,repairCycleId=null,now=stamp()}={}){
     id=ident(id,'sandbox run id');
     check(!!this.getProject(projectId),'Unknown project',404);
     const job=this.getJobRow(jobId);check(!!job,'Unknown job',404);
@@ -1047,18 +1121,37 @@ export class OwnerStore {
     check(typeof snapshotPath==='string'&&snapshotPath.length>0&&snapshotPath.length<=1500,'Invalid snapshot path');
     check(Array.isArray(includePaths)&&includePaths.length<=50,'Invalid include paths');
     for(const p of includePaths)txt(p,'include path',200);
+    if(repairCycleId){
+      const cycle=this.getRepairCycleRow(repairCycleId);check(!!cycle,'Unknown repair cycle',404);
+      check(cycle.project_id===projectId,'Repair cycle belongs to a different project',409);
+      check(cycle.repair_proposal_id===proposalId,'Repair cycle does not own this proposal',409);
+      check(cycle.status==='proposal_ready'||cycle.status==='applied','Repair cycle cannot start a sandbox test',409);
+      check(cycle.source_base_sha===baseSha,'Repair cycle base SHA mismatch',409);
+    }
+    this.db.exec('BEGIN IMMEDIATE');
     try{
       this.db.prepare(`INSERT INTO owner_sandbox_runs(
         id,project_id,job_id,attempt,workspace_id,proposal_id,approved_hash,base_sha,
         profile_id,profile_hash,test_plan_hash,approval_hash,profile_json,image_digest,
         snapshot_hash,snapshot_path,include_paths,status,timeout_ms,memory_bytes,cpus,pids_limit,tmpfs_bytes,
-        created_at,updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_approval',?,?,?,?,?,?,?)`)
+        created_at,updated_at,repair_cycle_id
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_approval',?,?,?,?,?,?,?,?)`)
         .run(id,projectId,jobId,attempt,workspaceId,proposalId,approvedHash,baseSha,
           profile.id,profile.profileHash,profile.testPlanHash,approvalHash,json(profile),profile.imageDigest,
           snapshotHash,snapshotPath,json(includePaths),profile.timeoutMs,profile.memoryBytes,profile.cpus,
-          profile.pidsLimit,profile.tmpfsBytes,now,now);
-    }catch(e){if(/UNIQUE constraint/.test(e.message))throw new OwnerInputError('A sandbox run already exists for this proposal/profile',409);throw e;}
+          profile.pidsLimit,profile.tmpfsBytes,now,now,repairCycleId||null);
+      if(repairCycleId){
+        const changed=this.db.prepare(`UPDATE owner_repair_cycles SET status='test_pending',repair_sandbox_run_id=?,updated_at=?
+          WHERE id=? AND status IN ('proposal_ready','applied')`).run(id,now,repairCycleId);
+        check(changed.changes===1,'Repair cycle status changed concurrently',409);
+        this.repairAudit(repairCycleId,'test_pending','owner',`run:${id}`,now);
+      }
+      this.db.exec('COMMIT');
+    }catch(e){
+      this.db.exec('ROLLBACK');
+      if(/UNIQUE constraint/.test(e.message))throw new OwnerInputError('A sandbox run already exists for this proposal/profile',409);
+      throw e;
+    }
     this.sandboxAudit(id,'created','owner','pending_approval',now);
     return this.getSandboxRun(id);
   }
@@ -1230,6 +1323,15 @@ export class OwnerStore {
           stdout?.truncated?1:0,stderr?.truncated?1:0,txt(errorCode,'error code',80,false),now,now,id);
       check(changed.changes===1,'Sandbox status changed concurrently',409);
       this.sandboxAudit(id,finalStatus,workerId,`execution:${executionStatus}; test:${testStatus}`,now);
+      if(row.repair_cycle_id){
+        const cycleStatus=finalStatus==='completed'
+          ? (testStatus==='pass'?'tested_pass':testStatus==='fail'?'tested_fail':'failed')
+          : (finalStatus==='cancelled'?'cancelled':'failed');
+        const cycleChanged=this.db.prepare(`UPDATE owner_repair_cycles SET status=?,error_code=?,completed_at=?,updated_at=?
+          WHERE id=? AND status IN ('test_pending','proposal_ready','applied')`)
+          .run(cycleStatus,txt(errorCode,'error code',80,false),now,now,row.repair_cycle_id);
+        if(cycleChanged.changes===1)this.repairAudit(row.repair_cycle_id,cycleStatus,workerId,`run:${id}`,now);
+      }
       this.db.exec('COMMIT');return this.getSandboxRun(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -1244,6 +1346,11 @@ export class OwnerStore {
         .run(txt(errorCode,'error code',80,false),now,id);
       check(changed.changes===1,'Sandbox status changed concurrently',409);
       this.sandboxAudit(id,'needs_reconciliation','system',txt(reason,'reason',400,false),now);
+      if(row.repair_cycle_id){
+        this.db.prepare(`UPDATE owner_repair_cycles SET status='needs_reconciliation',error_code=?,updated_at=?
+          WHERE id=? AND status IN ('test_pending','applied','proposal_ready')`)
+          .run(txt(errorCode,'error code',80,false),now,row.repair_cycle_id);
+      }
       this.db.exec('COMMIT');return this.getSandboxRun(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -1262,6 +1369,11 @@ export class OwnerStore {
         .run(decision,safeReason,now,now,id);
       check(changed.changes===1,'Sandbox status changed concurrently',409);
       this.sandboxAudit(id,`reconcile_${decision}`,actor,safeReason,now);
+      if(row.repair_cycle_id){
+        this.db.prepare(`UPDATE owner_repair_cycles SET status='failed',error_code='reconciled',completed_at=?,updated_at=?
+          WHERE id=? AND status IN ('test_pending','needs_reconciliation')`)
+          .run(now,now,row.repair_cycle_id);
+      }
       this.db.exec('COMMIT');return this.getSandboxRun(id);
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
@@ -1292,12 +1404,142 @@ export class OwnerStore {
       .run(now,now,id);
     return changed.changes===1;
   }
+  // ---- Owner-controlled Patch–Test–Repair (v1.0) ----
+  repairAudit(id,action,actor,detail='',at=stamp()){
+    this.db.prepare('INSERT INTO owner_repair_oplog(run_id,at,actor,action,detail) VALUES(?,?,?,?,?)')
+      .run(id,at,txt(actor,'actor',80),txt(action,'action',80),txt(detail,'detail',400,false));}
+  createRepairCycle({id,projectId,ownerTaskId,sourceProposalId,sourceWorkspaceId,sourceSandboxRunId,
+    sourceEvidenceHash,sourceSnapshotHash,sourceBaseSha,sourceChainHash,repairScope,contextText,contextHash,
+    approvalHash,idempotencyKey,now=stamp()}={}){
+    id=ident(id,'repair cycle id');
+    check(!!this.getProject(projectId),'Unknown project',404);
+    const task=this.getTask(ownerTaskId);check(!!task,'Unknown owner task',404);
+    check(task.project_id===projectId,'Repair task belongs to a different project');
+    const sourceProposal=this.getPatchProposalRow(sourceProposalId);check(!!sourceProposal,'Unknown source proposal',404);
+    check(sourceProposal.project_id===projectId,'Source proposal belongs to a different project');
+    check(sourceProposal.owner_task_id===ownerTaskId,'Source proposal belongs to a different owner task');
+    check(sourceProposal.status==='applied','Repair requires an applied source proposal');
+    const sourceWorkspace=this.getWorkspace(sourceWorkspaceId);check(!!sourceWorkspace,'Unknown source workspace',404);
+    check(sourceWorkspace.project_id===projectId&&sourceWorkspace.id===sourceProposal.workspace_id,
+      'Source workspace does not match the source proposal');
+    const sourceRun=this.getSandboxRunRow(sourceSandboxRunId);check(!!sourceRun,'Unknown source sandbox run',404);
+    check(sourceRun.project_id===projectId,'Source sandbox run belongs to a different project');
+    check(sourceRun.proposal_id===sourceProposalId,'Source sandbox run does not match the source proposal');
+    const sourceJob=this.getJobRow(sourceRun.job_id);check(!!sourceJob,'Unknown source job',404);
+    check(sourceJob.owner_task_id===ownerTaskId,'Source sandbox run belongs to a different owner task');
+    check(sourceRun.status==='completed'&&sourceRun.execution_status==='completed'&&sourceRun.test_status==='fail',
+      'Repair requires a completed, failed test run');
+    check(!sourceRun.repair_cycle_id,'Repair-of-repair is not supported in v1.0');
+    check(sourceRun.base_sha===sourceBaseSha,'Source base SHA mismatch');
+    check(sourceRun.snapshot_hash===sourceSnapshotHash,'Source snapshot hash mismatch');
+    for(const [value,label] of [[sourceEvidenceHash,'source evidence hash'],[sourceChainHash,'source chain hash'],
+      [contextHash,'repair context hash'],[approvalHash,'repair approval hash']]){
+      check(typeof value==='string'&&/^[0-9a-f]{64}$/.test(value),`Invalid ${label}`);
+    }
+    check(Array.isArray(repairScope)&&repairScope.length>=1&&repairScope.length<=5,'Invalid repair scope');
+    for(const item of repairScope)txt(item,'repair scope path',200);
+    check(typeof contextText==='string'&&contextText.length>0&&contextText.length<=20000,'Invalid repair context');
+    check(typeof idempotencyKey==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,88}$/.test(idempotencyKey),'Invalid repair idempotency key');
+    try{
+      this.db.prepare(`INSERT INTO owner_repair_cycles(
+        id,project_id,owner_task_id,source_proposal_id,source_workspace_id,source_sandbox_run_id,
+        source_evidence_hash,source_snapshot_hash,source_base_sha,source_chain_hash,repair_scope,
+        context_text,context_hash,approval_hash,status,iteration,max_iterations,idempotency_key,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_approval',1,1,?,?,?)`)
+        .run(id,projectId,ownerTaskId,sourceProposalId,sourceWorkspaceId,sourceSandboxRunId,
+          sourceEvidenceHash,sourceSnapshotHash,sourceBaseSha,sourceChainHash,json(repairScope),
+          contextText,contextHash,approvalHash,idempotencyKey,now,now);
+    }catch(e){if(/UNIQUE constraint/.test(e.message))throw new OwnerInputError('A repair cycle already exists for this source run or key',409);throw e;}
+    this.repairAudit(id,'created','owner',`source:${sourceSandboxRunId}`,now);
+    return this.getRepairCycle(id);
+  }
+  getRepairCycleRow(id){return this.db.prepare('SELECT * FROM owner_repair_cycles WHERE id=?').get(id)??null;}
+  getRepairCycleByKey(projectId,idempotencyKey){return repairRow(this.db.prepare('SELECT * FROM owner_repair_cycles WHERE project_id=? AND idempotency_key=?').get(projectId,idempotencyKey)??null);}
+  getRepairCycleBySourceRun(runId){return repairRow(this.db.prepare('SELECT * FROM owner_repair_cycles WHERE source_sandbox_run_id=?').get(runId)??null);}
+  getRepairCycle(id){const row=this.getRepairCycleRow(id);if(!row)return null;
+    return {...repairRow(row),
+      job:row.job_id?this.getJob(row.job_id):null,
+      proposal:row.repair_proposal_id?this.getPatchProposal(row.repair_proposal_id):null,
+      sandboxRun:row.repair_sandbox_run_id?this.getSandboxRun(row.repair_sandbox_run_id):null,
+      oplog:this.db.prepare('SELECT seq,at,actor,action,detail FROM owner_repair_oplog WHERE run_id=? ORDER BY seq').all(id)};}
+  listRepairCycles({projectId='',status='',limit=100}={}){
+    check(Number.isSafeInteger(limit)&&limit>=1&&limit<=500,'Invalid limit');
+    const statuses=new Set(['pending_approval','queued','proposal_ready','applied','test_pending','tested_pass','tested_fail','failed','cancelled','rejected','needs_reconciliation']);
+    check(!status||statuses.has(status),'Invalid repair status');
+    const where=[];const params=[];
+    if(projectId){where.push('project_id=?');params.push(projectId);}
+    if(status){where.push('status=?');params.push(status);}
+    return this.db.prepare(`SELECT * FROM owner_repair_cycles ${where.length?`WHERE ${where.join(' AND ')}`:''} ORDER BY created_at DESC,id DESC LIMIT ?`)
+      .all(...params,limit).map(repairRow);
+  }
+  getRepairContextForJob(jobOrId){
+    const job=typeof jobOrId==='string'?this.getJob(jobOrId):jobOrId;
+    check(!!job,'Unknown repair job',404);
+    const cycleId=job.payload?.repairCycleId;
+    check(typeof cycleId==='string'&&cycleId.length>0,'Job is not a repair job');
+    const cycle=this.getRepairCycleRow(cycleId);check(!!cycle,'Unknown repair cycle',404);
+    check(cycle.job_id===job.id,'Repair cycle is not bound to this job',409);
+    check(['queued','running'].includes(cycle.status),`Repair cycle in status ${cycle.status} cannot provide context`,409);
+    return {cycleId,contextText:cycle.context_text,contextHash:cycle.context_hash};
+  }
+  markRepairCycleQueued(id,{jobId,expectedHash,actor='owner',now=stamp()}={}){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=this.getRepairCycleRow(id);check(!!row,'Unknown repair cycle',404);
+      check(row.status==='pending_approval',`Repair cycle in status ${row.status} cannot be queued`,409);
+      check(expectedHash===row.approval_hash,'Repair approval hash does not match the frozen cycle',409);
+      check(!!this.getJobRow(jobId),'Unknown repair job',404);
+      const changed=this.db.prepare(`UPDATE owner_repair_cycles SET status='queued',job_id=?,approved_at=?,approved_by=?,updated_at=?
+        WHERE id=? AND status='pending_approval'`).run(jobId,now,txt(actor,'actor',80),now,id);
+      check(changed.changes===1,'Repair cycle status changed concurrently',409);
+      this.repairAudit(id,'queued',actor,`job:${jobId}`,now);
+      this.db.exec('COMMIT');return this.getRepairCycle(id);
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
+  setRepairCycleForProposal(proposalId,status,{reason='',now=stamp()}={}){
+    const proposal=this.getPatchProposalRow(proposalId);if(!proposal?.repair_cycle_id)return false;
+    const changed=this.db.prepare(`UPDATE owner_repair_cycles SET status=?,error_code=?,completed_at=?,updated_at=?
+      WHERE id=? AND status IN ('proposal_ready','applied','test_pending','needs_reconciliation')`)
+      .run(status,txt(reason,'repair reason',80,false),['tested_pass','tested_fail','failed','cancelled'].includes(status)?now:null,
+        now,proposal.repair_cycle_id);
+    if(changed.changes===1)this.repairAudit(proposal.repair_cycle_id,status,'system',reason,now);
+    return changed.changes===1;
+  }
+  markRepairCycleFailedForJob(jobId,{reason='',now=stamp()}={}){
+    const job=this.getJobRow(jobId);if(!job)return false;
+    const cycleId=repairCycleIdFromJob(job);if(!cycleId)return false;
+    const changed=this.db.prepare(`UPDATE owner_repair_cycles SET status='failed',error_code=?,completed_at=?,updated_at=?
+      WHERE id=? AND job_id=? AND status IN ('queued','proposal_ready','needs_reconciliation')`)
+      .run(txt(reason,'reason',80,false),now,now,cycleId,jobId);
+    if(changed.changes===1)this.repairAudit(cycleId,'failed','system',reason,now);
+    return changed.changes===1;
+  }
+  markRepairCycleNeedsForJob(jobId,{reason='',now=stamp()}={}){
+    const job=this.getJobRow(jobId);if(!job)return false;
+    const cycleId=repairCycleIdFromJob(job);if(!cycleId)return false;
+    const changed=this.db.prepare(`UPDATE owner_repair_cycles SET status='needs_reconciliation',error_code=?,updated_at=?
+      WHERE id=? AND job_id=? AND status IN ('queued','proposal_ready')`)
+      .run(txt(reason,'reason',80,false),now,cycleId,jobId);
+    if(changed.changes===1)this.repairAudit(cycleId,'needs_reconciliation','system',reason,now);
+    return changed.changes===1;
+  }
+  markRepairCycleCancelledForJob(jobId,{reason='',now=stamp()}={}){
+    const job=this.getJobRow(jobId);if(!job)return false;
+    const cycleId=repairCycleIdFromJob(job);if(!cycleId)return false;
+    const changed=this.db.prepare(`UPDATE owner_repair_cycles SET status='cancelled',error_code=?,completed_at=?,updated_at=?
+      WHERE id=? AND job_id=? AND status IN ('queued','proposal_ready','needs_reconciliation')`)
+      .run(txt(reason,'reason',80,false),now,now,cycleId,jobId);
+    if(changed.changes===1)this.repairAudit(cycleId,'cancelled','system',reason,now);
+    return changed.changes===1;
+  }
   summary(){const projects=this.listProjects();const tasks=this.listTasks();const runs=this.listRuns();const pending=this.listSuggestions('pending');
     const counts=this.jobStatusCounts();
     const patchCounts={};let patchTotal=0;
     for(const r of this.db.prepare('SELECT status,COUNT(*) AS n FROM owner_patch_proposals GROUP BY status').all()){patchCounts[r.status]=r.n;patchTotal+=r.n;}
     const sandboxCounts={};let sandboxTotal=0;
     for(const r of this.db.prepare('SELECT status,COUNT(*) AS n FROM owner_sandbox_runs GROUP BY status').all()){sandboxCounts[r.status]=r.n;sandboxTotal+=r.n;}
+    const repairCounts={};let repairTotal=0;
+    for(const r of this.db.prepare('SELECT status,COUNT(*) AS n FROM owner_repair_cycles GROUP BY status').all()){repairCounts[r.status]=r.n;repairTotal+=r.n;}
     return {projectCount:projects.length,activeRuns:runs.filter(r=>r.status==='running').length,
       blockedTasks:tasks.filter(t=>t.status==='blocked').length,pendingSuggestions:pending.length,
       activeJobs:['queued','leased','running','cancel_requested'].reduce((sum,st)=>sum+(counts[st]??0),0),
@@ -1309,6 +1551,9 @@ export class OwnerStore {
       sandboxRuns:sandboxTotal,
       pendingSandboxApprovals:sandboxCounts['pending_approval']??0,
       unresolvedSandboxRuns:['provisioning','running','collecting','needs_reconciliation'].reduce((sum,st)=>sum+(sandboxCounts[st]??0),0),
+      repairCycles:repairTotal,
+      pendingRepairApprovals:repairCounts['pending_approval']??0,
+      testedPassRepairs:repairCounts['tested_pass']??0,
       projects:projects.map(p=>({...p,tasks:tasks.filter(t=>t.project_id===p.id),
         runs:runs.filter(r=>r.project_id===p.id).slice(0,8),knowledgeLinks:this.knowledgeLinks(p.id),
         jobs:this.listJobs({projectId:p.id,limit:8})}))};}
