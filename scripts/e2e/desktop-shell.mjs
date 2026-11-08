@@ -38,6 +38,27 @@ const pageFor = async (app, file) => {
   throw new Error(`${file} window was not created`);
 };
 
+const makeAddProjectFixture = (root) => {
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'package.json'),
+    '{"name":"added-project","private":true,"type":"module"}\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'src', 'index.js'), 'export const value = 1;\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'tests', 'sandbox-smoke.test.mjs'),
+    "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('smoke',()=>assert.equal(1,1));\n", 'utf8');
+  const git = (args) => execFileSync('git', args, {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  }).trim();
+  git(['init', '-q', '-b', 'main']);
+  git(['config', 'core.autocrlf', 'false']);
+  git(['config', 'user.email', 'added@example.invalid']);
+  git(['config', 'user.name', 'Added Fixture']);
+  git(['add', '.']);
+  git(['commit', '-qm', 'added base']);
+};
+
 const windowInfo = (app) => app.evaluate(({ BrowserWindow }) => {
   const windows = BrowserWindow.getAllWindows();
   const pet = windows.find((win) => win.webContents.getURL().includes('pet.html'));
@@ -116,6 +137,19 @@ const run = async () => {
         applied: modelResult?.modelApplied,
         pending: modelResult?.modelPending
       }));
+
+    // 首次配置路径：通过受控目录选择器注册新项目（曾经误用不存在的 sidecar POST）。
+    const addedRoot = path.join(userData, 'added-project');
+    makeAddProjectFixture(addedRoot);
+    await app.evaluate(({ dialog }, root) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] });
+    }, addedRoot);
+    const added = await panelPage.evaluate(() => window.companion.settings.addProject());
+    check('add project registers through the owner store', added?.name === 'added-project',
+      JSON.stringify(added));
+    await panelPage.waitForTimeout(3500);
+    const projectCount = await panelPage.locator('#projectSelect option').count();
+    check('added project appears in the project selector', projectCount === 2, String(projectCount));
     await panelPage.screenshot({ path: path.join(evidence, 'shell-panel.png') });
 
     // 重启：同一个 userData / SQLite，任务与位置都应保持。

@@ -919,26 +919,32 @@ const registerIpc = () => {
 
   ipcMain.handle('companion:add-project', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!store) throw new Error('本地 Owner Runtime 尚未就绪，请稍后重试。');
     const result = await dialog.showOpenDialog({
       title: '选择项目目录',
       properties: ['openDirectory']
     });
     if (result.canceled || !result.filePaths[0]) return null;
     const root = result.filePaths[0];
-    const name = path.basename(root) || 'project';
-    const id = name.toLowerCase().replace(/[^a-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 40)
-      || `project-${Date.now()}`;
-    await api('/owner/v1/projects', {
-      method: 'POST',
-      body: { id, name, root, primaryDomain: 'software-engineering' }
-    }).catch(async (error) => {
-      if (!/already|exists|UNIQUE/iu.test(error.message)) throw error;
-    });
-    const projects = (await api('/owner/v1/projects')).items ?? [];
-    const project = projects.find((item) => item.id === id);
-    config.projectId = project?.id ?? config.projectId;
+    // 同一个目录重复添加时直接复用已有项目，避免 UNIQUE 冲突。
+    let project = store.getProjectByRoot(root);
+    if (!project) {
+      const name = path.basename(root) || 'project';
+      const baseId = name.toLowerCase().replace(/[^a-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 40)
+        || 'project';
+      const id = store.getProject(baseId)
+        ? `${baseId.slice(0, 32)}-${Date.now().toString(36).slice(-5)}`
+        : baseId;
+      project = store.registerProject({
+        id,
+        name,
+        root,
+        primaryDomain: 'software-engineering'
+      });
+    }
+    config.projectId = project.id;
     saveConfig();
-    return project ?? null;
+    return project;
   });
 
   ipcMain.handle('companion:open-full', async (event) => {

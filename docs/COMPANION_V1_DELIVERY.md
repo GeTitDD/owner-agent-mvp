@@ -50,6 +50,11 @@ Electron 桌宠 + 进程内 Owner Runtime：
 - Worker 空闲时保存设置会直接更新提案 Agent 的模型并提示“模型已切换”。
 - Worker 正在执行时不会打断当前任务，模型在任务结束后自动应用，并提示“将在当前任务结束后生效”。
 
+**首次配置添加项目**
+- 修复 `companion:add-project` 误调用 sidecar `POST /owner/v1/projects` 导致的 `Method POST is not allowed`。
+- 现在由 Electron 主进程直接写 OwnerStore；同一目录重复添加会复用已有项目，不再撞 UNIQUE。
+- 外壳 E2E 通过受控目录选择器覆盖该路径。
+
 ## 3. 客户端外壳验收
 
 `npm run e2e:desktop:shell`：
