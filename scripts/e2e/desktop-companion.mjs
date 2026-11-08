@@ -21,6 +21,15 @@ const check = (label, condition) => {
   if (condition) console.log(`[DESKTOP] OK   ${label}`);
   else { failures.push(label); console.error(`[DESKTOP] FAIL ${label}`); }
 };
+const pageFor = async (app, file) => {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    const page = app.windows().find((item) => item.url().includes(file));
+    if (page) return page;
+    await sleep(300);
+  }
+  throw new Error(`${file} window was not created`);
+};
 
 const run = async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'companion-e2e-'));
@@ -58,7 +67,7 @@ const run = async () => {
   let panel;
   let failed = true;
   try {
-    const pet = await app.firstWindow();
+    const pet = await pageFor(app, 'pet.html');
     await pet.waitForSelector('#pet', { timeout: 30000 });
     check('pet window loads', true);
 
