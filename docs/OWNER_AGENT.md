@@ -4,6 +4,20 @@
 
 Owner is the durable principal. The owner-centred Resident Runtime owns a project registry, tasks, event log, verified knowledge links and attention policies. Project-specific Pi sessions own their execution; the existing domain knowledge compiler owns cross-domain contexts. No single long-running LLM session is an authoritative database.
 
+## Current priority: maintain knowledge within each project (2026-11-09)
+
+Owner is a **source of truth for Owner's recorded, adopted domain knowledge and project context**, not an authority on the latest external facts. A code change, test, document or Agent inference may support a candidate update, but does not imply Owner has learned or accepted it. Preserve the source, project scope, revision and the distinction between observed evidence, verified claims and Owner adoption.
+
+The immediate work is deliberately concrete:
+
+1. Inventory registered projects: domain(s), goals, environment/dependency versions, constraints and explicit unknowns; mark declarations versus observations.
+2. Extract small, traceable knowledge candidates from code, documents, experiments, tests and completed runs. Keep automatic candidates unverified.
+3. Use the existing Personal Knowledge Workbench for human review, corrections, version history and evidence. Store specific findings at L3 before cross-project generalization.
+4. Reuse applicability checks, Resolver and Context Compiler; propose L2/L1 only with independent evidence and explicit review.
+5. Re-check knowledge when environments, test evidence or project assumptions change; do not silently overwrite Owner's adopted version.
+
+The project workflow and acceptance criteria are in [Project Knowledge Maintenance](PROJECT_KNOWLEDGE_MAINTENANCE.md). A universal cognitive-state schema, Project Journal, knowledge graph and new Agent infrastructure are intentionally deferred. The sections below describe the historical v0.5 baseline; automatic Knowledge Loop and Companion knowledge UI remain Draft PR #23/#24.
+
 ## Implemented
 
 - Local SQLite owner registry, explicit project ID ↔ canonical existing project root (with status, goals and domains). No recursive project scanning without authorization.
