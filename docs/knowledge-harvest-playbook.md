@@ -40,7 +40,9 @@
 ```
 
 - 最多 5 个候选。
-- 单项目证据只能 `project`；两个独立项目且都有 passed 证据才建议 `applied`；三个以上才建议 `domain`。
+- 每项必须有 `title` 和 `claim`；claim 不得省略，也不能只写在 title 里。
+- claim 必须保留证据中的关键常量、默认值、文件名和测试断言，不用 N/某个值占位。
+- 单项目证据只能 `project`；**两个独立项目各自有 passed/repaired 证据**才建议 `applied`；三个以上才建议 `domain`。A pass + B fail 不够。
 - 任何自动候选都是 `unverified`。
 - `evidenceRefs` 只能引用 Experience 中出现的 ref。
 - 不保存原始 prompt、工具输出或密钥。

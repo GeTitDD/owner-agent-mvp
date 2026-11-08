@@ -28,8 +28,9 @@
 - Knowledge Candidate：现有 proposal payload + `meta`：
   - `contract=knowledge-candidate/v1`
   - `sourceExperienceIds / proposedLayer / confidence / contradictions / revision / harvestRunId / playbook=edae / steps / validationSuggestions`
-- Knowledge Usage：`knowledgeId / revision / targetRunId / projectId / retrievalReason / applicabilityResult / contextSnapshotId / outcomeEvidenceRefs / observedBenefit / unresolvedQuestions`。
-- Outcome Feedback：`usageId / outcome / observedBenefit / evidenceRefs / proposedEvolution / rationale`。
+- Knowledge Usage：`knowledgeId / revision / targetRunId（Owner Run 或 knowledge eval run）/ projectId / retrievalReason / applicabilityResult / contextSnapshotId / outcomeEvidenceRefs / benefitEvidenceRefs / observedBenefit / unresolvedQuestions`。
+- Outcome Feedback：`usageId / outcome / observedBenefit / evidenceRefs / benefitEvidenceRefs / proposedEvolution / rationale`。
+- Knowledge Eval Run：`id / projectId / taskId / knowledgeId / revision / task / model / mode / baseline / variant / taskHash / contextHash / output hashes / usageIds`；用于 A/B provenance，不伪造 Sandbox run。
 
 自动候选永远 `unverified`；approve 与 verify 是两个显式人工步骤。
 
@@ -37,7 +38,7 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `src/personal-store.mjs` | 三张 Loop 表、proposal meta、幂等 API |
+| `src/personal-store.mjs` | Experience/Harvest/Usage/Feedback/EvalRun 表、proposal meta、幂等 API |
 | `src/knowledge-loop/contracts.mjs` | 契约校验与候选映射 |
 | `src/knowledge-loop/experience.mjs` | 从 Sandbox/Job 采集经验 |
 | `src/knowledge-loop/pi-harvest-session.mjs` | 只读 Pi Harvest，加载 pstack skills |
@@ -55,7 +56,7 @@
 ## 4. 自动化验证
 
 - `npm run check`：通过。
-- `npm test`：207 tests / 204 pass / 3 skip / 0 fail（含合并后的 knowledge-loop、自动采集与旧库迁移测试）。
+- `npm test`：209 tests / 206 pass / 3 skip / 0 fail（含自动采集终态过滤、L2 双项目通过门槛、EvalRun 持久化与旧库迁移）。
 - `npm run knowledge:demo`：确定性三项目闭环通过。
   - 4 条 Experience（修复、失败、两个通过）
   - L3 候选 → 审核/验证
@@ -101,19 +102,21 @@
 
 ### 5.4 真实 A→B 学习链（非 Oracle）
 
-运行 root：`D:\nautilus_trader\.tmp\opencode\knowledge-ab-learning2`
+运行 root：`D:\nautilus_trader\.tmp\opencode\knowledge-ab-learning6`
 
-1. **A 证据**：A 的隐藏约定 fixture（默认 attempts=7）失败 → 人工修复通过；采集 `exp_f153...`（fail）与 `exp_b07b...`（repaired）。
-2. **A Harvest**：真实 Pi `harvest_b039...` 生成 project 候选；Owner 审核/验证为 `personal.6d7a...`（L3）。
-3. **B baseline**：独立项目 B 无知识执行同一任务，真实 Pi 生成补丁，测试 exit 1（fail）；采集 `exp_61a4...`。
-4. **A+B Harvest**：真实 Pi `harvest_ad52...` 生成 applied 候选；Owner 审核/验证为 `personal.a386...`（L2）。
-5. **B reuse**：`KnowledgeReuse` 在 B 的 `dynamicContext` 中检索到该 L2 单元，记录 usage `usage_2c5f...`。
-6. **B knowledge run**：同一任务/模型/测试，只增加知识上下文，测试 exit 0（pass）。
-7. **反馈**：显式 controlled comparison（baseline failed / variant succeeded）→ `observedBenefit=positive`，证据 `comparison:ab-learning-b`。
+1. **A 证据**：A 的隐藏约定 fixture（默认 attempts=7）失败 → 人工修复通过；采集 `exp_8e61...`（fail）与 `exp_69a3...`（repaired）。
+2. **A Harvest**：真实 Pi `harvest_68bf...` 生成 project 候选；Owner 审核/验证为 `personal.dc71...`（L3）。
+3. **B baseline**：独立项目 B 无知识执行同一任务，真实 Pi 生成补丁，测试 exit 1（fail）；采集 `exp_50f1...`。
+4. **A+B baseline Harvest**：`harvest_b12f...` **仍是 project**，因为 B 只有失败证据；不晋升 L2。
+5. **B validation**：显式注入 L3 内容（`mode=validation-injection`），真实 Pi 通过；持久化 eval run `eval_b_validation_9ff5...`，并采集 `exp_2d8b...`（pass）。
+6. **A+B pass Harvest**：真实 Pi `harvest_417a...` 生成 applied 候选；Owner 审核/验证为 `personal.0e03...`（L2）。
+7. **B reuse**：`KnowledgeReuse` 在 B 的 `dynamicContext` 中检索到 L2，Usage 绑定 `eval_b_reuse_0c7f...`（不是 baseline sandbox）。
+8. **B knowledge run**：同一任务/模型/测试，测试 exit 0（pass）；eval run 持久化 baseline/variant、exit code、输出哈希。
+9. **反馈**：controlled comparison（baseline failed / variant succeeded）→ `observedBenefit=positive`，usage outcome=succeeded，证据 `eval:eval_b_reuse...`。
 
-结果：**A 的失败/修复经验 → Harvest → 审核/验证 → B 实际检索 → B baseline fail → knowledge pass**。这是“跨项目学习”的主要证据；`eval-hard` 的预置答案实验保留为 Oracle Control，不再作为学习成功主证据。
+结果：**A 的失败/修复经验 → Harvest → L3；B baseline 失败不晋升；B validation 通过后 A+B 才晋升 L2；B 正常检索 L2 后 pass**。这是本轮“跨项目学习”的主要证据；`eval-hard` 的预置答案实验保留为 Oracle Control。
 
-证据文件：`ab-report.json`、`ab-decisions.tsv`。
+证据文件：`ab-report.json`、`ab-decisions.tsv`、`knowledge_eval_runs` 表。
 
 ## 6. A/B/C 评估
 
@@ -149,10 +152,12 @@
 | A 项目经验 | 2 条（fail / repaired） |
 | A Harvest | project 候选，审核/验证为 L3 |
 | B baseline（无知识） | fail，exit 1 |
-| A+B Harvest | applied 候选，审核/验证为 L2 |
+| A+B baseline Harvest | **project**（B 只有失败证据，不晋升 L2） |
+| B validation（显式 L3 注入） | pass；持久化 eval run + B pass Experience |
+| A+B pass Harvest | applied 候选，审核/验证为 L2 |
+| B reuse（正常检索 L2） | Usage 绑定 knowledge eval run，不是 baseline sandbox |
 | B knowledge（同一任务/模型/测试） | pass，exit 0 |
-| 检索 | B 的 dynamicContext 含 L2 单元 |
-| 反馈 | controlled comparison → benefit=positive |
+| 反馈 | controlled comparison → outcome succeeded / benefit positive |
 
 这是本轮“知识复用有效”的主要证据；它证明 A 的 Experience 经 Harvest/审批/验证后，被 B 实际检索并改变执行结果。Oracle Control 仅作上限参考。
 
@@ -167,6 +172,9 @@
 
 - 真实 A→B 链只在单一模型（glm-5.3）与单一 fixture family 上完成；样本量 1，不能外推为普遍效果。
 - 任务成功只写 outcome；只有 controlled comparison 或人工证据才标记 benefit，绝大多数日常任务会是 unknown。
+- 自动采集只处理终态 Job/Sandbox（completed/failed/cancelled/rejected）；运行中只保留 Runtime 状态，不进入待提炼队列。
+- L2 要求两个不同项目各自有 passed/repaired 证据；A pass + B fail 只保留 L3/待验证。
+- A→B 的 Usage 绑定知识版 eval run；`knowledge_eval_runs` 持久化 baseline/variant、exit code、输出哈希与 context hash。B validation 使用显式 L3 注入，不是正常检索；最终 B reuse 才是正常检索。
 - 自动采集由 `KnowledgeLoopRuntime` 提供；#23 提供 runtime 与宿主，Companion 的产品 timer 在 #24 接入。
 - pstack 集成是 **pstack-inspired 薄适配**：固定 `c0fad96` 的 EDAE/Reflect 纪律、skill 目录与 TSV 记录；未执行原生 `pstack_todo`/Reflect Playbook，不称为“pstack 已驱动自动学习”。
 - pstack 只作为纪律与 Skill 加载来源；未自动修改 pstack Skill，未调用 Cursor `/loop`。
@@ -198,14 +206,14 @@ node scripts/knowledge-loop/eval-ab-learning.mjs --root <dir> --allow-model
 | DoD | 状态 |
 | --- | --- |
 | 真实 Pi Run 可采集为 Experience | ✅（acceptance level 2 真实 Pi 修复 → 两条 Experience） |
-| 自动采集（无 CLI） | ✅（KnowledgeLoopRuntime tick + OwnerResidentRuntime 复用） |
+| 自动采集（无 CLI） | ✅（仅终态 Job/Sandbox；KnowledgeLoopRuntime tick + OwnerResidentRuntime 复用） |
 | pstack-inspired Harvest 生成结构化候选 | ✅（加载 pstack skills；EDAE/Reflect 纪律 + TSV；非原生 pstack_todo） |
 | 候选进入现有知识库 | ✅（proposal → unit） |
 | 查询/修订/验证/拒绝/来源追踪 | ✅（现有 PersonalKnowledgeStore + 新增视图） |
-| L3→L2/L1 晋升建议 | ✅（仅 controlled comparison/人工证据；非任务成功计数） |
-| 新任务检索并使用知识 | ✅（真实 A→B：B context + usage） |
-| 复用结果反向关联知识 | ✅（controlled comparison → feedback → usage） |
-| 真实跨项目 A→B 学习链 | ✅（A 经验 → Harvest → L3；A+B → L2；B baseline fail → knowledge pass） |
+| L3→L2/L1 晋升建议 | ✅（两个项目各自 passed/repaired + controlled comparison；A pass+B fail 不晋升） |
+| 新任务检索并使用知识 | ✅（真实 A→B：B validation → L2；B 正常检索 L2 → pass） |
+| 复用结果反向关联知识 | ✅（Usage 绑定 knowledge eval run；feedback → eval/comparison 证据） |
+| 真实跨项目 A→B 学习链 | ✅（A L3；B fail 不晋升；B validation pass → L2；B reuse pass） |
 | 错误/无关/冲突负向测试 | ✅（阈值修复、forced misleading、conflict status） |
 | 不重复造存储/Harness | ✅ |
 | 真实 Pi 提炼案例 | ✅（harvest_53ef...、harvest_b039...、harvest_ad52...） |

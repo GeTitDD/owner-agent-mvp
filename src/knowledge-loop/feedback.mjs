@@ -39,6 +39,16 @@ export class KnowledgeFeedback {
         evidenceRefs: [`job:${job.id}`]
       };
     }
+    const evalRun = this.personal.getEvalRun(runId);
+    if (evalRun) {
+      const success = evalRun.variant?.success === true;
+      return {
+        outcome: success ? 'succeeded' : 'failed',
+        projectId: evalRun.projectId,
+        observedBenefit: 'unknown',
+        evidenceRefs: [`eval:${evalRun.id}`]
+      };
+    }
     return { outcome: 'unknown', projectId: null, observedBenefit: 'unknown', evidenceRefs: [] };
   }
 

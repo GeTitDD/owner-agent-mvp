@@ -47,6 +47,31 @@ const job = (id, overrides = {}) => ({
   ], payload: {}, ...overrides
 });
 
+test('auto collection ignores non-terminal runs and collects one final experience', () => {
+  const personal = new PersonalKnowledgeStore(':memory:');
+  try {
+    const state = {
+      tasks: { task1: { id: 'task1', project_id: 'p1' } },
+      jobs: { job1: job('job1', { status: 'running' }) },
+      runs: { run1: sandbox('run1', { status: 'running', test_status: 'unknown' }) }
+    };
+    const owner = fakeOwner(state);
+    const collector = new ExperienceCollector(owner, personal);
+    assert.throws(() => collector.collectSandboxRun('run1'), /not terminal/u);
+    assert.deepEqual(collector.collectProject('p1'), []);
+    state.runs.run1 = sandbox('run1');
+    state.jobs.job1 = job('job1');
+    const collected = collector.collectProject('p1');
+    assert.equal(collected.length, 1);
+    assert.equal(collected[0].observedOutcome.status, 'succeeded');
+    assert.equal(personal.listExperiences({ projectId: 'p1' }).length, 1);
+    const again = collector.collectProject('p1');
+    assert.equal(again.length, 1);
+    assert.equal(again[0].duplicate, true);
+    assert.equal(personal.listExperiences({ projectId: 'p1' }).length, 1);
+  } finally { personal.close(); }
+});
+
 test('Experience collector records success, failure and repair without duplicating', () => {
   const personal = new PersonalKnowledgeStore(':memory:');
   try {
@@ -176,6 +201,33 @@ test('Harvest suggests applied only with two independent projects and flags cont
     assert.equal(proposal.payload.scope, 'domain');
     assert.equal(proposal.payload.verificationStatus, 'needs_reverification');
     assert.equal(proposal.meta.independentProjects?.length ?? 2, 2);
+  } finally { personal.close(); }
+});
+
+test('L2 requires passing evidence in two independent projects, not A pass + B fail', async () => {
+  const personal = new PersonalKnowledgeStore(':memory:');
+  try {
+    const a = personal.addExperience(experience('run-a', 'p1'));
+    const b = personal.addExperience(experience('run-b', 'p2', {
+      observedOutcome: { status: 'failed', source: 'owner-store', testStatus: 'fail', executionStatus: 'completed', repairStatus: null }
+    }));
+    const harvester = new KnowledgeHarvester({ ownerStore: fakeOwner(), personalStore: personal });
+    const result = await harvester.harvest({
+      experienceIds: [a.id, b.id], projectId: 'p1', domainId: 'software-engineering',
+      extractor: () => ({
+        candidates: [{
+          title: 'Retry bound across projects',
+          claim: 'When a retry helper must use every attempt, loop with i < attempts.',
+          kind: 'pattern', proposedLayer: 'applied', applicability: ['Node retry helper'],
+          exceptions: [], confidence: 0.8, contradictions: [], keywords: ['retry'],
+          evidenceRefs: [`experience:${a.id}`, `experience:${b.id}`],
+          facts: [], inferences: [], unknowns: [], validationSuggestions: []
+        }]
+      })
+    });
+    const proposal = result.candidates[0];
+    assert.equal(proposal.payload.layer, 'project');
+    assert.equal(proposal.payload.scope, 'project');
   } finally { personal.close(); }
 });
 

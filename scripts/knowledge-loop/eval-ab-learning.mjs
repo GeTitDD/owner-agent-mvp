@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 // 真正的跨项目 A→B 学习实验。
 //
-// A：隐藏约定（默认 attempts=7）的失败 + 人工修复证据
-//   → 真实 Pi Harvest → 审核/验证 → L3
-// B：独立项目先无知识执行（baseline fail）→ 采集独立证据
-//   → Harvest(A+B) → L2 → B 知识注入执行（knowledge pass）
+// 规则：
+// - A 的失败/修复证据 → Harvest → 审核/验证 → L3。
+// - B 无知识 baseline 失败，只证明问题存在，不足以晋升 L2。
+// - B 用 L3 内容做显式 validation-injection，通过后产生第二条独立通过证据。
+// - Harvest(A pass + B pass) → L2。
+// - B 再通过 Compiler 正常检索 L2，执行 knowledge run；Usage/Feedback 绑定该 eval run。
 //
-// 不使用 personal.create 预置答案；知识必须来自 A/B 的证据与 Harvest 审批。
+// 不使用 personal.create 预置答案；Oracle Control 仍由 eval-hard.mjs 单独提供。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { OwnerStore } from '../../src/owner-store.mjs';
 import { PersonalKnowledgeStore } from '../../src/personal-store.mjs';
@@ -20,6 +23,7 @@ import { KnowledgeReuse } from '../../src/knowledge-loop/reuse.mjs';
 import { KnowledgeFeedback } from '../../src/knowledge-loop/feedback.mjs';
 import { KnowledgeEvalRunner } from '../../src/knowledge-loop/eval.mjs';
 import { appendDecision } from '../../src/knowledge-loop/decision-log.mjs';
+import { sha256 } from '../../src/utils.mjs';
 import {
   insertJob, insertWorkspace, insertPatch, insertRun, insertRepairCycle
 } from './fixtures.mjs';
@@ -43,7 +47,6 @@ const log = (phase, decision, why, evidence, result) => {
   appendDecision(decisions, { phase, decision, why, evidence, result });
   console.log(`[${phase}] ${decision} -> ${result}`);
 };
-
 const git = (cwd, cmd) => execFileSync('git', cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const testContent = `import test from 'node:test';
@@ -60,7 +63,6 @@ test('withRetry uses all attempts', () => {
   assert.equal(calls, 7);
 });
 `;
-
 const buggy = `export function withRetry(fn, { attempts = 1 } = {}) {
   let lastError;
   for (let i = 0; i < attempts; i += 1) {
@@ -69,7 +71,6 @@ const buggy = `export function withRetry(fn, { attempts = 1 } = {}) {
   throw lastError;
 }
 `;
-
 const fixed = `export function withRetry(fn, { attempts = 7 } = {}) {
   let lastError;
   for (let i = 0; i < attempts; i += 1) {
@@ -78,8 +79,7 @@ const fixed = `export function withRetry(fn, { attempts = 7 } = {}) {
   throw lastError;
 }
 `;
-
-const diff = `--- a/src/retry.js\n+++ b/src/retry.js\n@@\n-export function withRetry(fn, { attempts = 1 } = {}) {\n+export function withRetry(fn, { attempts = 7 } = {}) {\n`;
+const repairDiff = `--- a/src/retry.js\n+++ b/src/retry.js\n@@\n-export function withRetry(fn, { attempts = 1 } = {}) {\n+export function withRetry(fn, { attempts = 7 } = {}) {\n`;
 
 function makeProject(projectId) {
   const projectRoot = path.join(root, projectId);
@@ -118,9 +118,7 @@ function addFailRun(store, { projectId, root: projectRoot, baseSha, taskId, suff
     diff: '--- a/src/retry.js\n+++ b/src/retry.js\n@@\n // no semantic change\n'
   });
   const runId = `run-${projectId}-${suffix}`;
-  insertRun(store, {
-    id: runId, projectId, jobId, workspaceId, patchId, baseSha, testStatus: 'fail', root: projectRoot
-  });
+  insertRun(store, { id: runId, projectId, jobId, workspaceId, patchId, baseSha, testStatus: 'fail', root: projectRoot });
   return { jobId, workspaceId, patchId, runId };
 }
 
@@ -132,7 +130,7 @@ function addRepairRun(store, { projectId, root: projectRoot, baseSha, taskId, so
   const patchId = `patch-${projectId}-repair`;
   insertPatch(store, {
     id: patchId, projectId, jobId, taskId, workspaceId, baseSha,
-    filePath: 'src/retry.js', content: fixed, diff
+    filePath: 'src/retry.js', content: fixed, diff: repairDiff
   });
   const runId = `run-${projectId}-repair`;
   const cycleId = `cycle-${projectId}`;
@@ -154,9 +152,26 @@ function approveAndVerify(personal, proposalId) {
   unit = personal.update(unit.id, {
     ...unit,
     verificationStatus: 'verified',
-    evidenceRefs: [...new Set([...(unit.evidenceRefs ?? []), 'ab:passing-tests'])]
-  }, { expectedRevision: unit.revision, actor: 'ab-owner', note: 'Verified from A/B passing evidence' });
+    evidenceRefs: [...new Set([...(unit.evidenceRefs ?? []), 'ab:validated'])]
+  }, { expectedRevision: unit.revision, actor: 'ab-owner', note: 'Verified from A/B evidence' });
   return { proposal: reviewed, unit };
+}
+
+function evalSummary(result) {
+  return {
+    success: result.success,
+    testExitCode: result.testExitCode,
+    failureType: result.failureType,
+    model: result.model,
+    proposalHash: result.proposalHash,
+    outputHash: result.outputHash,
+    stdoutHash: result.stdoutHash,
+    stderrHash: result.stderrHash,
+    filesChanged: result.filesChanged,
+    knowledgeRefs: result.knowledgeRefs,
+    estimatedKnowledgeTokens: result.estimatedKnowledgeTokens,
+    durationMs: result.durationMs
+  };
 }
 
 async function harvest(owner, personal, experienceIds, projectId) {
@@ -179,24 +194,14 @@ async function main() {
     const sourceA = addFailRun(owner, { projectId: 'ab-a', root: a.projectRoot, baseSha: a.baseSha, taskId: taskA.id, suffix: 'source' });
     const repairA = addRepairRun(owner, { projectId: 'ab-a', root: a.projectRoot, baseSha: a.baseSha, taskId: taskA.id, source: sourceA });
     const collector = new ExperienceCollector(owner, personal);
-    const expA = [
-      collector.collectSandboxRun(sourceA.runId),
-      collector.collectSandboxRun(repairA.runId)
-    ];
-    report.stages.aExperiences = expA.map((item) => ({ id: item.id, outcome: item.observedOutcome.status }));
+    const expA = [collector.collectSandboxRun(sourceA.runId), collector.collectSandboxRun(repairA.runId)];
+    report.stages.aExperiences = expA.map((item) => ({ id: item.id, outcome: item.observedOutcome.status, test: item.observedOutcome.testStatus }));
     log('A', 'collected failure and human repair', 'A must provide the hidden convention evidence', ownerDb, `${expA.length} experiences`);
 
     const l3 = await harvest(owner, personal, expA.map((item) => item.id), 'ab-a');
-    if (!l3.candidates[0]) {
-      console.error('A harvest invalid candidates:', JSON.stringify(l3.invalid ?? [], null, 2).slice(0, 4000));
-      throw new Error('A harvest produced no candidate');
-    }
-    report.stages.aHarvest = {
-      id: l3.harvestRun.id,
-      candidateId: l3.candidates[0].id,
-      layer: l3.candidates[0].payload.layer,
-      claim: l3.candidates[0].payload.content
-    };
+    if (!l3.candidates[0]) throw new Error('A harvest produced no candidate');
+    if (l3.candidates[0].payload.layer !== 'project') throw new Error('A-only harvest must stay project-scoped');
+    report.stages.aHarvest = { id: l3.harvestRun.id, candidateId: l3.candidates[0].id, layer: l3.candidates[0].payload.layer, claim: l3.candidates[0].payload.content };
     const l3Verified = approveAndVerify(personal, l3.candidates[0].id);
     report.stages.aKnowledge = { id: l3Verified.unit.id, layer: l3Verified.unit.layer, revision: l3Verified.unit.revision };
     log('A', 'approved L3 knowledge', 'single-project evidence stays project-scoped', l3Verified.unit.id, l3Verified.unit.layer);
@@ -206,66 +211,120 @@ async function main() {
     const taskB = owner.createTask({ projectId: 'ab-b', title: 'Fix hidden retry convention in B' });
     const sourceB = addFailRun(owner, { projectId: 'ab-b', root: b.projectRoot, baseSha: b.baseSha, taskId: taskB.id, suffix: 'source' });
     const expB = collector.collectSandboxRun(sourceB.runId);
-    report.stages.bExperience = { id: expB.id, outcome: expB.observedOutcome.status };
-    log('B', 'collected independent baseline failure', 'B must not receive A knowledge before baseline', ownerDb, expB.id);
+    report.stages.bExperience = { id: expB.id, outcome: expB.observedOutcome.status, test: expB.observedOutcome.testStatus };
+    log('B', 'collected independent baseline failure', 'B failure proves the problem, not the fix', ownerDb, expB.id);
 
     const runner = new KnowledgeEvalRunner({ personalStore: personal, model });
+    const task = 'Fix the failing retry test in src/retry.js';
     const baseline = await runner.runTask({
-      taskId: 'ab-b-baseline', projectRoot: b.projectRoot,
-      task: 'Fix the failing retry test in src/retry.js', allowedPaths: ['src/'], variant: 'baseline'
+      taskId: 'ab-b-baseline', projectRoot: b.projectRoot, task,
+      allowedPaths: ['src/'], variant: 'baseline'
     });
-    report.stages.bBaseline = { success: baseline.success, failure: baseline.failureType, exit: baseline.testExitCode };
-    log('B', 'baseline run without knowledge', 'same task/model/test as variant', `exit=${baseline.testExitCode}`, baseline.success ? 'pass' : 'fail');
+    report.stages.bBaseline = evalSummary(baseline);
+    log('B', 'baseline run without knowledge', 'same task/model/test as validation/variant', `exit=${baseline.testExitCode}`, baseline.success ? 'pass' : 'fail');
 
-    const l2 = await harvest(owner, personal, [expA[0].id, expA[1].id, expB.id], 'ab-a');
-    if (!l2.candidates[0]) throw new Error('A+B harvest produced no candidate');
-    report.stages.abHarvest = {
-      id: l2.harvestRun.id,
-      candidateId: l2.candidates[0].id,
-      layer: l2.candidates[0].payload.layer,
-      claim: l2.candidates[0].payload.content
+    const pendingHarvest = await harvest(owner, personal, [expA[0].id, expA[1].id, expB.id], 'ab-a');
+    if (!pendingHarvest.candidates[0]) throw new Error('A+B baseline harvest produced no candidate');
+    if (pendingHarvest.candidates[0].payload.layer !== 'project') {
+      throw new Error('A pass + B fail must not be promoted to L2');
+    }
+    report.stages.pendingHarvest = {
+      id: pendingHarvest.harvestRun.id,
+      candidateId: pendingHarvest.candidates[0].id,
+      layer: pendingHarvest.candidates[0].payload.layer
     };
+    log('A+B', 'baseline harvest stayed L3', 'B has no passing evidence yet', pendingHarvest.harvestRun.id, pendingHarvest.candidates[0].payload.layer);
+
+    // B validation：显式注入 L3 内容，只作为“第二项目验证”，不是正常检索。
+    const validationId = `eval_b_validation_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+    const validationContext = `## Validation Knowledge\n${l3Verified.unit.title}\n${l3Verified.unit.content}\n[verification=verified; scope=validation-injection]`;
+    const validation = await runner.runTask({
+      taskId: 'ab-b-validation', projectRoot: b.projectRoot, task,
+      allowedPaths: ['src/'], variant: 'validation-injection', knowledgeContext: validationContext,
+      knowledgeRefs: [`knowledge:${l3Verified.unit.id}:r${l3Verified.unit.revision}`]
+    });
+    const validationRun = personal.addEvalRun({
+      id: validationId,
+      projectId: 'ab-b', taskId: taskB.id,
+      knowledgeId: l3Verified.unit.id, knowledgeRevision: l3Verified.unit.revision,
+      domainId: domain, task, model: model || baseline.model || 'sdk-default',
+      mode: 'validation-injection', status: 'completed',
+      baseline: evalSummary(baseline), variant: evalSummary(validation),
+      sameTask: true,
+      taskHash: sha256(task),
+      contextHash: sha256(validationContext),
+      evidenceRefs: [`eval:${validationId}`]
+    });
+    const expValidation = collector.collectEvalRun(validationId);
+    report.stages.bValidation = {
+      evalRunId: validationRun.id,
+      success: validation.success,
+      exit: validation.testExitCode,
+      experienceId: expValidation.id
+    };
+    log('B', 'validation run with L3 content', 'second project passes before L2 consideration', validationRun.id, validation.success ? 'pass' : 'fail');
+    if (!validation.success) throw new Error('B validation did not pass; L2 not demonstrated');
+
+    const l2 = await harvest(owner, personal, [expA[1].id, expValidation.id], 'ab-a');
+    if (!l2.candidates[0]) throw new Error('A+B passing harvest produced no candidate');
+    if (l2.candidates[0].payload.layer !== 'applied') throw new Error('Two independent passing projects must be eligible for L2');
+    report.stages.abHarvest = { id: l2.harvestRun.id, candidateId: l2.candidates[0].id, layer: l2.candidates[0].payload.layer, claim: l2.candidates[0].payload.content };
     const l2Verified = approveAndVerify(personal, l2.candidates[0].id);
     report.stages.abKnowledge = { id: l2Verified.unit.id, layer: l2Verified.unit.layer, revision: l2Verified.unit.revision };
-    log('A+B', 'approved shared knowledge', 'two independent projects with passing evidence', l2Verified.unit.id, l2Verified.unit.layer);
+    log('A+B', 'approved shared knowledge', 'two independent projects each have passing evidence', l2Verified.unit.id, l2Verified.unit.layer);
 
+    // 正常检索：Usage 绑定知识版 eval run，而不是 B 的 baseline sandbox。
+    const reuseId = `eval_b_reuse_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
     const reuse = new KnowledgeReuse({ personalStore: personal, engine, ownerStore: owner });
     const planResult = await reuse.compileAsync({
       cwd: b.projectRoot,
       task: 'retry attempts default loop',
-      targetRunId: sourceB.runId,
+      targetRunId: reuseId,
       projectId: 'ab-b',
       maxTokens: 2000
     });
     const knowledgeRefs = (planResult.plan?.knowledgeRefs ?? []).filter((key) => key.startsWith('workspace:'));
+    if (!knowledgeRefs.some((key) => key.startsWith(`workspace:${l2Verified.unit.id}:`))) {
+      throw new Error('B did not retrieve the L2 unit');
+    }
+    const knowledge = await runner.runTask({
+      taskId: 'ab-b-reuse', projectRoot: b.projectRoot, task,
+      allowedPaths: ['src/'], variant: 'knowledge',
+      knowledgeContext: planResult.plan?.dynamicContext ?? '',
+      knowledgeRefs
+    });
+    const reuseRun = personal.addEvalRun({
+      id: reuseId,
+      projectId: 'ab-b', taskId: taskB.id,
+      knowledgeId: l2Verified.unit.id, knowledgeRevision: l2Verified.unit.revision,
+      domainId: domain, task, model: model || baseline.model || 'sdk-default',
+      mode: 'retrieval', status: 'completed',
+      baseline: evalSummary(baseline), variant: evalSummary(knowledge),
+      sameTask: true,
+      taskHash: sha256(task),
+      contextHash: planResult.plan?.compilationHash ?? '',
+      usageIds: planResult.usages.map((usage) => usage.id),
+      evidenceRefs: [`eval:${reuseId}`]
+    });
     report.stages.reuse = {
+      evalRunId: reuseRun.id,
       knowledgeRefs,
       usageIds: planResult.usages.map((usage) => usage.id),
       contextChars: planResult.plan?.dynamicContext?.length ?? 0
     };
-    log('reuse', 'B context retrieved shared knowledge', 'knowledge must enter B through the compiler', knowledgeDb, knowledgeRefs.join(', '));
-
-    const knowledge = await runner.runTask({
-      taskId: 'ab-b-knowledge', projectRoot: b.projectRoot,
-      task: 'Fix the failing retry test in src/retry.js', allowedPaths: ['src/'], variant: 'knowledge',
-      knowledgeContext: planResult.plan?.dynamicContext ?? '',
-      knowledgeRefs
-    });
-    report.stages.bKnowledge = {
-      success: knowledge.success, failure: knowledge.failureType, exit: knowledge.testExitCode,
-      knowledgeRefs: knowledge.knowledgeRefs, tokens: knowledge.estimatedKnowledgeTokens
-    };
-    log('B', 'knowledge run', 'same task/model/test; only knowledge context differs', `exit=${knowledge.testExitCode}`, knowledge.success ? 'pass' : 'fail');
+    report.stages.bKnowledge = evalSummary(knowledge);
+    log('B', 'knowledge run', 'normal compiler retrieval; same task/model/test', reuseRun.id, knowledge.success ? 'pass' : 'fail');
 
     const feedback = new KnowledgeFeedback({ ownerStore: owner, personalStore: personal });
     const feedbackResults = [];
     for (const usage of planResult.usages) {
       feedbackResults.push(feedback.record({
         usageId: usage.id,
-        runId: sourceB.runId,
+        runId: reuseId,
         rationale: 'same task: baseline failed, knowledge variant passed',
+        benefitEvidenceRefs: [`eval:${reuseId}`],
         comparison: {
-          id: 'ab-learning-b',
+          id: reuseId,
           knowledgeId: usage.knowledgeId,
           sameTask: true,
           baselineOutcome: baseline.success ? 'succeeded' : 'failed',
@@ -280,20 +339,23 @@ async function main() {
       benefitEvidenceRefs: item.feedback.benefitEvidenceRefs,
       evolution: item.evolution?.meta?.kind ?? null
     }));
-    log('feedback', 'recorded controlled A/B benefit', 'task success alone is not benefit evidence', knowledgeDb, report.stages.feedback[0]?.benefit ?? 'unknown');
+    log('feedback', 'recorded controlled A/B benefit', 'usage points to the knowledge eval run', knowledgeDb, report.stages.feedback[0]?.benefit ?? 'unknown');
 
     report.summary = {
       aKnowledgeLayer: report.stages.aKnowledge.layer,
+      pendingL2Layer: report.stages.pendingHarvest.layer,
       abKnowledgeLayer: report.stages.abKnowledge.layer,
       baselineSuccess: baseline.success,
+      validationSuccess: validation.success,
       knowledgeSuccess: knowledge.success,
       knowledgeRefs,
       feedbackBenefit: report.stages.feedback[0]?.benefit ?? 'unknown',
+      evalRunIds: { validation: validationRun.id, reuse: reuseRun.id },
       decisions
     };
     fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
     console.log(JSON.stringify({ report: reportPath, summary: report.summary }, null, 2));
-    if (baseline.success) throw new Error('Baseline unexpectedly succeeded; A→B learning contrast is not demonstrated');
+    if (baseline.success) throw new Error('Baseline unexpectedly succeeded; A→B contrast is not demonstrated');
     if (!knowledge.success) throw new Error('Knowledge variant failed; A→B transfer is not demonstrated');
   } finally {
     engine.close();

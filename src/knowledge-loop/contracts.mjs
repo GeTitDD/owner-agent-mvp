@@ -92,7 +92,10 @@ export function normalizeCandidateDraft(input) {
   if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) throw new Error('Invalid confidence');
   return {
     title: text(input.title, 'candidate title', 200, true),
-    claim: text(input.claim, 'candidate claim', 2400, true),
+    claim: text(
+      input.claim ?? input.statement ?? input.content ?? input.summary ?? input.title,
+      'candidate claim', 8000, true
+    ),
     kind: rawKind,
     proposedLayer,
     applicability: Array.isArray(input.applicability)

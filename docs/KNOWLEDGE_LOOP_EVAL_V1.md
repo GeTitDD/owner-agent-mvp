@@ -34,21 +34,25 @@
 2. 采集 A 的 fail/repaired Experience。
 3. 真实 Pi Harvest → project 候选 → Owner 审核/验证 → L3。
 4. B 独立项目无知识执行同一任务 → baseline fail（真实 Pi）。
-5. 采集 B 失败 Experience；Harvest(A+B) → applied 候选 → 审核/验证 → L2。
-6. B 通过 Compiler/overlay 检索到 L2；同一任务/模型/测试重新执行 → pass。
-7. 显式 controlled comparison（baseline failed / variant succeeded）→ benefit=positive。
+5. 采集 B 失败 Experience；Harvest(A+B) **仍是 project**，因为 B 只有失败证据。
+6. B 用 L3 内容做显式 validation-injection → pass；持久化 eval run 并采集 B pass Experience。
+7. Harvest(A pass + B pass) → applied → L2。
+8. B 通过 Compiler/overlay 正常检索 L2；同一任务/模型/测试执行 → pass。
+9. Usage 绑定知识版 eval run；controlled comparison（baseline failed / variant succeeded）→ benefit=positive。
 
 | 阶段 | 结果 |
 | --- | --- |
 | A Experience | fail + repaired |
-| A Harvest | `harvest_b039...` → L3 `personal.6d7a...` |
+| A Harvest | `harvest_68bf...` → L3 `personal.dc71...` |
 | B baseline | fail，exit 1 |
-| A+B Harvest | `harvest_ad52...` → L2 `personal.a386...` |
-| B reuse | dynamicContext 含 L2，记录 usage |
+| A+B baseline Harvest | `harvest_b12f...` → **project**，不晋升 |
+| B validation | `eval_b_validation_9ff5...` → pass；B pass Experience |
+| A+B pass Harvest | `harvest_417a...` → L2 `personal.0e03...` |
+| B reuse | `eval_b_reuse_0c7f...`；dynamicContext 含 L2 |
 | B knowledge | pass，exit 0 |
-| Feedback | `comparison:ab-learning-b` → positive |
+| Feedback | outcome=succeeded，benefit=positive，证据 `eval:eval_b_reuse...` |
 
-结论：这是首次由真实执行证据驱动、经 Harvest/审批/验证、在另一个项目被实际检索并改变结果的 A→B 学习链。样本量 1，仍不外推。
+结论：这是由真实执行证据驱动、经 Harvest/审批/验证、在另一个项目被实际检索并改变结果的 A→B 学习链。**范围是“B 已失败后进行跨项目知识迁移”，不是“A 学会后让 B 首次运行预防失败”。** 样本量 1，仍不外推。
 
 ## 3. Oracle Control：不可从源码推断的项目约定
 
@@ -87,7 +91,7 @@ Fixture：
 
 ## 6. 证据索引
 
-- 真实 A→B：`ab-report.json`、`ab-decisions.tsv`（root `knowledge-ab-learning2`）。
+- 真实 A→B：`ab-report.json`、`ab-decisions.tsv`；root `knowledge-ab-learning6`；eval runs `eval_b_validation_9ff5...`、`eval_b_reuse_0c7f...`。
 - 通用评估：`eval-report-2.json`（本地运行产物，未提交；摘要见本文件）。
 - Oracle Control：`eval-hard-report.json`（baseline exit 1，knowledge exit 0）。
 - 真实 Harvest：`harvest_53ef6399aa3d4b1582c0d201`。
