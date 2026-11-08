@@ -10,7 +10,7 @@ import {
 } from './contracts.mjs';
 import { createHarvestSessionFactory, HARVEST_DISCIPLINE, resolvePstackSkillsDir } from './pi-harvest-session.mjs';
 
-export const HARVEST_VERSION = '1.1.0';
+export const HARVEST_VERSION = '1.3.0';
 export const HARVEST_STEPS = [
   '确定任务边界与可用证据',
   '判断是否存在值得长期保留的经验',
@@ -37,7 +37,7 @@ export class KnowledgeHarvester {
   constructor({
     ownerStore, personalStore, sessionFactory = null,
     model = '', pstackDir = process.env.PSTACK_DIR,
-    timeoutMs = 180000, allowModel = false, clock = () => new Date().toISOString(), logger = console
+    timeoutMs = 300000, allowModel = false, clock = () => new Date().toISOString(), logger = console
   } = {}) {
     if (!ownerStore || !personalStore) throw new Error('ownerStore and personalStore are required');
     this.owner = ownerStore;
@@ -132,6 +132,8 @@ export class KnowledgeHarvester {
       '- unknowns：证据不足、无法确认的内容。',
       '不要把模型自述“成功”当作成功证据；只有测试通过才算成功证据。',
       '优先提炼能解释 observedProblem、失败机制、有效修复和适用条件的可复用技术经验；',
+      'claim 必须保留证据中的关键常量、默认值、文件名和测试断言；不要用 N、某个值等占位符替代。',
+      '每项候选必须同时包含 title 和 claim；claim 不得省略，也不能只把主张写在 title 里。',
       '只有在没有技术机制证据时，才提炼流程或验证纪律。',
       '不要复制原始 prompt、工具输出或任何密钥；证据只引用 ref。',
       '如果经验只支持一个项目事实，proposedLayer 必须是 project；',
@@ -259,12 +261,10 @@ export class KnowledgeHarvester {
     if (!Array.isArray(drafts)) throw new Error('Harvest output must contain a candidates array');
     if (drafts.length > 5) throw new Error('Harvest returned more than 5 candidates');
 
-    const independentProjects = new Set(experiences.map((item) => item.projectId)).size;
-    const hasPassedEvidence = experiences.some((item) =>
-      item.observedOutcome?.testStatus === 'pass'
-      || item.observedOutcome?.status === 'repaired'
-      || item.observedOutcome?.status === 'succeeded'
-    );
+    const passedProjects = new Set(experiences
+      .filter((item) => item.observedOutcome?.testStatus === 'pass' || item.observedOutcome?.status === 'repaired')
+      .map((item) => item.projectId));
+    const hasPassedEvidence = passedProjects.size > 0;
     const allowedRefs = new Set(experiences.flatMap((item) => item.evidenceRefs ?? []));
     const candidates = [];
     const invalid = [];
@@ -278,8 +278,9 @@ export class KnowledgeHarvester {
         continue;
       }
       let layer = normalized.proposedLayer;
-      if (!hasPassedEvidence || independentProjects < 2) layer = 'project';
-      if (layer === 'domain' && independentProjects < 3) layer = 'applied';
+      // L2 必须由两个不同项目各自的 passed/repaired 证据支持；单个 A pass + B fail 不够。
+      if (!hasPassedEvidence || passedProjects.size < 2) layer = 'project';
+      if (layer === 'domain' && passedProjects.size < 3) layer = 'applied';
       // 两个独立项目的通过证据是 L2 的充分条件；但若主张/适用条件绑定具体项目 ID，
       // 仍保守保留为 project，避免把项目特例伪装成共享知识。
       const projectIds = [...new Set(experiences.map((item) => item.projectId))];
@@ -287,7 +288,7 @@ export class KnowledgeHarvester {
         [normalized.title, normalized.claim, ...normalized.applicability, ...normalized.exceptions]
           .join(' ').includes(projectId)
       );
-      if (layer === 'project' && independentProjects >= 2 && hasPassedEvidence && !projectSpecific) {
+      if (layer === 'project' && passedProjects.size >= 2 && !projectSpecific) {
         layer = 'applied';
       }
       const evidenceRefs = (normalized.evidenceRefs ?? []).filter((ref) => allowedRefs.has(ref) || /^experience:/u.test(ref));

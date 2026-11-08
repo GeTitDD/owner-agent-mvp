@@ -120,6 +120,13 @@ export class PersonalKnowledgeStore {
         outcome TEXT NOT NULL, observed_benefit TEXT NOT NULL, proposed_evolution TEXT NOT NULL,
         created_at TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS knowledge_eval_runs (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT,
+        knowledge_id TEXT, knowledge_revision INTEGER, task TEXT NOT NULL, model TEXT NOT NULL,
+        mode TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
+        payload TEXT NOT NULL, payload_hash TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS knowledge_eval_runs_project ON knowledge_eval_runs(project_id,created_at DESC);
     `);
     // In-place migration for databases created before proposal revision pinning.
     // Legacy proposals with unknown base revision intentionally fail closed on approval.
@@ -397,5 +404,39 @@ export class PersonalKnowledgeStore {
       ? this.db.prepare('SELECT id FROM knowledge_feedback WHERE usage_id=? ORDER BY created_at DESC LIMIT ?').all(usageId,Math.min(Math.max(1,limit),1000))
       : this.db.prepare('SELECT id FROM knowledge_feedback ORDER BY created_at DESC,id DESC LIMIT ?').all(Math.min(Math.max(1,limit),1000));
     return rows.map(({id})=>this.getFeedback(id));
+  }
+  addEvalRun(input) {
+    valid(input && typeof input === 'object' && !Array.isArray(input),'Eval run must be an object');
+    const id = input.id ?? `eval_${randomUUID().replaceAll('-','').slice(0,24)}`;
+    requireId(input.projectId,'project id');
+    const stamp = now();
+    const payload = {...input,id,createdAt:input.createdAt ?? stamp};
+    const body = canonical(payload);
+    try {
+      this.db.prepare(`INSERT INTO knowledge_eval_runs(id,project_id,task_id,knowledge_id,knowledge_revision,task,model,mode,status,created_at,payload,payload_hash)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        id,input.projectId,input.taskId ?? null,input.knowledgeId ?? null,
+        Number.isSafeInteger(input.knowledgeRevision) ? input.knowledgeRevision : null,
+        safeText(input.task,2000,'task',true),safeText(input.model ?? 'unknown',120,'model',true),
+        safeText(input.mode ?? 'ab',40,'mode',true),safeText(input.status ?? 'completed',40,'status',true),
+        stamp,body,sha256(body)
+      );
+    } catch (error) {
+      if (/UNIQUE constraint/.test(error.message)) return this.getEvalRun(id);
+      throw error;
+    }
+    return this.getEvalRun(id);
+  }
+  getEvalRun(id) {
+    const row=this.db.prepare('SELECT * FROM knowledge_eval_runs WHERE id=?').get(id);
+    return row ? {...JSON.parse(row.payload),payloadHash:row.payload_hash} : null;
+  }
+  listEvalRuns({projectId='',knowledgeId='',limit=100}={}) {
+    const where=[];const params=[];
+    if(projectId){where.push('project_id=?');params.push(projectId);}
+    if(knowledgeId){where.push('knowledge_id=?');params.push(knowledgeId);}
+    const rows=this.db.prepare(`SELECT id FROM knowledge_eval_runs ${where.length?`WHERE ${where.join(' AND ')}`:''}
+      ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params,Math.min(Math.max(1,limit),1000));
+    return rows.map(({id})=>this.getEvalRun(id));
   }
 }

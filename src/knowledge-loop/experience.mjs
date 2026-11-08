@@ -5,6 +5,9 @@ import { normalizeExperience } from './contracts.mjs';
 import { requireId } from '../utils.mjs';
 
 const text = (value, max = 1200) => String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, max);
+const TERMINAL_SANDBOX = new Set(['completed', 'failed', 'cancelled', 'rejected']);
+const TERMINAL_JOB = new Set(['succeeded', 'failed', 'cancelled', 'rejected']);
+
 const shortRef = (value, max = 80) => text(value, max);
 
 function projectDomain(project) {
@@ -40,6 +43,9 @@ export class ExperienceCollector {
     requireId(runId, 'sandbox run id');
     const run = this.store.getSandboxRun(runId);
     if (!run) throw new Error('Sandbox run not found');
+    if (!TERMINAL_SANDBOX.has(run.status)) {
+      throw new Error(`Sandbox run is not terminal: ${run.status}`);
+    }
     const job = this.store.getJob(run.job_id);
     const task = job?.owner_task_id ? this.store.getTask(job.owner_task_id) : null;
     const project = this.projectFor(run.project_id);
@@ -109,6 +115,9 @@ export class ExperienceCollector {
   collectJob(jobId) {
     const job = this.store.getJob(requireId(jobId, 'job id'));
     if (!job) throw new Error('Job not found');
+    if (!TERMINAL_JOB.has(job.status)) {
+      throw new Error(`Job is not terminal: ${job.status}`);
+    }
     const task = job.owner_task_id ? this.store.getTask(job.owner_task_id) : null;
     const project = this.projectFor(job.project_id);
     const runs = this.store.listSandboxRuns({ projectId: job.project_id, limit: 200 })
@@ -160,15 +169,71 @@ export class ExperienceCollector {
     return { ...saved, duplicate: false };
   }
 
+  /** 从持久化 A/B eval run 采集“知识版执行”经验；用于第二项目验证证据。 */
+  collectEvalRun(evalRunId) {
+    const run = this.personal.getEvalRun(requireId(evalRunId, 'eval run id'));
+    if (!run) throw new Error('Eval run not found');
+    const project = this.projectFor(run.projectId);
+    const variant = run.variant ?? null;
+    const baseline = run.baseline ?? null;
+    if (!variant) throw new Error('Eval run has no variant result');
+    const success = variant.success === true;
+    const facts = [
+      `eval.mode=${run.mode}`,
+      `eval.model=${run.model}`,
+      `baseline.success=${baseline?.success ?? 'unknown'}`,
+      `baseline.exit=${baseline?.testExitCode ?? 'unknown'}`,
+      `variant.success=${variant.success}`,
+      `variant.exit=${variant.testExitCode ?? 'unknown'}`
+    ];
+    const unknowns = [];
+    if (!baseline) unknowns.push('没有 baseline 结果');
+    if (variant.testExitCode === null || variant.testExitCode === undefined) unknowns.push('知识版测试退出码未知');
+    const record = normalizeExperience({
+      sourceRunId: run.id,
+      projectId: run.projectId,
+      taskId: run.taskId ?? null,
+      domainIds: [run.domainId ?? projectDomain(project)],
+      observedProblem: text(run.task),
+      actionSummary: text(`eval mode=${run.mode}; knowledge=${run.knowledgeId ?? 'none'}@r${run.knowledgeRevision ?? '?'}; model=${run.model}`),
+      observedOutcome: {
+        status: success ? 'succeeded' : 'failed',
+        source: 'eval-run',
+        testStatus: success ? 'pass' : 'fail',
+        executionStatus: 'completed',
+        repairStatus: null
+      },
+      evidenceRefs: [`eval:${run.id}`, ...(run.evidenceRefs ?? [])],
+      environment: {
+        primaryDomain: run.domainId ?? projectDomain(project),
+        profileId: run.testProfileId ?? 'eval',
+        runtime: 'node'
+      },
+      facts,
+      inferences: [],
+      unknowns,
+      createdAt: this.clock()
+    });
+    const existing = this.personal.experienceByDedupe(record.dedupeKey);
+    if (existing) return { ...existing, duplicate: true };
+    const saved = this.personal.addExperience(record);
+    return { ...saved, duplicate: false };
+  }
+
   /** 批量采集：先 Sandbox，再没有 Sandbox 的 Job。 */
   collectProject(projectId, { limit = 50 } = {}) {
-    const runs = this.store.listSandboxRuns({ projectId, limit });
-    const jobs = this.store.listJobs({ projectId, limit });
+    const allRuns = this.store.listSandboxRuns({ projectId, limit });
+    const runs = allRuns.filter((run) => TERMINAL_SANDBOX.has(run.status));
+    const jobs = this.store.listJobs({ projectId, limit }).filter((job) => TERMINAL_JOB.has(job.status));
     const seenJobs = new Set(runs.map((run) => run.job_id));
+    // 有未终态 Sandbox 的 Job 先不采集，避免把未完成运行写成长期经验。
+    const pendingJobs = new Set(allRuns
+      .filter((run) => !TERMINAL_SANDBOX.has(run.status))
+      .map((run) => run.job_id));
     const collected = [];
     for (const run of runs) collected.push(this.collectSandboxRun(run.id));
     for (const job of jobs) {
-      if (!seenJobs.has(job.id)) collected.push(this.collectJob(job.id));
+      if (!seenJobs.has(job.id) && !pendingJobs.has(job.id)) collected.push(this.collectJob(job.id));
     }
     return collected;
   }
