@@ -13,6 +13,7 @@ import { KnowledgeReuse } from '../src/knowledge-loop/reuse.mjs';
 import { KnowledgeFeedback } from '../src/knowledge-loop/feedback.mjs';
 import { appendDecision } from '../src/knowledge-loop/decision-log.mjs';
 import { createWorkbenchServer } from '../src/workbench-server.mjs';
+import { DatabaseSync } from 'node:sqlite';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const image = `sha256:${'a'.repeat(64)}`;
@@ -319,6 +320,39 @@ test('Workbench exposes knowledge-loop read-only views', async () => {
     personal.close();
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test('old personal_proposals schema migrates meta_json without losing proposals', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'knowledge-migrate-'));
+  const dbPath = path.join(tmp, 'old.sqlite');
+  try {
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE personal_proposals (
+        id TEXT PRIMARY KEY, target_id TEXT, payload TEXT NOT NULL,
+        status TEXT NOT NULL, actor TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL,
+        reviewed_at TEXT, reviewer TEXT, applied_id TEXT
+      );
+    `);
+    legacy.close();
+    const store = new PersonalKnowledgeStore(dbPath);
+    try {
+      const columns = store.db.prepare('PRAGMA table_info(personal_proposals)').all().map((row) => row.name);
+      assert.ok(columns.includes('meta_json'));
+      const proposal = store.submitProposal({
+        targetId: null,
+        payload: {
+          title: 'Migrated', content: 'A migrated claim.', kind: 'claim',
+          layer: 'project', scope: 'project', projectId: 'p1',
+          domains: ['software-engineering'], tags: [], evidenceRefs: ['experiment:1'],
+          verificationStatus: 'unverified', relations: {}, sourceRef: 'test'
+        },
+        meta: { contract: 'knowledge-candidate/v1' }
+      });
+      assert.equal(proposal.meta.contract, 'knowledge-candidate/v1');
+      assert.equal(store.proposals('pending')[0].id, proposal.id);
+    } finally { store.close(); }
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 test('Decision log matches pstack columns and escapes formula cells', () => {
