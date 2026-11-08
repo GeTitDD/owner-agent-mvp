@@ -10,6 +10,18 @@ Build reusable, inspectable knowledge for new research, experiments, and feature
 - **Sharing is orthogonal to abstraction:** `layer` says what a claim is about; `sharing` controls where it may be accessed. L3 example records stay local (`sharing: "project"`).
 - **Confidence is orthogonal to eligibility:** `applicable` does not mean `verified`. Verification is a separate `verification.status` field.
 
+## Project knowledge first: extraction and maintenance
+
+The immediate objective is **reliable knowledge within each registered project**, not a universal cognitive ontology or a continuously updated mirror of external facts.
+
+- Distinguish declared project context (goals, versions, capabilities, constraints) from observed behavior backed by code, tests or experiments.
+- Capture completed experience and evidence before distilling atomic claims; Agent-generated candidates are unverified and do not imply Owner acceptance.
+- Default new findings to L3 and the correct project scope. Cross-project promotion to L2 requires successful independent evidence from at least two distinct projects; L1 needs stronger domain-level validation and explicit review.
+- Applicability, verification and Owner adoption are different concepts. Neither an applicable rule nor a passing test proves that Owner already knows the claim.
+- Preserve revisions and provenance. When dependencies, evidence or conditions change, mark relevant knowledge for review instead of overwriting a previously adopted revision.
+
+See [Project Knowledge Maintenance](PROJECT_KNOWLEDGE_MAINTENANCE.md) for the current extraction SOP. The main branch already provides layered knowledge and manual Workbench editing; automatic harvest/reuse/feedback remains Draft [PR #23](https://github.com/GeTitDD/owner-agent-mvp/pull/23).
+
 ## Run the new end-to-end example
 
 ```bash
