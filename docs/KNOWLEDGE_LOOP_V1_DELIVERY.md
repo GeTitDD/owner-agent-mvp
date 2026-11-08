@@ -166,5 +166,14 @@ node scripts/knowledge-loop/eval-hard.mjs --root <dir> --allow-model
 | 真实 Pi 提炼案例 | ✅（harvest_53ef...） |
 | 真实 Pi 复用案例 | ✅（real-reuse-b） |
 | 三轮 Eval/质量迭代 | ✅（见 §7） |
-| 桌宠知识入口 | ⏳ 堆叠 Companion PR |
+| 桌宠知识入口 | ✅（堆叠 Companion 分支；四问 + 详情 + 完整知识库） |
+
+## 11. Companion 知识入口
+
+- 面板摘要：已验证知识数 / 候选数 / 复用次数与正反馈。
+- 四个请求：今天学到什么、本项目经验、类似问题、验证与复用。
+- 详情：claim、层级、verification、revision、证据、复用项目、正/负反馈。
+- 候选与 Coding Job 审批分开展示；完整编辑/冲突分析打开 Workbench。
+- Electron E2E：`npm run e2e:desktop:knowledge`。
+- 截图：`docs/assets/companion/knowledge-list.png`、`knowledge-detail.png`。
 | 安装/回滚说明 | ✅（CLI + docs） |
