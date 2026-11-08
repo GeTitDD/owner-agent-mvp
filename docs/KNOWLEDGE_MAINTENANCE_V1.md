@@ -146,5 +146,6 @@ node scripts/e2e/knowledge-provenance-smoke.mjs   # 真实 CLI + 真实 git + �
 - 项目身份在没有 remote、也没有根提交时退到本地根哈希，此时**跨设备不可识别**，会显式标为 `local-root`。
 - 导入不自动解决冲突；冲突保留在 `knowledge_conflicts`，需 Owner 在后续版本处理。
 - 导出默认只含项目范围的单元；`--all` 可导出全部，但没有按领域筛选。
+- 同步包**未签名**：哈希只防传输损坏与误改，不防恶意构造；跨不可信网络传输前需自行加密与认证。
 - 尚未接入 Workbench UI；目前是 CLI + 可注入服务。
 - 未验证：macOS、超大历史（>10k 修订）同步性能。

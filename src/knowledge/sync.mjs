@@ -185,6 +185,10 @@ function importProvenance({ provenance, bundle, unitIds }) {
   }
   for (const link of bundle.links ?? []) {
     if (!unitIds.has(link.unitId) || !provenance.getObservation(link.observationId)) continue;
+    // 合并后修订号可能变化：只接受本地真实存在的修订，避免悬挂链接。
+    const revisionExists = db.prepare('SELECT 1 AS hit FROM personal_revisions WHERE unit_id=? AND revision=?')
+      .get(link.unitId, link.revision);
+    if (!revisionExists) continue;
     const exists = db.prepare(`SELECT 1 AS hit FROM knowledge_source_links
       WHERE unit_id=? AND revision=? AND observation_id=? AND relation=?`)
       .get(link.unitId, link.revision, link.observationId, link.relation);
