@@ -105,7 +105,7 @@ npx electron-builder --mac dmg --arm64
 | 桌面 E2E（Electron） | **通过**（SOP-1..4） |
 | 外壳 E2E | **通过**（位置/焦点/隐藏/召回/重启保留） |
 | 打包应用启动 | **通过** |
-| CI（PR #22） | run `42426257732` 全绿：plugin / sandbox-real / ubuntu test / windows test |
+| CI（PR #22） | run `42428401321`（`ce27e9c`）全绿：plugin / sandbox-real / ubuntu test / windows test |
 
 截图：`docs/assets/companion/`。
 
