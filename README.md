@@ -2,7 +2,22 @@
 
 > **v1.0 Patch–Test–Repair** 与 v0.6–v0.9 全部能力均已合并到 main。真实 Pi + 真实 Docker 的全链路已通过首轮 L3 验收（见 [v1.1 验收报告](docs/ACCEPTANCE_REPORT_V1.1.md)）；更大范围的真实仓库与多轮可靠性验收见 [#14](https://github.com/GeTitDD/owner-agent-mvp/issues/14)。
 
-**以 Owner 为中心的多项目管理 Agent + 个人领域知识资产工作台 + 可选桌面宠物。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
+**以 Owner 为中心的长期领域知识与项目上下文管理系统（并保留任务执行 Agent 和可选桌宠形态）。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
+
+## 核心定位与当前优先级（2026-11-09）
+
+Owner 维护的是 **Owner 已采纳的领域知识及其项目上下文**，而不是“客观世界的最新事实”。仓库、测试、外部资料和 Agent 推断是来源与候选更新；不能据此静默覆盖 Owner 的既有认知，也不能把 Agent 发现等同于 Owner 已知。
+
+**当前先以每个已登记项目为单位，做好领域知识的提取、整理、证据验证、修订维护和按需复用：**
+
+1. 整理项目领域、目标、技术栈、环境版本、约束与未知项；区分声明和实测事实。
+2. 从文档、源码、实验、测试、已完成任务中提取可追溯的候选，默认先保留 L3 项目知识；自动提炼不代表审核通过。
+3. 用现有 Workbench 审核、纠错、维护修订及证据；知识适用性与证据验证相互独立。
+4. 只在有跨项目独立验证和明确适用条件时，提出向 L2/L1 泛化；使用与反馈需记录来源，任务成功不自动证明知识产生收益。
+
+本阶段**不优先开发**统一认知状态模型、Project Journal、通用知识图谱或新 Agent Harness。详见 [项目领域知识提取与维护指南](docs/PROJECT_KNOWLEDGE_MAINTENANCE.md)。
+
+**状态说明**：分层知识库与人工 Workbench 属于 `main` 已有能力；自动 Knowledge Loop 见 [PR #23](https://github.com/GeTitDD/owner-agent-mvp/pull/23)，桌宠知识入口见 [PR #24](https://github.com/GeTitDD/owner-agent-mvp/pull/24)，二者仍为 Draft、尚未合并到 `main`。
 
 ## v1.0（已合并）：Patch–Test–Repair
 
@@ -22,9 +37,9 @@ npm run demo:repair   # Fake patch + Fake sandbox 端到端演示（零真实模
 
 完整 schema、哈希链、审批断点、CLI 与测试矩阵见 **[Patch–Test–Repair 文档](docs/PATCH_TEST_REPAIR.md)**。
 
-## v1.1 方向：OpenClaw-first 客户端复用（设计评审中）
+## v1.1：OpenClaw-first 客户端 PoC（已合并）
 
-v1.1 改为复用 OpenClaw 的 Gateway、Control UI、会话、通知与桌面壳，Owner 只保留任务执行与审批权威。方案、模块级复用清单、许可证/依赖分析与两套集成方案的工作量比较见 **[OpenClaw-first 设计评审稿](docs/V1.1_OPENCLAW_FIRST.md)**。该方案**待 Owner 批准，尚未实施**。
+Owner sidecar 与 OpenClaw feature plugin PoC 已在 [PR #17](https://github.com/GeTitDD/owner-agent-mvp/pull/17) 合并。方案与复用边界见 **[OpenClaw-first 设计评审稿](docs/V1.1_OPENCLAW_FIRST.md)**。完整 Worker 客户端闭环 [PR #21](https://github.com/GeTitDD/owner-agent-mvp/pull/21) 与桌面宠物 [PR #22](https://github.com/GeTitDD/owner-agent-mvp/pull/22) 仍是 Draft，不属于主分支已发布能力。
 
 ## 真实项目端到端验收（v1.1 / #14）
 
