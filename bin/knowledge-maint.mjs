@@ -100,6 +100,8 @@ async function main() {
   revalidate resolve --id <id> --decision accepted|dismissed [--note <text>]
   context latest --project <id> [--session <id>]
   context restore --snapshot <id>
+  conflicts list [--knowledge <id>] [--status open]
+  conflicts resolve --id <id>
   sync export [--project <id>] [--all] --out <file>
   sync import --in <file> [--dry-run]
 
@@ -181,6 +183,17 @@ DB: --knowledge-db <path> (default ${knowledgeDb})
     }
     if (command === 'context' && group === 'restore') {
       json(stores.ledger.restore(read('--snapshot')));
+      return;
+    }
+    if (command === 'conflicts' && group === 'list') {
+      json(stores.provenance.listConflicts({
+        unitId: read('--knowledge'),
+        status: read('--status', 'open')
+      }));
+      return;
+    }
+    if (command === 'conflicts' && group === 'resolve') {
+      json(stores.provenance.resolveConflict({ id: read('--id'), actor: read('--actor', 'owner') }));
       return;
     }
     if (command === 'sync' && group === 'export') {
