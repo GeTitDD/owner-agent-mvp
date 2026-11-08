@@ -12,12 +12,13 @@ export function personalRefsFromPlan(plan) {
 }
 
 export class KnowledgeReuse {
-  constructor({ personalStore, engine, ownerStore = null } = {}) {
+  constructor({ personalStore, engine, ownerStore = null, contextLedger = null } = {}) {
     if (!personalStore) throw new Error('personalStore is required');
     if (!engine) throw new Error('engine is required');
     this.personal = personalStore;
     this.engine = engine;
     this.owner = ownerStore;
+    this.ledger = contextLedger;
   }
 
   /** 检索当前项目可用的知识与适用性，不写入 usage。 */
@@ -64,11 +65,12 @@ export class KnowledgeReuse {
       }));
       usages.push(usage);
     }
+    this.recordContext({ plan, task, projectId: projectId ?? snapshot.profile.id, sessionId });
     return { snapshot, plan, usages };
   }
 
   /** Pi 扩展使用：从编译结果和 session 记录 usage，不返回项目内容。 */
-  recordFromPlan({ plan, task, targetRunId, projectId }) {
+  recordFromPlan({ plan, task, targetRunId, projectId, sessionId = '' }) {
     if (!plan || !targetRunId) return [];
     const applicability = new Map((plan.applicability ?? []).map((item) => [item.key, item.state]));
     const usages = [];
@@ -90,6 +92,15 @@ export class KnowledgeReuse {
         unresolvedQuestions: []
       })));
     }
+    this.recordContext({ plan, task, projectId, sessionId: sessionId || targetRunId });
     return usages;
+  }
+
+  /** 记录上下文快照；失败不影响本次编译（只有审计价值，不是主路径）。 */
+  recordContext({ plan, task, projectId, sessionId = '' }) {
+    if (!this.ledger) return;
+    try {
+      this.ledger.record({ projectId, sessionId, task, plan });
+    } catch { /* 台账失败不回滚编译 */ }
   }
 }

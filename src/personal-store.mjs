@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { canonical, requireId, sha256 } from './utils.mjs';
 import { defaultDbPath } from './storage.mjs';
 import { rejectObviousSecrets } from './evolution.mjs';
+import { installProvenanceSchema } from './knowledge/provenance-schema.mjs';
 
 export class KnowledgeConflict extends Error { constructor(message) { super(message); this.status = 409; } }
 export class KnowledgeValidationError extends Error { constructor(message) { super(message); this.status = 400; } }
@@ -137,6 +138,8 @@ export class PersonalKnowledgeStore {
     if (!proposalColumns.includes('meta_json')) {
       this.db.exec("ALTER TABLE personal_proposals ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'");
     }
+    // Knowledge Maintenance & Provenance：加法式建表，旧库打开即升级。
+    installProvenanceSchema(this.db);
   }
   close() { this.db.close(); }
   list({q='',domain='',layer='',scope='',status='',projectId='',limit=500}={}) {

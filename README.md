@@ -157,6 +157,21 @@ DOMAIN_CONTEXT_DB=/absolute/path/knowledge.sqlite DOMAIN_WORKBENCH_PORT=4321 npm
 
 完整 UI、知识数据与审核 API 文档见 **[Personal Knowledge Workbench 指南](docs/PERSONAL_WORKBENCH.md)**。
 
+## Knowledge Maintenance & Provenance v1（当前 PR）
+
+在既有 `PersonalKnowledgeStore` 之上增加来源身份、观察、修订绑定、Owner 采纳、重验证队列、离线同步与会话上下文台账；不新建存储、不改 Harvest。
+
+```powershell
+node bin/knowledge-maint.mjs observe --kind git --project demo --root <repo> --path src/retry.js
+node bin/knowledge-maint.mjs explain --knowledge personal.x
+node bin/knowledge-maint.mjs sync export --project demo --out bundle.json
+node bin/knowledge-maint.mjs sync import --in bundle.json --dry-run
+```
+
+- 设计取舍：[docs/DESIGN_REFERENCES.md](docs/DESIGN_REFERENCES.md)
+- 数据模型与验收：[docs/KNOWLEDGE_MAINTENANCE_V1.md](docs/KNOWLEDGE_MAINTENANCE_V1.md)
+- 端到端验收：`node scripts/e2e/knowledge-provenance-smoke.mjs`（真实 git；GitHub 需 `gh` 登录）
+
 ## v0.3：从共享知识升级为分层可组合知识
 
 - **L1 Domain Knowledge：** 跨项目的概念、原理、不变量。
