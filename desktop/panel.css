@@ -388,3 +388,14 @@ pre.diff, pre.logs {
 
 .knowledge-item strong { font-size: 12px; color: var(--text); }
 .knowledge-item span { font-size: 10px; color: var(--muted); }
+
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.checkbox-row input { margin-top: 2px; }

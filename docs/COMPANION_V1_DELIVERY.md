@@ -101,13 +101,17 @@ Electron 桌宠 + 进程内 Owner Runtime：
 
 ### 3.2 知识入口（Knowledge Loop）
 
-- 面板固定显示知识摘要：已验证知识数、候选数、复用次数与正反馈。
+- 面板固定显示知识摘要：经验数、待提炼数、已验证知识数、候选数、复用次数与正反馈。
 - 四个轻量请求：今天学到什么 / 本项目经验 / 类似问题 / 验证与复用。
+- 「本项目经验」按当前项目的 `primary_domain` 过滤，不再硬编码 software-engineering。
+- 「类似问题」未输入查询时明确标注以最近经验为检索词。
 - 列表只展示短摘要、层级、验证状态与证据数量；详情展示 claim、revision、复用项目与正/负反馈。
 - 待确认知识候选与 Coding Job 审批分开显示，不混入同一张待办表。
 - 「完整知识库」打开本地 Workbench，用于复杂编辑、冲突分析和版本审查。
+- 自动采集：Companion 启动 `KnowledgeLoopRuntime`，低频扫描已完成 Run；默认只积累待提炼队列，设置中可显式开启自动 Harvest（会调用模型）。
+- 任务成功只写 outcome；未做对照实验时 benefit 显示 unknown，不再暗示“任务成功=知识有效”。
 - 知识候选不会在每次生成时弹窗；只在主动查询或面板摘要中展示。
-- 回归：`npm run e2e:desktop:knowledge`（真实 Electron，摘要/列表/详情/今日经验）。
+- 回归：`npm run e2e:desktop:knowledge`（真实 Electron，自动采集/摘要/列表/详情/今日经验）。
 - 截图：`docs/assets/companion/knowledge-list.png`、`knowledge-detail.png`。
 
 ## 4. 打包

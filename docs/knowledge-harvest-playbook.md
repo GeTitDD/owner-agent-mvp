@@ -2,6 +2,13 @@
 
 本 playbook 是 Owner Knowledge Loop 的提炼工作流。它复用 pstack 的 EDAE、Reflect 与 decision-log 纪律，但不修改 pstack 的全局 Skill。
 
+## pstack 接入边界
+
+- 固定来源：`GeTitDD/pstack-pi@c0fad96`（npm `0.2.0`）。
+- 实际使用：EDAE 六步、Reflect 三个视角作为只读 session 的 system prompt；加载 pstack `skills/` 目录；用同列 TSV 记录决策。
+- 未执行：原生 `pstack_todo` 工具、`/reflect` 命令、Cursor `/loop`。Harvest session 是 `noTools` 只读会话。
+- 因此文档与 UI 只称 **pstack-inspired 薄适配**，不说“pstack 已驱动自动学习”。
+
 ## 何时使用
 
 - 一次 Sandbox / Job 结束后，需要判断是否值得留下长期经验。

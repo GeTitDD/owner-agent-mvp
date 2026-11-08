@@ -179,6 +179,7 @@ export function normalizeUsage(input) {
     applicabilityResult,
     contextSnapshotId: text(input.contextSnapshotId, 'contextSnapshotId', 200, true),
     outcomeEvidenceRefs: strings(input.outcomeEvidenceRefs ?? [], 'outcomeEvidenceRefs', 40, 500),
+    benefitEvidenceRefs: strings(input.benefitEvidenceRefs ?? [], 'benefitEvidenceRefs', 40, 500),
     observedBenefit,
     unresolvedQuestions: strings(input.unresolvedQuestions ?? [], 'unresolvedQuestions', 20, 500)
   };
@@ -196,6 +197,7 @@ export function normalizeFeedback(input) {
     outcome: input.outcome,
     observedBenefit: input.observedBenefit,
     evidenceRefs: strings(input.evidenceRefs ?? [], 'feedback evidenceRefs', 40, 500),
+    benefitEvidenceRefs: strings(input.benefitEvidenceRefs ?? [], 'feedback benefitEvidenceRefs', 40, 500),
     proposedEvolution,
     rationale: text(input.rationale, 'feedback rationale', 2000)
   };

@@ -317,6 +317,10 @@ export class PersonalKnowledgeStore {
     const row=this.db.prepare('SELECT id FROM knowledge_harvest_runs WHERE dedupe_key=?').get(key);
     return row ? this.getHarvestRun(row.id) : null;
   }
+  listHarvestRuns(limit=100) {
+    return this.db.prepare('SELECT id FROM knowledge_harvest_runs ORDER BY created_at DESC,id DESC LIMIT ?')
+      .all(Math.min(Math.max(1,limit),1000)).map(({id})=>this.getHarvestRun(id));
+  }
   addUsage(input) {
     const stamp=now();
     const id = input.id ?? `usage_${randomUUID().replaceAll('-','').slice(0,24)}`;
@@ -353,11 +357,12 @@ export class PersonalKnowledgeStore {
       ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params,Math.min(Math.max(1,limit),1000));
     return rows.map(({id})=>this.getUsage(id));
   }
-  updateUsageOutcome(id,{outcome,observedBenefit,outcomeEvidenceRefs}={}) {
+  updateUsageOutcome(id,{outcome,observedBenefit,outcomeEvidenceRefs,benefitEvidenceRefs}={}) {
     const usage=this.getUsage(id);
     if(!usage)throw new KnowledgeValidationError('Usage not found');
     const next={...usage,outcome:outcome??usage.outcome,observedBenefit:observedBenefit??usage.observedBenefit,
-      outcomeEvidenceRefs:outcomeEvidenceRefs??usage.outcomeEvidenceRefs};
+      outcomeEvidenceRefs:outcomeEvidenceRefs??usage.outcomeEvidenceRefs,
+      benefitEvidenceRefs:benefitEvidenceRefs??usage.benefitEvidenceRefs??[]};
     delete next.payloadHash;
     const body=canonical(next);
     this.db.prepare('UPDATE knowledge_usages SET outcome=?,observed_benefit=?,payload=?,payload_hash=? WHERE id=?')

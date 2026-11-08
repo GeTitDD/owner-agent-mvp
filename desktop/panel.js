@@ -74,10 +74,11 @@
     $('knowledgeBadge').hidden = !knowledge?.available || candidates === 0;
     if (knowledge?.available) {
       $('knowledgeSummaryText').textContent =
-        `已验证知识 ${knowledge.counts.verified} 条 · 候选 ${candidates} 条 · ` +
+        `经验 ${knowledge.counts.experiences ?? 0} 条 · 待提炼 ${knowledge.counts.pendingHarvest ?? 0} 条 · ` +
+        `已验证 ${knowledge.counts.verified} 条 · 候选 ${candidates} 条 · ` +
         `复用 ${knowledge.counts.usages} 次（正反馈 ${knowledge.counts.positiveUsages}）`;
     } else {
-      $('knowledgeSummaryText').textContent = '知识库尚未建立；完成任务后会自动积累经验。';
+      $('knowledgeSummaryText').textContent = '知识库尚未建立；完成任务后会自动采集经验，提炼可自动或进入待提炼队列。';
     }
   };
 
@@ -313,7 +314,8 @@
     try {
       const result = await window.companion.knowledge.ask({
         kind,
-        projectId: view?.config?.projectId ?? ''
+        projectId: view?.config?.projectId ?? '',
+        domain: view?.config?.domain ?? ''
       });
       const nodes = [el('p', 'result-summary', result.answer)];
       if (result.items?.length) {
@@ -538,6 +540,7 @@
       $('model').value = data.model ?? '';
       $('allowedPaths').value = data.allowedPaths ?? 'src/';
       $('includePaths').value = (data.includePaths ?? []).join(',');
+      $('knowledgeAutoHarvest').checked = data.knowledgeAutoHarvest === true;
       renderServiceGrid($('serviceGrid'), data.services);
       $('settings').hidden = false;
     } catch (error) {
@@ -560,10 +563,12 @@
         gatewayUrl: $('gatewayUrl').value,
         model: $('model').value,
         allowedPaths: $('allowedPaths').value,
-        includePaths: $('includePaths').value
+        includePaths: $('includePaths').value,
+        knowledgeAutoHarvest: $('knowledgeAutoHarvest').checked
       });
       $('settings').hidden = true;
-      if (saved?.modelPending) toast('设置已保存；模型将在当前任务结束后生效', 6000);
+      if (saved?.knowledgeAutoHarvest) toast('设置已保存；自动提炼会在模型可用时低频运行', 6000);
+      else if (saved?.modelPending) toast('设置已保存；模型将在当前任务结束后生效', 6000);
       else if (saved?.modelChanged) toast('设置已保存，模型已切换');
       else toast('设置已保存');
       await refresh();

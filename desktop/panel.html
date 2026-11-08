@@ -110,6 +110,10 @@
           <span>模型（留空使用 Pi 默认）</span>
           <input id="model" placeholder="provider/model" />
         </label>
+        <label class="checkbox-row">
+          <input id="knowledgeAutoHarvest" type="checkbox" />
+          <span>自动提炼知识（会调用模型；关闭时只自动采集经验并进入待提炼队列）</span>
+        </label>
         <label class="field">
           <span>允许修改的路径</span>
           <input id="allowedPaths" placeholder="src/" />

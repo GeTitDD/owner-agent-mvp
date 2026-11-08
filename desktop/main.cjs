@@ -24,6 +24,8 @@ let fullWindow = null;
 let tray = null;
 let store = null;
 let personalStore = null;
+let knowledgeRuntime = null;
+let knowledgeTimer = null;
 let broker = null;
 let sidecar = null;
 let workbench = null;
@@ -48,6 +50,7 @@ const defaults = () => ({
   includePaths: ['package.json'],
   gatewayUrl: 'http://127.0.0.1:18789',
   model: '',
+  knowledgeAutoHarvest: false,
   panelPinned: false
 });
 let config = defaults();
@@ -155,6 +158,31 @@ async function startServices() {
   } catch (error) {
     console.error('knowledge store unavailable:', error.message);
     personalStore = null;
+  }
+  if (personalStore) {
+    try {
+      const { KnowledgeLoopRuntime } = await importEsm('../src/knowledge-loop/runtime.mjs');
+      knowledgeRuntime = new KnowledgeLoopRuntime({
+        ownerStore: store,
+        personalStore,
+        model: config.model || '',
+        // 自动提炼会调用模型；默认关闭，只自动采集经验并显示待提炼队列。
+        allowHarvest: process.env.OWNER_KNOWLEDGE_AUTO_HARVEST === '1'
+          || config.knowledgeAutoHarvest === true
+      });
+      knowledgeTimer = setInterval(() => {
+        knowledgeRuntime.tick().catch((error) => {
+          console.error('knowledge auto tick failed:', error.message);
+        });
+      }, 15000);
+      knowledgeTimer.unref?.();
+      setTimeout(() => {
+        knowledgeRuntime.tick().catch(() => { /* first scan is best effort */ });
+      }, 2500).unref?.();
+    } catch (error) {
+      console.error('knowledge runtime unavailable:', error.message);
+      knowledgeRuntime = null;
+    }
   }
   broker = new WorkspaceBroker(store, {
     workspacesRoot: path.join(app.getPath('userData'), 'workspaces')
@@ -372,20 +400,27 @@ const circleSafe = (value, expected) => value === expected;
 const knowledgeSnapshot = () => {
   if (!personalStore) return { available: false, counts: {}, recentExperiences: [], candidates: [] };
   const units = personalStore.list({ limit: 2000 });
-  const experiences = personalStore.listExperiences({ limit: 50 });
+  const experiences = personalStore.listExperiences({ limit: 1000 });
   const candidates = personalStore.proposals('pending')
     .filter((item) => item.meta?.contract === 'knowledge-candidate/v1');
   const usages = personalStore.listUsages({ limit: 200 });
+  const harvested = new Set(personalStore.listHarvestRuns(1000).flatMap((run) => run.experienceIds ?? []));
+  const pendingHarvest = experiences.filter((item) => !harvested.has(item.id)).length;
   return {
     available: true,
     counts: {
       experiences: experiences.length,
+      pendingHarvest,
       knowledge: units.length,
       verified: units.filter((item) => item.verificationStatus === 'verified').length,
       candidates: candidates.length,
       usages: usages.length,
       positiveUsages: usages.filter((item) => item.observedBenefit === 'positive').length,
       negativeUsages: usages.filter((item) => item.observedBenefit === 'negative').length
+    },
+    auto: {
+      allowHarvest: Boolean(knowledgeRuntime?.allowHarvest),
+      last: knowledgeRuntime?.last ?? null
     },
     recentExperiences: experiences.slice(0, 5).map((item) => ({
       id: item.id, projectId: item.projectId, title: item.observedProblem,
@@ -405,11 +440,13 @@ const knowledgeSnapshot = () => {
   };
 };
 
-const knowledgeAsk = ({ kind, projectId = '', query = '' } = {}) => {
-  if (!personalStore) return { answer: '知识库尚未建立。先完成任务并采集经验。', items: [], basis: [] };
+const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) => {
+  if (!personalStore) return { answer: '知识库尚未建立；任务完成后会自动采集经验。', items: [], basis: [] };
   const units = personalStore.list({ limit: 2000 });
-  const experiences = personalStore.listExperiences({ projectId, limit: 200 });
-  const now = Date.now();
+  const allExperiences = personalStore.listExperiences({ limit: 1000 });
+  const experiences = kind === 'project'
+    ? allExperiences.filter((row) => !projectId || row.projectId === projectId)
+    : allExperiences;
   const item = (type, row, extra = {}) => ({
     type, id: row.id,
     title: type === 'experience' ? row.observedProblem : row.title,
@@ -430,14 +467,15 @@ const knowledgeAsk = ({ kind, projectId = '', query = '' } = {}) => {
     };
   }
   if (kind === 'similar') {
-    const q = query || experiences[0]?.observedProblem || '';
+    const latest = experiences[0]?.observedProblem;
+    const q = query || latest || '';
     const matched = personalStore.list({ q, limit: 10 });
     const exp = experiences.filter((row) =>
       `${row.observedProblem} ${row.actionSummary}`.toLowerCase().includes(q.toLowerCase())
     ).slice(0, 10);
     return {
       answer: q
-        ? `找到 ${matched.length} 条知识、${exp.length} 条相似经验。`
+        ? `${query ? '' : `以最近经验“${latest}”为检索词；`}找到 ${matched.length} 条知识、${exp.length} 条相似经验。`
         : '还没有可用于相似检索的历史问题。',
       items: [...matched.map((row) => item('knowledge', row)), ...exp.map((row) => item('experience', row))],
       basis: [...matched.map((row) => `knowledge:${row.id}`), ...exp.map((row) => `experience:${row.id}`)]
@@ -464,8 +502,9 @@ const knowledgeAsk = ({ kind, projectId = '', query = '' } = {}) => {
   }
   // project
   const projectKnowledge = units.filter((row) =>
-    row.scope === 'project' ? row.projectId === projectId
-      : !projectId || row.domains.includes('software-engineering')
+    row.scope === 'project'
+      ? row.projectId === projectId
+      : Boolean(domain) && row.domains.includes(domain)
   );
   const projectExperiences = experiences.filter((row) => !projectId || row.projectId === projectId);
   return {
@@ -597,6 +636,7 @@ const buildView = async () => {
     })),
     config: {
       projectId: activeProjectId,
+      domain: activeProject?.primary_domain ?? activeProject?.primaryDomain ?? '',
       allowedPaths: config.allowedPaths,
       includePaths: config.includePaths,
       gatewayUrl: config.gatewayUrl,
@@ -1055,6 +1095,7 @@ const registerIpc = () => {
     return knowledgeAsk({
       kind: String(input?.kind ?? 'project'),
       projectId: String(input?.projectId ?? config.projectId ?? ''),
+      domain: String(input?.domain ?? ''),
       query: String(input?.query ?? '').slice(0, 500)
     });
   });
@@ -1088,6 +1129,12 @@ const registerIpc = () => {
     if (typeof input?.gatewayUrl === 'string') config.gatewayUrl = input.gatewayUrl.trim();
     if (typeof input?.model === 'string') config.model = input.model.trim();
     if (typeof input?.projectId === 'string') config.projectId = input.projectId;
+    if (typeof input?.knowledgeAutoHarvest === 'boolean') {
+      config.knowledgeAutoHarvest = input.knowledgeAutoHarvest;
+      knowledgeRuntime?.setAutoHarvest(input.knowledgeAutoHarvest, { model: config.model });
+    } else if (knowledgeRuntime && config.knowledgeAutoHarvest) {
+      knowledgeRuntime.setAutoHarvest(true, { model: config.model });
+    }
     saveConfig();
     serviceCache = { at: 0, value: null };
     const modelChanged = config.model !== previousModel;
@@ -1250,6 +1297,7 @@ app.on('before-quit', () => {
   quitting = true;
   if (dragTimer) clearInterval(dragTimer);
   if (workerTimer) clearInterval(workerTimer);
+  if (knowledgeTimer) clearInterval(knowledgeTimer);
   saveConfig();
 });
 app.on('will-quit', () => {

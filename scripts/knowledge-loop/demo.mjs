@@ -174,18 +174,22 @@ async function main() {
     const feedbackResults = [];
     for (const [reuse, runId] of [[reuseA, a.repairRunId], [reuseB, b.runId], [reuseC, c.runId]]) {
       for (const usage of reuse.usages) {
-        feedbackResults.push(feedback.record({ usageId: usage.id, runId, rationale: 'demo passing test' }));
+        feedbackResults.push(feedback.record({
+          usageId: usage.id,
+          runId,
+          rationale: 'demo run completed; benefit requires an explicit controlled comparison'
+        }));
       }
     }
     report.stages.feedback = feedbackResults.map((item) => ({
       usageId: item.feedback?.usageId, benefit: item.feedback?.observedBenefit,
       evolution: item.evolution?.id ?? null, evolutionKind: item.evolution?.meta?.kind ?? null
     }));
-    log('feedback', 'recorded usage outcomes', 'reuse must be tied back to a real outcome', knowledgeDb, `${feedbackResults.length} feedback rows`);
+    log('feedback', 'recorded usage outcomes', 'task success alone cannot prove knowledge benefit', knowledgeDb, `${feedbackResults.length} feedback rows; benefit unknown`);
 
     const promotion = feedbackResults.map((item) => item.evolution).find((item) => item?.meta?.kind === 'promotion') ?? null;
     report.stages.promotion = promotion ? { id: promotion.id, targetLayer: promotion.payload.layer, scope: promotion.payload.scope } : null;
-    log('evolution', promotion ? 'proposed L2 -> L1 promotion' : 'no promotion yet', 'needs three independent positive projects', knowledgeDb, promotion?.payload?.layer ?? 'none');
+    log('evolution', promotion ? 'proposed L2 -> L1 promotion' : 'no promotion without controlled benefit evidence', 'promotion requires explicit positive A/B evidence, not task counts', knowledgeDb, promotion?.payload?.layer ?? 'none');
 
     report.summary = {
       experiences: personal.listExperiences({ limit: 1000 }).length,

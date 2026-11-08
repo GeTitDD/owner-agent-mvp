@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { PersonalKnowledgeStore } from '../../src/personal-store.mjs';
+import { OwnerStore } from '../../src/owner-store.mjs';
+import { createSyntheticProject } from '../knowledge-loop/fixtures.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
 const pluginDir = path.join(repoRoot, 'integrations', 'openclaw-plugin');
@@ -77,6 +79,12 @@ const run = async () => {
     });
   } finally { personal.close(); }
 
+  // 自动采集验收：先写入两个已完成 Sandbox Run，不运行任何 CLI。
+  const owner = new OwnerStore(ownerDb);
+  try {
+    createSyntheticProject({ store: owner, root: path.join(root, 'auto-a'), projectId: 'auto-a', name: 'Auto A' });
+  } finally { owner.close(); }
+
   const app = await electron.launch({
     executablePath: electronPath,
     args: [path.join(repoRoot, 'desktop', 'main.cjs'), `--user-data-dir=${userData}`],
@@ -97,10 +105,12 @@ const run = async () => {
     panel = await pageFor(app, 'panel.html');
     await pet.evaluate(() => window.companion.showPanel());
     await panel.waitForSelector('#knowledgeSummaryText', { timeout: 15000 });
-    await panel.waitForTimeout(1500);
+    await panel.waitForTimeout(7000);
     const summary = await panel.locator('#knowledgeSummaryText').innerText();
-    check('knowledge summary shows verified knowledge', /已验证知识 1 条/u.test(summary), summary);
+    check('knowledge summary shows verified knowledge', /已验证 1 条/u.test(summary), summary);
     check('knowledge summary shows candidates', /候选 1 条/u.test(summary), summary);
+    check('knowledge summary shows auto-collected experiences', /经验 3 条/u.test(summary), summary);
+    check('knowledge summary shows pending harvest queue', /待提炼 3 条/u.test(summary), summary);
 
     await panel.locator('[data-knowledge="verified"]').click();
     await panel.locator('#modalTitle').filter({ hasText: '验证与复用' }).waitFor({ timeout: 10000 });
