@@ -337,3 +337,54 @@ pre.diff, pre.logs {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
+.knowledge-section {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+  background: rgba(31, 122, 92, 0.04);
+}
+
+.knowledge-quick {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.knowledge-quick button {
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.knowledge-quick button:hover { background: var(--accent-soft); }
+
+.knowledge-summary {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.knowledge-actions { display: flex; justify-content: flex-end; }
+
+.knowledge-list { display: grid; gap: 6px; }
+
+.knowledge-item {
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  padding: 8px 10px;
+  cursor: pointer;
+  display: grid;
+  gap: 2px;
+}
+
+.knowledge-item strong { font-size: 12px; color: var(--text); }
+.knowledge-item span { font-size: 10px; color: var(--muted); }

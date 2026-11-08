@@ -127,6 +127,27 @@ export async function createWorkbenchServer({host='127.0.0.1',port=4317,dbPath=d
           packageVersions:staticCatalog.packages.filter(x=>x.id===id).map(x=>x.version),knowledgeCount:allUnits().filter(x=>x.domains.includes(id)).length})));
       }
       if(method==='POST'&&url.pathname==='/api/domains')return json(res,store.createDomain(await body(req)),201);
+      if(method==='GET'&&url.pathname==='/api/knowledge/experiences')
+        return json(res,store.listExperiences({projectId:url.searchParams.get('projectId')??'',outcome:url.searchParams.get('outcome')??'',limit:Math.min(200,Math.max(1,Number(url.searchParams.get('limit')??100)))}));
+      if(method==='GET'&&url.pathname==='/api/knowledge/usages')
+        return json(res,store.listUsages({targetRunId:url.searchParams.get('targetRunId')??'',projectId:url.searchParams.get('projectId')??'',knowledgeId:url.searchParams.get('knowledgeId')??'',limit:Math.min(200,Math.max(1,Number(url.searchParams.get('limit')??100)))}));
+      if(method==='GET'&&url.pathname==='/api/knowledge/feedback')
+        return json(res,store.listFeedback({usageId:url.searchParams.get('usageId')??'',limit:Math.min(200,Math.max(1,Number(url.searchParams.get('limit')??100)))}));
+      if(method==='GET'&&url.pathname==='/api/knowledge/candidates')
+        return json(res,store.proposals(url.searchParams.get('status')??'pending').filter(x=>x.meta?.contract==='knowledge-candidate/v1'));
+      if(method==='GET'&&url.pathname==='/api/knowledge/loop-summary') {
+        const units=store.list({limit:2000});
+        return json(res,{
+          experiences:store.listExperiences({limit:1000}).length,
+          pendingCandidates:store.proposals('pending').filter(x=>x.meta?.contract==='knowledge-candidate/v1').length,
+          approvedKnowledge:units.filter(x=>x.verificationStatus==='verified').length,
+          knowledgeAtL2:units.filter(x=>x.layer==='applied').length,
+          knowledgeAtL1:units.filter(x=>x.layer==='domain').length,
+          usages:store.listUsages({limit:1000}).length,
+          positiveUsages:store.listUsages({limit:1000}).filter(x=>x.observedBenefit==='positive').length,
+          negativeUsages:store.listUsages({limit:1000}).filter(x=>x.observedBenefit==='negative').length
+        });
+      }
       if(method==='GET'&&url.pathname==='/api/projects')return json(res,staticCatalog.projects);
       if(method==='GET'&&url.pathname==='/api/knowledge') {
         const filters=Object.fromEntries(['q','domain','layer','scope','status','projectId'].map(k=>[k,url.searchParams.get(k)??'']));

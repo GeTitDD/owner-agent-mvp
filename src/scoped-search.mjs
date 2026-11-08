@@ -12,6 +12,6 @@ export function rankKnowledge(record, query) {
 export function scopedSearch(index, snapshot, query, limit = 12) {
   if (typeof query !== 'string' || !query.trim()) return [];
   const shared = index.search(snapshot, query, 100);
-  const local = (snapshot.projectRecords ?? []).filter((rec) => rankKnowledge(rec, query) > 0);
+  const local = (snapshot.projectRecords ?? []).filter((rec) => rankKnowledge(rec, query) >= 3);
   return [...shared, ...local].sort((a, b) => rankKnowledge(b, query) - rankKnowledge(a, query) || a.key.localeCompare(b.key)).slice(0, limit);
 }

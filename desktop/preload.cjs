@@ -9,6 +9,12 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   patchDetail: (input) => invoke('companion:patch-detail', input),
   result: (input) => invoke('companion:result', input),
   createSandbox: (input) => invoke('companion:create-sandbox', input),
+  knowledge: Object.freeze({
+    summary: () => invoke('companion:knowledge-summary'),
+    ask: (input) => invoke('companion:knowledge-ask', input),
+    detail: (input) => invoke('companion:knowledge-detail', input),
+    open: () => invoke('companion:knowledge-open')
+  }),
   settings: Object.freeze({
     get: () => invoke('companion:settings:get'),
     set: (input) => invoke('companion:settings:set', input),

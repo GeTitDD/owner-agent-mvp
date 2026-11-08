@@ -96,12 +96,39 @@ export class PersonalKnowledgeStore {
       );
       CREATE INDEX IF NOT EXISTS personal_revisions_unit ON personal_revisions(unit_id,revision DESC);
       CREATE INDEX IF NOT EXISTS personal_proposals_status ON personal_proposals(status,created_at DESC);
+      CREATE TABLE IF NOT EXISTS knowledge_experiences (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT,
+        source_run_id TEXT NOT NULL, outcome TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS knowledge_experiences_project ON knowledge_experiences(project_id,created_at DESC);
+      CREATE TABLE IF NOT EXISTS knowledge_harvest_runs (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, experience_ids TEXT NOT NULL,
+        dedupe_key TEXT NOT NULL UNIQUE, model TEXT NOT NULL, status TEXT NOT NULL,
+        candidate_ids TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS knowledge_usages (
+        id TEXT PRIMARY KEY, knowledge_id TEXT NOT NULL, revision INTEGER NOT NULL,
+        target_run_id TEXT NOT NULL, project_id TEXT NOT NULL, context_snapshot_id TEXT NOT NULL,
+        outcome TEXT NOT NULL DEFAULT 'unknown', observed_benefit TEXT NOT NULL DEFAULT 'unknown',
+        created_at TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL,
+        UNIQUE(knowledge_id,revision,target_run_id,context_snapshot_id)
+      );
+      CREATE INDEX IF NOT EXISTS knowledge_usages_target ON knowledge_usages(target_run_id,created_at DESC);
+      CREATE TABLE IF NOT EXISTS knowledge_feedback (
+        id TEXT PRIMARY KEY, usage_id TEXT NOT NULL UNIQUE REFERENCES knowledge_usages(id),
+        outcome TEXT NOT NULL, observed_benefit TEXT NOT NULL, proposed_evolution TEXT NOT NULL,
+        created_at TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL
+      );
     `);
     // In-place migration for databases created before proposal revision pinning.
     // Legacy proposals with unknown base revision intentionally fail closed on approval.
     const proposalColumns = this.db.prepare('PRAGMA table_info(personal_proposals)').all().map(x => x.name);
     if (!proposalColumns.includes('target_revision')) {
       this.db.exec('ALTER TABLE personal_proposals ADD COLUMN target_revision INTEGER');
+    }
+    if (!proposalColumns.includes('meta_json')) {
+      this.db.exec("ALTER TABLE personal_proposals ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'");
     }
   }
   close() { this.db.close(); }
@@ -158,7 +185,7 @@ export class PersonalKnowledgeStore {
     return {id,label:name,description:desc};
   }
   domains() { return this.db.prepare('SELECT * FROM personal_domains ORDER BY label,id').all(); }
-  submitProposal({targetId=null,payload,actor='agent',note=''}) {
+  submitProposal({targetId=null,payload,actor='agent',note='',meta={}}) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const existing = targetId === null ? null : this.get(targetId);
@@ -168,16 +195,27 @@ export class PersonalKnowledgeStore {
       if (existing && (normalized.scope !== existing.scope || normalized.projectId !== existing.projectId)) {
         throw new KnowledgeValidationError('Proposal cannot change target scope or project ownership');
       }
+      valid(meta && typeof meta === 'object' && !Array.isArray(meta), 'Proposal meta must be an object');
+      rejectObviousSecrets(meta);
+      const metaJson = canonical(meta);
+      valid(metaJson.length <= 20000, 'Proposal meta is too large');
       const id = randomUUID(), stamp = now();
-      this.db.prepare(`INSERT INTO personal_proposals(id,target_id,target_revision,payload,status,actor,note,created_at)
-        VALUES(?,?,?,?,'pending',?,?,?)`).run(id,targetId,existing?.revision ?? null,canonical(normalized),
-          safeText(actor,80,'actor',true),safeText(note,500,'note'),stamp);
+      this.db.prepare(`INSERT INTO personal_proposals(id,target_id,target_revision,payload,status,actor,note,created_at,meta_json)
+        VALUES(?,?,?,?,'pending',?,?,?,?)`).run(id,targetId,existing?.revision ?? null,canonical(normalized),
+          safeText(actor,80,'actor',true),safeText(note,500,'note'),stamp,metaJson);
       this.db.exec('COMMIT');
       return this.proposal(id);
     } catch(e) { this.db.exec('ROLLBACK'); throw e; }
   }
-  proposal(id) { const row=this.db.prepare('SELECT * FROM personal_proposals WHERE id=?').get(id); return row ? {...row,payload:JSON.parse(row.payload)} : null; }
-  proposals(status='') { return this.db.prepare('SELECT * FROM personal_proposals ORDER BY created_at DESC,id DESC').all().map(r=>({...r,payload:JSON.parse(r.payload)})).filter(r=>!status||r.status===status); }
+  proposal(id) {
+    const row=this.db.prepare('SELECT * FROM personal_proposals WHERE id=?').get(id);
+    return row ? {...row,payload:JSON.parse(row.payload),meta:JSON.parse(row.meta_json??'{}')} : null;
+  }
+  proposals(status='') {
+    return this.db.prepare('SELECT * FROM personal_proposals ORDER BY created_at DESC,id DESC').all()
+      .map(r=>({...r,payload:JSON.parse(r.payload),meta:JSON.parse(r.meta_json??'{}')}))
+      .filter(r=>!status||r.status===status);
+  }
   reviewProposal(id,{decision,reviewer='user',expectedRevision=null}) {
     valid(['approved','rejected'].includes(decision),'Invalid proposal decision');
     this.db.exec('BEGIN IMMEDIATE');
@@ -216,5 +254,143 @@ export class PersonalKnowledgeStore {
       this.db.exec('COMMIT');
     } catch(e) {this.db.exec('ROLLBACK');throw e;}
     return this.proposal(id);
+  }
+
+  // ---- Knowledge Loop: Experience / Harvest / Usage / Feedback ----
+  addExperience(record,{dedupeKey}={}) {
+    valid(record && typeof record === 'object' && !Array.isArray(record),'Experience must be an object');
+    const id = typeof record.id === 'string' && record.id ? record.id : `exp_${randomUUID().replaceAll('-','').slice(0,24)}`;
+    const stamp = now();
+    const body = canonical({...record,id,createdAt:record.createdAt ?? stamp});
+    const key = dedupeKey ?? sha256(canonical({
+      sourceRunId: record.sourceRunId, projectId: record.projectId,
+      taskId: record.taskId ?? null, outcome: record.observedOutcome?.status ?? 'unknown',
+      evidenceRefs: [...(record.evidenceRefs ?? [])].sort()
+    }));
+    try {
+      this.db.prepare(`INSERT INTO knowledge_experiences(id,project_id,task_id,source_run_id,outcome,dedupe_key,created_at,payload,payload_hash)
+        VALUES(?,?,?,?,?,?,?,?,?)`).run(id,record.projectId,record.taskId ?? null,record.sourceRunId,
+          record.observedOutcome?.status ?? 'unknown',key,stamp,body,sha256(body));
+    } catch (error) {
+      if (/UNIQUE constraint/.test(error.message)) return this.experienceByDedupe(key);
+      throw error;
+    }
+    return this.getExperience(id);
+  }
+  getExperience(id) {
+    const row=this.db.prepare('SELECT * FROM knowledge_experiences WHERE id=?').get(id);
+    return row ? {...JSON.parse(row.payload),payloadHash:row.payload_hash,dedupeKey:row.dedupe_key} : null;
+  }
+  experienceByDedupe(key) {
+    const row=this.db.prepare('SELECT id FROM knowledge_experiences WHERE dedupe_key=?').get(key);
+    return row ? this.getExperience(row.id) : null;
+  }
+  listExperiences({projectId='',outcome='',limit=100}={}) {
+    const where=[];const params=[];
+    if(projectId){where.push('project_id=?');params.push(projectId);}
+    if(outcome){where.push('outcome=?');params.push(outcome);}
+    const rows=this.db.prepare(`SELECT id FROM knowledge_experiences ${where.length?`WHERE ${where.join(' AND ')}`:''}
+      ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params,Math.min(Math.max(1,limit),1000));
+    return rows.map(({id})=>this.getExperience(id));
+  }
+  addHarvestRun(input) {
+    const id = input.id ?? `harvest_${randomUUID().replaceAll('-','').slice(0,24)}`;
+    const stamp=now();
+    const payload={...input,id,createdAt:input.createdAt ?? stamp};
+    const body=canonical(payload);
+    try {
+      this.db.prepare(`INSERT INTO knowledge_harvest_runs(id,project_id,experience_ids,dedupe_key,model,status,candidate_ids,created_at,payload,payload_hash)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(id,input.projectId,canonical(input.experienceIds),input.dedupeKey,
+          safeText(input.model ?? 'unknown',120,'model',true),input.status,canonical(input.candidateIds ?? []),stamp,body,sha256(body));
+    } catch (error) {
+      if (/UNIQUE constraint/.test(error.message)) return this.harvestRunByDedupe(input.dedupeKey);
+      throw error;
+    }
+    return this.getHarvestRun(id);
+  }
+  getHarvestRun(id) {
+    const row=this.db.prepare('SELECT * FROM knowledge_harvest_runs WHERE id=?').get(id);
+    if(!row)return null;
+    return {...JSON.parse(row.payload),candidateIds:JSON.parse(row.candidate_ids),experienceIds:JSON.parse(row.experience_ids),payloadHash:row.payload_hash};
+  }
+  harvestRunByDedupe(key) {
+    const row=this.db.prepare('SELECT id FROM knowledge_harvest_runs WHERE dedupe_key=?').get(key);
+    return row ? this.getHarvestRun(row.id) : null;
+  }
+  addUsage(input) {
+    const stamp=now();
+    const id = input.id ?? `usage_${randomUUID().replaceAll('-','').slice(0,24)}`;
+    const payload={...input,id,createdAt:input.createdAt ?? stamp};
+    const body=canonical(payload);
+    try {
+      this.db.prepare(`INSERT INTO knowledge_usages(id,knowledge_id,revision,target_run_id,project_id,context_snapshot_id,outcome,observed_benefit,created_at,payload,payload_hash)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(id,input.knowledgeId,input.revision,input.targetRunId,input.projectId,
+          input.contextSnapshotId,input.outcome ?? 'unknown',input.observedBenefit ?? 'unknown',stamp,body,sha256(body));
+    } catch (error) {
+      if (/UNIQUE constraint/.test(error.message)) {
+        return this.usageByKey(input.knowledgeId,input.revision,input.targetRunId,input.contextSnapshotId);
+      }
+      throw error;
+    }
+    return this.getUsage(id);
+  }
+  getUsage(id) {
+    const row=this.db.prepare('SELECT * FROM knowledge_usages WHERE id=?').get(id);
+    if(!row)return null;
+    return {...JSON.parse(row.payload),outcome:row.outcome,observedBenefit:row.observed_benefit,payloadHash:row.payload_hash};
+  }
+  usageByKey(knowledgeId,revision,targetRunId,contextSnapshotId) {
+    const row=this.db.prepare('SELECT id FROM knowledge_usages WHERE knowledge_id=? AND revision=? AND target_run_id=? AND context_snapshot_id=?')
+      .get(knowledgeId,revision,targetRunId,contextSnapshotId);
+    return row ? this.getUsage(row.id) : null;
+  }
+  listUsages({targetRunId='',projectId='',knowledgeId='',limit=100}={}) {
+    const where=[];const params=[];
+    if(targetRunId){where.push('target_run_id=?');params.push(targetRunId);}
+    if(projectId){where.push('project_id=?');params.push(projectId);}
+    if(knowledgeId){where.push('knowledge_id=?');params.push(knowledgeId);}
+    const rows=this.db.prepare(`SELECT id FROM knowledge_usages ${where.length?`WHERE ${where.join(' AND ')}`:''}
+      ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params,Math.min(Math.max(1,limit),1000));
+    return rows.map(({id})=>this.getUsage(id));
+  }
+  updateUsageOutcome(id,{outcome,observedBenefit,outcomeEvidenceRefs}={}) {
+    const usage=this.getUsage(id);
+    if(!usage)throw new KnowledgeValidationError('Usage not found');
+    const next={...usage,outcome:outcome??usage.outcome,observedBenefit:observedBenefit??usage.observedBenefit,
+      outcomeEvidenceRefs:outcomeEvidenceRefs??usage.outcomeEvidenceRefs};
+    delete next.payloadHash;
+    const body=canonical(next);
+    this.db.prepare('UPDATE knowledge_usages SET outcome=?,observed_benefit=?,payload=?,payload_hash=? WHERE id=?')
+      .run(next.outcome,next.observedBenefit,body,sha256(body),id);
+    return this.getUsage(id);
+  }
+  addFeedback(input) {
+    const stamp=now();
+    const id=input.id ?? `feedback_${randomUUID().replaceAll('-','').slice(0,24)}`;
+    const payload={...input,id,createdAt:input.createdAt ?? stamp};
+    const body=canonical(payload);
+    try {
+      this.db.prepare(`INSERT INTO knowledge_feedback(id,usage_id,outcome,observed_benefit,proposed_evolution,created_at,payload,payload_hash)
+        VALUES(?,?,?,?,?,?,?,?)`).run(id,input.usageId,input.outcome,input.observedBenefit,
+          input.proposedEvolution ?? 'none',stamp,body,sha256(body));
+    } catch (error) {
+      if (/UNIQUE constraint/.test(error.message)) return this.feedbackForUsage(input.usageId);
+      throw error;
+    }
+    return this.getFeedback(id);
+  }
+  getFeedback(id) {
+    const row=this.db.prepare('SELECT * FROM knowledge_feedback WHERE id=?').get(id);
+    return row ? {...JSON.parse(row.payload),payloadHash:row.payload_hash} : null;
+  }
+  feedbackForUsage(usageId) {
+    const row=this.db.prepare('SELECT id FROM knowledge_feedback WHERE usage_id=?').get(usageId);
+    return row ? this.getFeedback(row.id) : null;
+  }
+  listFeedback({usageId='',limit=100}={}) {
+    const rows=usageId
+      ? this.db.prepare('SELECT id FROM knowledge_feedback WHERE usage_id=? ORDER BY created_at DESC LIMIT ?').all(usageId,Math.min(Math.max(1,limit),1000))
+      : this.db.prepare('SELECT id FROM knowledge_feedback ORDER BY created_at DESC,id DESC LIMIT ?').all(Math.min(Math.max(1,limit),1000));
+    return rows.map(({id})=>this.getFeedback(id));
   }
 }

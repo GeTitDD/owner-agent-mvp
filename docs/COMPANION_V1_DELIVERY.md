@@ -14,6 +14,7 @@ Electron 桌宠 + 进程内 Owner Runtime：
 - L1 面板：交办、决策、异常恢复、进展与成果；
 - L2：打开 OpenClaw Control UI（未连接时回退到 Workbench）；
 - 审批令牌只存在主进程；渲染进程通过受控 IPC 操作；
+- 知识入口：今天学到什么 / 本项目经验 / 类似问题 / 验证与复用；候选与 Job 审批分开展示；
 - 旧 Workbench 的 companion 悬浮问答与 `companion.*` 静态页均已移除，L2 聊天统一交给 OpenClaw，避免第二套聊天状态。
 
 ## 2. 四条 SOP 验收
@@ -98,6 +99,17 @@ Electron 桌宠 + 进程内 Owner Runtime：
 
 首次配置的诊断入口：无项目时展示 Docker / OpenClaw / 模型自检；设置页每次打开都会重新探测，并提供「重新检测」按钮，不需要重启应用。
 
+### 3.2 知识入口（Knowledge Loop）
+
+- 面板固定显示知识摘要：已验证知识数、候选数、复用次数与正反馈。
+- 四个轻量请求：今天学到什么 / 本项目经验 / 类似问题 / 验证与复用。
+- 列表只展示短摘要、层级、验证状态与证据数量；详情展示 claim、revision、复用项目与正/负反馈。
+- 待确认知识候选与 Coding Job 审批分开显示，不混入同一张待办表。
+- 「完整知识库」打开本地 Workbench，用于复杂编辑、冲突分析和版本审查。
+- 知识候选不会在每次生成时弹窗；只在主动查询或面板摘要中展示。
+- 回归：`npm run e2e:desktop:knowledge`（真实 Electron，摘要/列表/详情/今日经验）。
+- 截图：`docs/assets/companion/knowledge-list.png`、`knowledge-detail.png`。
+
 ## 4. 打包
 
 ```bash
@@ -147,6 +159,7 @@ npx electron-builder --mac dmg --arm64
 | 外壳 E2E | **通过**（位置/焦点/隐藏/召回/重启保留/模型切换） |
 | Sandbox 配置失败回归 | **通过**（错误反馈 + 配置警告 + 重试创建） |
 | 多项目隔离回归 | **通过**（当前项目链、其他项目待办标签） |
+| 知识入口 E2E | **通过**（摘要、列表、详情、今日经验） |
 | 打包应用启动 | **通过** |
 | CI（PR #22） | 最终代码提交与后续 docs-only head 的 5 个 job 全绿：plugin / sandbox-real / ubuntu test / windows test / desktop-package |
 
@@ -173,6 +186,7 @@ npm run desktop            # 开发运行
 npm run e2e:desktop:shell  # 外壳验收
 npm run e2e:desktop:sandbox-config  # 沙箱创建失败反馈与重试
 npm run e2e:desktop:multiproject    # 多项目状态隔离
+npm run e2e:desktop:knowledge       # 桌宠知识入口
 npm run e2e:desktop        # 四条 SOP（真实 Docker + 真实 Pi）
 npm run desktop:pack       # Windows portable
 ```
@@ -204,6 +218,7 @@ npm run desktop:pack       # Windows portable
 | macOS 分发包 | ❌ 未验证，已说明缺口 |
 | 首次配置说明 | ✅ |
 | 自动化/真实模型记录 | ✅ |
+| 知识入口 | ✅（四问 + 详情 + 完整知识库） |
 | 截图/演示材料 | ✅ |
 | Release Notes | ✅ |
 | 构建命令/证据 | ✅ |

@@ -29,6 +29,7 @@
 - 任务链、阶段和成果只关联当前项目；全局待办卡标注「当前项目 / 其他项目」。
 - 默认快照配置不再依赖测试 fixture 文件名；node-smoke 固定测试路径自动加入。
 - 模型切换：Worker 空闲时立即生效；忙碌时在当前任务结束后生效并提示。
+- 知识入口：桌宠可回答“今天学到什么 / 本项目经验 / 类似问题 / 验证与复用”，候选与 Job 审批分开展示。
 - 首次配置添加项目改为主进程直接写 OwnerStore，修复 `Method POST is not allowed`；重复目录会复用已有项目。
 - CI 增加 `desktop-package` job，上传私有 Windows portable Artifact 与 `SHA256SUMS.txt`（含 commit 与 run id）。
 

@@ -13,7 +13,9 @@
 - 运行：`npm install && npm run desktop`
 - Windows 打包：`npm run desktop:pack`（CI `desktop-package` 上传私有 RC Artifact + SHA256）
 - 桌面 E2E：`npm run e2e:desktop`（真实 Docker + 真实 Pi）
-- 定向回归：`npm run e2e:desktop:sandbox-config`、`npm run e2e:desktop:multiproject`
+- 定向回归：`npm run e2e:desktop:sandbox-config`、`npm run e2e:desktop:multiproject`、`npm run e2e:desktop:knowledge`
+- 知识闭环：`npm run knowledge:demo`；CLI `npm run knowledge -- --help`（collect/harvest/approve/verify/reuse/feedback）
+- 知识报告：[docs/KNOWLEDGE_LOOP_V1_DELIVERY.md](docs/KNOWLEDGE_LOOP_V1_DELIVERY.md)
 - 交付报告：[docs/COMPANION_V1_DELIVERY.md](docs/COMPANION_V1_DELIVERY.md)
 - Release Notes：[docs/RELEASE_NOTES_V1.0.md](docs/RELEASE_NOTES_V1.0.md)
 

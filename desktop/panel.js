@@ -68,6 +68,17 @@
     $('footerStatus').textContent = view?.services?.docker
       ? '本地服务已启动 · Docker 可用'
       : '本地服务已启动 · Docker 未检测到';
+    const knowledge = view?.knowledge;
+    const candidates = knowledge?.counts?.candidates ?? 0;
+    $('knowledgeBadge').textContent = String(candidates);
+    $('knowledgeBadge').hidden = !knowledge?.available || candidates === 0;
+    if (knowledge?.available) {
+      $('knowledgeSummaryText').textContent =
+        `已验证知识 ${knowledge.counts.verified} 条 · 候选 ${candidates} 条 · ` +
+        `复用 ${knowledge.counts.usages} 次（正反馈 ${knowledge.counts.positiveUsages}）`;
+    } else {
+      $('knowledgeSummaryText').textContent = '知识库尚未建立；完成任务后会自动积累经验。';
+    }
   };
 
   const renderProjects = () => {
@@ -223,6 +234,98 @@
         toast('补丁已应用，测试已创建，等你批准后运行');
       };
       openModal(applying ? '应用补丁' : '审阅补丁', nodes, [cancel, approve]);
+    } catch (error) {
+      toast(String(error?.message ?? error), 5000);
+    }
+  };
+
+  const knowledgeItem = (item) => {
+    const button = el('button', 'knowledge-item');
+    button.type = 'button';
+    button.append(el('strong', undefined, item.title));
+    button.append(el('span', undefined,
+      `${item.type === 'experience' ? '经验' : item.type === 'candidate' ? '候选' : '知识'} · ` +
+      `${item.status ?? 'unknown'}${item.layer ? ` · ${item.layer}` : ''}` +
+      `${item.revision ? ` · r${item.revision}` : ''}`));
+    if (item.detail) button.append(el('span', undefined, item.detail));
+    button.onclick = () => { void openKnowledgeDetail(item.id); };
+    return button;
+  };
+
+  const openKnowledgeDetail = async (id) => {
+    try {
+      const data = await window.companion.knowledge.detail({ id });
+      const nodes = [];
+      if (data.kind === 'knowledge') {
+        nodes.push(el('p', 'result-summary', data.item.content));
+        nodes.push(detailRows([
+          ['层级', data.item.layer],
+          ['范围', data.item.scope === 'project' ? `项目 ${data.item.projectId}` : data.item.scope],
+          ['验证', data.item.verificationStatus],
+          ['版本', `r${data.item.revision}`],
+          ['证据', String((data.item.evidenceRefs ?? []).length)],
+          ['复用', String(data.usages.length)]
+        ]));
+        if (data.item.evidenceRefs?.length) nodes.push(el('pre', 'diff', data.item.evidenceRefs.join('\n')));
+        if (data.usages.length) {
+          nodes.push(el('div', 'section-title', '复用记录'));
+          nodes.push(el('pre', 'diff', data.usages.map((usage) =>
+            `${usage.projectId} · ${usage.observedBenefit} · ${usage.targetRunId}`).join('\n')));
+        }
+      } else if (data.kind === 'experience') {
+        nodes.push(el('p', 'result-summary', data.item.observedProblem));
+        nodes.push(detailRows([
+          ['项目', data.item.projectId],
+          ['结果', data.item.observedOutcome?.status],
+          ['测试', data.item.observedOutcome?.testStatus ?? 'unknown'],
+          ['执行', data.item.observedOutcome?.executionStatus ?? 'unknown'],
+          ['创建', data.item.createdAt]
+        ]));
+        for (const [title, values] of [
+          ['已观察事实', data.item.facts ?? []],
+          ['模型推断', data.item.inferences ?? []],
+          ['未知', data.item.unknowns ?? []]
+        ]) {
+          if (!values.length) continue;
+          nodes.push(el('div', 'section-title', title));
+          nodes.push(el('pre', 'diff', values.join('\n')));
+        }
+      } else {
+        nodes.push(detailRows([
+          ['候选', data.item.payload?.title ?? data.item.id],
+          ['层级', data.item.payload?.layer],
+          ['状态', data.item.status],
+          ['置信度', String(data.item.meta?.confidence ?? 'unknown')]
+        ]));
+        nodes.push(el('p', 'pending-summary', '候选需要人工审阅；请打开完整知识库。'));
+      }
+      const close = el('button', 'ghost', '关闭');
+      close.onclick = closeModal;
+      const workbench = el('button', 'primary', '完整知识库');
+      workbench.onclick = () => { closeModal(); void window.companion.knowledge.open(); };
+      openModal('知识详情', nodes, [close, workbench]);
+    } catch (error) {
+      toast(String(error?.message ?? error), 5000);
+    }
+  };
+
+  const askKnowledge = async (kind) => {
+    try {
+      const result = await window.companion.knowledge.ask({
+        kind,
+        projectId: view?.config?.projectId ?? ''
+      });
+      const nodes = [el('p', 'result-summary', result.answer)];
+      if (result.items?.length) {
+        const list = el('div', 'knowledge-list');
+        for (const item of result.items.slice(0, 12)) list.append(knowledgeItem(item));
+        nodes.push(list);
+      }
+      const close = el('button', 'ghost', '关闭');
+      close.onclick = closeModal;
+      const workbench = el('button', 'primary', '完整知识库');
+      workbench.onclick = () => { closeModal(); void window.companion.knowledge.open(); };
+      openModal(kind === 'today' ? '今天学到了什么' : kind === 'verified' ? '验证与复用' : '知识', nodes, [close, workbench]);
     } catch (error) {
       toast(String(error?.message ?? error), 5000);
     }
@@ -485,6 +588,12 @@
   $('addProjectSettings').onclick = () => { void pickProject(); };
   $('retryServices').onclick = () => { void openSettings(); };
   $('fixTestConfig').onclick = () => { void openSettings(); };
+  for (const button of document.querySelectorAll('[data-knowledge]')) {
+    button.onclick = () => { void askKnowledge(button.dataset.knowledge); };
+  }
+  $('openKnowledge').onclick = () => {
+    void window.companion.knowledge.open().catch((error) => toast(String(error.message ?? error)));
+  };
 
   window.companion.onOpenSettings(() => { void openSettings(); });
 

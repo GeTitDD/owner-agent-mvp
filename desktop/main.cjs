@@ -6,6 +6,7 @@ const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, dialog, No
   require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 
 const PET_SIZE = 136;
@@ -22,6 +23,7 @@ let panel = null;
 let fullWindow = null;
 let tray = null;
 let store = null;
+let personalStore = null;
 let broker = null;
 let sidecar = null;
 let workbench = null;
@@ -73,6 +75,10 @@ const importEsm = (relative) =>
 
 const dbPath = () =>
   process.env.OWNER_AGENT_DB || path.join(app.getPath('userData'), 'owner.sqlite');
+const knowledgeDbPath = () =>
+  process.env.OWNER_KNOWLEDGE_DB
+  || process.env.DOMAIN_CONTEXT_DB
+  || path.join(os.homedir(), '.domain-context', 'index.sqlite');
 
 const resolveDigest = () => {
   const explicit = process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST;
@@ -141,6 +147,15 @@ async function startServices() {
   const file = dbPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   store = new OwnerStore(file);
+  try {
+    const { PersonalKnowledgeStore } = await importEsm('../src/personal-store.mjs');
+    const knowledgeFile = knowledgeDbPath();
+    fs.mkdirSync(path.dirname(knowledgeFile), { recursive: true });
+    personalStore = new PersonalKnowledgeStore(knowledgeFile);
+  } catch (error) {
+    console.error('knowledge store unavailable:', error.message);
+    personalStore = null;
+  }
   broker = new WorkspaceBroker(store, {
     workspacesRoot: path.join(app.getPath('userData'), 'workspaces')
   });
@@ -354,6 +369,136 @@ const stageText = (chain) => {
 
 const circleSafe = (value, expected) => value === expected;
 
+const knowledgeSnapshot = () => {
+  if (!personalStore) return { available: false, counts: {}, recentExperiences: [], candidates: [] };
+  const units = personalStore.list({ limit: 2000 });
+  const experiences = personalStore.listExperiences({ limit: 50 });
+  const candidates = personalStore.proposals('pending')
+    .filter((item) => item.meta?.contract === 'knowledge-candidate/v1');
+  const usages = personalStore.listUsages({ limit: 200 });
+  return {
+    available: true,
+    counts: {
+      experiences: experiences.length,
+      knowledge: units.length,
+      verified: units.filter((item) => item.verificationStatus === 'verified').length,
+      candidates: candidates.length,
+      usages: usages.length,
+      positiveUsages: usages.filter((item) => item.observedBenefit === 'positive').length,
+      negativeUsages: usages.filter((item) => item.observedBenefit === 'negative').length
+    },
+    recentExperiences: experiences.slice(0, 5).map((item) => ({
+      id: item.id, projectId: item.projectId, title: item.observedProblem,
+      outcome: item.observedOutcome?.status ?? 'unknown',
+      testStatus: item.observedOutcome?.testStatus ?? null,
+      createdAt: item.createdAt
+    })),
+    candidates: candidates.slice(0, 5).map((item) => ({
+      id: item.id, title: item.payload?.title ?? '未命名候选',
+      layer: item.payload?.layer ?? 'project',
+      confidence: item.meta?.confidence ?? null
+    })),
+    recentKnowledge: units.filter((item) => item.verificationStatus === 'verified').slice(0, 5).map((item) => ({
+      id: item.id, title: item.title, layer: item.layer, revision: item.revision,
+      scope: item.scope, projectId: item.projectId
+    }))
+  };
+};
+
+const knowledgeAsk = ({ kind, projectId = '', query = '' } = {}) => {
+  if (!personalStore) return { answer: '知识库尚未建立。先完成任务并采集经验。', items: [], basis: [] };
+  const units = personalStore.list({ limit: 2000 });
+  const experiences = personalStore.listExperiences({ projectId, limit: 200 });
+  const now = Date.now();
+  const item = (type, row, extra = {}) => ({
+    type, id: row.id,
+    title: type === 'experience' ? row.observedProblem : row.title,
+    status: type === 'experience' ? row.observedOutcome?.status : row.verificationStatus,
+    layer: row.layer ?? null, revision: row.revision ?? null,
+    projectId: row.projectId ?? row.project_id ?? null,
+    ...extra
+  });
+  if (kind === 'today') {
+    const recent = experiences.filter((row) => Date.now() - Date.parse(row.createdAt) < 24 * 60 * 60 * 1000);
+    const fresh = units.filter((row) => Date.now() - Date.parse(row.updatedAt) < 24 * 60 * 60 * 1000);
+    return {
+      answer: recent.length || fresh.length
+        ? `最近 24 小时采集了 ${recent.length} 条经验，知识库更新 ${fresh.length} 条。`
+        : '最近 24 小时没有新的经验或知识更新。',
+      items: [...recent.map((row) => item('experience', row)), ...fresh.map((row) => item('knowledge', row))],
+      basis: [...recent.map((row) => `experience:${row.id}`), ...fresh.map((row) => `knowledge:${row.id}`)]
+    };
+  }
+  if (kind === 'similar') {
+    const q = query || experiences[0]?.observedProblem || '';
+    const matched = personalStore.list({ q, limit: 10 });
+    const exp = experiences.filter((row) =>
+      `${row.observedProblem} ${row.actionSummary}`.toLowerCase().includes(q.toLowerCase())
+    ).slice(0, 10);
+    return {
+      answer: q
+        ? `找到 ${matched.length} 条知识、${exp.length} 条相似经验。`
+        : '还没有可用于相似检索的历史问题。',
+      items: [...matched.map((row) => item('knowledge', row)), ...exp.map((row) => item('experience', row))],
+      basis: [...matched.map((row) => `knowledge:${row.id}`), ...exp.map((row) => `experience:${row.id}`)]
+    };
+  }
+  if (kind === 'verified') {
+    const verified = units.filter((row) => row.verificationStatus === 'verified');
+    const rows = verified.map((row) => {
+      const usages = personalStore.listUsages({ knowledgeId: row.id, limit: 200 });
+      const projects = [...new Set(usages.map((usage) => usage.projectId))];
+      const positive = usages.filter((usage) => usage.observedBenefit === 'positive').length;
+      const negative = usages.filter((usage) => usage.observedBenefit === 'negative').length;
+      return item('knowledge', row, {
+        usageProjects: projects, positiveUsages: positive, negativeUsages: negative,
+        detail: `被 ${projects.length} 个项目复用；正反馈 ${positive}，负反馈 ${negative}`
+      });
+    });
+    return {
+      answer: verified.length
+        ? `${verified.length} 条已验证知识；${rows.filter((row) => row.usageProjects.length > 0).length} 条有复用记录。`
+        : '还没有已验证知识。',
+      items: rows, basis: verified.map((row) => `knowledge:${row.id}`)
+    };
+  }
+  // project
+  const projectKnowledge = units.filter((row) =>
+    row.scope === 'project' ? row.projectId === projectId
+      : !projectId || row.domains.includes('software-engineering')
+  );
+  const projectExperiences = experiences.filter((row) => !projectId || row.projectId === projectId);
+  return {
+    answer: `${projectId || '当前项目'}：${projectExperiences.length} 条经验，${projectKnowledge.length} 条相关知识。`,
+    items: [...projectExperiences.slice(0, 10).map((row) => item('experience', row)),
+      ...projectKnowledge.slice(0, 10).map((row) => item('knowledge', row))],
+    basis: [...projectExperiences.map((row) => `experience:${row.id}`),
+      ...projectKnowledge.map((row) => `knowledge:${row.id}`)]
+  };
+};
+
+const knowledgeDetail = ({ id } = {}) => {
+  if (!personalStore) throw new Error('知识库尚未建立');
+  const unit = personalStore.get(id);
+  if (unit) {
+    const revisions = personalStore.revisions(id);
+    const usages = personalStore.listUsages({ knowledgeId: id, limit: 200 });
+    const feedback = usages.map((usage) => personalStore.feedbackForUsage(usage.id)).filter(Boolean);
+    return { kind: 'knowledge', item: unit, revisions, usages, feedback };
+  }
+  const experience = personalStore.getExperience(id);
+  if (experience) {
+    const linked = experience.evidenceRefs
+      .filter((ref) => ref.startsWith('experience:'))
+      .map((ref) => personalStore.getExperience(ref.slice('experience:'.length)))
+      .filter(Boolean);
+    return { kind: 'experience', item: experience, linkedExperiences: linked };
+  }
+  const proposal = personalStore.proposal(id);
+  if (proposal) return { kind: 'candidate', item: proposal };
+  throw new Error('未找到该知识或经验');
+};
+
 const buildView = async () => {
   const projects = await api('/owner/v1/projects');
   const projectList = projects.items ?? [];
@@ -459,6 +604,7 @@ const buildView = async () => {
     },
     testConfig: testConfigForProject(activeProject),
     services,
+    knowledge: knowledgeSnapshot(),
     result: finalCycle
       ? {
         cycleId: finalCycle.id,
@@ -667,6 +813,26 @@ const openFull = async () => {
   });
   fullWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   fullWindow.loadURL(target);
+  fullWindow.on('closed', () => { fullWindow = null; });
+};
+
+const openKnowledgeWorkbench = async () => {
+  if (!workbenchUrl) throw new Error('本地知识工作台尚未启动');
+  if (fullWindow && !fullWindow.isDestroyed()) {
+    fullWindow.show();
+    fullWindow.focus();
+    return;
+  }
+  fullWindow = new BrowserWindow({
+    width: 1180,
+    height: 820,
+    minWidth: 800,
+    minHeight: 600,
+    title: 'Owner Companion · 知识工作台',
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true }
+  });
+  fullWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  fullWindow.loadURL(workbenchUrl);
   fullWindow.on('closed', () => { fullWindow = null; });
 };
 
@@ -879,6 +1045,30 @@ const registerIpc = () => {
     return createSandbox(String(input?.proposalId ?? ''));
   });
 
+  ipcMain.handle('companion:knowledge-summary', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return knowledgeSnapshot();
+  });
+
+  ipcMain.handle('companion:knowledge-ask', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return knowledgeAsk({
+      kind: String(input?.kind ?? 'project'),
+      projectId: String(input?.projectId ?? config.projectId ?? ''),
+      query: String(input?.query ?? '').slice(0, 500)
+    });
+  });
+
+  ipcMain.handle('companion:knowledge-detail', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return knowledgeDetail({ id: String(input?.id ?? '') });
+  });
+
+  ipcMain.handle('companion:knowledge-open', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    await openKnowledgeWorkbench();
+  });
+
   ipcMain.handle('companion:settings:get', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     // 设置页每次打开都重新探测，提供“重新检测”入口。
@@ -1066,5 +1256,6 @@ app.on('will-quit', () => {
   try { tray?.destroy(); } catch { /* best effort */ }
   try { if (workbench) void workbench.close(); } catch { /* best effort */ }
   try { if (sidecar) void sidecar.close(); } catch { /* best effort */ }
+  try { personalStore?.close(); } catch { /* best effort */ }
   try { store?.close(); } catch { /* best effort */ }
 });
