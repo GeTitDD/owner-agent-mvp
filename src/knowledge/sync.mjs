@@ -238,8 +238,22 @@ export function importBundle({ personalStore, provenance = null, bundle, actor =
   const report = {
     contract: SYNC_CONTRACT, device, applied: apply,
     imported: 0, fastForwarded: 0, merged: 0, unchanged: 0, localAhead: 0,
-    conflicts: [], errors: [], provenance: null
+    conflicts: [], errors: [], provenance: null, project: null
   };
+  // 项目身份：跨设备保留 projectIdentity；本地已有不同绑定时不覆盖，只报告。
+  if (provenance && bundle.project?.projectIdentity) {
+    try {
+      const registered = provenance.ensureProject({
+        projectId: bundle.project.projectId,
+        identity: bundle.project.projectIdentity,
+        identityKind: bundle.project.identityKind ?? 'unknown',
+        aliases: bundle.project.aliases ?? []
+      });
+      report.project = registered?.aliasOf ? `alias-of:${registered.aliasOf}` : 'registered';
+    } catch (error) {
+      report.project = `skipped: ${error.message}`;
+    }
+  }
   const importedIds = new Set();
   for (const unit of bundle.units ?? []) {
     try {

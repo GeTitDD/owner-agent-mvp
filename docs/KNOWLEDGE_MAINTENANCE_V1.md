@@ -126,7 +126,7 @@ node bin/knowledge-maint.mjs context restore --snapshot ctx.x
 
 ```powershell
 node --test tests/knowledge-provenance.test.mjs   # 13 tests
-node --test tests/knowledge-sync.test.mjs         # 11 tests
+node --test tests/knowledge-sync.test.mjs         # 12 tests
 node scripts/e2e/knowledge-provenance-smoke.mjs   # 真实 CLI + 真实 git + 真实 GitHub
 ```
 
@@ -148,7 +148,7 @@ node scripts/e2e/knowledge-provenance-smoke.mjs   # 真实 CLI + 真实 git + �
 - 同步按**单元线性历史**合并；若同一设备删除后重建修订号，会判为分叉而不是重写历史。
 - 项目身份在没有 remote、也没有根提交时退到本地根哈希，此时**跨设备不可识别**，会显式标为 `local-root`。
 - 导入不自动解决冲突；冲突保留在 `knowledge_conflicts`，需 Owner 在后续版本处理（CLI 已提供 `conflicts list/resolve`）。
-- 导出默认只含项目范围的单元；`--all` 可导出全部，但没有按领域筛选。
+- 导出默认只含项目范围的单元；`--all` 可导出全部，但没有按领域筛选；单次导出上限 2000 个单元。
 - 同步包**未签名**：哈希只防传输损坏与误改，不防恶意构造；跨不可信网络传输前需自行加密与认证。
 - 尚未接入 Workbench UI；目前是 CLI + 可注入服务。
 - 未验证：macOS、超大历史（>10k 修订）同步性能。
@@ -157,9 +157,9 @@ node scripts/e2e/knowledge-provenance-smoke.mjs   # 真实 CLI + 真实 git + �
 
 ```
 npm run check                → 0
-npm test                     → 230 tests / 227 pass / 3 skip / 0 fail
+npm test                     → 231 tests / 228 pass / 3 skip / 0 fail
 node --test tests/knowledge-provenance.test.mjs tests/knowledge-sync.test.mjs
-                             → 24 pass / 0 fail
+                             → 25 pass / 0 fail
 node scripts/e2e/knowledge-provenance-smoke.mjs → PASS（10 步，含真实 GitHub）
 ```
 

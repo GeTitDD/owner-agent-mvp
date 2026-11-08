@@ -223,6 +223,34 @@ test('项目身份登记：同 identity 不重复建项目，不同 identity 拒
   } finally { store.close(); }
 });
 
+test('同步包携带项目身份：导入端登记 identity 并记录别名', () => {
+  const { a, b } = pair();
+  try {
+    const unit = makeUnit(a);
+    const provenanceA = new KnowledgeProvenance({ personalStore: a, device: 'dev-a' });
+    provenanceA.ensureProject({ projectId: 'demo', identity: 'prj_shared001', identityKind: 'git-remote' });
+    const bundle = exportBundle({ personalStore: a, provenance: provenanceA, projectId: 'demo', device: 'dev-a' });
+    assert.equal(bundle.project.projectIdentity, 'prj_shared001');
+
+    const provenanceB = new KnowledgeProvenance({ personalStore: b, device: 'dev-b' });
+    const report = importBundle({ personalStore: b, provenance: provenanceB, bundle, device: 'dev-b' });
+    assert.equal(report.project, 'registered');
+    assert.equal(provenanceB.getProject('demo').projectIdentity, 'prj_shared001');
+    assert.equal(b.get(unit.id).revision, 1);
+
+    // 本地同名项目已被绑定到不同 identity → 不覆盖，只报告。
+    provenanceB.ensureProject({ projectId: 'local-other', identity: 'prj_other002', identityKind: 'local-root' });
+    const conflicting = importBundle({
+      personalStore: b,
+      provenance: provenanceB,
+      bundle: { ...bundle, project: { ...bundle.project, projectId: 'local-other' } },
+      device: 'dev-b'
+    });
+    assert.match(conflicting.project, /^skipped:/u);
+    assert.equal(provenanceB.getProject('local-other').projectIdentity, 'prj_other002');
+  } finally { a.close(); b.close(); }
+});
+
 test('非 git 目录退到 local-root 身份，并明确标记', () => {
   const store = new PersonalKnowledgeStore(':memory:');
   try {
