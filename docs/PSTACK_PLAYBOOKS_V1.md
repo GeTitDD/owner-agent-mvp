@@ -46,7 +46,8 @@ pstack 仓库里另外 43 个 skill 没有进面板；它们仍然可以通过 `
 - 每次点击 = 一次真实模型调用。小项目约 10–30 秒，大仓库实测 2 分 48 秒（`architect` 在 12 万行级 Godot 仓库上）。
 - 运行中面板显示已用秒数，并提供「取消」；取消会真正中止会话，而不是只隐藏转圈。
 - 超时预算：默认 4 分钟，`architect` 5 分钟；可用 `OWNER_PLAYBOOK_TIMEOUT_MS` 覆盖默认值。
-- 失败返回结构化分类：`timeout` / `canceled` / `auth-error` / `network-error` / `readonly-violation` / `session-error`，并附一句可执行建议 + 「重试」按钮；不会把上游原文塞进 UI。
+- 失败返回结构化分类：`timeout` / `canceled` / `auth-error` / `network-error` / `readonly-violation` / `quota-exceeded` / `empty-response` / `session-error`，并附一句可执行建议 + 「重试」按钮；不会把上游原文塞进 UI。
+- 上游以 `stopReason=error` 结束（如 429 额度用尽）会显式失败并给出额度重置时间；空文本不会被当成“模型没有结论”。
 - 找不到 pstack skills 目录时按钮禁用，提示设置 `PSTACK_DIR`。
 
 ## 5. 验证

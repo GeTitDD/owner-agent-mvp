@@ -98,11 +98,25 @@ export function createReadonlySessionFactory({ playbook, skillsDir } = {}) {
             throw new Error(`readonly-tools-violation: ${unexpected.join(',')}`);
           }
           let disposed = false;
+          const lastMessage = () => {
+            const messages = session.messages ?? [];
+            const last = messages[messages.length - 1];
+            if (!last) return null;
+            return {
+              role: last.role ?? last.type ?? 'unknown',
+              stopReason: last.stopReason ?? null,
+              errorMessage: last.errorMessage ?? null,
+              hasText: Array.isArray(last.content)
+                ? last.content.some((part) => part?.type === 'text' && String(part.text ?? '').trim())
+                : Boolean(String(last.content ?? '').trim())
+            };
+          };
           return {
             sessionId: () => String(session.sessionId ?? ''),
             prompt: (value) => session.prompt(value),
             abort: () => session.abort?.(),
             activeTools: () => active,
+            lastMessage,
             getLastText: () => String(session.getLastAssistantText?.() ?? ''),
             get model() { return session.model ? `${session.model.provider}/${session.model.id}` : 'unknown'; },
             dispose() {

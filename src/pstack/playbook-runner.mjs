@@ -134,15 +134,31 @@ export function verifyEvidence(projectRoot, findings) {
 }
 
 const classifyError = (error) => {
+  if (error?.category) return error.category;
   const name = String(error?.name ?? '');
   const message = String(error?.message ?? '');
   if (/timeout/iu.test(name) || /timeout/iu.test(message)) return 'timeout';
   if (/abort/iu.test(name) || /cancel/iu.test(message)) return 'canceled';
   if (/readonly-tools/u.test(message)) return 'readonly-violation';
-  if (/No API key|auth|permission|forbidden/iu.test(message)) return 'auth-error';
+  if (/no api key|api key|relogin|auth|permission|forbidden/iu.test(message)) return 'auth-error';
   if (/network|fetch|connection|socket|dns/iu.test(message)) return 'network-error';
   return 'session-error';
 };
+
+/** 把上游错误归到受控分类；只保留额度重置时间这类非敏感信息。 */
+export function classifyProviderError(rawMessage) {
+  const raw = String(rawMessage ?? '');
+  if (/429|1310|quota|rate.?limit|使用上限|额度/iu.test(raw)) {
+    const reset = /(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?)/u.exec(raw);
+    return {
+      category: 'quota-exceeded',
+      detail: reset ? `额度将于 ${reset[1]} 重置。` : ''
+    };
+  }
+  if (/401|403|unauthorized|invalid api key|no api key|relogin/iu.test(raw)) return { category: 'auth-error', detail: '' };
+  if (/timeout|ETIMEDOUT/iu.test(raw)) return { category: 'timeout', detail: '' };
+  return { category: 'session-error', detail: '' };
+}
 
 export class PlaybookRunner {
   constructor({
@@ -203,7 +219,21 @@ export class PlaybookRunner {
         signal.addEventListener('abort', cancelListener, { once: true });
       });
       await Promise.race([session.prompt(prompt), timedOut, canceled]);
+      // 上游可能以“空内容 + stopReason=error”结束（额度、鉴权、网络）；必须显式失败，
+      // 不能伪装成“模型没有给出结论”。
+      const last = session.lastMessage?.();
+      if (last?.stopReason === 'error') {
+        const classified = classifyProviderError(last.errorMessage);
+        throw Object.assign(new Error('provider error'), {
+          name: 'ProviderError',
+          category: classified.category,
+          detail: classified.detail
+        });
+      }
       const text = session.getLastText();
+      if (!String(text).trim()) {
+        throw Object.assign(new Error('empty model response'), { name: 'EmptyResponseError', category: 'empty-response' });
+      }
       const parsed = parsePlaybookOutput(text);
       const findings = verifyEvidence(project.root, parsed.findings);
       return {
@@ -227,6 +257,8 @@ export class PlaybookRunner {
       };
     } catch (error) {
       const category = classifyError(error);
+      const advice = [FAILURE_ADVICE[category] ?? FAILURE_ADVICE['session-error'], error?.detail]
+        .filter(Boolean).join(' ');
       return {
         runId,
         playbookId: playbook.id,
@@ -236,7 +268,8 @@ export class PlaybookRunner {
         status: 'error',
         category,
         summary: `执行失败：${category}`,
-        advice: FAILURE_ADVICE[category] ?? FAILURE_ADVICE['session-error'],
+        advice,
+        detail: error?.detail ?? '',
         findings: [],
         risks: [],
         nextSteps: [],
@@ -262,5 +295,7 @@ const FAILURE_ADVICE = {
   'readonly-violation': '只读工具校验失败，已中止；这属于客户端缺陷，请不要继续执行写操作。',
   'auth-error': '模型凭据不可用：到设置里检查模型，或重新登录 Pi。',
   'network-error': '模型服务连接失败：检查代理/网络后重试。',
+  'quota-exceeded': '模型额度已用尽（429）。换一个模型，或等额度重置后再试。',
+  'empty-response': '模型返回了空内容：可能是额度、网络或上下文问题；先重试，仍为空就换模型。',
   'session-error': '模型会话异常：重试一次；持续失败时换模型或缩小分析范围。'
 };

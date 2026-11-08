@@ -212,6 +212,45 @@ test('PlaybookRunner 支持外部取消并真正中止会话', async () => {
   assert.ok(result.advice && result.advice.length > 0);
 });
 
+test('配额错误不再伪装成“没有结论”', async () => {
+  const skills = makeSkillsRoot();
+  const project = makeProject();
+  const factory = {
+    requiresModel: true,
+    async create() {
+      return {
+        sessionId: () => 'quota-session',
+        prompt: async () => {},
+        abort: () => {},
+        activeTools: () => [...READONLY_TOOLS],
+        lastMessage: () => ({
+          role: 'assistant', stopReason: 'error', hasText: false,
+          errorMessage: '429: {"code":"1310","message":"您已达到每周/每月使用上限，您的限额将于 2026-11-09 05:02:07 重置。"}'
+        }),
+        getLastText: () => '',
+        model: 'fake/model',
+        dispose: () => {}
+      };
+    }
+  };
+  const runner = new PlaybookRunner({ skillsDir: skills, sessionFactoryFor: () => factory });
+  const result = await runner.run({ playbookId: 'how', project });
+  assert.equal(result.status, 'error');
+  assert.equal(result.category, 'quota-exceeded');
+  assert.match(result.advice, /额度/u);
+  assert.match(result.detail, /2026-11-09 05:02:07/u);
+});
+
+test('模型返回空文本时标记 empty-response', async () => {
+  const skills = makeSkillsRoot();
+  const project = makeProject();
+  const runner = new PlaybookRunner({ skillsDir: skills, sessionFactoryFor: () => fakeFactory('   ') });
+  const result = await runner.run({ playbookId: 'how', project });
+  assert.equal(result.status, 'error');
+  assert.equal(result.category, 'empty-response');
+  assert.match(result.advice, /空内容/u);
+});
+
 test('重负载 playbook 有更长预算和单会话声明', () => {
   const architect = getPlaybook('architect');
   assert.ok(architect.timeoutMs >= 300000);
