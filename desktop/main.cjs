@@ -48,8 +48,10 @@ let serviceCache = { at: 0, value: null };
 let playbookRegistry = null;
 let playbookRunner = null;
 let playbookRunnerError = '';
-const playbookRuns = new Map();
+let playbookRuns = new Map();
 const playbookAborts = new Map();
+let knowledgeSummaryModule = null;
+let harvestInFlight = false;
 
 const configPath = () => path.join(app.getPath('userData'), 'companion.json');
 const defaults = () => ({
@@ -406,46 +408,19 @@ const stageText = (chain) => {
 
 const circleSafe = (value, expected) => value === expected;
 
-const knowledgeSnapshot = () => {
-  if (!personalStore) return { available: false, counts: {}, recentExperiences: [], candidates: [] };
-  const units = personalStore.list({ limit: 2000 });
-  const experiences = personalStore.listExperiences({ limit: 1000 });
-  const candidates = personalStore.proposals('pending')
-    .filter((item) => item.meta?.contract === 'knowledge-candidate/v1');
-  const usages = personalStore.listUsages({ limit: 200 });
-  const harvested = new Set(personalStore.listHarvestRuns(1000).flatMap((run) => run.experienceIds ?? []));
-  const pendingHarvest = experiences.filter((item) => !harvested.has(item.id)).length;
+const knowledgeSnapshot = async (projectId = config.projectId) => {
+  if (!personalStore) {
+    return { available: false, counts: {}, recentExperiences: [], pendingExperiences: [], candidates: [], auto: {} };
+  }
+  knowledgeSummaryModule = knowledgeSummaryModule ?? await importEsm('../src/knowledge/summary.mjs');
+  const summary = knowledgeSummaryModule.knowledgeSummaryFor({ personalStore, projectId });
   return {
     available: true,
-    counts: {
-      experiences: experiences.length,
-      pendingHarvest,
-      knowledge: units.length,
-      verified: units.filter((item) => item.verificationStatus === 'verified').length,
-      candidates: candidates.length,
-      usages: usages.length,
-      positiveUsages: usages.filter((item) => item.observedBenefit === 'positive').length,
-      negativeUsages: usages.filter((item) => item.observedBenefit === 'negative').length
-    },
+    ...summary,
     auto: {
       allowHarvest: Boolean(knowledgeRuntime?.allowHarvest),
       last: knowledgeRuntime?.last ?? null
-    },
-    recentExperiences: experiences.slice(0, 5).map((item) => ({
-      id: item.id, projectId: item.projectId, title: item.observedProblem,
-      outcome: item.observedOutcome?.status ?? 'unknown',
-      testStatus: item.observedOutcome?.testStatus ?? null,
-      createdAt: item.createdAt
-    })),
-    candidates: candidates.slice(0, 5).map((item) => ({
-      id: item.id, title: item.payload?.title ?? '未命名候选',
-      layer: item.payload?.layer ?? 'project',
-      confidence: item.meta?.confidence ?? null
-    })),
-    recentKnowledge: units.filter((item) => item.verificationStatus === 'verified').slice(0, 5).map((item) => ({
-      id: item.id, title: item.title, layer: item.layer, revision: item.revision,
-      scope: item.scope, projectId: item.projectId
-    }))
+    }
   };
 };
 
@@ -653,7 +628,7 @@ const buildView = async () => {
     },
     testConfig: testConfigForProject(activeProject),
     services,
-    knowledge: knowledgeSnapshot(),
+    knowledge: await knowledgeSnapshot(activeProjectId),
     result: finalCycle
       ? {
         cycleId: finalCycle.id,
@@ -1171,9 +1146,34 @@ const registerIpc = () => {
     return createSandbox(String(input?.proposalId ?? ''));
   });
 
-  ipcMain.handle('companion:knowledge-summary', async (event) => {
+  ipcMain.handle('companion:knowledge-summary', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    return knowledgeSnapshot();
+    return knowledgeSnapshot(String(input?.projectId ?? '') || config.projectId);
+  });
+
+  // 显式人工动作：只对当前项目的待提炼经验调用 Harvest，产出 pending 候选。
+  ipcMain.handle('companion:knowledge-harvest', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) throw new Error('知识库尚未初始化。');
+    if (harvestInFlight) throw new Error('正在提炼，请稍候。');
+    const projectId = String(input?.projectId ?? '') || config.projectId;
+    if (!projectId) throw new Error('先选择一个项目。');
+    const projects = (await api('/owner/v1/projects')).items ?? [];
+    const project = projects.find((item) => item.id === projectId);
+    const domainId = project?.primary_domain ?? project?.primaryDomain ?? 'software-engineering';
+    harvestInFlight = true;
+    try {
+      knowledgeSummaryModule = knowledgeSummaryModule ?? await importEsm('../src/knowledge/summary.mjs');
+      return await knowledgeSummaryModule.harvestProjectNow({
+        personalStore,
+        ownerStore: store,
+        model: config.model || '',
+        projectId,
+        domainId
+      });
+    } finally {
+      harvestInFlight = false;
+    }
   });
 
   ipcMain.handle('companion:knowledge-ask', async (event, input) => {

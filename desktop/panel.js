@@ -74,12 +74,21 @@
     $('knowledgeBadge').textContent = String(candidates);
     $('knowledgeBadge').hidden = !knowledge?.available || candidates === 0;
     if (knowledge?.available) {
+      const counts = knowledge.counts ?? {};
       $('knowledgeSummaryText').textContent =
-        `经验 ${knowledge.counts.experiences ?? 0} 条 · 待提炼 ${knowledge.counts.pendingHarvest ?? 0} 条 · ` +
-        `已验证 ${knowledge.counts.verified} 条 · 候选 ${candidates} 条 · ` +
-        `复用 ${knowledge.counts.usages} 次（正反馈 ${knowledge.counts.positiveUsages}）`;
+        `本项目：经验 ${counts.experiences ?? 0} · 待提炼 ${counts.pendingHarvest ?? 0} · ` +
+        `知识 ${counts.knowledge ?? 0}（已验证 ${counts.verified ?? 0}）· 候选 ${candidates} · ` +
+        `复用 ${counts.usages ?? 0}（正反馈 ${counts.positiveUsages ?? 0}）\n` +
+        `共享知识 ${counts.sharedKnowledge ?? 0} 条（已验证 ${counts.sharedVerified ?? 0}）`;
+      const harvest = $('harvestNow');
+      harvest.disabled = (counts.pendingHarvest ?? 0) === 0;
+      harvest.textContent = '立即提炼';
+      harvest.title = (counts.pendingHarvest ?? 0) === 0
+        ? '当前项目没有待提炼经验：先完成一次终态任务'
+        : `把当前项目 ${counts.pendingHarvest} 条经验提炼成待审核候选`;
     } else {
       $('knowledgeSummaryText').textContent = '知识库尚未建立；完成任务后会自动采集经验，提炼可自动或进入待提炼队列。';
+      $('harvestNow').disabled = true;
     }
   };
 
@@ -332,6 +341,72 @@
     } catch (error) {
       toast(String(error?.message ?? error), 5000);
     }
+  };
+
+  // ---- 手动提炼（只生成候选，不自动验证） ----
+
+  const showHarvestResult = (result) => {
+    const nodes = [
+      el('p', 'result-summary',
+        `已处理 ${result.experienceCount} 条经验，生成 ${result.candidates?.length ?? 0} 条候选。`),
+      el('p', 'pending-summary',
+        '候选仍是「待审核」状态：需要你在完整知识库里逐条批准；批准也不等于已验证。')
+    ];
+    if (result.invalid?.length) {
+      nodes.push(el('pre', 'diff',
+        `跳过 ${result.invalid.length} 条无效候选：\n${result.invalid.map((item) => item.error).join('\n')}`));
+    }
+    if (result.candidates?.length) {
+      const list = el('div', 'knowledge-list');
+      for (const item of result.candidates) {
+        const row = el('div', 'knowledge-item');
+        row.append(el('strong', undefined, item.title));
+        row.append(el('span', undefined,
+          `候选 · ${item.layer ?? 'project'} · 置信度 ${item.confidence ?? 'unknown'}`));
+        list.append(row);
+      }
+      nodes.push(list);
+    }
+    const close = el('button', 'ghost', '关闭');
+    close.onclick = closeModal;
+    const workbench = el('button', 'primary', '去知识库审核');
+    workbench.onclick = () => { closeModal(); void window.companion.knowledge.open(); };
+    openModal('提炼完成（待审核候选）', nodes, [close, workbench]);
+  };
+
+  const harvestNow = async () => {
+    const projectId = view?.config?.projectId ?? '';
+    const pending = view?.knowledge?.counts?.pendingHarvest ?? 0;
+    if (!projectId) { toast('先选择一个项目。'); return; }
+    if (pending === 0) { toast('当前项目没有待提炼经验。'); return; }
+    const nodes = [
+      el('p', 'result-summary', `将用当前模型把本项目的 ${pending} 条待提炼经验整理成候选。`),
+      el('p', 'pending-summary', '提炼只会生成待审核候选，不会写入已验证知识；模型调用可能需要几十秒。')
+    ];
+    const cancel = el('button', 'ghost', '取消');
+    cancel.onclick = closeModal;
+    const start = el('button', 'primary', '开始提炼');
+    start.onclick = async () => {
+      start.disabled = true;
+      start.textContent = '提炼中…';
+      const button = $('harvestNow');
+      button.disabled = true;
+      button.textContent = '提炼中…';
+      try {
+        const result = await window.companion.knowledge.harvest({ projectId });
+        closeModal();
+        await refresh();
+        showHarvestResult(result);
+      } catch (error) {
+        start.disabled = false;
+        start.textContent = '开始提炼';
+        toast(String(error?.message ?? error), 8000);
+      } finally {
+        button.textContent = '立即提炼';
+        button.disabled = (view?.knowledge?.counts?.pendingHarvest ?? 0) === 0;
+      }
+    };
+    openModal('提炼经验（只生成候选）', nodes, [cancel, start]);
   };
 
   // ---- pstack Playbook ----
@@ -840,6 +915,8 @@
   $('openKnowledge').onclick = () => {
     void window.companion.knowledge.open().catch((error) => toast(String(error.message ?? error)));
   };
+
+  $('harvestNow').onclick = () => { void harvestNow(); };
 
   $('playbookCancel').onclick = async () => {
     if (!playbookRunningId) return;

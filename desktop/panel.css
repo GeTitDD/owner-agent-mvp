@@ -523,3 +523,7 @@ pre.diff, pre.logs {
   border-radius: 8px;
   padding: 6px 8px;
 }
+
+.primary.small { padding: 4px 10px; font-size: 11px; }
+.knowledge-actions { gap: 6px; align-items: center; }
+.knowledge-summary { white-space: pre-line; }
