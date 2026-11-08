@@ -27,7 +27,10 @@ export const PLAYBOOKS = Object.freeze([
     group: 'analyze',
     title: '当前架构与可演进形状',
     hint: '先画类型、签名与模块边界，再谈改动。',
-    focus: '画出模块边界与关键类型/函数签名，指出结构上明显的耦合或错位。'
+    focus: '画出模块边界与关键类型/函数签名，指出结构上明显的耦合或错位。',
+    timeoutMs: 300000,
+    maxFiles: 14,
+    budget: '本会话只有一个模型：直接给出你这一版草图，不要声称做了多视角综合或子代理评审。'
   },
   {
     id: 'why',
@@ -83,7 +86,8 @@ export const PLAYBOOKS = Object.freeze([
     group: 'fix',
     title: '哪些错误会被反复犯',
     hint: '把重复错误变成结构约束。',
-    focus: '找出仓库里容易被重复犯的错误，并建议用类型/结构/测试而非文档来阻止。'
+    focus: '找出仓库里容易被重复犯的错误，并建议用类型/结构/测试而非文档来阻止。',
+    budget: '只给建议；不要声称已经跑过失败验证或改过文件。'
   },
   {
     id: 'reflect',
@@ -91,7 +95,8 @@ export const PLAYBOOKS = Object.freeze([
     group: 'distill',
     title: '这个项目有哪些值得沉淀的经验',
     hint: '把一次性做法提炼成可复用规则。',
-    focus: '提炼可复用的技术经验，注明适用条件与例外；一次性事项不算经验。'
+    focus: '提炼可复用的技术经验，注明适用条件与例外；一次性事项不算经验。',
+    budget: '没有对话记录可读：只依据仓库现状提炼，不要假装读过历史会话。'
   },
   {
     id: 'teach',
@@ -99,7 +104,8 @@ export const PLAYBOOKS = Object.freeze([
     group: 'distill',
     title: '把这个项目讲给新人听',
     hint: '用平实语言解释是什么、怎么跑、为什么。',
-    focus: '用平实语言解释项目是什么、怎么运转、为什么这样设计，按重要性排序。'
+    focus: '用平实语言解释项目是什么、怎么运转、为什么这样设计，按重要性排序。',
+    budget: '不要声称调用了 how/why 等其他 skill；直接给出你自己的解释。'
   },
   {
     id: 'technical-writing',

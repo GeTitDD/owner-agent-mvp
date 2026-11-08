@@ -41,10 +41,12 @@ pstack 仓库里另外 43 个 skill 没有进面板；它们仍然可以通过 `
 
 任何增删改都必须经过这两次显式批准；panel 侧没有审批令牌，令牌只存在于主进程，渲染进程拿不到。
 
-## 4. 成本与失败
+## 4. 成本、进度与失败
 
-- 每次点击 = 一次真实模型调用。小项目约 10–30 秒，大项目实测 90 秒左右（`how` 在 12 万行级 Godot 仓库上 93 秒）。
-- 模型不稳定时返回结构化错误：`timeout` / `auth-error` / `network-error` / `readonly-violation` / `session-error`，不会把上游原文塞进 UI。
+- 每次点击 = 一次真实模型调用。小项目约 10–30 秒，大仓库实测 2 分 48 秒（`architect` 在 12 万行级 Godot 仓库上）。
+- 运行中面板显示已用秒数，并提供「取消」；取消会真正中止会话，而不是只隐藏转圈。
+- 超时预算：默认 4 分钟，`architect` 5 分钟；可用 `OWNER_PLAYBOOK_TIMEOUT_MS` 覆盖默认值。
+- 失败返回结构化分类：`timeout` / `canceled` / `auth-error` / `network-error` / `readonly-violation` / `session-error`，并附一句可执行建议 + 「重试」按钮；不会把上游原文塞进 UI。
 - 找不到 pstack skills 目录时按钮禁用，提示设置 `PSTACK_DIR`。
 
 ## 5. 验证
@@ -58,7 +60,9 @@ $env:EVIDENCE_DIR='<证据目录>'
 node scripts/e2e/desktop-playbooks.mjs
 ```
 
-E2E 覆盖：12 个按钮/4 组渲染 → 真实只读分析（摘要 + 证据引用）→ 无可编造路径 → 生成提案 → 关库后确认 Job 停在 `pending_approval` 且没有补丁提案。
+E2E 覆盖：12 个按钮/4 组渲染 → 真实只读分析（摘要 + 证据引用）→ 无可编造路径 → 运行中取消 → 生成提案 → 关库后确认 Job 停在 `pending_approval` 且没有补丁提案。
+
+证据规范化：模型给出的 `` `path` ``、`path:12`、`path#L3`、`path（第 12 行）` 都会归一到文件路径再核验。
 
 ## 6. 边界
 

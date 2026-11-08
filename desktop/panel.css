@@ -504,3 +504,22 @@ pre.diff, pre.logs {
 .playbook-more { font-size: 10px; color: var(--muted); }
 
 .playbook-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+.playbook-hint-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.playbook-hint-row .playbook-hint { flex: 1; }
+
+.playbook-advice {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: 8px;
+  padding: 6px 8px;
+}

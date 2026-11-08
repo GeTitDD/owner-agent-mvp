@@ -183,3 +183,53 @@ test('PlaybookRunner 不向会话暴露写工具（工厂只接受只读白名�
   assert.ok(!READONLY_TOOLS.includes('write'));
   assert.ok(!READONLY_TOOLS.includes('bash'));
 });
+
+test('PlaybookRunner 支持外部取消并真正中止会话', async () => {
+  const skills = makeSkillsRoot();
+  const project = makeProject();
+  let aborted = false;
+  const factory = {
+    requiresModel: true,
+    async create() {
+      return {
+        sessionId: () => 'hang-session',
+        prompt: () => new Promise(() => {}),
+        abort: () => { aborted = true; },
+        activeTools: () => [...READONLY_TOOLS],
+        getLastText: () => '',
+        model: 'fake/model',
+        dispose: () => {}
+      };
+    }
+  };
+  const runner = new PlaybookRunner({ skillsDir: skills, sessionFactoryFor: () => factory });
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 20);
+  const result = await runner.run({ playbookId: 'how', project, signal: controller.signal });
+  assert.equal(result.status, 'error');
+  assert.equal(result.category, 'canceled');
+  assert.equal(aborted, true);
+  assert.ok(result.advice && result.advice.length > 0);
+});
+
+test('重负载 playbook 有更长预算和单会话声明', () => {
+  const architect = getPlaybook('architect');
+  assert.ok(architect.timeoutMs >= 300000);
+  assert.match(architect.budget, /多视角/u);
+  assert.ok(architect.maxFiles <= 20);
+  const prompt = buildPlaybookPrompt({
+    playbook: architect,
+    project: { id: 'demo', root: 'D:\\demo', domain: '' }
+  });
+  assert.match(prompt, /最多读 14 个文件/u);
+  assert.match(prompt, /不要声称做了多视角综合/u);
+});
+
+test('证据引用规范化：反引号、行号后缀与中文行号标注都能落地', () => {
+  const project = makeProject();
+  const findings = verifyEvidence(project.root, [{
+    title: 't', detail: '',
+    evidence: ['`src/retry.js`', 'src/retry.js:12', 'src/retry.js#L3', 'src/retry.js（第 12 行）']
+  }]);
+  assert.deepEqual(findings[0].evidenceChecks.map((item) => item.exists), [true, true, true, true]);
+});

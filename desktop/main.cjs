@@ -49,6 +49,7 @@ let playbookRegistry = null;
 let playbookRunner = null;
 let playbookRunnerError = '';
 const playbookRuns = new Map();
+const playbookAborts = new Map();
 
 const configPath = () => path.join(app.getPath('userData'), 'companion.json');
 const defaults = () => ({
@@ -1203,18 +1204,25 @@ const registerIpc = () => {
 
   ipcMain.handle('companion:playbook-run', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const playbookId = String(input?.playbookId ?? '');
     const project = await projectForPlaybook(String(input?.projectId ?? ''));
     const runner = await getPlaybookRunner();
+    // 同一时刻只允许一个同名 playbook；取消按钮通过这张表精确中止。
+    const controller = new AbortController();
+    playbookAborts.set(playbookId, controller);
     let result;
     try {
       result = await runner.run({
-        playbookId: String(input?.playbookId ?? ''),
+        playbookId,
         project,
-        task: String(input?.task ?? '')
+        task: String(input?.task ?? ''),
+        signal: controller.signal
       });
     } catch (error) {
       playbookRunnerError = String(error?.message ?? error);
       throw error;
+    } finally {
+      playbookAborts.delete(playbookId);
     }
     persistPlaybookRun(result);
     playbookRuns.set(`${project.id}::${result.playbookId}`, result);
@@ -1225,6 +1233,15 @@ const registerIpc = () => {
     }
     const { text, ...summary } = result;
     return summary;
+  });
+
+  ipcMain.handle('companion:playbook-cancel', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const playbookId = String(input?.playbookId ?? '');
+    const controller = playbookAborts.get(playbookId);
+    if (!controller) return { canceled: false };
+    controller.abort();
+    return { canceled: true };
   });
 
   ipcMain.handle('companion:playbook-report', async (event, input) => {

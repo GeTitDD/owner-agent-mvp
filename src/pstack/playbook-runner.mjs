@@ -30,7 +30,8 @@ export function buildPlaybookPrompt({ playbook, project, task = '' }) {
     '1. 先用 read/grep/find/ls 实际查看关键文件再下结论；没有读到的内容标为未知。',
     '2. 每条结论必须给证据：`相对路径` 或 `相对路径:行号`。',
     '3. 只输出 JSON，不要代码块、不要解释文字。',
-    '4. 控制成本：先看 README/入口/配置，最多读 20 个文件；不够就说明还缺什么。',
+    `4. 控制成本：先看 README/入口/配置，最多读 ${playbook.maxFiles ?? 20} 个文件；需要更多就说明还缺什么。`,
+    playbook.budget ? `5. ${playbook.budget}` : '',
     '',
     '输出格式：',
     '{"summary":"不超过120字、与本项目直接相关的结论",',
@@ -38,6 +39,7 @@ export function buildPlaybookPrompt({ playbook, project, task = '' }) {
     ' "risks":["风险或未知项"],',
     ' "nextSteps":["建议的下一步，可执行"]}',
     `最多 ${MAX_FINDINGS} 条 findings、${MAX_RISKS} 条 risks、${MAX_NEXT_STEPS} 条 nextSteps。`,
+    '除证据确实不足外，findings 至少给 3 条，每条都要能落到具体文件。',
     '如果证据不足以支持任何结论，返回 summary 说明缺什么，findings 留空。'
   ].filter(Boolean).join('\n');
 }
@@ -106,11 +108,20 @@ export function parsePlaybookOutput(text) {
   };
 }
 
+/** 证据引用规范化：去掉包裹符号、行号后缀与“第 N 行”之类修饰。 */
+export const normalizeEvidenceRef = (ref) => String(ref ?? '')
+  .trim()
+  .replace(/^[`'"“”‘’]+|[`'"“”‘’]+$/gu, '')
+  .replace(/[（(]\s*(?:line|第)?\s*\d+\s*(?:行)?\s*[)）]/giu, '')
+  .replace(/#L\d+$/iu, '')
+  .replace(/:\d+(?:-\d+)?$/u, '')
+  .trim();
+
 /** 证据引用落地检查：只认项目根目录内的相对路径，越界或不存在都标为未验证。 */
 export function verifyEvidence(projectRoot, findings) {
   const root = path.resolve(projectRoot);
   const check = (ref) => {
-    const file = String(ref).split(':')[0].trim();
+    const file = normalizeEvidenceRef(String(ref).split(':')[0]);
     if (!file) return { ref, exists: false };
     const absolute = path.resolve(root, file);
     const inside = absolute === root || absolute.startsWith(`${root}${path.sep}`);
@@ -126,7 +137,7 @@ const classifyError = (error) => {
   const name = String(error?.name ?? '');
   const message = String(error?.message ?? '');
   if (/timeout/iu.test(name) || /timeout/iu.test(message)) return 'timeout';
-  if (/abort/iu.test(name)) return 'aborted';
+  if (/abort/iu.test(name) || /cancel/iu.test(message)) return 'canceled';
   if (/readonly-tools/u.test(message)) return 'readonly-violation';
   if (/No API key|auth|permission|forbidden/iu.test(message)) return 'auth-error';
   if (/network|fetch|connection|socket|dns/iu.test(message)) return 'network-error';
@@ -137,7 +148,7 @@ export class PlaybookRunner {
   constructor({
     model = '',
     skillsDir = process.env.PSTACK_DIR,
-    timeoutMs = 180000,
+    timeoutMs = Number(process.env.OWNER_PLAYBOOK_TIMEOUT_MS) || 240000,
     logger = console,
     sessionFactoryFor = (playbook, resolvedSkillsDir) =>
       createReadonlySessionFactory({ playbook, skillsDir: resolvedSkillsDir })
@@ -154,7 +165,7 @@ export class PlaybookRunner {
   }
 
   /** 执行一个 playbook。任何失败都返回结构化 error，不抛给 IPC 层裸奔。 */
-  async run({ playbookId, project, task = '', model = this.model } = {}) {
+  async run({ playbookId, project, task = '', model = this.model, signal } = {}) {
     const playbook = getPlaybook(playbookId);
     if (!playbook) throw new Error(`Unknown playbook: ${playbookId}`);
     if (!project?.root) throw new Error('Project root is required');
@@ -164,15 +175,34 @@ export class PlaybookRunner {
     const startedAt = new Date().toISOString();
     const prompt = buildPlaybookPrompt({ playbook, project, task });
     const factory = this.sessionFactoryFor(playbook, skillsDir);
+    // 大仓库需要更长预算；单个 playbook 可以覆盖全局默认。
+    const timeoutMs = Number(playbook.timeoutMs) > 0 ? Number(playbook.timeoutMs) : this.timeoutMs;
     let session = null;
     let timer = null;
+    let cancelListener = null;
     const began = Date.now();
+    const stopSession = () => {
+      try { session?.abort?.(); } catch { /* 中止失败也要继续 dispose */ }
+    };
     try {
+      if (signal?.aborted) throw Object.assign(new Error('playbook canceled'), { name: 'AbortError' });
       session = await factory.create({ cwd: project.root, model });
       const timedOut = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(Object.assign(new Error('playbook timeout'), { name: 'TimeoutError' })), this.timeoutMs);
+        timer = setTimeout(() => {
+          // 先真正中止会话，避免超时后模型继续跑、继续计费。
+          stopSession();
+          reject(Object.assign(new Error('playbook timeout'), { name: 'TimeoutError' }));
+        }, timeoutMs);
       });
-      await Promise.race([session.prompt(prompt), timedOut]);
+      const canceled = new Promise((_, reject) => {
+        if (!signal) return;
+        cancelListener = () => {
+          stopSession();
+          reject(Object.assign(new Error('playbook canceled'), { name: 'AbortError' }));
+        };
+        signal.addEventListener('abort', cancelListener, { once: true });
+      });
+      await Promise.race([session.prompt(prompt), timedOut, canceled]);
       const text = session.getLastText();
       const parsed = parsePlaybookOutput(text);
       const findings = verifyEvidence(project.root, parsed.findings);
@@ -196,6 +226,7 @@ export class PlaybookRunner {
         text
       };
     } catch (error) {
+      const category = classifyError(error);
       return {
         runId,
         playbookId: playbook.id,
@@ -203,20 +234,33 @@ export class PlaybookRunner {
         playbookTitle: playbook.title,
         projectId: project.id,
         status: 'error',
-        category: classifyError(error),
-        summary: `执行失败：${classifyError(error)}`,
+        category,
+        summary: `执行失败：${category}`,
+        advice: FAILURE_ADVICE[category] ?? FAILURE_ADVICE['session-error'],
         findings: [],
         risks: [],
         nextSteps: [],
         model: model || 'unknown',
         startedAt,
         durationMs: Date.now() - began,
+        timeoutMs,
         promptHash: sha256(prompt),
         textHash: ''
       };
     } finally {
       if (timer) clearTimeout(timer);
+      if (signal && cancelListener) signal.removeEventListener('abort', cancelListener);
       try { session?.dispose(); } catch { /* ignore */ }
     }
   }
 }
+
+// 失败后给用户可执行的一句话，而不是只显示分类名。
+const FAILURE_ADVICE = {
+  timeout: '项目较大时先用「结构走读」缩小范围，或直接重试；单次预算已提高到 4 分钟。',
+  canceled: '已按你的要求中止；可以换个更小的 playbook 再试。',
+  'readonly-violation': '只读工具校验失败，已中止；这属于客户端缺陷，请不要继续执行写操作。',
+  'auth-error': '模型凭据不可用：到设置里检查模型，或重新登录 Pi。',
+  'network-error': '模型服务连接失败：检查代理/网络后重试。',
+  'session-error': '模型会话异常：重试一次；持续失败时换模型或缩小分析范围。'
+};

@@ -340,6 +340,9 @@
   let playbookBusy = false;
   let playbookCurrent = null;
   let playbookProjectId = '';
+  let playbookRunningId = '';
+  let playbookTimer = null;
+  let playbookStartedAt = 0;
 
   const playbookLabelOf = (id) => {
     for (const group of playbookCatalog?.groups ?? []) {
@@ -417,6 +420,14 @@
       box.append(el('span', 'playbook-more', `还有 ${result.findings.length - 3} 条，见完整报告`));
     }
     const actions = el('div', 'playbook-actions');
+    if (result.status !== 'ok') {
+      if (result.advice) {
+        box.append(el('p', 'playbook-advice', result.advice));
+      }
+      const retry = el('button', 'primary small', '重试');
+      retry.onclick = () => { void runPlaybook(result.playbookId); };
+      actions.append(retry);
+    }
     const full = el('button', 'ghost small', '完整报告');
     full.onclick = () => { void openPlaybookReport(result.runId); };
     actions.append(full);
@@ -512,8 +523,16 @@
     const projectId = view?.config?.projectId ?? $('projectSelect').value ?? '';
     if (!projectId) { toast('先选择一个项目。'); return; }
     playbookBusy = true;
+    playbookRunningId = id;
+    playbookStartedAt = Date.now();
     playbookButtonState(true);
-    $('playbookHint').textContent = `正在运行「${playbookLabelOf(id)}」，只读分析项目文件…`;
+    $('playbookCancel').hidden = false;
+    const tick = () => {
+      const seconds = Math.round((Date.now() - playbookStartedAt) / 1000);
+      $('playbookHint').textContent = `正在运行「${playbookLabelOf(id)}」· ${seconds}s（只读，可取消）`;
+    };
+    tick();
+    playbookTimer = window.setInterval(tick, 1000);
     try {
       const result = await window.companion.playbooks.run({ playbookId: id, projectId });
       playbookCurrent = result;
@@ -523,7 +542,10 @@
     } catch (error) {
       toast(String(error?.message ?? error), 6000);
     } finally {
+      if (playbookTimer) { window.clearInterval(playbookTimer); playbookTimer = null; }
       playbookBusy = false;
+      playbookRunningId = '';
+      $('playbookCancel').hidden = true;
       playbookButtonState(false);
       $('playbookHint').textContent = '一键只读分析当前项目；改动会先生成提案等你批准。';
       void loadPlaybooks();
@@ -817,6 +839,16 @@
   }
   $('openKnowledge').onclick = () => {
     void window.companion.knowledge.open().catch((error) => toast(String(error.message ?? error)));
+  };
+
+  $('playbookCancel').onclick = async () => {
+    if (!playbookRunningId) return;
+    try {
+      const result = await window.companion.playbooks.cancel({ playbookId: playbookRunningId });
+      toast(result?.canceled ? '已请求取消，正在中止会话…' : '当前没有正在运行的 playbook');
+    } catch (error) {
+      toast(String(error?.message ?? error), 5000);
+    }
   };
 
   window.companion.onOpenSettings(() => { void openSettings(); });
