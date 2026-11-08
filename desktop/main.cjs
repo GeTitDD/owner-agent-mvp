@@ -17,6 +17,9 @@ const screenshotArg = process.argv.find((arg) => arg.startsWith('--screenshot-di
 const screenshotDir = screenshotArg ? screenshotArg.slice('--screenshot-dir='.length) : '';
 const userDataArg = process.argv.find((arg) => arg.startsWith('--user-data-dir='));
 if (userDataArg) app.setPath('userData', path.resolve(userDataArg.slice('--user-data-dir='.length)));
+// 开发期用 `electron desktop/main.cjs` 启动时 Electron 会把 userData 落到 `%APPDATA%\Electron`，
+// 与打包版（`owner-agent-mvp`）配置、数据库不一致。这里统一到打包版目录，未显式指定时才生效。
+else app.setPath('userData', path.join(app.getPath('appData'), 'owner-agent-mvp'));
 
 let pet = null;
 let panel = null;
@@ -41,6 +44,11 @@ let dragTimer = null;
 let lastNoticeKey = '';
 let pendingModel = null;
 let serviceCache = { at: 0, value: null };
+// pstack Playbook：注册表按需加载，runner 跟随当前模型，结果留在内存便于面板复读。
+let playbookRegistry = null;
+let playbookRunner = null;
+let playbookRunnerError = '';
+const playbookRuns = new Map();
 
 const configPath = () => path.join(app.getPath('userData'), 'companion.json');
 const defaults = () => ({
@@ -896,6 +904,109 @@ const createTray = () => {
   tray.on('click', showPanel);
 };
 
+// ---- pstack Playbook ----
+
+const playbookReportDir = () => path.join(app.getPath('userData'), 'playbooks');
+
+const loadPlaybookRegistry = async () => {
+  if (playbookRegistry) return playbookRegistry;
+  const registry = await importEsm('../src/pstack/playbooks.mjs');
+  playbookRegistry = registry;
+  return registry;
+};
+
+const getPlaybookRunner = async () => {
+  if (playbookRunner) return playbookRunner;
+  const { PlaybookRunner } = await importEsm('../src/pstack/playbook-runner.mjs');
+  playbookRunner = new PlaybookRunner({ model: config.model || '' });
+  playbookRunnerError = '';
+  return playbookRunner;
+};
+
+/** 权限校验：只接受当前 Owner 已注册的项目，根目录必须与登记一致。 */
+const projectForPlaybook = async (projectId) => {
+  const items = (await api('/owner/v1/projects')).items ?? [];
+  const project = items.find((item) => item.id === (projectId || config.projectId)) ?? items[0];
+  if (!project) throw new Error('还没有项目，请先在设置里添加一个项目目录。');
+  return {
+    id: project.id,
+    root: project.root,
+    domain: project.primary_domain ?? project.primaryDomain ?? ''
+  };
+};
+
+const persistPlaybookRun = (result) => {
+  const dir = playbookReportDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${result.runId}.json`);
+  fs.writeFileSync(file, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+  return file;
+};
+
+/** 面板列表：playbook 元数据 + 可用性 + 当前项目的最近一次结果。 */
+const playbookListPayload = async (projectId) => {
+  const registry = await loadPlaybookRegistry();
+  const { resolvePstackSkillsDir } = await importEsm('../src/pstack/readonly-session.mjs');
+  const skillsDir = resolvePstackSkillsDir();
+  const activeProject = config.projectId || '';
+  const lastRuns = {};
+  for (const [key, value] of playbookRuns.entries()) {
+    const [runProjectId, runPlaybookId] = key.split('::');
+    if (runProjectId !== (projectId || activeProject)) continue;
+    lastRuns[runPlaybookId] = {
+      runId: value.runId,
+      status: value.status,
+      summary: value.summary,
+      durationMs: value.durationMs,
+      startedAt: value.startedAt
+    };
+  }
+  return {
+    skillsAvailable: Boolean(skillsDir),
+    skillsDir: skillsDir ?? '',
+    groups: registry.listPlaybooks(),
+    lastRuns,
+    error: playbookRunnerError
+  };
+};
+
+/** 面板点“生成改动提案”时使用：只发任务，真正的写文件仍走既有审批/沙箱链路。 */
+const createPatchJob = async ({ text, projectId }) => {
+  const value = String(text ?? '').trim();
+  if (!value) throw new Error('请先输入要交办的事情。');
+  const projects = (await api('/owner/v1/projects')).items ?? [];
+  const project = projects.find((item) => item.id === projectId)
+    ?? projects.find((item) => item.id === config.projectId)
+    ?? projects[0];
+  if (!project) throw new Error('还没有项目，请先在设置里添加一个项目目录。');
+  const task = await api('/owner/v1/tasks', {
+    method: 'POST',
+    body: { projectId: project.id, title: value.slice(0, 200) }
+  });
+  const baseSha = project.baseSha ?? project.base_sha ?? '';
+  if (!/^[0-9a-f]{40}$/u.test(baseSha)) {
+    throw new Error('项目目录不是有效的 Git 仓库，无法确定 base commit。');
+  }
+  const job = await api('/owner/v1/jobs', {
+    method: 'POST',
+    body: {
+      projectId: project.id,
+      jobType: 'code-patch',
+      title: value.slice(0, 200),
+      payload: {
+        baseSha,
+        allowedPaths: config.allowedPaths || 'src/',
+        focus: value.slice(0, 300)
+      },
+      idempotencyKey: `companion-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      ownerTaskId: task.id
+    }
+  });
+  config.projectId = project.id;
+  saveConfig();
+  return { jobId: job.id, status: job.status, projectId: project.id };
+};
+
 const registerIpc = () => {
   const fromCompanion = (event) =>
     [pet?.webContents, panel?.webContents].filter(Boolean).includes(event.sender);
@@ -909,39 +1020,13 @@ const registerIpc = () => {
 
   ipcMain.handle('companion:create-job', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    const text = String(input?.text ?? '').trim();
-    if (!text) throw new Error('请先输入要交办的事情。');
+    const created = await createPatchJob({
+      text: String(input?.text ?? ''),
+      projectId: String(input?.projectId ?? '')
+    });
     const projects = (await api('/owner/v1/projects')).items ?? [];
-    const project = projects.find((item) => item.id === input?.projectId)
-      ?? projects.find((item) => item.id === config.projectId)
-      ?? projects[0];
-    if (!project) throw new Error('还没有项目，请先在设置里添加一个项目目录。');
-    const task = await api('/owner/v1/tasks', {
-      method: 'POST',
-      body: { projectId: project.id, title: text.slice(0, 200) }
-    });
-    const baseSha = project.baseSha ?? project.base_sha ?? '';
-    if (!/^[0-9a-f]{40}$/u.test(baseSha)) {
-      throw new Error('项目目录不是有效的 Git 仓库，无法确定 base commit。');
-    }
-    const job = await api('/owner/v1/jobs', {
-      method: 'POST',
-      body: {
-        projectId: project.id,
-        jobType: 'code-patch',
-        title: text.slice(0, 200),
-        payload: {
-          baseSha,
-          allowedPaths: config.allowedPaths || 'src/',
-          focus: text.slice(0, 300)
-        },
-        idempotencyKey: `companion-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        ownerTaskId: task.id
-      }
-    });
-    config.projectId = project.id;
-    saveConfig();
-    return { jobId: job.id, status: job.status, testConfig: testConfigForProject(project) };
+    const project = projects.find((item) => item.id === created.projectId);
+    return { jobId: created.jobId, status: created.status, testConfig: project ? testConfigForProject(project) : null };
   });
 
   ipcMain.handle('companion:decide', async (event, input) => {
@@ -1110,6 +1195,66 @@ const registerIpc = () => {
     await openKnowledgeWorkbench();
   });
 
+  // 只读 playbook：列表、执行、报告、转提案。
+  ipcMain.handle('companion:playbooks', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return playbookListPayload(String(input?.projectId ?? ''));
+  });
+
+  ipcMain.handle('companion:playbook-run', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const project = await projectForPlaybook(String(input?.projectId ?? ''));
+    const runner = await getPlaybookRunner();
+    let result;
+    try {
+      result = await runner.run({
+        playbookId: String(input?.playbookId ?? ''),
+        project,
+        task: String(input?.task ?? '')
+      });
+    } catch (error) {
+      playbookRunnerError = String(error?.message ?? error);
+      throw error;
+    }
+    persistPlaybookRun(result);
+    playbookRuns.set(`${project.id}::${result.playbookId}`, result);
+    // 避免内存无限增长：只保留最近 40 次结果。
+    if (playbookRuns.size > 40) {
+      const oldest = playbookRuns.keys().next().value;
+      playbookRuns.delete(oldest);
+    }
+    const { text, ...summary } = result;
+    return summary;
+  });
+
+  ipcMain.handle('companion:playbook-report', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const runId = String(input?.runId ?? '');
+    if (!/^pb_[a-z0-9]{1,40}$/u.test(runId)) throw new Error('Invalid run id');
+    const file = path.join(playbookReportDir(), `${runId}.json`);
+    if (!fs.existsSync(file)) throw new Error('报告不存在或已被清理。');
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  });
+
+  ipcMain.handle('companion:playbook-propose', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const playbookId = String(input?.playbookId ?? '');
+    const registry = await loadPlaybookRegistry();
+    const playbook = registry.getPlaybook(playbookId);
+    if (!playbook) throw new Error('未知的 playbook');
+    const summary = String(input?.summary ?? '').trim();
+    if (!summary) throw new Error('没有可用的诊断结论，无法生成提案。');
+    const text = registry.buildProposalText(playbook, summary);
+    if (!text) throw new Error('没有可用的诊断结论，无法生成提案。');
+    const created = await createPatchJob({
+      text,
+      projectId: String(input?.projectId ?? '')
+    });
+    const projects = (await api('/owner/v1/projects')).items ?? [];
+    const project = projects.find((item) => item.id === created.projectId);
+    return { ...created, testConfig: project ? testConfigForProject(project) : null };
+  });
+
   ipcMain.handle('companion:settings:get', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     // 设置页每次打开都重新探测，提供“重新检测”入口。
@@ -1138,6 +1283,7 @@ const registerIpc = () => {
     saveConfig();
     serviceCache = { at: 0, value: null };
     const modelChanged = config.model !== previousModel;
+    if (modelChanged) playbookRunner = null;
     let modelApplied = true;
     let modelPending = false;
     if (modelChanged && worker) {

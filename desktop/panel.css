@@ -372,7 +372,6 @@ pre.diff, pre.logs {
 }
 
 .knowledge-actions { display: flex; justify-content: flex-end; }
-
 .knowledge-list { display: grid; gap: 6px; }
 
 .knowledge-item {
@@ -399,3 +398,109 @@ pre.diff, pre.logs {
 }
 
 .checkbox-row input { margin-top: 2px; }
+
+/* ---- pstack Playbook ---- */
+.playbook-section {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+  background: rgba(31, 122, 92, 0.03);
+}
+
+.playbook-hint { font-size: 10px; line-height: 1.45; color: var(--muted); }
+
+.playbook-groups { display: grid; gap: 8px; }
+
+.playbook-group { display: grid; gap: 4px; }
+
+.playbook-group-label {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.playbook-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+
+.playbook-btn {
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: 8px;
+  padding: 6px 4px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text);
+  position: relative;
+}
+
+.playbook-btn:hover:not(:disabled) { background: var(--accent-soft); }
+.playbook-btn:disabled { opacity: 0.55; cursor: progress; }
+
+.playbook-btn.has-run::after,
+.playbook-btn.has-error::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.playbook-btn.has-error::after { background: var(--warn); }
+
+.playbook-result {
+  display: grid;
+  gap: 6px;
+  border-top: 1px dashed var(--line);
+  padding-top: 8px;
+}
+
+.playbook-result-head { font-size: 10px; color: var(--muted); }
+
+.playbook-summary {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.playbook-finding {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.playbook-finding strong { font-size: 11px; }
+.playbook-finding span { color: var(--muted); }
+
+.playbook-evidence { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+
+.evidence-chip {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.evidence-chip.missing {
+  border-color: var(--warn);
+  color: var(--warn);
+  text-decoration: line-through;
+}
+
+.playbook-more { font-size: 10px; color: var(--muted); }
+
+.playbook-actions { display: flex; justify-content: flex-end; gap: 6px; }

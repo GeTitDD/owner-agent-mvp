@@ -11,9 +11,10 @@
 桌宠是产品入口：自然语言交办、处理决策、异常恢复、查看成果。它启动进程内 Owner Runtime（sidecar + Worker），审批令牌只留在主进程；L1 不依赖 OpenClaw，L2 完整工作台才连接 OpenClaw Control UI。
 
 - 运行：`npm install && npm run desktop`
+- pstack Playbook：面板内 12 个按钮，一键只读分析项目；改动一律走「提案 → 你批准 → 沙箱」。见 [docs/PSTACK_PLAYBOOKS_V1.md](docs/PSTACK_PLAYBOOKS_V1.md)
 - Windows 打包：`npm run desktop:pack`（CI `desktop-package` 上传私有 RC Artifact + SHA256）
 - 桌面 E2E：`npm run e2e:desktop`（真实 Docker + 真实 Pi）
-- 定向回归：`npm run e2e:desktop:sandbox-config`、`npm run e2e:desktop:multiproject`、`npm run e2e:desktop:knowledge`
+- 定向回归：`npm run e2e:desktop:sandbox-config`、`npm run e2e:desktop:multiproject`、`npm run e2e:desktop:knowledge`、`npm run e2e:desktop:playbooks`
 - 知识闭环：`npm run knowledge:demo`；自动采集 `npm run knowledge:auto -- --once`；CLI `npm run knowledge -- --help`
 - A→B 实验：`npm run knowledge:eval:ab -- --root <dir> --allow-model`；Oracle Control 用 `knowledge:eval:hard`
 - 知识报告：[docs/KNOWLEDGE_LOOP_V1_DELIVERY.md](docs/KNOWLEDGE_LOOP_V1_DELIVERY.md)

@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     detail: (input) => invoke('companion:knowledge-detail', input),
     open: () => invoke('companion:knowledge-open')
   }),
+  playbooks: Object.freeze({
+    list: (input) => invoke('companion:playbooks', input),
+    run: (input) => invoke('companion:playbook-run', input),
+    report: (input) => invoke('companion:playbook-report', input),
+    propose: (input) => invoke('companion:playbook-propose', input)
+  }),
   settings: Object.freeze({
     get: () => invoke('companion:settings:get'),
     set: (input) => invoke('companion:settings:set', input),

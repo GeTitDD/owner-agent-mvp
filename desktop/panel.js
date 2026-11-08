@@ -57,6 +57,7 @@
     $('composeSection').hidden = !hasProjects;
     $('submitTask').disabled = !hasProjects;
     if (!hasProjects) renderServiceGrid($('setupServices'), view?.services);
+    $('playbookSection').hidden = !hasProjects;
     const testConfig = view?.testConfig;
     const missing = testConfig?.missing ?? [];
     $('testWarning').hidden = !(hasProjects && testConfig && testConfig.ok === false);
@@ -333,8 +334,219 @@
     }
   };
 
-  const openResult = async (cycleId) => {
+  // ---- pstack Playbook ----
+
+  let playbookCatalog = null;
+  let playbookBusy = false;
+  let playbookCurrent = null;
+  let playbookProjectId = '';
+
+  const playbookLabelOf = (id) => {
+    for (const group of playbookCatalog?.groups ?? []) {
+      const found = group.items.find((item) => item.id === id);
+      if (found) return found.label;
+    }
+    return id;
+  };
+
+  const playbookButtonState = (busy) => {
+    for (const button of document.querySelectorAll('.playbook-btn')) {
+      button.disabled = busy || !playbookCatalog?.skillsAvailable;
+    }
+  };
+
+  const renderPlaybookButtons = () => {
+    const container = $('playbookGroups');
+    container.replaceChildren();
+    if (!playbookCatalog) return;
+    if (!playbookCatalog.skillsAvailable) {
+      $('playbookHint').textContent = '未找到 pstack skills 目录；设置 PSTACK_DIR 后再试。';
+      return;
+    }
+    $('playbookHint').textContent = '一键只读分析当前项目；改动会先生成提案等你批准。';
+    for (const group of playbookCatalog.groups) {
+      const wrap = el('div', 'playbook-group');
+      wrap.append(el('span', 'playbook-group-label', group.label));
+      const grid = el('div', 'playbook-grid');
+      for (const item of group.items) {
+        const button = el('button', 'playbook-btn', item.label);
+        button.type = 'button';
+        button.title = `${item.title}\n${item.hint}`;
+        button.dataset.playbook = item.id;
+        const last = playbookCatalog.lastRuns?.[item.id];
+        if (last) button.classList.add(last.status === 'ok' ? 'has-run' : 'has-error');
+        button.onclick = () => { void runPlaybook(item.id); };
+        grid.append(button);
+      }
+      wrap.append(grid);
+      container.append(wrap);
+    }
+    playbookButtonState(false);
+  };
+
+  const playbookEvidenceChips = (finding) => {
+    if (!finding.evidence?.length) return null;
+    const wrap = el('div', 'playbook-evidence');
+    for (const ref of finding.evidence.slice(0, 4)) {
+      const check = finding.evidenceChecks?.find((item) => item.ref === ref);
+      const chip = el('span', `evidence-chip ${check?.exists === false ? 'missing' : 'ok'}`, ref);
+      chip.title = check?.exists === false ? '该路径在项目里不存在，结论可能不可靠' : '路径已存在';
+      wrap.append(chip);
+    }
+    return wrap;
+  };
+
+  const renderPlaybookResult = () => {
+    const box = $('playbookResult');
+    if (!playbookCurrent) { box.hidden = true; box.replaceChildren(); return; }
+    const result = playbookCurrent;
+    box.hidden = false;
+    box.replaceChildren();
+    box.append(el('div', 'playbook-result-head',
+      `${result.playbookLabel} · ${result.status === 'ok' ? `${result.durationMs} ms` : '失败'}`));
+    box.append(el('p', 'playbook-summary', result.summary));
+    for (const finding of (result.findings ?? []).slice(0, 3)) {
+      const row = el('div', 'playbook-finding');
+      row.append(el('strong', undefined, finding.title));
+      if (finding.detail) row.append(el('span', undefined, finding.detail));
+      const chips = playbookEvidenceChips(finding);
+      if (chips) row.append(chips);
+      box.append(row);
+    }
+    if ((result.findings ?? []).length > 3) {
+      box.append(el('span', 'playbook-more', `还有 ${result.findings.length - 3} 条，见完整报告`));
+    }
+    const actions = el('div', 'playbook-actions');
+    const full = el('button', 'ghost small', '完整报告');
+    full.onclick = () => { void openPlaybookReport(result.runId); };
+    actions.append(full);
+    if (result.status === 'ok' && result.summary) {
+      const propose = el('button', 'primary small', '生成改动提案');
+      propose.onclick = () => { confirmPlaybookProposal(result); };
+      actions.append(propose);
+    }
+    box.append(actions);
+  };
+
+  const openPlaybookReport = async (runId) => {
     try {
+      const report = await window.companion.playbooks.report({ runId });
+      const nodes = [
+        el('p', 'result-summary', report.summary),
+        detailRows([
+          ['Playbook', `${report.playbookLabel} (${report.playbookId})`],
+          ['项目', report.projectId],
+          ['模型', report.model],
+          ['耗时', `${report.durationMs} ms`],
+          ['格式', report.format ?? 'unknown'],
+          ['文本哈希', fmtHash(report.textHash)]
+        ])
+      ];
+      if (report.findings?.length) {
+        nodes.push(el('div', 'section-title', '关键发现'));
+        for (const finding of report.findings) {
+          const row = el('div', 'playbook-finding');
+          row.append(el('strong', undefined, finding.title));
+          if (finding.detail) row.append(el('span', undefined, finding.detail));
+          const chips = playbookEvidenceChips(finding);
+          if (chips) row.append(chips);
+          nodes.push(row);
+        }
+      }
+      if (report.risks?.length) {
+        nodes.push(el('div', 'section-title', '风险与未知'));
+        nodes.push(el('pre', 'diff', report.risks.join('\n')));
+      }
+      if (report.nextSteps?.length) {
+        nodes.push(el('div', 'section-title', '建议下一步'));
+        nodes.push(el('pre', 'diff', report.nextSteps.join('\n')));
+      }
+      if (report.text) {
+        nodes.push(el('div', 'section-title', '模型原始输出'));
+        nodes.push(el('pre', 'diff', report.text.slice(0, 6000)));
+      }
+      const close = el('button', 'ghost', '关闭');
+      close.onclick = closeModal;
+      openModal(`${report.playbookLabel} · 完整报告`, nodes, [close]);
+    } catch (error) {
+      toast(String(error?.message ?? error), 5000);
+    }
+  };
+
+  const confirmPlaybookProposal = (result) => {
+    const nodes = [
+      el('p', 'result-summary',
+        '这一步会创建任务并生成补丁提案；在你批准前不会改动任何文件。'),
+      el('p', 'pending-summary', result.summary),
+      el('p', 'pending-summary',
+        `批准后由 Worker 生成补丁，再经你二次批准才会应用到项目，并进入沙箱验证。`)
+    ];
+    const cancel = el('button', 'ghost', '取消');
+    cancel.onclick = closeModal;
+    const confirm = el('button', 'primary', '创建提案任务');
+    confirm.onclick = async () => {
+      confirm.disabled = true;
+      try {
+        const created = await window.companion.playbooks.propose({
+          playbookId: result.playbookId,
+          projectId: view?.config?.projectId ?? '',
+          summary: result.summary
+        });
+        closeModal();
+        const missing = created?.testConfig?.missing ?? [];
+        toast(missing.length
+          ? `任务已创建，等你批准；测试配置还缺 ${missing.join(', ')}`
+          : '任务已创建，等你批准后才会生成补丁。', 5200);
+        await refresh();
+      } catch (error) {
+        confirm.disabled = false;
+        toast(String(error?.message ?? error), 6000);
+      }
+    };
+    openModal('生成改动提案（需要你批准）', nodes, [cancel, confirm]);
+  };
+
+  const runPlaybook = async (id) => {
+    if (playbookBusy) { toast('上一个 playbook 还在运行。'); return; }
+    if (!playbookCatalog?.skillsAvailable) { toast('未找到 pstack skills 目录。'); return; }
+    const projectId = view?.config?.projectId ?? $('projectSelect').value ?? '';
+    if (!projectId) { toast('先选择一个项目。'); return; }
+    playbookBusy = true;
+    playbookButtonState(true);
+    $('playbookHint').textContent = `正在运行「${playbookLabelOf(id)}」，只读分析项目文件…`;
+    try {
+      const result = await window.companion.playbooks.run({ playbookId: id, projectId });
+      playbookCurrent = result;
+      playbookProjectId = projectId;
+      renderPlaybookResult();
+      if (result.status !== 'ok') toast(result.summary, 6000);
+    } catch (error) {
+      toast(String(error?.message ?? error), 6000);
+    } finally {
+      playbookBusy = false;
+      playbookButtonState(false);
+      $('playbookHint').textContent = '一键只读分析当前项目；改动会先生成提案等你批准。';
+      void loadPlaybooks();
+    }
+  };
+
+  const loadPlaybooks = async () => {
+    const projectId = view?.config?.projectId ?? '';
+    try {
+      playbookCatalog = await window.companion.playbooks.list({ projectId });
+      renderPlaybookButtons();
+      if (playbookProjectId && playbookProjectId !== projectId) {
+        playbookCurrent = null;
+        playbookProjectId = projectId;
+        renderPlaybookResult();
+      }
+    } catch (error) {
+      playbookCatalog = null;
+      $('playbookHint').textContent = `Playbook 不可用：${String(error?.message ?? error)}`;
+    }
+  };
+
+  const openResult = async (cycleId) => {    try {
       const data = await window.companion.result({ cycleId });
       const summary = data.cycle.status === 'tested_pass'
         ? '修复已完成，复测通过。下面是源补丁、修复补丁和测试输出。'
@@ -528,9 +740,16 @@
   });
 
   $('projectSelect').onchange = async () => {
+    const projectId = $('projectSelect').value;
     try {
-      await window.companion.settings.set({ projectId: $('projectSelect').value });
+      await window.companion.settings.set({ projectId });
     } catch { /* non-blocking */ }
+    // 切项目后旧结论不再适用，先清空再按新项目重新加载。
+    playbookCurrent = null;
+    playbookProjectId = projectId;
+    renderPlaybookResult();
+    await refresh();
+    void loadPlaybooks();
   };
 
   const openSettings = async () => {
@@ -610,6 +829,6 @@
     }
   });
 
-  void refresh();
+  void refresh().then(() => { void loadPlaybooks(); });
   window.setInterval(refresh, 2000);
 })();
