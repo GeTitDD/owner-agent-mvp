@@ -20,6 +20,8 @@
 
 未新建 KnowledgeStore、CandidateStore、Context Compiler、Agent Harness 或调度器。
 
+知识提炼 playbook 与回滚说明：`docs/knowledge-harvest-playbook.md`。
+
 ## 2. 数据契约
 
 - Experience：`sourceRunId / projectId / taskId / domainIds / observedProblem / actionSummary / observedOutcome / evidenceRefs / environment / facts / inferences / unknowns / dedupeKey`。
@@ -51,7 +53,7 @@
 ## 4. 自动化验证
 
 - `npm run check`：通过。
-- `npm test`：202 tests / 199 pass / 3 skip / 0 fail（含合并后的 knowledge-loop 测试）。
+- `npm test`：203 tests / 200 pass / 3 skip / 0 fail（含合并后的 knowledge-loop 测试与旧库迁移测试）。
 - `npm run knowledge:demo`：确定性三项目闭环通过。
   - 4 条 Experience（修复、失败、两个通过）
   - L3 候选 → 审核/验证
