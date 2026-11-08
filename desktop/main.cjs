@@ -784,6 +784,8 @@ const registerIpc = () => {
 
   ipcMain.handle('companion:settings:get', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
+    // 设置页每次打开都重新探测，提供“重新检测”入口。
+    serviceCache = { at: 0, value: null };
     return { ...config, services: await serviceStatus() };
   });
 

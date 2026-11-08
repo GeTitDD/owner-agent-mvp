@@ -38,6 +38,7 @@ Electron 桌宠 + 进程内 Owner Runtime：
 - 位置从 `companion.json` 恢复（220,180）；
 - 桌宠 `focusable=false`、启动不抢焦点；
 - 面板默认隐藏；可打开；桌宠可隐藏与召回；
+- 预置待审批 Job 后重启（同一 `userData` / SQLite）：位置保持 220,180，任务仍在面板中，且仍不抢焦点；
 - 托盘菜单：显示桌宠、打开面板、完整工作台、设置、退出。
 
 未验证：多显示器实机（当前环境单屏）；缩放/DPI 仅按 Electron 默认处理。
@@ -63,6 +64,8 @@ Electron 桌宠 + 进程内 Owner Runtime：
 
 三轮后回归：桌面 SOP-1..4、外壳、打包启动均通过；无已知阻断四条 SOP 的 P0/P1。
 
+首次配置的诊断入口：无项目时展示 Docker / OpenClaw / 模型自检；设置页每次打开都会重新探测，并提供「重新检测」按钮，不需要重启应用。
+
 ## 4. 打包
 
 ```bash
@@ -74,7 +77,7 @@ npm run desktop:pack   # Windows x64 portable
 - `dist-companion/OwnerCompanion-1.0.0-portable.exe`（约 122 MB）
 - `dist-companion/win-unpacked/Owner Companion.exe`（可直接运行）
 
-已实测打包后的应用可启动、创建 DB、截图、退出；`node:sqlite` 在 Electron 内可用。最终提交对应的 portable EXE（122,170,475 字节）与 `win-unpacked` 均已实机启动验证。
+已实测打包后的应用可启动、创建 DB、截图、退出；`node:sqlite` 在 Electron 内可用。最终提交对应的 portable EXE（122,171,319 字节）与 `win-unpacked` 均已实机启动验证。
 
 限制：
 
@@ -100,7 +103,7 @@ npx electron-builder --mac dmg --arm64
 | OpenClaw 插件 build/validate | 通过（P3.1 PR） |
 | 浏览器 E2E（OpenClaw Control UI） | P3.1 通过 |
 | 桌面 E2E（Electron） | **通过**（SOP-1..4） |
-| 外壳 E2E | **通过** |
+| 外壳 E2E | **通过**（位置/焦点/隐藏/召回/重启保留） |
 | 打包应用启动 | **通过** |
 | CI（PR #22） | run `42426257732` 全绿：plugin / sandbox-real / ubuntu test / windows test |
 
@@ -143,7 +146,7 @@ npm run desktop:pack       # Windows portable
 | 无 CLI 正常交互 | ✅ |
 | Job → Patch → Sandbox → Repair → Retest → Result 真实成功 | ✅ |
 | 不绕过人工审批 | ✅ |
-| 关闭重开状态不丢 | ✅（SQLite） |
+| 关闭重开状态不丢 | ✅（SQLite；外壳 E2E 实际重启验证） |
 | 启动/拖动/收起/隐藏/召回 | ✅（多显示器未实测） |
 | 托盘/窗口/状态 | ✅ |
 | 闲置不频繁请求模型 | ✅（2s 仅本地 HTTP；Worker 空闲不调用模型） |

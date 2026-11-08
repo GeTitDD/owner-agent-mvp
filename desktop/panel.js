@@ -415,6 +415,7 @@
   };
   $('addProject').onclick = () => { void pickProject(); };
   $('addProjectSettings').onclick = () => { void pickProject(); };
+  $('retryServices').onclick = () => { void openSettings(); };
 
   window.companion.onOpenSettings(() => { void openSettings(); });
 

@@ -16,7 +16,7 @@
 1. **交办任务**：在面板输入自然语言 → 创建 OwnerTask + Coding Job；不需要 Job Type/Base SHA/JSON。
 2. **处理决策**：Job/Patch/Sandbox/Repair 的审批卡；Patch 显示冻结 Diff；批准与应用分离。
 3. **异常恢复**：测试失败 → 创建修复 → 批准 → 常驻 Worker 自动生成修复补丁 → 复测。
-4. **进展与成果**：自动刷新；阶段摘要；结果面板含 Diff 与测试输出；重启不丢。
+4. **进展与成果**：自动刷新；阶段摘要；结果面板含 Diff 与测试输出；重启后任务不丢（外壳 E2E 实际重启验证）。
 
 ### 运行时
 - 进程内启动 Owner sidecar + 常驻 Worker，复用 v1.1 的 Patch/Sandbox/Repair 执行器；
@@ -66,5 +66,5 @@ npx electron-builder --mac dmg --arm64
 
 - 内核测试 194 / 191 pass / 3 skip；
 - 桌面 E2E（SOP-1..4，真实 Docker + 真实 Pi）通过；
-- 外壳 E2E（位置/焦点/隐藏/召回）通过；
+- 外壳 E2E（位置/焦点/隐藏/召回/重启保留）通过；
 - 打包应用启动通过。
