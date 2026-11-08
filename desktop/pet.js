@@ -1,24 +1,47 @@
+// 桌宠窗口：渲染 mascot 皮肤，并把 Owner 五态映射到 Codex 会话阶段。
+//
+// 皮肤来自主进程（内置 Cindy 套装 + 用户自定义目录）；这里只负责展示与拖拽。
 (() => {
   const pet = document.getElementById('pet');
+  const mascot = document.getElementById('mascot');
   const badge = document.getElementById('badge');
   const hint = document.getElementById('hint');
+  const phaseDot = document.getElementById('phaseDot');
   let startX = 0;
   let startY = 0;
   let downAt = 0;
   let moved = false;
   let polling = false;
+  let currentMascot = '';
 
   const states = ['idle', 'working', 'waiting', 'done', 'error'];
+  // 与 Cindy Agent Island / Codex 会话阶段一致的命名。
+  const phaseOf = (state) => ({
+    idle: 'idle', working: 'running', waiting: 'needs-interaction',
+    done: 'completed', error: 'error'
+  })[state] ?? 'idle';
+
+  const applyMascot = (info) => {
+    if (!info?.url || info.url === currentMascot) return;
+    currentMascot = info.url;
+    mascot.src = info.url;
+    mascot.alt = info.label ?? info.skin ?? 'mascot';
+    pet.dataset.skin = info.skin ?? '';
+  };
 
   const applyView = (view) => {
     const state = states.includes(view?.state) ? view.state : 'idle';
-    for (const name of states) pet.classList.toggle(`state-${name}`, name === state);
+    const phase = phaseOf(state);
+    pet.dataset.phase = phase;
+    pet.dataset.state = state;
+    applyMascot(view?.mascot);
     const pending = Array.isArray(view?.pending) ? view.pending.length : 0;
     badge.hidden = pending <= 0;
     if (pending > 0) badge.textContent = pending > 9 ? '9+' : String(pending);
+    phaseDot.dataset.phase = phase;
     const text = String(view?.stage ?? 'Owner Companion');
     hint.textContent = text;
-    pet.title = text;
+    pet.title = `${view?.mascot?.label ?? 'Owner Companion'} · ${text}`;
     pet.setAttribute('aria-label', `Owner Companion · ${text}`);
   };
 

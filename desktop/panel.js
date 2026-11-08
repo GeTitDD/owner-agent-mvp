@@ -858,9 +858,45 @@
       $('includePaths').value = (data.includePaths ?? []).join(',');
       $('knowledgeAutoHarvest').checked = data.knowledgeAutoHarvest === true;
       renderServiceGrid($('serviceGrid'), data.services);
+      void renderMascotGrid();
       $('settings').hidden = false;
     } catch (error) {
       toast(String(error?.message ?? error), 5000);
+    }
+  };
+
+  const renderMascotGrid = async () => {
+    const grid = $('mascotGrid');
+    grid.replaceChildren(el('span', 'mascot-loading', '正在读取皮肤…'));
+    try {
+      const catalog = await window.companion.mascots.list();
+      grid.replaceChildren();
+      for (const skin of catalog.skins) {
+        const option = el('button', 'mascot-option');
+        option.type = 'button';
+        option.dataset.skin = skin.id;
+        option.title = skin.builtin ? `${skin.label}（内置）` : `${skin.label}（自定义）`;
+        if (skin.id === catalog.current) option.classList.add('selected');
+        const image = el('img');
+        image.src = skin.url;
+        image.alt = skin.label;
+        image.draggable = false;
+        option.append(image, el('span', undefined, skin.label));
+        option.onclick = async () => {
+          try {
+            await window.companion.mascots.set({ skin: skin.id });
+            await renderMascotGrid();
+            toast(`桌宠已切换为 ${skin.label}`);
+            await refresh();
+          } catch (error) {
+            toast(String(error?.message ?? error), 5000);
+          }
+        };
+        grid.append(option);
+      }
+      if (!catalog.skins.length) grid.append(el('span', 'mascot-loading', '没有可用皮肤'));
+    } catch (error) {
+      grid.replaceChildren(el('span', 'mascot-loading', String(error?.message ?? error)));
     }
   };
 

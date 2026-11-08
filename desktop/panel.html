@@ -124,6 +124,10 @@
           <span>模型（留空使用 Pi 默认）</span>
           <input id="model" placeholder="provider/model" />
         </label>
+        <div class="field">
+          <span>桌宠皮肤（Codex 阶段兼容；把 PNG 放进 userData\mascots 即可自定义）</span>
+          <div id="mascotGrid" class="mascot-grid"></div>
+        </div>
         <label class="checkbox-row">
           <input id="knowledgeAutoHarvest" type="checkbox" />
           <span>自动提炼知识（会调用模型；关闭时只自动采集经验并进入待提炼队列）</span>

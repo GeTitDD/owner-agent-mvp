@@ -8,6 +8,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
 
 const PET_SIZE = 136;
 const PANEL_WIDTH = 440;
@@ -52,6 +53,7 @@ let playbookRuns = new Map();
 const playbookAborts = new Map();
 let knowledgeSummaryModule = null;
 let harvestInFlight = false;
+let mascotModule = null;
 
 const configPath = () => path.join(app.getPath('userData'), 'companion.json');
 const defaults = () => ({
@@ -61,6 +63,7 @@ const defaults = () => ({
   includePaths: ['package.json'],
   gatewayUrl: 'http://127.0.0.1:18789',
   model: '',
+  mascotSkin: 'pululu',
   knowledgeAutoHarvest: false,
   panelPinned: false
 });
@@ -408,6 +411,39 @@ const stageText = (chain) => {
 
 const circleSafe = (value, expected) => value === expected;
 
+// ---- 桌宠皮肤（mascot / Codex 阶段） ----
+
+const mascotDirs = () => ({
+  builtinDir: path.join(__dirname, 'assets', 'mascots'),
+  userDir: path.join(app.getPath('userData'), 'mascots')
+});
+
+const loadMascots = async () => (mascotModule ??= await importEsm('../src/mascots.mjs'));
+
+const mascotView = async () => {
+  const mod = await loadMascots();
+  const resolved = mod.resolveMascot({ ...mascotDirs(), skin: config.mascotSkin });
+  return {
+    skin: resolved.skin,
+    label: resolved.label,
+    fallback: resolved.fallback,
+    url: resolved.file ? pathToFileURL(resolved.file).href : ''
+  };
+};
+
+const mascotCatalog = async () => {
+  const mod = await loadMascots();
+  const resolved = mod.resolveMascot({ ...mascotDirs(), skin: config.mascotSkin });
+  return {
+    current: resolved.skin,
+    fallback: resolved.fallback,
+    skins: resolved.skins.map((item) => ({
+      id: item.id, label: item.label, builtin: item.builtin,
+      url: pathToFileURL(item.file).href
+    }))
+  };
+};
+
 const knowledgeSnapshot = async (projectId = config.projectId) => {
   if (!personalStore) {
     return { available: false, counts: {}, recentExperiences: [], pendingExperiences: [], candidates: [], auto: {} };
@@ -628,6 +664,7 @@ const buildView = async () => {
     },
     testConfig: testConfigForProject(activeProject),
     services,
+    mascot: await mascotView(),
     knowledge: await knowledgeSnapshot(activeProjectId),
     result: finalCycle
       ? {
@@ -1270,6 +1307,21 @@ const registerIpc = () => {
     const projects = (await api('/owner/v1/projects')).items ?? [];
     const project = projects.find((item) => item.id === created.projectId);
     return { ...created, testConfig: project ? testConfigForProject(project) : null };
+  });
+
+  ipcMain.handle('companion:mascots:list', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return mascotCatalog();
+  });
+
+  ipcMain.handle('companion:mascots:set', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const mod = await loadMascots();
+    const skin = String(input?.skin ?? '');
+    if (!mod.isValidMascotSelection({ ...mascotDirs(), skin })) throw new Error('未知的宠物皮肤');
+    config.mascotSkin = skin;
+    saveConfig();
+    return mascotCatalog();
   });
 
   ipcMain.handle('companion:settings:get', async (event) => {

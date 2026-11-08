@@ -8,15 +8,12 @@
 </head>
 <body>
   <div class="stage">
-    <button id="pet" class="pet state-idle" type="button" aria-label="Owner Companion">
-      <span class="ring"></span>
-      <span class="face" aria-hidden="true">
-        <span class="eye eye-left"></span>
-        <span class="eye eye-right"></span>
-        <span class="mouth"></span>
-      </span>
+    <button id="pet" class="pet" data-phase="idle" type="button" aria-label="Owner Companion">
+      <span class="plate" aria-hidden="true"></span>
+      <img id="mascot" class="mascot" alt="" draggable="false" />
+      <span class="ring" aria-hidden="true"></span>
       <span class="badge" id="badge" hidden>0</span>
-      <span class="mark" id="mark" aria-hidden="true"></span>
+      <span class="phase-dot" id="phaseDot" aria-hidden="true"></span>
     </button>
     <div class="hint" id="hint">Owner</div>
   </div>
