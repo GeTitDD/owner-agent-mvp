@@ -45,7 +45,9 @@
 | `src/knowledge-loop/reuse.mjs` | 编译上下文、Usage 记录 |
 | `src/knowledge-loop/feedback.mjs` | Outcome Feedback、晋升/降级建议 |
 | `src/knowledge-loop/eval.mjs` | A/B/C Runner 与指标 |
+| `src/knowledge-loop/runtime.mjs` | 低频扫描自动采集 + 可配置自动 Harvest / 待提炼队列 |
 | `src/knowledge-loop/decision-log.mjs` | 与 pstack 同列 TSV |
+| `scripts/knowledge-loop/auto-runtime.mjs` | 无桌面环境的常驻采集宿主；Companion 复用同一 Runtime |
 | `bin/knowledgectl.mjs` | collect/harvest/approve/verify/reuse/feedback |
 | `adapters/pi/extension.mjs` | 编译时记录 Usage（`OWNER_KNOWLEDGE_USAGE=1`） |
 | `src/workbench-server.mjs` | 只读 experiences/candidates/usages/loop-summary API |
@@ -53,13 +55,14 @@
 ## 4. 自动化验证
 
 - `npm run check`：通过。
-- `npm test`：200 tests / 197 pass / 3 skip / 0 fail（新增 9 个 knowledge-loop 测试）。
+- `npm test`：204 tests / 201 pass / 3 skip / 0 fail（新增 knowledge-loop、自动采集、旧库迁移测试）。
 - `npm run knowledge:demo`：确定性三项目闭环通过。
   - 4 条 Experience（修复、失败、两个通过）
   - L3 候选 → 审核/验证
   - L2 候选 → 审核/验证
-  - 3 个项目复用，4 条 usage，4 条正反馈
-  - 提出 L2→L1 晋升建议
+  - 3 个项目复用，4 条 usage
+  - 任务成功只写 outcome，benefit 保持 unknown；没有对照证据时不提出晋升
+- 自动采集：`KnowledgeLoopRuntime.tick()` 在无 CLI 情况下幂等采集已完成 Run；`OwnerResidentRuntime` 复用同一个 tick。
 - 幂等：同一 Run 重复采集不重复；同一 Experience 组合重复 Harvest 返回已有候选；同一 usage key 幂等。
 - 数据兼容：`personal_proposals` 自动增加 `meta_json`；旧库仍可打开。
 
@@ -96,6 +99,22 @@
 - 记录 usage：`targetRunId=run-demo-b-pass`，`contextSnapshotId=407db8...`，`applicabilityResult=applicable`。
 - 证据文件：`real-reuse-b.json`。
 
+### 5.4 真实 A→B 学习链（非 Oracle）
+
+运行 root：`D:\nautilus_trader\.tmp\opencode\knowledge-ab-learning2`
+
+1. **A 证据**：A 的隐藏约定 fixture（默认 attempts=7）失败 → 人工修复通过；采集 `exp_f153...`（fail）与 `exp_b07b...`（repaired）。
+2. **A Harvest**：真实 Pi `harvest_b039...` 生成 project 候选；Owner 审核/验证为 `personal.6d7a...`（L3）。
+3. **B baseline**：独立项目 B 无知识执行同一任务，真实 Pi 生成补丁，测试 exit 1（fail）；采集 `exp_61a4...`。
+4. **A+B Harvest**：真实 Pi `harvest_ad52...` 生成 applied 候选；Owner 审核/验证为 `personal.a386...`（L2）。
+5. **B reuse**：`KnowledgeReuse` 在 B 的 `dynamicContext` 中检索到该 L2 单元，记录 usage `usage_2c5f...`。
+6. **B knowledge run**：同一任务/模型/测试，只增加知识上下文，测试 exit 0（pass）。
+7. **反馈**：显式 controlled comparison（baseline failed / variant succeeded）→ `observedBenefit=positive`，证据 `comparison:ab-learning-b`。
+
+结果：**A 的失败/修复经验 → Harvest → 审核/验证 → B 实际检索 → B baseline fail → knowledge pass**。这是“跨项目学习”的主要证据；`eval-hard` 的预置答案实验保留为 Oracle Control，不再作为学习成功主证据。
+
+证据文件：`ab-report.json`、`ab-decisions.tsv`。
+
 ## 6. A/B/C 评估
 
 固定任务、模型 `zai-coding-cn/glm-5.3`、同一 fixture 与测试命令。完整分析见 `docs/KNOWLEDGE_LOOP_EVAL_V1.md`。
@@ -110,7 +129,9 @@
 
 结论：在强基线上，helpful 任务没有成功率提升；irrelevant 任务在相关性阈值修复后注入 0 条；forced misleading 被模型忽略，未造成失败。**不宣称通用任务上的效果提升。**
 
-### 6.2 困难任务（不可从源码推断的项目约定）
+### 6.2 Oracle Control（不可从源码推断的项目约定）
+
+此实验直接 `personal.create` 预置答案并人工 verified，只用于测量“有答案时可达到的上限”，**不作为 A→B 学习链证据**。
 
 任务：fixture 默认 `attempts = 1`，测试要求 7 次；知识明确“该 fixture 家族默认尝试次数为 7”。
 
@@ -119,18 +140,35 @@
 | Baseline | **false** | 1 | 0 |
 | Knowledge | **true** | 0 | 3 |
 
-证据：`eval-hard-report.json`（baseline exit 1，knowledge exit 0）。这是本轮唯一可支持的“知识复用有效”结论，且只在明确适用约定的任务上成立。
+证据：`eval-hard-report.json`（baseline exit 1，knowledge exit 0）。这是 Oracle 上限对照，不是学习链证据。
 
-## 7. 三轮迭代
+### 6.3 真实 A→B 学习链结果
+
+| 阶段 | 结果 |
+| --- | --- |
+| A 项目经验 | 2 条（fail / repaired） |
+| A Harvest | project 候选，审核/验证为 L3 |
+| B baseline（无知识） | fail，exit 1 |
+| A+B Harvest | applied 候选，审核/验证为 L2 |
+| B knowledge（同一任务/模型/测试） | pass，exit 0 |
+| 检索 | B 的 dynamicContext 含 L2 单元 |
+| 反馈 | controlled comparison → benefit=positive |
+
+这是本轮“知识复用有效”的主要证据；它证明 A 的 Experience 经 Harvest/审批/验证后，被 B 实际检索并改变执行结果。Oracle Control 仅作上限参考。
+
+## 7. 四轮迭代
 
 1. **采集/候选映射**：修复 evidenceRefs 排序导致去重失效；限制单项目候选为 L3；发现 remove candidate meta 需要扩展 proposal schema。
 2. **Harvest 证据质量**：真实 Pi 第一轮只看到 patch 路径，产出流程型候选；加入 proposal diff 与“技术机制优先”提示后，真实候选正确识别 `attempts - 1`。
 3. **检索精度/Eval**：发现无关任务注入 0.2 分的 claim 命中；把本地知识相关性阈值提高到 3，irrelevant injection 降为 0；新增困难任务 A/B，得到 baseline fail → knowledge pass。
+4. **语义/闭环修复**：任务成功不再自动算 positive；benefit 默认 unknown，晋升只接受 controlled comparison；新增低频自动采集 Runtime 与真实 A→B 学习链，Oracle 实验降级为上限对照。
 
 ## 8. 已知限制
 
-- 真实 A/B 只在单一模型（glm-5.3）与小型 fixture 上完成；样本量 1，不能外推为普遍效果。
-- “知识有效”只在“项目约定不可从源码推断”的困难任务上被证明；通用 retry 任务 baseline 已完成。
+- 真实 A→B 链只在单一模型（glm-5.3）与单一 fixture family 上完成；样本量 1，不能外推为普遍效果。
+- 任务成功只写 outcome；只有 controlled comparison 或人工证据才标记 benefit，绝大多数日常任务会是 unknown。
+- 自动采集由 `KnowledgeLoopRuntime` 提供；#23 提供 runtime 与宿主，Companion 的产品 timer 在 #24 接入。
+- pstack 集成是 **pstack-inspired 薄适配**：固定 `c0fad96` 的 EDAE/Reflect 纪律、skill 目录与 TSV 记录；未执行原生 `pstack_todo`/Reflect Playbook，不称为“pstack 已驱动自动学习”。
 - pstack 只作为纪律与 Skill 加载来源；未自动修改 pstack Skill，未调用 Cursor `/loop`。
 - Harvest 使用只读 Pi Session，未加载 `pstack_todo` 工具；用冻结的六步 + `decisions.tsv` 等价记录。
 - Companion 知识入口在堆叠分支实现；macOS 未验证。
@@ -143,6 +181,7 @@
 npm run check
 npm test
 npm run knowledge:demo -- --root <dir>
+npm run knowledge:auto -- --owner-db <owner.sqlite> --knowledge-db <knowledge.sqlite> --once
 # 真实 Pi（需模型凭据）
 node bin/knowledgectl.mjs harvest --owner-db <dir>/owner.sqlite --knowledge-db <dir>/knowledge.sqlite \
   --project demo-a --experience <id> --experience <id> --allow-model
@@ -150,24 +189,27 @@ node bin/knowledgectl.mjs approve --knowledge-db <dir>/knowledge.sqlite --propos
 node bin/knowledgectl.mjs verify --knowledge-db <dir>/knowledge.sqlite --knowledge-id <id> --evidence sandbox:<id>
 node bin/knowledgectl.mjs reuse --cwd <project> --project <id> --task "..." --target-run <run>
 node scripts/knowledge-loop/eval-real.mjs --root <dir> --knowledge-id <id> --allow-model
-node scripts/knowledge-loop/eval-hard.mjs --root <dir> --allow-model
+node scripts/knowledge-loop/eval-hard.mjs --root <dir> --allow-model   # Oracle Control
+node scripts/knowledge-loop/eval-ab-learning.mjs --root <dir> --allow-model
 ```
 
 ## 10. DoD 对照
 
 | DoD | 状态 |
 | --- | --- |
-| 真实 Pi Run 可采集为 Experience | ✅（真实 Harvest 使用了真实运行证据；采集器本身也支持 Job/Sandbox） |
-| pstack 驱动 Harvest 生成结构化候选 | ✅（加载 pstack skills，EDAE/Reflect/decision log） |
+| 真实 Pi Run 可采集为 Experience | ✅（acceptance level 2 真实 Pi 修复 → 两条 Experience） |
+| 自动采集（无 CLI） | ✅（KnowledgeLoopRuntime tick + OwnerResidentRuntime 复用） |
+| pstack-inspired Harvest 生成结构化候选 | ✅（加载 pstack skills；EDAE/Reflect 纪律 + TSV；非原生 pstack_todo） |
 | 候选进入现有知识库 | ✅（proposal → unit） |
 | 查询/修订/验证/拒绝/来源追踪 | ✅（现有 PersonalKnowledgeStore + 新增视图） |
-| L3→L2/L1 晋升建议 | ✅（两/三个项目正反馈触发 promotion proposal；单元测试+demo） |
-| 新任务检索并使用知识 | ✅（真实 Reuse，context + usage） |
-| 复用结果反向关联知识 | ✅（feedback → usage → knowledge） |
+| L3→L2/L1 晋升建议 | ✅（仅 controlled comparison/人工证据；非任务成功计数） |
+| 新任务检索并使用知识 | ✅（真实 A→B：B context + usage） |
+| 复用结果反向关联知识 | ✅（controlled comparison → feedback → usage） |
+| 真实跨项目 A→B 学习链 | ✅（A 经验 → Harvest → L3；A+B → L2；B baseline fail → knowledge pass） |
 | 错误/无关/冲突负向测试 | ✅（阈值修复、forced misleading、conflict status） |
 | 不重复造存储/Harness | ✅ |
-| 真实 Pi 提炼案例 | ✅（harvest_53ef...） |
-| 真实 Pi 复用案例 | ✅（real-reuse-b） |
-| 三轮 Eval/质量迭代 | ✅（见 §7） |
-| 桌宠知识入口 | ⏳ 堆叠 Companion PR |
+| 真实 Pi 提炼案例 | ✅（harvest_53ef...、harvest_b039...、harvest_ad52...） |
+| 真实 Pi 复用案例 | ✅（A→B ab-b baseline/knowledge） |
+| 四轮 Eval/质量迭代 | ✅（见 §7） |
+| 桌宠知识入口 | ✅（堆叠 Companion PR #24） |
 | 安装/回滚说明 | ✅（CLI + docs） |

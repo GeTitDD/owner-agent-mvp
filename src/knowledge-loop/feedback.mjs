@@ -1,10 +1,9 @@
 // Outcome Feedback：把知识复用后的真实结果写回，并给出晋升/降级建议。
 //
-// 只产生 pending proposal；不会自动批准、发布或修改 pstack 全局 Skill。
+// 关键语义：任务成功只说明 outcome，不等于被注入知识产生了正收益。
+// observedBenefit 默认 unknown；只有显式对照实验或人工审核的 benefitEvidenceRefs
+// 才能标记 positive/negative，并参与晋升/降级建议。
 import { normalizeFeedback } from './contracts.mjs';
-import { canonical, sha256 } from '../utils.mjs';
-
-const positive = new Set(['succeeded', 'repaired']);
 
 export class KnowledgeFeedback {
   constructor({ ownerStore, personalStore, clock = () => new Date().toISOString() } = {}) {
@@ -17,12 +16,13 @@ export class KnowledgeFeedback {
   outcomeForRun(runId) {
     const sandbox = this.owner.getSandboxRun(runId);
     if (sandbox) {
-      const status = sandbox.test_status === 'pass' ? 'succeeded'
+      const outcome = sandbox.test_status === 'pass' ? 'succeeded'
         : sandbox.test_status === 'fail' ? 'failed'
           : sandbox.status === 'cancelled' ? 'cancelled' : 'unknown';
       return {
-        outcome: status,
-        observedBenefit: status === 'succeeded' ? 'positive' : status === 'failed' ? 'negative' : 'unknown',
+        outcome,
+        projectId: sandbox.project_id,
+        observedBenefit: 'unknown',
         evidenceRefs: [`sandbox:${sandbox.id}`]
       };
     }
@@ -34,11 +34,12 @@ export class KnowledgeFeedback {
             : job.status === 'failed' ? 'failed' : 'unknown';
       return {
         outcome,
-        observedBenefit: outcome === 'succeeded' ? 'positive' : outcome === 'failed' ? 'negative' : 'unknown',
+        projectId: job.project_id,
+        observedBenefit: 'unknown',
         evidenceRefs: [`job:${job.id}`]
       };
     }
-    return { outcome: 'unknown', observedBenefit: 'unknown', evidenceRefs: [] };
+    return { outcome: 'unknown', projectId: null, observedBenefit: 'unknown', evidenceRefs: [] };
   }
 
   pendingEvolution(kind, sourceIds) {
@@ -51,7 +52,13 @@ export class KnowledgeFeedback {
 
   proposePromotion(unit, { usageIds, evidenceRefs }) {
     const usages = usageIds.map((id) => this.personal.getUsage(id)).filter(Boolean);
-    const projects = new Set(usages.map((usage) => usage.projectId));
+    // 只有带显式对照/人工证据的正向 usage 才能参与晋升。
+    const evidenced = usages.filter((usage) =>
+      usage.observedBenefit === 'positive'
+      && Array.isArray(usage.benefitEvidenceRefs)
+      && usage.benefitEvidenceRefs.length > 0
+    );
+    const projects = new Set(evidenced.map((usage) => usage.projectId));
     let targetLayer = null;
     if (unit.layer === 'project' && projects.size >= 2) targetLayer = 'applied';
     if (unit.layer === 'applied' && projects.size >= 3) targetLayer = 'domain';
@@ -67,7 +74,12 @@ export class KnowledgeFeedback {
       projectId: null,
       domains: unit.domains,
       tags: [...new Set([...unit.tags, 'promotion'])],
-      evidenceRefs: [...new Set([...unit.evidenceRefs, ...evidenceRefs, ...usages.map((u) => `usage:${u.id}`)])],
+      evidenceRefs: [...new Set([
+        ...unit.evidenceRefs,
+        ...evidenceRefs,
+        ...evidenced.flatMap((usage) => usage.benefitEvidenceRefs ?? []),
+        ...evidenced.map((usage) => `usage:${usage.id}`)
+      ])],
       verificationStatus: 'unverified',
       relations: { ...(unit.relations ?? {}), specializes: [unit.id] },
       sourceRef: `knowledge-loop:promotion:${unit.id}:r${unit.revision}`
@@ -76,16 +88,17 @@ export class KnowledgeFeedback {
       targetId: null,
       payload,
       actor: 'knowledge-feedback',
-      note: `Promotion suggestion from ${projects.size} independent projects`,
+      note: `Promotion suggestion from ${projects.size} independent evidenced projects`,
       meta: {
         contract: 'knowledge-evolution/v1',
         kind: 'promotion',
         sourceKnowledgeIds: [unit.id],
         revision: unit.revision,
-        usageIds,
+        usageIds: evidenced.map((usage) => usage.id),
         independentProjects: [...projects],
         targetLayer,
         evidenceRefs,
+        benefitEvidenceRefs: [...new Set(evidenced.flatMap((usage) => usage.benefitEvidenceRefs ?? []))],
         createdAt: this.clock()
       }
     });
@@ -123,25 +136,69 @@ export class KnowledgeFeedback {
     });
   }
 
-  record({ usageId, runId = '', rationale = '', outcome, observedBenefit, evidenceRefs = [] } = {}) {
+  record({
+    usageId, runId = '', rationale = '', outcome, observedBenefit,
+    evidenceRefs = [], benefitEvidenceRefs = [], comparison = null
+  } = {}) {
     const usage = this.personal.getUsage(usageId);
     if (!usage) throw new Error('Unknown usage');
     const existing = this.personal.feedbackForUsage(usageId);
     if (existing) {
       return { feedback: existing, evolution: this.personal.proposal(existing.payload?.evolutionProposalId ?? '') ?? null, duplicate: true };
     }
-    const derived = runId ? this.outcomeForRun(runId) : null;
-    const finalOutcome = outcome ?? derived?.outcome ?? 'unknown';
-    const finalBenefit = observedBenefit ?? derived?.observedBenefit ?? 'unknown';
-    const refs = [...new Set([...(derived?.evidenceRefs ?? []), ...evidenceRefs])];
+    // 结果必须属于这次 usage 的目标 run/project，避免把别的项目成功/失败算到这条知识上。
+    if (runId && usage.targetRunId && runId !== usage.targetRunId) {
+      throw new Error('Run does not match usage targetRunId');
+    }
+    const derived = this.outcomeForRun(runId || usage.targetRunId);
+    if (derived.projectId && derived.projectId !== usage.projectId) {
+      throw new Error('Run project does not match usage project');
+    }
+    const finalOutcome = outcome ?? derived.outcome ?? 'unknown';
+    const refs = [...new Set([...(derived.evidenceRefs ?? []), ...evidenceRefs])];
+
+    let finalBenefit = observedBenefit ?? 'unknown';
+    const benefitRefs = [...new Set(benefitEvidenceRefs)];
+    if (comparison) {
+      // 只接受同任务、同模型的对照结果；baseline fail + variant pass 才是正收益。
+      if (comparison.sameTask === false) throw new Error('Comparison must use the same task');
+      if (!['failed', 'succeeded'].includes(comparison.baselineOutcome)
+        || !['failed', 'succeeded'].includes(comparison.variantOutcome)) {
+        throw new Error('Invalid comparison outcomes');
+      }
+      if (comparison.knowledgeId && comparison.knowledgeId !== usage.knowledgeId) {
+        throw new Error('Comparison knowledge does not match usage');
+      }
+      finalBenefit = comparison.baselineOutcome === 'failed' && comparison.variantOutcome === 'succeeded'
+        ? 'positive'
+        : comparison.baselineOutcome === 'succeeded' && comparison.variantOutcome === 'failed'
+          ? 'negative'
+          : 'unknown';
+      benefitRefs.push(`comparison:${comparison.id ?? 'unnamed'}`);
+    }
+    if (finalBenefit !== 'unknown' && !benefitRefs.length) {
+      throw new Error('Positive/negative benefit requires explicit benefitEvidenceRefs or comparison');
+    }
+    if (finalBenefit !== 'unknown' && !rationale.trim()) {
+      throw new Error('Positive/negative benefit requires a rationale');
+    }
+
+    // 先写回 usage，再计算 promotion，确保当前 usage 参与证据统计。
+    this.personal.updateUsageOutcome(usageId, {
+      outcome: finalOutcome,
+      observedBenefit: finalBenefit,
+      outcomeEvidenceRefs: refs,
+      benefitEvidenceRefs: benefitRefs
+    });
+
     let proposedEvolution = 'none';
     let evolution = null;
-    let reason = rationale;
     if (finalBenefit === 'negative') {
       const unit = this.personal.get(usage.knowledgeId);
       if (unit) {
         evolution = this.proposeDemotion(unit, {
-          usageIds: [usageId], evidenceRefs: refs, reason: rationale || 'negative reuse outcome'
+          usageIds: [usageId], evidenceRefs: [...refs, ...benefitRefs],
+          reason: rationale || 'controlled negative reuse outcome'
         });
         if (evolution) proposedEvolution = 'demote';
       }
@@ -149,7 +206,7 @@ export class KnowledgeFeedback {
       const unit = this.personal.get(usage.knowledgeId);
       if (unit) {
         const positiveUsages = [...new Set([usageId, ...this.positiveUsages(unit.id)])];
-        evolution = this.proposePromotion(unit, { usageIds: positiveUsages, evidenceRefs: refs });
+        evolution = this.proposePromotion(unit, { usageIds: positiveUsages, evidenceRefs: benefitRefs });
         if (evolution) proposedEvolution = 'promote';
       }
     }
@@ -158,26 +215,24 @@ export class KnowledgeFeedback {
       outcome: finalOutcome,
       observedBenefit: finalBenefit,
       evidenceRefs: refs,
+      benefitEvidenceRefs: benefitRefs,
       proposedEvolution,
-      rationale: reason
+      rationale: rationale || (finalBenefit === 'unknown' ? 'No controlled benefit evidence' : '')
     });
     const feedback = this.personal.addFeedback({
       ...normalized,
       runId: runId || usage.targetRunId,
-      evolutionProposalId: evolution?.id ?? null
-    });
-    // 把结果写回 usage，便于查询“这条知识有没有用”。
-    this.personal.updateUsageOutcome(usageId, {
-      outcome: finalOutcome,
-      observedBenefit: finalBenefit,
-      outcomeEvidenceRefs: refs
+      evolutionProposalId: evolution?.id ?? null,
+      comparison: comparison ?? null
     });
     return { feedback, evolution, duplicate: false };
   }
 
   positiveUsages(knowledgeId) {
     return this.personal.listUsages({ knowledgeId, limit: 1000 })
-      .filter((usage) => usage.observedBenefit === 'positive')
+      .filter((usage) => usage.observedBenefit === 'positive'
+        && Array.isArray(usage.benefitEvidenceRefs)
+        && usage.benefitEvidenceRefs.length > 0)
       .map((usage) => usage.id);
   }
 }

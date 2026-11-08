@@ -120,6 +120,8 @@ for (const variant of [
 }
 const report = {
   contract: 'knowledge-eval-hard/v1',
+  oracleControl: true,
+  note: 'Oracle control: the answer knowledge is injected directly, not learned from project A. Use eval-ab-learning.mjs for the A→B learning chain.',
   root, knowledgeDb, unitId: unit.id, model: model || 'sdk-default',
   fixedTask: 'Fix the failing retry test in src/retry.js',
   results,

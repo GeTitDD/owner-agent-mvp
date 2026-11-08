@@ -14,6 +14,9 @@ import { KnowledgeFeedback } from '../src/knowledge-loop/feedback.mjs';
 import { appendDecision } from '../src/knowledge-loop/decision-log.mjs';
 import { createWorkbenchServer } from '../src/workbench-server.mjs';
 import { DatabaseSync } from 'node:sqlite';
+import { OwnerStore } from '../src/owner-store.mjs';
+import { KnowledgeLoopRuntime } from '../src/knowledge-loop/runtime.mjs';
+import { createSyntheticProject, createPassingProject } from '../scripts/knowledge-loop/fixtures.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const image = `sha256:${'a'.repeat(64)}`;
@@ -161,7 +164,7 @@ test('Harvest suggests applied only with two independent projects and flags cont
         candidates: [{
           title: 'Retry bound across projects',
           claim: 'When a retry helper is expected to use every attempt, loop with i < attempts.',
-          kind: 'pattern', proposedLayer: 'applied', applicability: ['Node retry helper with attempts=3'],
+          kind: 'pattern', proposedLayer: 'project', applicability: ['Node retry helper with attempts=3'],
           exceptions: ['attempts < 1'], confidence: 0.8, contradictions: ['project:old knowledge says attempts - 1'],
           keywords: ['retry'], evidenceRefs: [`experience:${a.id}`, `experience:${b.id}`],
           facts: [], inferences: [], unknowns: [], validationSuggestions: []
@@ -217,7 +220,7 @@ test('Reuse compiles a project-scoped knowledge unit and records idempotent usag
   }
 });
 
-test('Feedback proposes promotion after independent positive use and demotion after negative use', () => {
+test('successful runs leave observedBenefit unknown and never trigger promotion', () => {
   const personal = new PersonalKnowledgeStore(':memory:');
   try {
     const unit = personal.create({
@@ -228,8 +231,8 @@ test('Feedback proposes promotion after independent positive use and demotion af
     });
     const owner = fakeOwner({
       runs: {
-        run1: sandbox('run1'), run2: sandbox('run2', { project_id: 'p2' }),
-        runNegative: sandbox('runNegative', { test_status: 'fail' })
+        run1: sandbox('run1'),
+        run2: sandbox('run2', { project_id: 'p2' })
       }
     });
     const feedback = new KnowledgeFeedback({ ownerStore: owner, personalStore: personal });
@@ -238,37 +241,166 @@ test('Feedback proposes promotion after independent positive use and demotion af
       retrievalReason: 'retry task', applicabilityResult: 'applicable', contextSnapshotId: 'c1',
       outcome: 'unknown', observedBenefit: 'unknown'
     });
-    const first = feedback.record({ usageId: usage1.id, runId: 'run1', rationale: 'test passed' });
-    assert.equal(first.feedback.observedBenefit, 'positive');
+    const first = feedback.record({ usageId: usage1.id, runId: 'run1', rationale: 'task passed' });
+    assert.equal(first.feedback.outcome, 'succeeded');
+    assert.equal(first.feedback.observedBenefit, 'unknown');
     assert.equal(first.evolution, null);
     const usage2 = personal.addUsage({
       knowledgeId: unit.id, revision: unit.revision, targetRunId: 'run2', projectId: 'p2',
       retrievalReason: 'retry task', applicabilityResult: 'applicable', contextSnapshotId: 'c2',
       outcome: 'unknown', observedBenefit: 'unknown'
     });
-    const second = feedback.record({ usageId: usage2.id, runId: 'run2', rationale: 'test passed in p2' });
+    const second = feedback.record({ usageId: usage2.id, runId: 'run2', rationale: 'task passed in p2' });
+    assert.equal(second.feedback.observedBenefit, 'unknown');
+    assert.equal(second.evolution, null);
+    assert.equal(personal.proposals('pending').filter((item) => item.meta?.kind === 'promotion').length, 0);
+    assert.equal(personal.getUsage(usage1.id).observedBenefit, 'unknown');
+    assert.equal(personal.getUsage(usage2.id).observedBenefit, 'unknown');
+  } finally { personal.close(); }
+});
+
+test('controlled A/B comparisons across projects can promote a project knowledge unit', () => {
+  const personal = new PersonalKnowledgeStore(':memory:');
+  try {
+    const unit = personal.create({
+      title: 'Retry loop bound', content: 'Use i < attempts so the final retry executes.',
+      kind: 'claim', layer: 'project', scope: 'project', projectId: 'p1',
+      domains: ['software-engineering'], tags: ['retry'], evidenceRefs: ['sandbox:run-a'],
+      verificationStatus: 'verified', sourceRef: 'test'
+    });
+    const owner = fakeOwner({
+      runs: { run1: sandbox('run1'), run2: sandbox('run2', { project_id: 'p2' }) }
+    });
+    const feedback = new KnowledgeFeedback({ ownerStore: owner, personalStore: personal });
+    const usage1 = personal.addUsage({
+      knowledgeId: unit.id, revision: unit.revision, targetRunId: 'run1', projectId: 'p1',
+      retrievalReason: 'retry task', applicabilityResult: 'applicable', contextSnapshotId: 'c1',
+      outcome: 'unknown', observedBenefit: 'unknown'
+    });
+    const first = feedback.record({
+      usageId: usage1.id, runId: 'run1', rationale: 'same task baseline failed, knowledge passed',
+      comparison: {
+        id: 'ab-p1', knowledgeId: unit.id, sameTask: true,
+        baselineOutcome: 'failed', variantOutcome: 'succeeded'
+      }
+    });
+    assert.equal(first.feedback.observedBenefit, 'positive');
+    assert.deepEqual(first.feedback.benefitEvidenceRefs, ['comparison:ab-p1']);
+    assert.equal(first.evolution, null);
+    const usage2 = personal.addUsage({
+      knowledgeId: unit.id, revision: unit.revision, targetRunId: 'run2', projectId: 'p2',
+      retrievalReason: 'retry task', applicabilityResult: 'applicable', contextSnapshotId: 'c2',
+      outcome: 'unknown', observedBenefit: 'unknown'
+    });
+    const second = feedback.record({
+      usageId: usage2.id, runId: 'run2', rationale: 'independent project same A/B result',
+      comparison: {
+        id: 'ab-p2', knowledgeId: unit.id, sameTask: true,
+        baselineOutcome: 'failed', variantOutcome: 'succeeded'
+      }
+    });
     assert.equal(second.evolution.meta.kind, 'promotion');
     assert.equal(second.evolution.payload.layer, 'applied');
     assert.equal(second.evolution.payload.scope, 'domain');
     assert.deepEqual(second.evolution.payload.relations.specializes, [unit.id]);
-    assert.equal(second.duplicate, false);
+    assert.deepEqual(second.evolution.meta.independentProjects.sort(), ['p1', 'p2']);
+  } finally { personal.close(); }
+});
 
+test('feedback rejects mismatched runs or unevidenced positive claims', () => {
+  const personal = new PersonalKnowledgeStore(':memory:');
+  try {
+    const unit = personal.create({
+      title: 'Retry loop bound', content: 'Use i < attempts.', kind: 'claim',
+      layer: 'project', scope: 'project', projectId: 'p1', domains: ['software-engineering'],
+      tags: ['retry'], evidenceRefs: ['sandbox:run1'], verificationStatus: 'verified', sourceRef: 'test'
+    });
+    const owner = fakeOwner({
+      runs: {
+        run1: sandbox('run1'),
+        run2: sandbox('run2', { project_id: 'p2' }),
+        run3: sandbox('run3', { project_id: 'p3' })
+      }
+    });
+    const feedback = new KnowledgeFeedback({ ownerStore: owner, personalStore: personal });
+    const usage = personal.addUsage({
+      knowledgeId: unit.id, revision: unit.revision, targetRunId: 'run1', projectId: 'p1',
+      retrievalReason: 'retry', applicabilityResult: 'applicable', contextSnapshotId: 'c1',
+      outcome: 'unknown', observedBenefit: 'unknown'
+    });
+    assert.throws(() => feedback.record({ usageId: usage.id, runId: 'run2' }), /targetRunId/u);
+    const other = personal.addUsage({
+      knowledgeId: unit.id, revision: unit.revision, targetRunId: 'run3', projectId: 'p2',
+      retrievalReason: 'retry', applicabilityResult: 'applicable', contextSnapshotId: 'c2',
+      outcome: 'unknown', observedBenefit: 'unknown'
+    });
+    assert.throws(() => feedback.record({ usageId: other.id, runId: 'run3' }), /project/u);
+    const third = personal.addUsage({
+      knowledgeId: unit.id, revision: unit.revision, targetRunId: 'run1', projectId: 'p1',
+      retrievalReason: 'retry', applicabilityResult: 'applicable', contextSnapshotId: 'c3',
+      outcome: 'unknown', observedBenefit: 'unknown'
+    });
+    assert.throws(() => feedback.record({
+      usageId: third.id, runId: 'run1', observedBenefit: 'positive', rationale: 'looks good'
+    }), /benefitEvidenceRefs/u);
+  } finally { personal.close(); }
+});
+
+test('controlled negative comparison proposes re-verification', () => {
+  const personal = new PersonalKnowledgeStore(':memory:');
+  try {
     const applied = personal.create({
       title: 'Always retry exactly twice', content: 'Fixed retry behavior.',
       kind: 'claim', layer: 'applied', scope: 'domain', domains: ['software-engineering'],
       tags: ['retry'], evidenceRefs: ['sandbox:old'], verificationStatus: 'verified', sourceRef: 'test'
     });
-    const usage3 = personal.addUsage({
+    const owner = fakeOwner({ runs: { runNegative: sandbox('runNegative', { test_status: 'fail' }) } });
+    const feedback = new KnowledgeFeedback({ ownerStore: owner, personalStore: personal });
+    const usage = personal.addUsage({
       knowledgeId: applied.id, revision: applied.revision, targetRunId: 'runNegative',
       projectId: 'p1', retrievalReason: 'retry task', applicabilityResult: 'applicable',
       contextSnapshotId: 'c3', outcome: 'unknown', observedBenefit: 'unknown'
     });
-    const negative = feedback.record({ usageId: usage3.id, runId: 'runNegative', rationale: 'test still fails' });
+    const negative = feedback.record({
+      usageId: usage.id, runId: 'runNegative', rationale: 'same task baseline passed, knowledge failed',
+      comparison: {
+        id: 'ab-negative', knowledgeId: applied.id, sameTask: true,
+        baselineOutcome: 'succeeded', variantOutcome: 'failed'
+      }
+    });
+    assert.equal(negative.feedback.observedBenefit, 'negative');
     assert.equal(negative.evolution.meta.kind, 'demotion');
     assert.equal(negative.evolution.target_id, applied.id);
     assert.equal(negative.evolution.payload.verificationStatus, 'needs_reverification');
-    assert.equal(personal.getUsage(usage3.id).observedBenefit, 'negative');
+    assert.equal(personal.getUsage(usage.id).observedBenefit, 'negative');
   } finally { personal.close(); }
+});
+
+test('KnowledgeLoopRuntime auto-collects completed runs without CLI and is idempotent', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'knowledge-runtime-'));
+  const ownerDb = path.join(tmp, 'owner.sqlite');
+  const knowledgeDb = path.join(tmp, 'knowledge.sqlite');
+  const owner = new OwnerStore(ownerDb);
+  const personal = new PersonalKnowledgeStore(knowledgeDb);
+  try {
+    createSyntheticProject({ store: owner, root: path.join(tmp, 'a'), projectId: 'runtime-a', name: 'Runtime A' });
+    createPassingProject({ store: owner, root: path.join(tmp, 'b'), projectId: 'runtime-b', name: 'Runtime B' });
+    const runtime = new KnowledgeLoopRuntime({ ownerStore: owner, personalStore: personal, allowHarvest: false });
+    const first = await runtime.tick();
+    assert.equal(first.newExperiences, 3);
+    assert.equal(first.pending, 3);
+    assert.equal(personal.listExperiences({ limit: 100 }).length, 3);
+    const second = await runtime.tick();
+    assert.equal(second.newExperiences, 0);
+    assert.equal(personal.listExperiences({ limit: 100 }).length, 3);
+    assert.equal(runtime.status().pending, 3);
+    // 待提炼队列可见：没有 Harvest run 引用这些 Experience。
+    assert.equal(personal.listHarvestRuns(10).length, 0);
+  } finally {
+    personal.close();
+    owner.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('Workbench exposes knowledge-loop read-only views', async () => {

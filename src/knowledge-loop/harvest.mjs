@@ -37,7 +37,7 @@ export class KnowledgeHarvester {
   constructor({
     ownerStore, personalStore, sessionFactory = null,
     model = '', pstackDir = process.env.PSTACK_DIR,
-    timeoutMs = 180000, allowModel = false, clock = () => new Date().toISOString()
+    timeoutMs = 180000, allowModel = false, clock = () => new Date().toISOString(), logger = console
   } = {}) {
     if (!ownerStore || !personalStore) throw new Error('ownerStore and personalStore are required');
     this.owner = ownerStore;
@@ -47,6 +47,7 @@ export class KnowledgeHarvester {
     this.timeoutMs = timeoutMs;
     this.allowModel = allowModel;
     this.clock = clock;
+    this.logger = logger;
   }
 
   evidenceFor(experiences) {
@@ -135,6 +136,7 @@ export class KnowledgeHarvester {
       '不要复制原始 prompt、工具输出或任何密钥；证据只引用 ref。',
       '如果经验只支持一个项目事实，proposedLayer 必须是 project；',
       '只有至少两个独立项目都有通过证据时，才可建议 applied；domain 需要三个以上独立项目。',
+      '跨项目候选不要写项目 ID；用运行时、代码形态、测试契约描述适用条件。',
       '如果与现有知识冲突，必须在 contradictions 中列出，并降低置信度。',
       '',
       `项目：${projectId}`,
@@ -265,11 +267,29 @@ export class KnowledgeHarvester {
     );
     const allowedRefs = new Set(experiences.flatMap((item) => item.evidenceRefs ?? []));
     const candidates = [];
+    const invalid = [];
     for (const raw of drafts) {
-      const normalized = normalizeCandidateDraft(raw);
+      let normalized;
+      try {
+        normalized = normalizeCandidateDraft(raw);
+      } catch (error) {
+        invalid.push({ error: error.message, draft: raw });
+        this.logger.warn?.('knowledge candidate skipped:', error.message);
+        continue;
+      }
       let layer = normalized.proposedLayer;
       if (!hasPassedEvidence || independentProjects < 2) layer = 'project';
       if (layer === 'domain' && independentProjects < 3) layer = 'applied';
+      // 两个独立项目的通过证据是 L2 的充分条件；但若主张/适用条件绑定具体项目 ID，
+      // 仍保守保留为 project，避免把项目特例伪装成共享知识。
+      const projectIds = [...new Set(experiences.map((item) => item.projectId))];
+      const projectSpecific = projectIds.some((projectId) =>
+        [normalized.title, normalized.claim, ...normalized.applicability, ...normalized.exceptions]
+          .join(' ').includes(projectId)
+      );
+      if (layer === 'project' && independentProjects >= 2 && hasPassedEvidence && !projectSpecific) {
+        layer = 'applied';
+      }
       const evidenceRefs = (normalized.evidenceRefs ?? []).filter((ref) => allowedRefs.has(ref) || /^experience:/u.test(ref));
       const contradictions = normalized.contradictions ?? [];
       const draft = {
@@ -313,10 +333,11 @@ export class KnowledgeHarvester {
         steps: HARVEST_STEPS,
         evidenceRefs: evidence.map((item) => item.ref),
         existingKnowledgeIds: existingKnowledge.map((item) => item.id),
+        invalidCandidates: invalid,
         skillsDir: resolvePstackSkillsDir(),
         createdAt: this.clock()
       }
     });
-    return { harvestRun, candidates, duplicate: false };
+    return { harvestRun, candidates, invalid, duplicate: false };
   }
 }
