@@ -68,14 +68,5 @@
     <section id="projectsView" class="view" hidden><div class="section-intro"><h2>项目知识组合</h2><p>预览 L1/L2 共享知识与 L3 项目知识在不同运行环境下的适用性。个人知识只在项目显式启用 Workspace 导入时参与编译。</p></div><div class="preview-layout"><div id="projectList" class="project-list"></div><div class="preview-panel"><label for="taskInput">研究任务</label><textarea id="taskInput" rows="3">研究 Pi Context 生命周期，验证跨项目共享知识和前缀缓存的适用边界</textarea><button id="previewBtn" class="button primary">生成上下文预览</button><div id="previewResult" class="preview-result"></div></div></div></section>
   </main>
 </div>
-<div id="companion" class="companion">
-  <button id="companionToggle" class="companion-toggle" aria-label="打开 Owner Agent" title="Owner Agent">✦</button>
-  <div id="companionPanel" class="companion-panel" hidden>
-    <div class="companion-heading"><strong>✦ Owner Agent</strong><button id="companionClose" aria-label="关闭">×</button></div>
-    <p class="companion-subtitle">本地管理助手 · 只读查询 · 有据可查</p>
-    <div id="companionMessages" class="companion-messages"><div class="companion-bubble">你好，我能查看项目状态、阻塞事项与待审核的知识迁移建议。复杂推理需要显式启用 Pi 模型。</div></div>
-    <form id="companionChat" class="companion-chat"><input id="companionQuery" placeholder="问我：有哪些项目正在进行？" required maxlength="1200" /><button type="submit">发送</button></form>
-  </div>
-</div>
 </body>
 </html>

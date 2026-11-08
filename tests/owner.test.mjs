@@ -153,10 +153,14 @@ test('workbench serves only its own assets; the old companion chat is retired',(
   try{
     const base=`http://127.0.0.1:${port}`;
     const html=await fetch(base+'/');assert.equal(html.status,200);
-    assert.match(await html.text(),/Workbench/i);
+    const htmlText=await html.text();
+    assert.match(htmlText,/Workbench/i);
+    assert.doesNotMatch(htmlText,/companion-panel|companionChat/);
     for(const name of ['/app.js','/styles.css']){
       const asset=await fetch(base+name);assert.equal(asset.status,200);
     }
+    const appJs=await (await fetch(base+'/app.js')).text();
+    assert.doesNotMatch(appJs,/ownerAsk|companionQuery/);
     // 旧的 companion.* 是第二套聊天入口，已删；必须 404，避免两套状态并存。
     for(const name of ['/companion.html','/companion.js','/companion.css']){
       const gone=await fetch(base+name);assert.equal(gone.status,404);

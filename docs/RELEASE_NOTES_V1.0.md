@@ -21,7 +21,8 @@
 ### 运行时
 - 进程内启动 Owner sidecar + 常驻 Worker，复用 v1.1 的 Patch/Sandbox/Repair 执行器；
 - 审批令牌只在 Electron 主进程，渲染进程通过受控 IPC 操作；
-- OpenClaw 不是 L1 的依赖：L2「完整工作台」才连接 Gateway，未连接时回退 Workbench。
+- OpenClaw 不是 L1 的依赖：L2「完整工作台」才连接 Gateway，未连接时回退 Workbench；
+- 旧 Workbench 的 companion 悬浮问答与静态页已移除，避免第二套聊天状态。
 
 ## 安装 / 运行
 

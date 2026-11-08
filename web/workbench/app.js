@@ -147,16 +147,13 @@ async function init(){try{document.querySelectorAll('[data-tab]').forEach(b=>b.a
   $('#ownerRegisterForm').addEventListener('submit',event=>{event.preventDefault();void registerOwnerProject();});
   $('#ownerTaskForm').addEventListener('submit',event=>{event.preventDefault();void createOwnerTask();});
   $('#ownerSuggestForm').addEventListener('submit',event=>{event.preventDefault();void createOwnerSuggestion();});
-  $('#companionToggle').addEventListener('click',()=>{$('#companionPanel').hidden=!$('#companionPanel').hidden;});
-  $('#companionClose').addEventListener('click',()=>{$('#companionPanel').hidden=true;});
-  $('#companionChat').addEventListener('submit',event=>{event.preventDefault();void ownerAsk();});
   setView('owner');await refresh();renderProjects();await loadOwner();
   setInterval(()=>{if(state.tab==='owner')void loadOwner(true);},15000);
 }catch(e){hintError(e);}}
 void init();
 
 
-// Owner dashboard and browser-based desktop-companion preview.
+// Owner dashboard.
 let ownerSnapshot=null;
 async function loadOwner(silent=false){try{
   const [summary,attention,suggestions,events]=await Promise.all([
@@ -189,10 +186,6 @@ async function registerOwnerProject(){try{
   $('#ownerRegisterForm').reset();toast('项目已注册');await loadOwner();
 }catch(e){hintError(e);}}
 async function createOwnerTask(){try{await api('/api/owner/tasks','POST',{projectId:$('#ownerTaskProject').value,title:$('#ownerTaskTitle').value.trim()});$('#ownerTaskTitle').value='';await loadOwner();toast('任务已创建');}catch(e){hintError(e);}}
-async function ownerAsk(){const q=$('#companionQuery').value.trim();if(!q)return;
-  const holder=$('#companionMessages');holder.insertAdjacentHTML('beforeend',`<div class="companion-bubble user">${esc(q)}</div>`);$('#companionQuery').value='';
-  try{const response=await api('/api/owner/ask','POST',{question:q});holder.insertAdjacentHTML('beforeend',`<div class="companion-bubble">${esc(response.answer)}<small>依据：${esc(response.basis.join(', ')||'无')} · ${esc(response.mode)}</small></div>`);}catch(e){holder.insertAdjacentHTML('beforeend',`<div class="companion-bubble">${esc(e.message)}</div>`);}holder.scrollTop=holder.scrollHeight;
-}
 
 async function createOwnerSuggestion(){try{
   await api('/api/owner/suggestions','POST',{sourceProjectId:$('#ownerSourceProject').value,targetProjectId:$('#ownerTargetProject').value,

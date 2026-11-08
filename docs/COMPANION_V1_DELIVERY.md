@@ -13,7 +13,8 @@ Electron 桌宠 + 进程内 Owner Runtime：
 - 五种状态：空闲 / 工作中 / 等待决定 / 已完成 / 异常；
 - L1 面板：交办、决策、异常恢复、进展与成果；
 - L2：打开 OpenClaw Control UI（未连接时回退到 Workbench）；
-- 审批令牌只存在主进程；渲染进程通过受控 IPC 操作。
+- 审批令牌只存在主进程；渲染进程通过受控 IPC 操作；
+- 旧 Workbench 的 companion 悬浮问答与 `companion.*` 静态页均已移除，L2 聊天统一交给 OpenClaw，避免第二套聊天状态。
 
 ## 2. 四条 SOP 验收
 
@@ -24,7 +25,7 @@ Electron 桌宠 + 进程内 Owner Runtime：
 | SOP-1 交办任务 | 空 Job 项目，从面板输入“Fix the failing retry test” → 创建 Job，无 CLI | E2E `SOP-1 job created from the pet` |
 | SOP-2 处理决策 | Job 批准 → Patch Diff 审阅/批准/应用 → Sandbox 审批；拒绝路径存在 | E2E 前 6 项断言；截图 `01/02` |
 | SOP-3 异常恢复 | 真实 Docker 失败 → 创建修复 → 批准 → 真实 Pi 生成修复补丁 → 应用 → 复测 pass | E2E `source sandbox failed` … `repair retest passed`；截图 `04/05/06` |
-| SOP-4 进展与成果 | 状态自动刷新；结果面板含 tested_pass、两个 Diff、两份测试输出；重启后数据仍在 SQLite | E2E `result modal shows tested_pass/test output`；截图 `07` |
+| SOP-4 进展与成果 | 状态自动刷新；结果面板含 tested_pass、两个 Diff、两份测试输出；重启后任务保留（外壳 E2E 实际重启） | E2E `result modal shows tested_pass/test output`；截图 `07` |
 
 **真实 Pi 记录**：
 - 第一次运行（任务文案为“Add a clarifying comment”）模型只加了注释，复测 `tested_fail`。说明任务措辞会直接影响修复行为。
@@ -77,7 +78,7 @@ npm run desktop:pack   # Windows x64 portable
 - `dist-companion/OwnerCompanion-1.0.0-portable.exe`（约 122 MB）
 - `dist-companion/win-unpacked/Owner Companion.exe`（可直接运行）
 
-已实测打包后的应用可启动、创建 DB、截图、退出；`node:sqlite` 在 Electron 内可用。最终提交对应的 portable EXE（122,171,319 字节）与 `win-unpacked` 均已实机启动验证。
+已实测打包后的应用可启动、创建 DB、截图、退出；`node:sqlite` 在 Electron 内可用。最终提交对应的 portable EXE（122,169,108 字节）与 `win-unpacked` 均已实机启动验证。
 
 限制：
 
@@ -105,7 +106,7 @@ npx electron-builder --mac dmg --arm64
 | 桌面 E2E（Electron） | **通过**（SOP-1..4） |
 | 外壳 E2E | **通过**（位置/焦点/隐藏/召回/重启保留） |
 | 打包应用启动 | **通过** |
-| CI（PR #22） | run `42428401321`（`ce27e9c`）全绿：plugin / sandbox-real / ubuntu test / windows test |
+| CI（PR #22） | 最终 head 的 4 个 job 全绿：plugin / sandbox-real / ubuntu test / windows test（见 PR checks） |
 
 截图：`docs/assets/companion/`。
 
