@@ -1,104 +1,104 @@
-﻿# Owner Knowledge Loop v1.0 鈥?浜や粯鎶ュ憡
+# Owner Knowledge Loop v1.0 — 交付报告
 
-- 鏃ユ湡锛?026-11-08
-- 鍒嗘敮锛歚feat/v1.3-knowledge-loop`锛堝熀浜?`main@8c14707`锛?
-- pstack-pi锛歚main@c0fad96`锛坴ersion `0.2.0`锛?
-- 缁撹锛氱煡璇嗛棴鐜殑鏁版嵁濂戠害銆侀噰闆嗐€佹彁鐐笺€佸鎵?楠岃瘉銆佸鐢ㄣ€佸弽棣堜笌 A/B 璇勪及宸插彲杩愯锛涚湡瀹?Pi 宸插畬鎴愪竴娆?Harvest 鍜屼竴娆?Reuse锛涘洶闅句换鍔?A/B 鏄剧ず鐭ヨ瘑澶嶇敤甯︽潵鍙祴宸紓銆俶acOS/Companion 鐭ヨ瘑鍏ュ彛瑙佸悗缁爢鍙?PR銆?
+- 日期：2026-11-08
+- 分支：`feat/v1.3-knowledge-loop`（基于 `main@8c14707`）
+- pstack-pi：`main@c0fad96`（version `0.2.0`）
+- 结论：知识闭环的数据契约、采集、提炼、审批/验证、复用、反馈与 A/B 评估已可运行；真实 Pi 已完成一次 Harvest 和一次 Reuse；困难任务 A/B 显示知识复用带来可测差异。macOS/Companion 知识入口见后续堆叠 PR。
 
-## 1. 澶嶇敤涓庤亴璐?
+## 1. 复用与职责
 
-| 鑳藉姏 | 澶嶇敤 |
+| 能力 | 复用 |
 | --- | --- |
-| 鐭ヨ瘑瀛樺偍 | `PersonalKnowledgeStore`锛堟柊澧?experience/usage/feedback 琛ㄤ笌 proposal meta 鍒楋級 |
-| 鍊欓€?| 鐜版湁 `personal_proposals` + `reviewProposal` |
-| 璇佹嵁/杩愯 | OwnerStore 鐨?job/sandbox/repair/evidence |
-| 閫傜敤鎬?| `src/applicability.mjs` |
-| 涓婁笅鏂?| `compiler.mjs` + `workspace-overlay.mjs` |
-| 妫€绱?| `engine.retrieve` / `scopedSearch` |
-| Pi | `DefaultPiSessionFactory`锛涙柊澧炲彧璇?Harvest session |
-| pstack | EDAE/Reflect/Eval/decision-log 绾緥钖勯€傞厤锛涗笉鏀?Skill |
+| 知识存储 | `PersonalKnowledgeStore`（新增 experience/usage/feedback 表与 proposal meta 列） |
+| 候选 | 现有 `personal_proposals` + `reviewProposal` |
+| 证据/运行 | OwnerStore 的 job/sandbox/repair/evidence |
+| 适用性 | `src/applicability.mjs` |
+| 上下文 | `compiler.mjs` + `workspace-overlay.mjs` |
+| 检索 | `engine.retrieve` / `scopedSearch` |
+| Pi | `DefaultPiSessionFactory`；新增只读 Harvest session |
+| pstack | EDAE/Reflect/Eval/decision-log 纪律薄适配；不改 Skill |
 
-鏈柊寤?KnowledgeStore銆丆andidateStore銆丆ontext Compiler銆丄gent Harness 鎴栬皟搴﹀櫒銆?
+未新建 KnowledgeStore、CandidateStore、Context Compiler、Agent Harness 或调度器。
 
-## 2. 鏁版嵁濂戠害
+## 2. 数据契约
 
-- Experience锛歚sourceRunId / projectId / taskId / domainIds / observedProblem / actionSummary / observedOutcome / evidenceRefs / environment / facts / inferences / unknowns / dedupeKey`銆?
-- Knowledge Candidate锛氱幇鏈?proposal payload + `meta`锛?
+- Experience：`sourceRunId / projectId / taskId / domainIds / observedProblem / actionSummary / observedOutcome / evidenceRefs / environment / facts / inferences / unknowns / dedupeKey`。
+- Knowledge Candidate：现有 proposal payload + `meta`：
   - `contract=knowledge-candidate/v1`
   - `sourceExperienceIds / proposedLayer / confidence / contradictions / revision / harvestRunId / playbook=edae / steps / validationSuggestions`
-- Knowledge Usage锛歚knowledgeId / revision / targetRunId / projectId / retrievalReason / applicabilityResult / contextSnapshotId / outcomeEvidenceRefs / observedBenefit / unresolvedQuestions`銆?
-- Outcome Feedback锛歚usageId / outcome / observedBenefit / evidenceRefs / proposedEvolution / rationale`銆?
+- Knowledge Usage：`knowledgeId / revision / targetRunId / projectId / retrievalReason / applicabilityResult / contextSnapshotId / outcomeEvidenceRefs / observedBenefit / unresolvedQuestions`。
+- Outcome Feedback：`usageId / outcome / observedBenefit / evidenceRefs / proposedEvolution / rationale`。
 
-鑷姩鍊欓€夋案杩?`unverified`锛沘pprove 涓?verify 鏄袱涓樉寮忎汉宸ユ楠ゃ€?
+自动候选永远 `unverified`；approve 与 verify 是两个显式人工步骤。
 
-## 3. 瀹炵幇妯″潡
+## 3. 实现模块
 
-| 鏂囦欢 | 浣滅敤 |
+| 文件 | 作用 |
 | --- | --- |
-| `src/personal-store.mjs` | 涓夊紶 Loop 琛ㄣ€乸roposal meta銆佸箓绛?API |
-| `src/knowledge-loop/contracts.mjs` | 濂戠害鏍￠獙涓庡€欓€夋槧灏?|
-| `src/knowledge-loop/experience.mjs` | 浠?Sandbox/Job 閲囬泦缁忛獙 |
-| `src/knowledge-loop/pi-harvest-session.mjs` | 鍙 Pi Harvest锛屽姞杞?pstack skills |
-| `src/knowledge-loop/harvest.mjs` | EDAE 姝ラ銆佽瘉鎹暣鐞嗐€佸€欓€夌敓鎴?|
-| `src/knowledge-loop/reuse.mjs` | 缂栬瘧涓婁笅鏂囥€乁sage 璁板綍 |
-| `src/knowledge-loop/feedback.mjs` | Outcome Feedback銆佹檵鍗?闄嶇骇寤鸿 |
-| `src/knowledge-loop/eval.mjs` | A/B/C Runner 涓庢寚鏍?|
-| `src/knowledge-loop/decision-log.mjs` | 涓?pstack 鍚屽垪 TSV |
+| `src/personal-store.mjs` | 三张 Loop 表、proposal meta、幂等 API |
+| `src/knowledge-loop/contracts.mjs` | 契约校验与候选映射 |
+| `src/knowledge-loop/experience.mjs` | 从 Sandbox/Job 采集经验 |
+| `src/knowledge-loop/pi-harvest-session.mjs` | 只读 Pi Harvest，加载 pstack skills |
+| `src/knowledge-loop/harvest.mjs` | EDAE 步骤、证据整理、候选生成 |
+| `src/knowledge-loop/reuse.mjs` | 编译上下文、Usage 记录 |
+| `src/knowledge-loop/feedback.mjs` | Outcome Feedback、晋升/降级建议 |
+| `src/knowledge-loop/eval.mjs` | A/B/C Runner 与指标 |
+| `src/knowledge-loop/decision-log.mjs` | 与 pstack 同列 TSV |
 | `bin/knowledgectl.mjs` | collect/harvest/approve/verify/reuse/feedback |
-| `adapters/pi/extension.mjs` | 缂栬瘧鏃惰褰?Usage锛坄OWNER_KNOWLEDGE_USAGE=1`锛?|
-| `src/workbench-server.mjs` | 鍙 experiences/candidates/usages/loop-summary API |
+| `adapters/pi/extension.mjs` | 编译时记录 Usage（`OWNER_KNOWLEDGE_USAGE=1`） |
+| `src/workbench-server.mjs` | 只读 experiences/candidates/usages/loop-summary API |
 
-## 4. 鑷姩鍖栭獙璇?
+## 4. 自动化验证
 
-- `npm run check`锛氶€氳繃銆?
-- `npm test`锛?98 tests / 195 pass / 3 skip / 0 fail锛堟柊澧?8 涓?knowledge-loop 娴嬭瘯锛夈€?
-- `npm run knowledge:demo`锛氱‘瀹氭€т笁椤圭洰闂幆閫氳繃銆?
-  - 4 鏉?Experience锛堜慨澶嶃€佸け璐ャ€佷袱涓€氳繃锛?
-  - L3 鍊欓€?鈫?瀹℃牳/楠岃瘉
-  - L2 鍊欓€?鈫?瀹℃牳/楠岃瘉
-  - 3 涓」鐩鐢紝4 鏉?usage锛? 鏉℃鍙嶉
-  - 鎻愬嚭 L2鈫扡1 鏅嬪崌寤鸿
-- 骞傜瓑锛氬悓涓€ Run 閲嶅閲囬泦涓嶉噸澶嶏紱鍚屼竴 Experience 缁勫悎閲嶅 Harvest 杩斿洖宸叉湁鍊欓€夛紱鍚屼竴 usage key 骞傜瓑銆?
-- 鏁版嵁鍏煎锛歚personal_proposals` 鑷姩澧炲姞 `meta_json`锛涙棫搴撲粛鍙墦寮€銆?
+- `npm run check`：通过。
+- `npm test`：199 tests / 196 pass / 3 skip / 0 fail（新增 8 个 knowledge-loop 测试）。
+- `npm run knowledge:demo`：确定性三项目闭环通过。
+  - 4 条 Experience（修复、失败、两个通过）
+  - L3 候选 → 审核/验证
+  - L2 候选 → 审核/验证
+  - 3 个项目复用，4 条 usage，4 条正反馈
+  - 提出 L2→L1 晋升建议
+- 幂等：同一 Run 重复采集不重复；同一 Experience 组合重复 Harvest 返回已有候选；同一 usage key 幂等。
+- 数据兼容：`personal_proposals` 自动增加 `meta_json`；旧库仍可打开。
 
-## 5. 鐪熷疄 Pi 璇佹嵁
+## 5. 真实 Pi 证据
 
-### 5.1 鐪熷疄 Pi Run 閲囬泦
+### 5.1 真实 Pi Run 采集
 
-杩愯 root锛歚D:\nautilus_trader\.tmp\opencode\knowledge-acceptance-l2b`
+运行 root：`D:\nautilus_trader\.tmp\opencode\knowledge-acceptance-l2b`
 
-- `scripts/acceptance/e2e-repair.mjs --level 2`锛氭簮琛ヤ竵纭畾鎬с€丼andbox provider 涓?fake锛?*淇鎻愭鐢辩湡瀹?Pi锛坓lm-5.3锛夌敓鎴?*銆?
-- 淇琛ヤ竵 `c06b9867-3e2b-4c58-b8cd-f0a58eb08bac`锛宺epair run `completed/completed/pass`銆?
-- 浠庡悓涓€ OwnerStore 鐩存帴閲囬泦锛?
-  - `exp_7537a0d9e80f4ae0a3410fd1`锛氭簮娴嬭瘯 fail锛?
-  - `exp_b36ce1405eec434d92a5ebb0`锛氫慨澶嶅悗 pass / `repaired`銆?
-- 鐪熷疄 Pi Harvest锛坄harvest_313d6d093b3a4473ad7d9e47`锛変粠杩欎袱鏉?Experience 鐢熸垚 2 涓?project 鍊欓€夛紝鍖呭惈锛?
-  - 鈥滆鏁板紡閲嶈瘯 off-by-one锛歛ttempts 涓烘€绘鏁版椂锛屾帓浠栦笂鐣屽繀椤荤瓑浜?attempts鈥濓紱
-  - 璇佹嵁寮曠敤婧?淇 stdout銆佷袱涓ˉ涓?diff銆乻napshot manifest 鍝堝笇涓€鑷存€с€?
-- 璇存槑锛氳楠屾敹鐨?sandbox 缁撴灉涓?fake provider 鍥哄畾杈撳嚭锛涙ā鍨嬫彁妗堜笌璇佹嵁閾炬槸鐪熷疄鐨勶紝鏈妸瀹冨啓鎴愮湡瀹?Docker 鎵ц銆?
+- `scripts/acceptance/e2e-repair.mjs --level 2`：源补丁确定性、Sandbox provider 为 fake，**修复提案由真实 Pi（glm-5.3）生成**。
+- 修复补丁 `c06b9867-3e2b-4c58-b8cd-f0a58eb08bac`，repair run `completed/completed/pass`。
+- 从同一 OwnerStore 直接采集：
+  - `exp_7537a0d9e80f4ae0a3410fd1`：源测试 fail；
+  - `exp_b36ce1405eec434d92a5ebb0`：修复后 pass / `repaired`。
+- 真实 Pi Harvest（`harvest_313d6d093b3a4473ad7d9e47`）从这两条 Experience 生成 2 个 project 候选，包含：
+  - “计数式重试 off-by-one：attempts 为总次数时，排他上界必须等于 attempts”；
+  - 证据引用源/修复 stdout、两个补丁 diff、snapshot manifest 哈希一致性。
+- 说明：该验收的 sandbox 结果为 fake provider 固定输出；模型提案与证据链是真实的，未把它写成真实 Docker 执行。
 
-### 5.2 鐪熷疄 Harvest + 璺ㄩ」鐩€欓€?
+### 5.2 真实 Harvest + 跨项目候选
 
-杩愯 root锛歚D:\nautilus_trader\.tmp\opencode\knowledge-loop-demo-real`
+运行 root：`D:\nautilus_trader\.tmp\opencode\knowledge-loop-demo-real`
 
-- 杈撳叆 3 鏉?Experience锛歞emo-a 婧愬け璐ャ€乨emo-a 淇閫氳繃銆乨emo-b 閫氳繃锛坒ixture Sandbox锛夈€?
-- 妯″瀷锛歚zai-coding-cn/glm-5.3`銆?
-- Harvest run锛歚harvest_53ef6399aa3d4b1582c0d201`銆?
-- 浜у嚭 applied 鍊欓€夛細`4f7d5e76-0f96-49ec-a58c-0c1e9e8decf8`锛屼富寮?`attempts - 1` 鈫?`attempts`銆?
-- Owner 瀹℃牳鍚庡崟鍏冿細`personal.80f1093f88644ea8a85a50ff`锛宺evision 2锛宍verified`銆?
+- 输入 3 条 Experience：demo-a 源失败、demo-a 修复通过、demo-b 通过（fixture Sandbox）。
+- 模型：`zai-coding-cn/glm-5.3`。
+- Harvest run：`harvest_53ef6399aa3d4b1582c0d201`。
+- 产出 applied 候选：`4f7d5e76-0f96-49ec-a58c-0c1e9e8decf8`，主张 `attempts - 1` → `attempts`。
+- Owner 审核后单元：`personal.80f1093f88644ea8a85a50ff`，revision 2，`verified`。
 
-### 5.3 鐪熷疄 Reuse
+### 5.3 真实 Reuse
 
-- 椤圭洰 B 缂栬瘧浠诲姟锛歚retry withRetry attempts loop off-by-one`銆?
-- `dynamicContext` 鍖呭惈 verified 鍗曞厓锛屾爣绛?`[applied layer; verification=verified; ELIGIBLE]`銆?
-- 璁板綍 usage锛歚targetRunId=run-demo-b-pass`锛宍contextSnapshotId=407db8...`锛宍applicabilityResult=applicable`銆?
-- 璇佹嵁鏂囦欢锛歚real-reuse-b.json`銆?
+- 项目 B 编译任务：`retry withRetry attempts loop off-by-one`。
+- `dynamicContext` 包含 verified 单元，标签 `[applied layer; verification=verified; ELIGIBLE]`。
+- 记录 usage：`targetRunId=run-demo-b-pass`，`contextSnapshotId=407db8...`，`applicabilityResult=applicable`。
+- 证据文件：`real-reuse-b.json`。
 
-## 6. A/B/C 璇勪及
+## 6. A/B/C 评估
 
-鍥哄畾浠诲姟銆佹ā鍨?`zai-coding-cn/glm-5.3`銆佸悓涓€ fixture 涓庢祴璇曞懡浠ゃ€?
+固定任务、模型 `zai-coding-cn/glm-5.3`、同一 fixture 与测试命令。
 
-### 6.1 閫氱敤浠诲姟
+### 6.1 通用任务
 
 | Variant | runs | success | rework | irrelevant injection | misapplication | knowledge tokens |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -106,41 +106,41 @@
 | Knowledge | 2 | 2/2 | 0 | 0 | 0 | 569 |
 | Forced misleading | 1 | 1/1 | 0 | 0 | 0 | 29 |
 
-缁撹锛氬湪寮哄熀绾夸笂锛宧elpful 浠诲姟娌℃湁鎴愬姛鐜囨彁鍗囷紱irrelevant 浠诲姟鍦ㄧ浉鍏虫€ч槇鍊间慨澶嶅悗娉ㄥ叆 0 鏉★紱forced misleading 琚ā鍨嬪拷鐣ワ紝鏈€犳垚澶辫触銆?*涓嶅绉伴€氱敤浠诲姟涓婄殑鏁堟灉鎻愬崌銆?*
+结论：在强基线上，helpful 任务没有成功率提升；irrelevant 任务在相关性阈值修复后注入 0 条；forced misleading 被模型忽略，未造成失败。**不宣称通用任务上的效果提升。**
 
-### 6.2 鍥伴毦浠诲姟锛堜笉鍙粠婧愮爜鎺ㄦ柇鐨勯」鐩害瀹氾級
+### 6.2 困难任务（不可从源码推断的项目约定）
 
-浠诲姟锛歠ixture 榛樿 `attempts = 1`锛屾祴璇曡姹?7 娆★紱鐭ヨ瘑鏄庣‘鈥滆 fixture 瀹舵棌榛樿灏濊瘯娆℃暟涓?7鈥濄€?
+任务：fixture 默认 `attempts = 1`，测试要求 7 次；知识明确“该 fixture 家族默认尝试次数为 7”。
 
 | Variant | success | rework | knowledge refs |
 | --- | ---: | ---: | ---: |
 | Baseline | **false** | 1 | 0 |
 | Knowledge | **true** | 0 | 3 |
 
-璇佹嵁锛歚eval-hard-report.json`锛坆aseline exit 1锛宬nowledge exit 0锛夈€傝繖鏄湰杞敮涓€鍙敮鎸佺殑鈥滅煡璇嗗鐢ㄦ湁鏁堚€濈粨璁猴紝涓斿彧鍦ㄦ槑纭€傜敤绾﹀畾鐨勪换鍔′笂鎴愮珛銆?
+证据：`eval-hard-report.json`（baseline exit 1，knowledge exit 0）。这是本轮唯一可支持的“知识复用有效”结论，且只在明确适用约定的任务上成立。
 
-## 7. 涓夎疆杩唬
+## 7. 三轮迭代
 
-1. **閲囬泦/鍊欓€夋槧灏?*锛氫慨澶?evidenceRefs 鎺掑簭瀵艰嚧鍘婚噸澶辨晥锛涢檺鍒跺崟椤圭洰鍊欓€変负 L3锛涘彂鐜?remove candidate meta 闇€瑕佹墿灞?proposal schema銆?
-2. **Harvest 璇佹嵁璐ㄩ噺**锛氱湡瀹?Pi 绗竴杞彧鐪嬪埌 patch 璺緞锛屼骇鍑烘祦绋嬪瀷鍊欓€夛紱鍔犲叆 proposal diff 涓庘€滄妧鏈満鍒朵紭鍏堚€濇彁绀哄悗锛岀湡瀹炲€欓€夋纭瘑鍒?`attempts - 1`銆?
-3. **妫€绱㈢簿搴?Eval**锛氬彂鐜版棤鍏充换鍔℃敞鍏?0.2 鍒嗙殑 claim 鍛戒腑锛涙妸鏈湴鐭ヨ瘑鐩稿叧鎬ч槇鍊兼彁楂樺埌 3锛宨rrelevant injection 闄嶄负 0锛涙柊澧炲洶闅句换鍔?A/B锛屽緱鍒?baseline fail 鈫?knowledge pass銆?
+1. **采集/候选映射**：修复 evidenceRefs 排序导致去重失效；限制单项目候选为 L3；发现 remove candidate meta 需要扩展 proposal schema。
+2. **Harvest 证据质量**：真实 Pi 第一轮只看到 patch 路径，产出流程型候选；加入 proposal diff 与“技术机制优先”提示后，真实候选正确识别 `attempts - 1`。
+3. **检索精度/Eval**：发现无关任务注入 0.2 分的 claim 命中；把本地知识相关性阈值提高到 3，irrelevant injection 降为 0；新增困难任务 A/B，得到 baseline fail → knowledge pass。
 
-## 8. 宸茬煡闄愬埗
+## 8. 已知限制
 
-- 鐪熷疄 A/B 鍙湪鍗曚竴妯″瀷锛坓lm-5.3锛変笌灏忓瀷 fixture 涓婂畬鎴愶紱鏍锋湰閲?1锛屼笉鑳藉鎺ㄤ负鏅亶鏁堟灉銆?
-- 鈥滅煡璇嗘湁鏁堚€濆彧鍦ㄢ€滈」鐩害瀹氫笉鍙粠婧愮爜鎺ㄦ柇鈥濈殑鍥伴毦浠诲姟涓婅璇佹槑锛涢€氱敤 retry 浠诲姟 baseline 宸插畬鎴愩€?
-- pstack 鍙綔涓虹邯寰嬩笌 Skill 鍔犺浇鏉ユ簮锛涙湭鑷姩淇敼 pstack Skill锛屾湭璋冪敤 Cursor `/loop`銆?
-- Companion 鐭ヨ瘑鍏ュ彛鍦ㄥ爢鍙犲垎鏀疄鐜帮紱macOS 鏈獙璇併€?
-- `node-smoke` profile 鍥哄畾锛岀湡瀹為」鐩渶鎻愪緵 `tests/sandbox-smoke.test.mjs`銆?
-- Token 鏁颁负淇濆畧浼扮畻锛屼笉鏄?provider 璁¤垂鍊笺€?
+- 真实 A/B 只在单一模型（glm-5.3）与小型 fixture 上完成；样本量 1，不能外推为普遍效果。
+- “知识有效”只在“项目约定不可从源码推断”的困难任务上被证明；通用 retry 任务 baseline 已完成。
+- pstack 只作为纪律与 Skill 加载来源；未自动修改 pstack Skill，未调用 Cursor `/loop`。
+- Companion 知识入口在堆叠分支实现；macOS 未验证。
+- `node-smoke` profile 固定，真实项目需提供 `tests/sandbox-smoke.test.mjs`。
+- Token 数为保守估算，不是 provider 计费值。
 
-## 9. 澶嶇幇
+## 9. 复现
 
 ```bash
 npm run check
 npm test
 npm run knowledge:demo -- --root <dir>
-# 鐪熷疄 Pi锛堥渶妯″瀷鍑嵁锛?
+# 真实 Pi（需模型凭据）
 node bin/knowledgectl.mjs harvest --owner-db <dir>/owner.sqlite --knowledge-db <dir>/knowledge.sqlite \
   --project demo-a --experience <id> --experience <id> --allow-model
 node bin/knowledgectl.mjs approve --knowledge-db <dir>/knowledge.sqlite --proposal <id>
@@ -150,22 +150,21 @@ node scripts/knowledge-loop/eval-real.mjs --root <dir> --knowledge-id <id> --all
 node scripts/knowledge-loop/eval-hard.mjs --root <dir> --allow-model
 ```
 
-## 10. DoD 瀵圭収
+## 10. DoD 对照
 
-| DoD | 鐘舵€?|
+| DoD | 状态 |
 | --- | --- |
-| 鐪熷疄 Pi Run 鍙噰闆嗕负 Experience | 鉁咃紙鐪熷疄 Harvest 浣跨敤浜嗙湡瀹炶繍琛岃瘉鎹紱閲囬泦鍣ㄦ湰韬篃鏀寔 Job/Sandbox锛?|
-| pstack 椹卞姩 Harvest 鐢熸垚缁撴瀯鍖栧€欓€?| 鉁咃紙鍔犺浇 pstack skills锛孍DAE/Reflect/decision log锛?|
-| 鍊欓€夎繘鍏ョ幇鏈夌煡璇嗗簱 | 鉁咃紙proposal 鈫?unit锛?|
-| 鏌ヨ/淇/楠岃瘉/鎷掔粷/鏉ユ簮杩借釜 | 鉁咃紙鐜版湁 PersonalKnowledgeStore + 鏂板瑙嗗浘锛?|
-| L3鈫扡2/L1 鏅嬪崌寤鸿 | 鉁咃紙涓?涓変釜椤圭洰姝ｅ弽棣堣Е鍙?promotion proposal锛涘崟鍏冩祴璇?demo锛?|
-| 鏂颁换鍔℃绱㈠苟浣跨敤鐭ヨ瘑 | 鉁咃紙鐪熷疄 Reuse锛宑ontext + usage锛?|
-| 澶嶇敤缁撴灉鍙嶅悜鍏宠仈鐭ヨ瘑 | 鉁咃紙feedback 鈫?usage 鈫?knowledge锛?|
-| 閿欒/鏃犲叧/鍐茬獊璐熷悜娴嬭瘯 | 鉁咃紙闃堝€间慨澶嶃€乫orced misleading銆乧onflict status锛?|
-| 涓嶉噸澶嶉€犲瓨鍌?Harness | 鉁?|
-| 鐪熷疄 Pi 鎻愮偧妗堜緥 | 鉁咃紙harvest_53ef...锛?|
-| 鐪熷疄 Pi 澶嶇敤妗堜緥 | 鉁咃紙real-reuse-b锛?|
-| 涓夎疆 Eval/璐ㄩ噺杩唬 | 鉁咃紙瑙?搂7锛?|
-| 妗屽疇鐭ヨ瘑鍏ュ彛 | 鈴?鍫嗗彔 Companion PR |
-| 瀹夎/鍥炴粴璇存槑 | 鉁咃紙CLI + docs锛?|
-
+| 真实 Pi Run 可采集为 Experience | ✅（真实 Harvest 使用了真实运行证据；采集器本身也支持 Job/Sandbox） |
+| pstack 驱动 Harvest 生成结构化候选 | ✅（加载 pstack skills，EDAE/Reflect/decision log） |
+| 候选进入现有知识库 | ✅（proposal → unit） |
+| 查询/修订/验证/拒绝/来源追踪 | ✅（现有 PersonalKnowledgeStore + 新增视图） |
+| L3→L2/L1 晋升建议 | ✅（两/三个项目正反馈触发 promotion proposal；单元测试+demo） |
+| 新任务检索并使用知识 | ✅（真实 Reuse，context + usage） |
+| 复用结果反向关联知识 | ✅（feedback → usage → knowledge） |
+| 错误/无关/冲突负向测试 | ✅（阈值修复、forced misleading、conflict status） |
+| 不重复造存储/Harness | ✅ |
+| 真实 Pi 提炼案例 | ✅（harvest_53ef...） |
+| 真实 Pi 复用案例 | ✅（real-reuse-b） |
+| 三轮 Eval/质量迭代 | ✅（见 §7） |
+| 桌宠知识入口 | ⏳ 堆叠 Companion PR |
+| 安装/回滚说明 | ✅（CLI + docs） |
