@@ -108,9 +108,9 @@ npm run desktop:pack   # Windows x64 portable
 
 **私有 CI Artifact（Windows RC）**
 - CI job `desktop-package` 在 `windows-latest` 执行 `npm run desktop:pack`；
-- run `42445382522`（code commit `922e305b4a150a6815e99051394b7448787550da`）；
-- artifact：`OwnerCompanion-1.0.0-portable-922e305b4a150a6815e99051394b7448787550da`（Artifact ID `13603427249`，122,191,430 字节）；
-- 解压后 EXE SHA256：`2408f50eff7845972cd9644b6c840fc08fdea9bb33f5c370176db64b2790ecde`；
+- run `42446149023`（code commit `92e68d2b5faeeca50fa139705da8e92232799d27`）；
+- artifact：`OwnerCompanion-1.0.0-portable-92e68d2b5faeeca50fa139705da8e92232799d27`（Artifact ID `13603543346`，122,191,416 字节）；
+- 解压后 EXE SHA256：`020b39d92c060419682b003c06b029cec7b91fb87ba72b4334007cd494ea643c`；
 - `SHA256SUMS.txt` 记录该 SHA256、对应 commit 与 run id；
 - 仓库为私有，需登录有权限的 GitHub 账号在 Actions 运行页下载；不做公开发布。
 
@@ -142,7 +142,7 @@ npx electron-builder --mac dmg --arm64
 | Sandbox 配置失败回归 | **通过**（错误反馈 + 配置警告 + 重试创建） |
 | 多项目隔离回归 | **通过**（当前项目链、其他项目待办标签） |
 | 打包应用启动 | **通过** |
-| CI（PR #22） | run `42445382522` 全绿：plugin / sandbox-real / ubuntu test / windows test / desktop-package |
+| CI（PR #22） | run `42446149023` 全绿：plugin / sandbox-real / ubuntu test / windows test / desktop-package |
 
 截图：`docs/assets/companion/`。
 
