@@ -144,8 +144,33 @@ node scripts/e2e/knowledge-provenance-smoke.mjs   # 真实 CLI + 真实 git + �
 
 - 同步按**单元线性历史**合并；若同一设备删除后重建修订号，会判为分叉而不是重写历史。
 - 项目身份在没有 remote、也没有根提交时退到本地根哈希，此时**跨设备不可识别**，会显式标为 `local-root`。
-- 导入不自动解决冲突；冲突保留在 `knowledge_conflicts`，需 Owner 在后续版本处理。
+- 导入不自动解决冲突；冲突保留在 `knowledge_conflicts`，需 Owner 在后续版本处理（CLI 已提供 `conflicts list/resolve`）。
 - 导出默认只含项目范围的单元；`--all` 可导出全部，但没有按领域筛选。
 - 同步包**未签名**：哈希只防传输损坏与误改，不防恶意构造；跨不可信网络传输前需自行加密与认证。
 - 尚未接入 Workbench UI；目前是 CLI + 可注入服务。
 - 未验证：macOS、超大历史（>10k 修订）同步性能。
+
+## 8. 本次验收记录（2026-11-09）
+
+```
+npm run check                → 0
+npm test                     → 229 tests / 226 pass / 3 skip / 0 fail
+node --test tests/knowledge-provenance.test.mjs tests/knowledge-sync.test.mjs
+                             → 23 pass / 0 fail
+node scripts/e2e/knowledge-provenance-smoke.mjs → PASS（10 步，含真实 GitHub）
+```
+
+端到端实测值（一次运行）：
+
+| 项 | 值 |
+| --- | --- |
+| 项目身份 | `git-first-commit`（无 remote 的 fixture 仓库） |
+| 知识单元 | `personal.8dc2f87b136b4086a2ea1d3b`，r1 |
+| 来源观察 | `obs_3426cab876963219726903a1`，commit `0866a6b5…`，blob `a91749af…` |
+| 采纳 | r1，`drift=false` |
+| 来源变更 | 恰好 1 条 `source_changed` pending，知识 Head 仍为 r1 |
+| 接受重验证 | Head → r2，`needs_reverification`，采纳仍为 r1（`drift=true`） |
+| 同步 | 导入空库 1 个单元，ID/历史保留；二次导入 `unchanged=1` |
+| GitHub | commit `8c14707a9c7fae08c083508b48816091ce91aec2`（`GeTitDD/owner-agent-mvp`） |
+
+证据文件：`provenance-smoke.json`（由 `EVIDENCE_DIR` 指定）。
