@@ -17,6 +17,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import { mkdtempSync,rmSync } from 'node:fs';
+import { resolvePiModel } from './pi-model-catalog.mjs';
 
 export const DefaultPiSessionFactory={
   async create({cwd,model,signal}={}){
@@ -37,7 +38,7 @@ export const DefaultPiSessionFactory={
           noTools:true,
           sessionManager:sdk.SessionManager.inMemory(),
           resourceLoader:loader,
-          ...(model?{model}:{})
+          ...(model?{model:resolvePiModel(model)}:{})
         });
         let disposed=false;
         return {
