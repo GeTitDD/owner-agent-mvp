@@ -74,6 +74,8 @@ deviceId         dev_<24hex>           首次运行生成，存 ~/.domain-contex
 
 **不会**因为外部文件变化自动改知识，也不会自动重算验证状态。
 
+来源被删除/不可访问时，`source mark-unavailable` 同样只生成 `source_unavailable` 的 pending 项。
+
 ### 4.3 同步四段式
 
 1. **完整性**：`sha256(canonical(payload)) == payloadHash`，不通过则整条拒绝。
@@ -96,6 +98,7 @@ node bin/knowledge-maint.mjs project register --project demo --root <repo>
 # 观察来源（真实 git / 文件 / GitHub / Run / Session）
 node bin/knowledge-maint.mjs observe --kind git --project demo --root <repo> --path src/retry.js
 node bin/knowledge-maint.mjs observe --kind github --repo GeTitDD/owner-agent-mvp --github-kind commit --ref main --project demo
+node bin/knowledge-maint.mjs source mark-unavailable --source src.x --note "repo archived"
 
 # 绑定与采纳
 node bin/knowledge-maint.mjs link --knowledge personal.x --revision 2 --observation obs.y --relation supports
@@ -122,7 +125,7 @@ node bin/knowledge-maint.mjs context restore --snapshot ctx.x
 ## 6. 验收证据
 
 ```powershell
-node --test tests/knowledge-provenance.test.mjs   # 12 tests
+node --test tests/knowledge-provenance.test.mjs   # 13 tests
 node --test tests/knowledge-sync.test.mjs         # 11 tests
 node scripts/e2e/knowledge-provenance-smoke.mjs   # 真实 CLI + 真实 git + 真实 GitHub
 ```
@@ -154,9 +157,9 @@ node scripts/e2e/knowledge-provenance-smoke.mjs   # 真实 CLI + 真实 git + �
 
 ```
 npm run check                → 0
-npm test                     → 229 tests / 226 pass / 3 skip / 0 fail
+npm test                     → 230 tests / 227 pass / 3 skip / 0 fail
 node --test tests/knowledge-provenance.test.mjs tests/knowledge-sync.test.mjs
-                             → 23 pass / 0 fail
+                             → 24 pass / 0 fail
 node scripts/e2e/knowledge-provenance-smoke.mjs → PASS（10 步，含真实 GitHub）
 ```
 

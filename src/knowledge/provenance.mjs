@@ -232,6 +232,37 @@ export class KnowledgeProvenance {
     return created;
   }
 
+  /** 显式标记来源不可访问：只排队重验证，不改知识内容或验证状态。 */
+  markSourceUnavailable({ sourceId, note = '' }) {
+    const source = this.getSource(sourceId);
+    if (!source) throw new Error('Source not found');
+    const latest = this.listObservations({ sourceId, limit: 1 })[0] ?? null;
+    const payload = { ...source, availability: 'unavailable', lastSeenAt: this.clock(), note };
+    delete payload.payloadHash;
+    const body = canonical(payload);
+    this.db.prepare('UPDATE knowledge_sources SET availability=?,last_seen_at=?,payload=?,payload_hash=? WHERE source_id=?')
+      .run('unavailable', this.clock(), body, sha256(body), sourceId);
+    if (!latest) return { source: this.getSource(sourceId), revalidations: [] };
+    const rows = this.db.prepare(`SELECT l.unit_id, l.revision, o.observation_id
+      FROM knowledge_source_links l
+      JOIN knowledge_source_observations o ON o.observation_id = l.observation_id
+      WHERE o.source_id = ?`).all(sourceId);
+    const created = [];
+    const seen = new Set();
+    for (const row of rows) {
+      const key = `${row.unit_id}:${row.revision}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const item = this.createRevalidation({
+        unitId: row.unit_id, revision: row.revision, sourceId,
+        fromObservationId: row.observation_id, toObservationId: latest.observationId,
+        reason: 'source_unavailable'
+      });
+      if (item) created.push(item);
+    }
+    return { source: this.getSource(sourceId), revalidations: created };
+  }
+
   // ---- 修订 ↔ 来源绑定 ----
 
   linkRevision({ unitId, revision, observationId, relation = 'supports', by = 'user' }) {

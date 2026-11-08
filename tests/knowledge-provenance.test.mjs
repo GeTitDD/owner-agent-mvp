@@ -265,6 +265,26 @@ test('链接校验：未知知识/修订/观察与非法关系都被拒绝', () 
   } finally { store.close(); }
 });
 
+test('来源不可访问：只排队重验证，不改知识 Head', () => {
+  const store = new PersonalKnowledgeStore(':memory:');
+  try {
+    const provenance = new KnowledgeProvenance({ personalStore: store });
+    const unit = makeUnit(store);
+    const observed = provenance.observeSource({
+      sourceType: 'github', namespace: 'github:o/r', objectId: 'o/r@commit:abc',
+      sourceVersion: 'abc', locator: 'https://github.com/o/r/commit/abc',
+      contentHash: '', availability: 'available', projectId: 'demo'
+    });
+    provenance.linkRevision({ unitId: unit.id, revision: 1, observationId: observed.observation.observationId });
+    const result = provenance.markSourceUnavailable({ sourceId: observed.observation.sourceId, note: 'repo deleted' });
+    assert.equal(result.source.availability, 'unavailable');
+    assert.equal(result.revalidations.length, 1);
+    assert.equal(result.revalidations[0].reason, 'source_unavailable');
+    assert.equal(store.get(unit.id).revision, 1);
+    assert.equal(store.get(unit.id).verificationStatus, 'unverified');
+  } finally { store.close(); }
+});
+
 test('上下文台账：记录、恢复与漂移检测', () => {
   const store = new PersonalKnowledgeStore(':memory:');
   try {

@@ -92,6 +92,7 @@ async function main() {
 
   project register --project <id> --root <dir>
   source list [--project <id>]
+  source mark-unavailable --source <sourceId> [--note <text>]
   observe --kind git|file|github|run|session [--project <id>] [--root <dir>] [--path <p>] [--repo <o/r>] [--ref <sha>] [--run <id>] [--session <id>]
   link --knowledge <id> --revision <n> --observation <id> [--relation supports|contradicts|derived_from|validates]
   adopt --knowledge <id> [--revision <n>] [--note <text>]
@@ -121,6 +122,13 @@ DB: --knowledge-db <path> (default ${knowledgeDb})
     }
     if (command === 'source' && group === 'list') {
       json(stores.provenance.listSources({ projectId: read('--project'), limit: Number(read('--limit', '100')) }));
+      return;
+    }
+    if (command === 'source' && group === 'mark-unavailable') {
+      json(stores.provenance.markSourceUnavailable({
+        sourceId: read('--source'),
+        note: read('--note')
+      }));
       return;
     }
     if (command === 'observe') {
