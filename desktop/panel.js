@@ -57,6 +57,14 @@
     $('composeSection').hidden = !hasProjects;
     $('submitTask').disabled = !hasProjects;
     if (!hasProjects) renderServiceGrid($('setupServices'), view?.services);
+    const testConfig = view?.testConfig;
+    const missing = testConfig?.missing ?? [];
+    $('testWarning').hidden = !(hasProjects && testConfig && testConfig.ok === false);
+    if (hasProjects && testConfig && testConfig.ok === false) {
+      $('testWarningText').textContent = missing.length
+        ? `测试配置缺少 ${missing.join(', ')}；补丁应用后无法创建沙箱。`
+        : '还没有可用的测试配置；补丁应用后无法创建沙箱。';
+    }
     $('footerStatus').textContent = view?.services?.docker
       ? '本地服务已启动 · Docker 可用'
       : '本地服务已启动 · Docker 未检测到';
@@ -93,15 +101,51 @@
   };
   const closeModal = () => { $('modal').hidden = true; };
 
-  const runDecision = async (input, successText) => {
+  const runDecision = async (input, successText = '') => {
     try {
-      await window.companion.decide(input);
+      const result = await window.companion.decide(input);
       closeModal();
-      toast(successText);
       await refresh();
+      if (successText) toast(successText);
+      return { ok: true, result };
     } catch (error) {
       toast(String(error?.message ?? error), 5000);
+      return { ok: false, error };
     }
+  };
+
+  const showSandboxFailure = (result, proposalId) => {
+    const missing = result?.testConfig?.missing ?? [];
+    const nodes = [
+      el('p', 'result-summary',
+        '补丁已经应用，但测试没有创建。补齐测试配置后可以在这里重试，不必重新应用补丁。'),
+      detailRows([
+        ['补丁状态', '已应用'],
+        ['测试创建', '失败'],
+        ['原因', result?.sandboxError || '未知错误'],
+        ['缺少文件', missing.join(', ') || '—']
+      ]),
+      el('p', 'pending-summary',
+        'node-smoke 固定运行 tests/sandbox-smoke.test.mjs；也可以在设置里调整快照包含的文件。')
+    ];
+    const later = el('button', 'ghost', '稍后处理');
+    later.onclick = closeModal;
+    const configure = el('button', 'ghost', '打开测试配置');
+    configure.onclick = () => { closeModal(); void openSettings(); };
+    const retry = el('button', 'primary', '重试创建测试');
+    retry.onclick = async () => {
+      retry.disabled = true;
+      try {
+        await window.companion.createSandbox({ proposalId });
+        closeModal();
+        toast('测试已创建，等你批准后运行');
+        await refresh();
+      } catch (error) {
+        retry.disabled = false;
+        toast(String(error?.message ?? error), 6000);
+      }
+    };
+    openModal('补丁已应用，但测试未创建', nodes, [later, configure, retry]);
   };
 
   const confirmDecision = ({ title, rows, hash, confirmLabel, success, input, reason }) => {
@@ -159,14 +203,24 @@
       const approve = el('button', 'primary', applying ? '应用并请求测试' : '批准补丁');
       approve.disabled = true;
       checkbox.onchange = () => { approve.disabled = !checkbox.checked; };
-      approve.onclick = () => {
+      approve.onclick = async () => {
         const kind = applying ? 'patch-apply' : 'patch';
-        void runDecision({
+        const outcome = await runDecision({
           kind,
           id: patch.id,
           hash: patch.proposal_hash,
           action: 'approve'
-        }, applying ? '补丁已应用，已请求测试' : '补丁已批准；再次审阅即可应用');
+        });
+        if (!outcome.ok) return;
+        if (!applying) {
+          toast('补丁已批准；再次审阅即可应用');
+          return;
+        }
+        if (outcome.result?.testRequested === false) {
+          showSandboxFailure(outcome.result, patch.id);
+          return;
+        }
+        toast('补丁已应用，测试已创建，等你批准后运行');
       };
       openModal(applying ? '应用补丁' : '审阅补丁', nodes, [cancel, approve]);
     } catch (error) {
@@ -215,6 +269,11 @@
     if (item.kind.startsWith('patch')) card.classList.add('patch');
     if (item.kind === 'repair-create') card.classList.add('error');
     card.append(el('div', 'pending-title', item.title));
+    if (item.projectName) {
+      const current = item.projectId === view?.config?.projectId;
+      card.append(el('div', 'pending-project',
+        current ? `当前项目 · ${item.projectName}` : `其他项目 · ${item.projectName}`));
+    }
     card.append(el('div', 'pending-summary',
       item.hash ? `${item.summary} · ${fmtHash(item.hash)}` : item.summary));
     const actions = el('div', 'pending-actions');
@@ -338,9 +397,16 @@
     const button = $('submitTask');
     button.disabled = true;
     try {
-      await window.companion.createJob({ text, projectId });
+      const created = await window.companion.createJob({ text, projectId });
       $('taskInput').value = '';
-      toast('任务已创建，等你批准后开始');
+      const missing = created?.testConfig?.missing ?? [];
+      if (created?.testConfig?.ok === false) {
+        toast(missing.length
+          ? `任务已创建；测试配置缺少 ${missing.join(', ')}，补丁应用后将无法创建沙箱。`
+          : '任务已创建；但还没有可用的测试配置，补丁应用后将无法创建沙箱。', 7000);
+      } else {
+        toast('任务已创建，等你批准后开始');
+      }
       await refresh();
     } catch (error) {
       toast(String(error?.message ?? error), 5000);
@@ -387,14 +453,16 @@
 
   $('saveSettings').onclick = async () => {
     try {
-      await window.companion.settings.set({
+      const saved = await window.companion.settings.set({
         gatewayUrl: $('gatewayUrl').value,
         model: $('model').value,
         allowedPaths: $('allowedPaths').value,
         includePaths: $('includePaths').value
       });
       $('settings').hidden = true;
-      toast('设置已保存');
+      if (saved?.modelPending) toast('设置已保存；模型将在当前任务结束后生效', 6000);
+      else if (saved?.modelChanged) toast('设置已保存，模型已切换');
+      else toast('设置已保存');
       await refresh();
     } catch (error) {
       toast(String(error?.message ?? error), 5000);
@@ -416,6 +484,7 @@
   $('addProject').onclick = () => { void pickProject(); };
   $('addProjectSettings').onclick = () => { void pickProject(); };
   $('retryServices').onclick = () => { void openSettings(); };
+  $('fixTestConfig').onclick = () => { void openSettings(); };
 
   window.companion.onOpenSettings(() => { void openSettings(); });
 

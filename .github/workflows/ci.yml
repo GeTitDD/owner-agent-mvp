@@ -100,3 +100,42 @@ jobs:
       - name: List sandbox-labelled containers for evidence
         if: always()
         run: docker ps -a --filter label=owner.sandbox=1
+
+  desktop-package:
+    # Windows RC artifact: downloadable only through the private repo's Actions.
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      ARTIFACT_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build Windows portable
+        run: npm run desktop:pack
+      - name: Write SHA256 and commit
+        shell: pwsh
+        run: |
+          $exe = Get-Item dist-companion/OwnerCompanion-1.0.0-portable.exe
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          @(
+            "$hash  $($exe.Name)",
+            "commit=$env:ARTIFACT_COMMIT",
+            "run=${{ github.run_id }}"
+          ) | Set-Content -Encoding ascii dist-companion/SHA256SUMS.txt
+          Get-Content dist-companion/SHA256SUMS.txt
+          "### Windows portable RC" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          "commit: ``$env:ARTIFACT_COMMIT``" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          "sha256: ``$hash``" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OwnerCompanion-1.0.0-portable-${{ env.ARTIFACT_COMMIT }}
+          path: |
+            dist-companion/OwnerCompanion-1.0.0-portable.exe
+            dist-companion/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30

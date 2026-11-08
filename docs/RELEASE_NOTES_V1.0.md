@@ -24,6 +24,13 @@
 - OpenClaw 不是 L1 的依赖：L2「完整工作台」才连接 Gateway，未连接时回退 Workbench；
 - 旧 Workbench 的 companion 悬浮问答与静态页已移除，避免第二套聊天状态。
 
+### 发布前 RC 修复
+- 自动创建 Sandbox 失败不再显示“已请求测试”：明确显示“补丁已应用 / 测试创建失败 / 缺少文件”，支持打开测试配置或原地重试。
+- 任务链、阶段和成果只关联当前项目；全局待办卡标注「当前项目 / 其他项目」。
+- 默认快照配置不再依赖测试 fixture 文件名；node-smoke 固定测试路径自动加入。
+- 模型切换：Worker 空闲时立即生效；忙碌时在当前任务结束后生效并提示。
+- CI 增加 `desktop-package` job，上传私有 Windows portable Artifact 与 `SHA256SUMS.txt`（含 commit 与 run id）。
+
 ## 安装 / 运行
 
 ```bash
@@ -44,7 +51,7 @@ npm run desktop
 npm run desktop:pack
 ```
 
-产物：`dist-companion/OwnerCompanion-1.0.0-portable.exe`（未签名，Electron 默认图标）。
+产物：`dist-companion/OwnerCompanion-1.0.0-portable.exe`（未签名，Electron 默认图标）。CI 的 `desktop-package` job 会上传私有 Artifact（EXE + SHA256SUMS.txt）；需登录有权限的账号在 Actions 下载。
 
 macOS：
 
@@ -67,5 +74,7 @@ npx electron-builder --mac dmg --arm64
 
 - 内核测试 194 / 191 pass / 3 skip；
 - 桌面 E2E（SOP-1..4，真实 Docker + 真实 Pi）通过；
-- 外壳 E2E（位置/焦点/隐藏/召回/重启保留）通过；
+- 外壳 E2E（位置/焦点/隐藏/召回/重启保留/模型切换）通过；
+- Sandbox 配置失败回归（错误反馈 + 重试）通过；
+- 多项目隔离回归通过；
 - 打包应用启动通过。

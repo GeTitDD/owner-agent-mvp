@@ -105,6 +105,17 @@ const run = async () => {
     const panelPage = await pageFor(app, 'panel.html');
     await panelPage.getByText('批准任务', { exact: true }).waitFor({ timeout: 15000 });
     check('pending job visible before restart', true);
+    const modelResult = await panelPage.evaluate(() => window.companion.settings.set({
+      model: 'test/companion-model'
+    }));
+    check('model change applies while idle',
+      modelResult?.modelChanged === true && modelResult?.modelApplied === true
+      && modelResult?.modelPending === false,
+      JSON.stringify({
+        changed: modelResult?.modelChanged,
+        applied: modelResult?.modelApplied,
+        pending: modelResult?.modelPending
+      }));
     await panelPage.screenshot({ path: path.join(evidence, 'shell-panel.png') });
 
     // 重启：同一个 userData / SQLite，任务与位置都应保持。

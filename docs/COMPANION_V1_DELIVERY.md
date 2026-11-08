@@ -3,7 +3,7 @@
 - 日期：2026-11-08
 - 基线：`main@8c14707` + PR #21（P3.1）之上的 Companion 分支
 - 运行环境：Windows 11（10.0.26100）、Electron 45.2.3、Node 22.20、Docker 29.4.3、Pi 默认模型
-- 结论：**四条核心 SOP 已通过真实桌面交互验收；Windows 便携包已生成；macOS 未验证（见缺口）。**
+- 结论：**四条核心 SOP 已通过真实桌面交互验收；Windows 内部 Release Candidate 便携包已生成，并作为私有 CI Artifact 提供；macOS 未验证（见缺口）。**
 
 ## 1. 产品形态
 
@@ -32,6 +32,24 @@ Electron 桌宠 + 进程内 Owner Runtime：
 - 第二次运行（文案改为“Fix the failing retry test”）模型输出正确的 off-by-one 修复，复测 `tested_pass`。
 - 两次都未自动 commit / push / merge。
 
+### 2.1 发布前 RC 收尾（Review #5816357081）
+
+**自动创建 Sandbox 失败不再伪装成功**
+- 默认快照配置改为 `package.json`；`tests/sandbox-smoke.test.mjs` 作为 node-smoke 固定路径自动加入，不再要求用户手工填写。
+- 面板会按当前项目检查测试配置；缺少文件时在交办区显示警告，并在任务创建提示中列出缺少路径。
+- 补丁应用结果与测试创建结果分开返回：补丁已应用但测试创建失败时，弹窗明确显示“已应用 / 创建失败 / 原因 / 缺少文件”，提供「打开测试配置」和「重试创建测试」，重试走已有 `companion:create-sandbox`，不会重复应用补丁。
+- 回归：`npm run e2e:desktop:sandbox-config`（fake source，不跑 Docker）。
+
+**多项目状态与成果隔离**
+- 任务链（Job → Patch → Sandbox → Repair → Result）只聚合 `config.projectId` 对应的项目。
+- 桌宠“工作中/完成/异常”和阶段摘要只反映当前项目；Worker 在别的项目上运行时不会把当前项目标成工作中。
+- 全局待办仍保留，但每张卡明确标注「当前项目 / 其他项目 · 项目名」。
+- 回归：`npm run e2e:desktop:multiproject`（双项目，p31 空闲 + p32 待审批）。
+
+**模型切换生效**
+- Worker 空闲时保存设置会直接更新提案 Agent 的模型并提示“模型已切换”。
+- Worker 正在执行时不会打断当前任务，模型在任务结束后自动应用，并提示“将在当前任务结束后生效”。
+
 ## 3. 客户端外壳验收
 
 `npm run e2e:desktop:shell`：
@@ -40,6 +58,7 @@ Electron 桌宠 + 进程内 Owner Runtime：
 - 桌宠 `focusable=false`、启动不抢焦点；
 - 面板默认隐藏；可打开；桌宠可隐藏与召回；
 - 预置待审批 Job 后重启（同一 `userData` / SQLite）：位置保持 220,180，任务仍在面板中，且仍不抢焦点；
+- Worker 空闲时切换模型立即生效（`modelChanged=true / modelApplied=true / modelPending=false`）；
 - 托盘菜单：显示桌宠、打开面板、完整工作台、设置、退出。
 
 未验证：多显示器实机（当前环境单屏）；缩放/DPI 仅按 Electron 默认处理。
@@ -63,7 +82,14 @@ Electron 桌宠 + 进程内 Owner Runtime：
 - 发现：很久以前的失败/成功会让桌宠永久停在异常/完成状态；可选 Gateway 未连接被标成错误色。
 - 修复：`files` 增加 `domains/`、`examples/`；状态只反映最近 30 分钟；Gateway 未连接改为警示色并标注“L2 可选”；结果弹窗增加自然语言摘要。
 
-三轮后回归：桌面 SOP-1..4、外壳、打包启动均通过；无已知阻断四条 SOP 的 P0/P1。
+**第 4 轮：发布前 RC 复审**
+- 发现：自动建沙箱失败仍提示“已请求测试”；默认快照配置像测试 fixture 专用。
+- 发现：多项目时不同项目的 Job/Patch/Run/Cycle 被拼成一条状态旅程。
+- 发现：保存模型后 Worker 仍使用旧模型。
+- 修复：拆分应用/测试结果并增加重试与配置引导；任务链按当前项目过滤、全局待办加项目标签；模型空闲立即生效、忙碌时任务结束后生效。
+- 回归：新增 `e2e:desktop:sandbox-config` 与 `e2e:desktop:multiproject`，并重跑真实 Docker + 真实 Pi 主链路。
+
+四轮后回归：桌面 SOP-1..4、外壳、Sandbox 配置失败、多项目隔离、打包启动均通过；无已知阻断四条 SOP 的 P0/P1。
 
 首次配置的诊断入口：无项目时展示 Docker / OpenClaw / 模型自检；设置页每次打开都会重新探测，并提供「重新检测」按钮，不需要重启应用。
 
@@ -78,7 +104,13 @@ npm run desktop:pack   # Windows x64 portable
 - `dist-companion/OwnerCompanion-1.0.0-portable.exe`（约 122 MB）
 - `dist-companion/win-unpacked/Owner Companion.exe`（可直接运行）
 
-已实测打包后的应用可启动、创建 DB、截图、退出；`node:sqlite` 在 Electron 内可用。最终提交对应的 portable EXE（122,169,108 字节）与 `win-unpacked` 均已实机启动验证。
+已实测打包后的应用可启动、创建 DB、截图、退出；`node:sqlite` 在 Electron 内可用。最终提交对应的 portable EXE（122,171,431 字节，本地构建 SHA256 `f7369064266831f5f6a49bc7e674c3923bfeb9f9c80e7b2d57ad4874b01da209`）与 `win-unpacked` 均已实机启动验证。
+
+**私有 CI Artifact（Windows RC）**
+- CI job `desktop-package` 在 `windows-latest` 执行 `npm run desktop:pack`；
+- 上传 artifact：`OwnerCompanion-1.0.0-portable-<commit>`，包含 EXE 与 `SHA256SUMS.txt`；
+- `SHA256SUMS.txt` 记录 EXE 的 SHA256、对应 head commit 与 run id；
+- 仓库为私有，需登录有权限的 GitHub 账号在 Actions 运行页下载；不做公开发布。
 
 限制：
 
@@ -104,9 +136,11 @@ npx electron-builder --mac dmg --arm64
 | OpenClaw 插件 build/validate | 通过（P3.1 PR） |
 | 浏览器 E2E（OpenClaw Control UI） | P3.1 通过 |
 | 桌面 E2E（Electron） | **通过**（SOP-1..4） |
-| 外壳 E2E | **通过**（位置/焦点/隐藏/召回/重启保留） |
+| 外壳 E2E | **通过**（位置/焦点/隐藏/召回/重启保留/模型切换） |
+| Sandbox 配置失败回归 | **通过**（错误反馈 + 配置警告 + 重试创建） |
+| 多项目隔离回归 | **通过**（当前项目链、其他项目待办标签） |
 | 打包应用启动 | **通过** |
-| CI（PR #22） | 最终 head 的 4 个 job 全绿：plugin / sandbox-real / ubuntu test / windows test（见 PR checks） |
+| CI（PR #22） | 最终 head：plugin / sandbox-real / ubuntu test / windows test / desktop-package 全绿（见 PR checks） |
 
 截图：`docs/assets/companion/`。
 
@@ -120,6 +154,8 @@ npx electron-builder --mac dmg --arm64
 6. 真实模型可靠性：任务措辞不当会得到“只加注释”的补丁；需要在任务模板/提示上继续优化。
 7. 桌面 E2E 未进 CI（需要桌面会话 + Electron + Docker）。
 8. 首次配置的项目选择使用系统目录对话框，无法在无头 CI 中自动化。
+9. `node-smoke` profile 固定运行 `tests/sandbox-smoke.test.mjs`；陌生项目需要提供该文件，自定义测试命令留待后续 profile 扩展。
+10. Windows RC 仅通过私有 CI Artifact 分发；未签名、未做公开 Release。
 
 ## 7. 复现命令
 
@@ -127,6 +163,8 @@ npx electron-builder --mac dmg --arm64
 npm install
 npm run desktop            # 开发运行
 npm run e2e:desktop:shell  # 外壳验收
+npm run e2e:desktop:sandbox-config  # 沙箱创建失败反馈与重试
+npm run e2e:desktop:multiproject    # 多项目状态隔离
 npm run e2e:desktop        # 四条 SOP（真实 Docker + 真实 Pi）
 npm run desktop:pack       # Windows portable
 ```
@@ -152,9 +190,9 @@ npm run desktop:pack       # Windows portable
 | 托盘/窗口/状态 | ✅ |
 | 闲置不频繁请求模型 | ✅（2s 仅本地 HTTP；Worker 空闲不调用模型） |
 | 不抢焦点 | ✅ |
-| 三轮 UX | ✅（外壳 smoke / 桌面 E2E / 打包实测） |
+| 三轮 UX | ✅（四轮：外壳 / 桌面 E2E / 打包 / RC 复审） |
 | 无 P0/P1 | ✅（当前无阻断） |
-| Windows 分发包 | ✅（未签名 portable） |
+| Windows 分发包 | ✅（未签名 portable；私有 CI Artifact + SHA256） |
 | macOS 分发包 | ❌ 未验证，已说明缺口 |
 | 首次配置说明 | ✅ |
 | 自动化/真实模型记录 | ✅ |

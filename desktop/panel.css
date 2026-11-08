@@ -316,3 +316,24 @@ pre.diff, pre.logs {
   line-height: 1.5;
 }
 .service-state.warn { color: var(--warn); }
+
+.test-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(161, 92, 10, 0.4);
+  border-radius: 9px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.pending-project {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

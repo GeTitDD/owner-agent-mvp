@@ -52,6 +52,10 @@
           <span class="compose-hint">会先创建任务，等你批准后才执行。</span>
           <button id="submitTask" class="primary">交办</button>
         </div>
+        <div id="testWarning" class="test-warning" hidden>
+          <span id="testWarningText"></span>
+          <button id="fixTestConfig" class="ghost small">配置测试</button>
+        </div>
       </section>
 
       <section>
@@ -94,8 +98,8 @@
           <input id="allowedPaths" placeholder="src/" />
         </label>
         <label class="field">
-          <span>沙箱测试包含的文件（逗号分隔）</span>
-          <input id="includePaths" placeholder="package.json,tests/sandbox-smoke.test.mjs" />
+          <span>沙箱快照额外包含的文件（逗号分隔；node-smoke 会自动包含 tests/sandbox-smoke.test.mjs）</span>
+          <input id="includePaths" placeholder="package.json" />
         </label>
         <div class="service-grid" id="serviceGrid"></div>
         <div class="sheet-actions">

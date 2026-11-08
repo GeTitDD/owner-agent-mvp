@@ -35,6 +35,7 @@ let quitting = false;
 let dragState = null;
 let dragTimer = null;
 let lastNoticeKey = '';
+let pendingModel = null;
 let serviceCache = { at: 0, value: null };
 
 const configPath = () => path.join(app.getPath('userData'), 'companion.json');
@@ -42,7 +43,7 @@ const defaults = () => ({
   pet: null,
   projectId: '',
   allowedPaths: 'src/',
-  includePaths: ['package.json', 'tests/sandbox-smoke.test.mjs'],
+  includePaths: ['package.json'],
   gatewayUrl: 'http://127.0.0.1:18789',
   model: '',
   panelPinned: false
@@ -108,14 +109,24 @@ const fakeSourceAgent = async () => {
   const fake = new FakePatchProposalAgent({
     files: [{ path: 'src/retry.js', action: 'modify', content: `${buggy}\n// touched by companion source patch\n` }]
   });
-  const real = new PatchProposalAgent({ timeoutMs: 300000 });
+  const real = new PatchProposalAgent({ timeoutMs: 300000, model: config.model || '' });
   return {
     requiresModel: false,
+    setModel(model) { real.model = model; },
     async generate(input) {
       if (String(input.repairContext ?? '').trim()) return real.generate(input);
       return fake.generate(input);
     }
   };
+};
+
+/** 把模型设置应用到现有 Worker 的提案 Agent（不重建 Worker）。 */
+const applyWorkerModel = (model) => {
+  const agent = worker?.patchWorker?.proposalAgent;
+  if (!agent) return false;
+  if (typeof agent.setModel === 'function') agent.setModel(model);
+  else agent.model = model;
+  return true;
 };
 
 async function startServices() {
@@ -161,6 +172,9 @@ async function startServices() {
 
   // 常驻 Worker：批准后的步骤自动推进；没有批准对象时保持空闲。
   workerTimer = setInterval(() => {
+    if (pendingModel !== null && worker && !worker.running) {
+      if (applyWorkerModel(pendingModel)) pendingModel = null;
+    }
     if (worker && !worker.running) worker.start({ wait: false });
   }, 2000);
   workerTimer.unref?.();
@@ -199,22 +213,55 @@ const api = async (route, { method = 'GET', body, decision = false } = {}) => {
 
 const stateOf = (summary) => summary;
 
+const projectIdOf = (item) => item?.project_id ?? item?.projectId ?? '';
+
+/** 当前项目的测试配置自检：node-smoke 固定运行 tests/sandbox-smoke.test.mjs。 */
+const testConfigForProject = (project) => {
+  const required = [...new Set(['tests/sandbox-smoke.test.mjs', ...config.includePaths])]
+    .map((item) => String(item).replace(/\\/gu, '/').replace(/^\.\//u, ''))
+    .filter(Boolean);
+  if (!project?.root) {
+    return { ok: false, projectId: project?.id ?? '', profile: 'node-smoke', required, missing: [] };
+  }
+  const missing = required.filter((rel) => {
+    try {
+      fs.accessSync(path.join(project.root, rel));
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  return {
+    ok: missing.length === 0,
+    projectId: project.id,
+    profile: 'node-smoke',
+    required,
+    missing
+  };
+};
+
 const createSandbox = (proposalId) => api('/owner/v1/sandbox-runs', {
   method: 'POST',
   body: {
     proposalId,
-    includePaths: config.includePaths
+    // node-smoke 固定运行该文件，自动加入快照，避免用户漏配。
+    includePaths: [...new Set(['tests/sandbox-smoke.test.mjs', ...config.includePaths])]
   }
 });
 
-const toPending = ({ jobs, patches, sandboxes, repairs }) => {
+const toPending = ({ jobs, patches, sandboxes, repairs }, projectNames = new Map()) => {
   const pending = [];
+  const tag = (item) => {
+    const projectId = projectIdOf(item);
+    return { projectId, projectName: projectNames.get(projectId) ?? '' };
+  };
   for (const job of jobs) {
     if (job.status === 'pending_approval') {
       pending.push({
         kind: 'job', id: job.id, hash: '',
         title: job.title,
-        summary: `${job.job_type} · 等待你批准后才会开始`
+        summary: `${job.job_type} · 等待你批准后才会开始`,
+        ...tag(job)
       });
     }
   }
@@ -223,13 +270,15 @@ const toPending = ({ jobs, patches, sandboxes, repairs }) => {
       pending.push({
         kind: 'patch', id: patch.id, hash: patch.proposal_hash,
         title: `补丁 ${patch.id.slice(0, 8)}`,
-        summary: (patch.files ?? []).map((file) => file.path).join(', ') || '等待审阅冻结 Diff'
+        summary: (patch.files ?? []).map((file) => file.path).join(', ') || '等待审阅冻结 Diff',
+        ...tag(patch)
       });
     } else if (patch.status === 'approved') {
       pending.push({
         kind: 'patch-apply', id: patch.id, hash: patch.proposal_hash,
         title: `已批准补丁 ${patch.id.slice(0, 8)}`,
-        summary: '下一步：应用到 Worktree，然后请求沙箱测试'
+        summary: '下一步：应用到 Worktree，然后请求沙箱测试',
+        ...tag(patch)
       });
     }
   }
@@ -239,7 +288,8 @@ const toPending = ({ jobs, patches, sandboxes, repairs }) => {
       pending.push({
         kind: 'sandbox', id: run.id, hash: run.approval_hash,
         title: `测试 ${run.id.slice(0, 8)}`,
-        summary: `${run.profile?.id ?? 'node-smoke'} · 等待你批准后运行`
+        summary: `${run.profile?.id ?? 'node-smoke'} · 等待你批准后运行`,
+        ...tag(run)
       });
     } else if (
       run.status === 'completed' && run.test_status === 'fail' && !cycleSources.has(run.id)
@@ -248,7 +298,8 @@ const toPending = ({ jobs, patches, sandboxes, repairs }) => {
       pending.push({
         kind: 'repair-create', id: run.id, hash: '',
         title: `测试失败 ${run.id.slice(0, 8)}`,
-        summary: '可以先创建一个修复周期，再决定是否批准'
+        summary: '可以先创建一个修复周期，再决定是否批准',
+        ...tag(run)
       });
     }
   }
@@ -260,7 +311,8 @@ const toPending = ({ jobs, patches, sandboxes, repairs }) => {
       pending.push({
         kind: 'repair', id: cycle.id, hash: cycle.approval_hash,
         title: `修复 ${cycle.id.slice(0, 8)}`,
-        summary: `范围 ${scope.join(', ') || '—'} · 等待你批准`
+        summary: `范围 ${scope.join(', ') || '—'} · 等待你批准`,
+        ...tag(cycle)
       });
     }
   }
@@ -303,36 +355,52 @@ const stageText = (chain) => {
 const circleSafe = (value, expected) => value === expected;
 
 const buildView = async () => {
-  const [summary, workerState, projects, jobs, patches, sandboxes, repairs] = await Promise.all([
+  const projects = await api('/owner/v1/projects');
+  const projectList = projects.items ?? [];
+  const activeProjectId = config.projectId && projectList.some((item) => item.id === config.projectId)
+    ? config.projectId
+    : projectList[0]?.id ?? '';
+  const activeProject = projectList.find((item) => item.id === activeProjectId) ?? null;
+  const [summary, workerState, jobs, patches, sandboxes, repairs] = await Promise.all([
     api('/owner/v1/summary'),
     api('/owner/v1/worker/status'),
-    api('/owner/v1/projects'),
     api('/owner/v1/jobs?limit=20'),
     api('/owner/v1/patches?limit=20'),
     api('/owner/v1/sandbox-runs?limit=20'),
     api('/owner/v1/repair-cycles?limit=20')
   ]);
+  const allJobs = jobs.items ?? [];
+  const allPatches = patches.items ?? [];
+  const allSandboxes = sandboxes.items ?? [];
+  const allRepairs = repairs.items ?? [];
+  const projectNames = new Map(projectList.map((project) => [project.id, project.name]));
   const pending = toPending({
-    jobs: jobs.items ?? [],
-    patches: patches.items ?? [],
-    sandboxes: sandboxes.items ?? [],
-    repairs: repairs.items ?? []
-  });
-  const activeJob = (jobs.items ?? []).find((job) =>
+    jobs: allJobs,
+    patches: allPatches,
+    sandboxes: allSandboxes,
+    repairs: allRepairs
+  }, projectNames);
+  // 任务链只关联当前选中的项目，避免把不同项目的 Job/Patch/Run/Cycle 拼成假进度。
+  const inProject = (item) => projectIdOf(item) === activeProjectId;
+  const jobsInProject = allJobs.filter(inProject);
+  const patchesInProject = allPatches.filter(inProject);
+  const sandboxesInProject = allSandboxes.filter(inProject);
+  const repairsInProject = allRepairs.filter(inProject);
+  const activeJob = jobsInProject.find((job) =>
     ['pending_approval', 'queued', 'leased', 'running', 'cancel_requested'].includes(job.status)
   );
-  const activeCycle = (repairs.items ?? []).find((cycle) =>
+  const activeCycle = repairsInProject.find((cycle) =>
     ['pending_approval', 'queued', 'proposal_ready', 'applied', 'test_pending'].includes(cycle.status)
   );
-  const activeSandbox = (sandboxes.items ?? []).find((run) =>
+  const activeSandbox = sandboxesInProject.find((run) =>
     ['pending_approval', 'queued', 'provisioning', 'running', 'collecting'].includes(run.status)
   );
-  const latestPatch = (patches.items ?? [])[0] ?? null;
+  const latestPatch = patchesInProject[0] ?? null;
   const chain = {
-    job: activeJob ?? (jobs.items ?? [])[0] ?? null,
+    job: activeJob ?? jobsInProject[0] ?? null,
     patch: latestPatch,
-    sandbox: activeSandbox ?? (sandboxes.items ?? [])[0] ?? null,
-    cycle: activeCycle ?? (repairs.items ?? [])[0] ?? null
+    sandbox: activeSandbox ?? sandboxesInProject[0] ?? null,
+    cycle: activeCycle ?? repairsInProject[0] ?? null
   };
   // 状态只反映“最近一次结果”，避免很久以前的失败/成功让桌宠永久变色。
   const nowMs = Date.now();
@@ -340,12 +408,14 @@ const buildView = async () => {
     const at = Date.parse(String(value ?? ''));
     return Number.isFinite(at) && nowMs - at < windowMs;
   };
-  const latestCycle = (repairs.items ?? [])[0] ?? null;
-  const latestJob = (jobs.items ?? [])[0] ?? null;
+  const latestCycle = repairsInProject[0] ?? null;
+  const latestJob = jobsInProject[0] ?? null;
+  const workerOnProject = workerState.running
+    && (!workerState.current?.projectId || workerState.current.projectId === activeProjectId);
   let state = 'idle';
   if (pending.length > 0) state = 'waiting';
-  else if (workerState.running || activeJob || activeSandbox || activeCycle
-    || (sandboxes.items ?? []).some((run) => ['queued', 'running'].includes(run.status))) {
+  else if (workerOnProject || activeJob || activeSandbox || activeCycle
+    || sandboxesInProject.some((run) => ['queued', 'running'].includes(run.status))) {
     state = 'working';
   } else if (latestCycle && ['tested_fail', 'failed'].includes(latestCycle.status)
     && recent(latestCycle.updated_at ?? latestCycle.created_at)) {
@@ -357,7 +427,7 @@ const buildView = async () => {
     && recent(latestCycle.updated_at ?? latestCycle.created_at)) {
     state = 'done';
   }
-  const finalCycle = (repairs.items ?? []).find((cycle) =>
+  const finalCycle = repairsInProject.find((cycle) =>
     ['tested_pass', 'tested_fail'].includes(cycle.status)) ?? null;
   const services = await serviceStatus();
   return {
@@ -367,6 +437,7 @@ const buildView = async () => {
     stage: stageText(chain),
     worker: {
       running: Boolean(workerState.running),
+      onProject: Boolean(workerOnProject),
       label: workerState.running
         ? `工作中${workerState.current?.kind ? ` · ${workerState.current.kind}` : ''}`
         : workerState.last
@@ -374,18 +445,19 @@ const buildView = async () => {
           : '空闲'
     },
     summary,
-    projects: (projects.items ?? []).map((project) => ({
+    projects: projectList.map((project) => ({
       id: project.id,
       name: project.name,
-      baseSha: project.baseSha ?? ''
+      baseSha: project.baseSha ?? project.base_sha ?? ''
     })),
     config: {
-      projectId: config.projectId,
+      projectId: activeProjectId,
       allowedPaths: config.allowedPaths,
       includePaths: config.includePaths,
       gatewayUrl: config.gatewayUrl,
       model: config.model
     },
+    testConfig: testConfigForProject(activeProject),
     services,
     result: finalCycle
       ? {
@@ -642,7 +714,7 @@ const registerIpc = () => {
       method: 'POST',
       body: { projectId: project.id, title: text.slice(0, 200) }
     });
-    const baseSha = project.baseSha ?? '';
+    const baseSha = project.baseSha ?? project.base_sha ?? '';
     if (!/^[0-9a-f]{40}$/u.test(baseSha)) {
       throw new Error('项目目录不是有效的 Git 仓库，无法确定 base commit。');
     }
@@ -663,7 +735,7 @@ const registerIpc = () => {
     });
     config.projectId = project.id;
     saveConfig();
-    return { jobId: job.id, status: job.status };
+    return { jobId: job.id, status: job.status, testConfig: testConfigForProject(project) };
   });
 
   ipcMain.handle('companion:decide', async (event, input) => {
@@ -697,13 +769,38 @@ const registerIpc = () => {
       const applied = await api(`/owner/v1/patches/${encodeURIComponent(id)}/apply`, {
         method: 'POST', body: { hash }, decision: true
       });
-      // 应用后自动创建待批准的沙箱运行，让用户只做一个决定。
+      // 应用后自动创建待批准的沙箱运行；失败必须如实回传，不能假装测试已开始。
+      const projects = (await api('/owner/v1/projects')).items ?? [];
+      const project = projects.find((item) => item.id === config.projectId) ?? projects[0] ?? null;
+      const testConfig = testConfigForProject(project);
+      if (!testConfig.ok) {
+        return {
+          ...applied,
+          testRequested: false,
+          sandboxError: testConfig.missing.length
+            ? `测试配置缺少文件：${testConfig.missing.join(', ')}`
+            : '还没有可用的项目测试配置。',
+          testConfig
+        };
+      }
       try {
-        await createSandbox(id);
+        const run = await createSandbox(id);
+        return {
+          ...applied,
+          testRequested: true,
+          sandboxRunId: run.id,
+          sandboxStatus: run.status,
+          testConfig
+        };
       } catch (error) {
         console.error('auto sandbox request failed:', error.message);
+        return {
+          ...applied,
+          testRequested: false,
+          sandboxError: String(error?.message ?? error),
+          testConfig
+        };
       }
-      return applied;
     }
     if (kind === 'sandbox') {
       return api(`/owner/v1/sandbox-runs/${encodeURIComponent(id)}/approve`, {
@@ -791,6 +888,7 @@ const registerIpc = () => {
 
   ipcMain.handle('companion:settings:set', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const previousModel = config.model;
     if (typeof input?.allowedPaths === 'string') config.allowedPaths = input.allowedPaths.trim() || 'src/';
     if (Array.isArray(input?.includePaths)) {
       config.includePaths = input.includePaths.map((item) => String(item).trim()).filter(Boolean);
@@ -802,7 +900,21 @@ const registerIpc = () => {
     if (typeof input?.projectId === 'string') config.projectId = input.projectId;
     saveConfig();
     serviceCache = { at: 0, value: null };
-    return { ...config, services: await serviceStatus() };
+    const modelChanged = config.model !== previousModel;
+    let modelApplied = true;
+    let modelPending = false;
+    if (modelChanged && worker) {
+      if (worker.running) {
+        // 不打断当前任务；空闲时由 workerTimer 应用。
+        pendingModel = config.model;
+        modelApplied = false;
+        modelPending = true;
+      } else {
+        modelApplied = applyWorkerModel(config.model);
+        if (modelApplied) pendingModel = null;
+      }
+    }
+    return { ...config, services: await serviceStatus(), modelChanged, modelApplied, modelPending };
   });
 
   ipcMain.handle('companion:add-project', async (event) => {
