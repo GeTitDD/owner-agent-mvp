@@ -98,7 +98,7 @@
 
 ## 6. A/B/C 评估
 
-固定任务、模型 `zai-coding-cn/glm-5.3`、同一 fixture 与测试命令。
+固定任务、模型 `zai-coding-cn/glm-5.3`、同一 fixture 与测试命令。完整分析见 `docs/KNOWLEDGE_LOOP_EVAL_V1.md`。
 
 ### 6.1 通用任务
 
@@ -132,6 +132,7 @@
 - 真实 A/B 只在单一模型（glm-5.3）与小型 fixture 上完成；样本量 1，不能外推为普遍效果。
 - “知识有效”只在“项目约定不可从源码推断”的困难任务上被证明；通用 retry 任务 baseline 已完成。
 - pstack 只作为纪律与 Skill 加载来源；未自动修改 pstack Skill，未调用 Cursor `/loop`。
+- Harvest 使用只读 Pi Session，未加载 `pstack_todo` 工具；用冻结的六步 + `decisions.tsv` 等价记录，避免扩大工具权限。
 - Companion 知识入口在堆叠分支实现；macOS 未验证。
 - `node-smoke` profile 固定，真实项目需提供 `tests/sandbox-smoke.test.mjs`。
 - Token 数为保守估算，不是 provider 计费值。
