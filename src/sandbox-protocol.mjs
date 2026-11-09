@@ -35,11 +35,42 @@ const check = (ok, message) => {
   if (!ok) throw new SandboxProtocolError(message);
 };
 
-export const SANDBOX_PROFILE_COMMANDS = Object.freeze({
-  'node-smoke': ['node', '--test', 'tests/sandbox-smoke.test.mjs'],
-  'node-fail': ['node', '--test', 'tests/sandbox-fail.test.mjs'],
-  'node-probe': ['node', '--test', 'tests/sandbox-probe.test.mjs']
+// 每个 profile 绑定一个可信镜像与固定 argv；argv 只允许此表内的 runtime。
+export const SANDBOX_PROFILES = Object.freeze({
+  'node-smoke': {
+    image: 'node:22-alpine', runtime: 'node',
+    command: ['node', '--test', 'tests/sandbox-smoke.test.mjs'],
+    includePaths: ['tests/sandbox-smoke.test.mjs', 'package.json']
+  },
+  'node-fail': {
+    image: 'node:22-alpine', runtime: 'node',
+    command: ['node', '--test', 'tests/sandbox-fail.test.mjs'],
+    includePaths: ['tests/sandbox-fail.test.mjs', 'package.json']
+  },
+  'node-probe': {
+    image: 'node:22-alpine', runtime: 'node',
+    command: ['node', '--test', 'tests/sandbox-probe.test.mjs'],
+    includePaths: ['tests/sandbox-probe.test.mjs', 'package.json']
+  },
+  'godot-headless': {
+    image: 'barichello/godot-ci:4.3', runtime: 'godot',
+    command: ['godot', '--headless', '--path', '.', '--quit'],
+    timeoutMs: 120000, memoryBytes: 512 * 1024 * 1024,
+    includePaths: ['project.godot']
+  },
+  'python-pytest': {
+    image: 'python:3.12-slim', runtime: 'python',
+    command: ['python', '-m', 'pytest', '-q'],
+    timeoutMs: 120000, memoryBytes: 512 * 1024 * 1024,
+    includePaths: ['pyproject.toml', 'requirements.txt']
+  }
 });
+
+export const SANDBOX_PROFILE_COMMANDS = Object.freeze(Object.fromEntries(
+  Object.entries(SANDBOX_PROFILES).map(([id, def]) => [id, [...def.command]])
+));
+
+const ALLOWED_RUNTIMES = new Set(Object.values(SANDBOX_PROFILES).map((def) => def.runtime));
 
 const BASE_PROFILE = {
   version: 1,
@@ -56,11 +87,12 @@ const BASE_PROFILE = {
   workdir: '/workspace'
 };
 
-const validateCommand = (command) => {
+const validateCommand = (command, runtime = 'node') => {
   check(Array.isArray(command) && command.length >= 1 && command.length <= 8, 'invalid test command');
   check(command.every((part) => typeof part === 'string' && part.length > 0 && part.length <= 300 && !/[\x00\r\n]/.test(part)),
     'invalid test command argument');
-  check(command[0] === 'node', 'only the allowlisted node runtime is supported in P0');
+  check(ALLOWED_RUNTIMES.has(runtime), 'unsupported test runtime');
+  check(command[0] === runtime, `test command must start with the allowlisted runtime: ${runtime}`);
   return [...command];
 };
 
@@ -69,7 +101,10 @@ const validateProfile = (profile) => {
   check(typeof profile.id === 'string' && /^[a-z0-9][a-z0-9-]{0,60}$/.test(profile.id), 'invalid profile id');
   check(Number.isSafeInteger(profile.version) && profile.version >= 1, 'invalid profile version');
   check(DIGEST_RE.test(profile.imageDigest), 'test profile requires a sha256 image digest');
-  validateCommand(profile.command);
+  check(typeof profile.image === 'string' && /^[a-z0-9][a-z0-9./:_-]{0,120}$/i.test(profile.image), 'invalid profile image');
+  const def = SANDBOX_PROFILES[profile.id];
+  check(def && def.runtime, `unknown test profile: ${profile.id}`);
+  validateCommand(profile.command, def.runtime);
   check(Number.isSafeInteger(profile.timeoutMs)
     && profile.timeoutMs >= SANDBOX_LIMITS.minTimeoutMs
     && profile.timeoutMs <= SANDBOX_LIMITS.maxTimeoutMs, 'invalid timeout');
@@ -90,14 +125,17 @@ const validateProfile = (profile) => {
 
 export function resolveTestProfile(id, { imageDigest } = {}) {
   check(typeof id === 'string' && id.length > 0, 'test profile id is required');
-  const command = SANDBOX_PROFILE_COMMANDS[id];
-  check(!!command, `unknown test profile: ${id}`);
+  const def = SANDBOX_PROFILES[id];
+  check(!!def, `unknown test profile: ${id}`);
   check(typeof imageDigest === 'string' && DIGEST_RE.test(imageDigest), 'imageDigest must be sha256:<64 hex>');
   const profile = validateProfile({
     ...BASE_PROFILE,
+    ...(Number.isSafeInteger(def.timeoutMs) ? { timeoutMs: def.timeoutMs } : {}),
+    ...(Number.isSafeInteger(def.memoryBytes) ? { memoryBytes: def.memoryBytes } : {}),
     id,
+    image: def.image,
     imageDigest,
-    command: [...command]
+    command: [...def.command]
   });
   return {
     ...profile,
@@ -110,6 +148,7 @@ export function profileHash(profile) {
   return sha256(canonical({
     id: profile.id,
     version: profile.version,
+    image: profile.image,
     command: profile.command,
     timeoutMs: profile.timeoutMs,
     memoryBytes: profile.memoryBytes,

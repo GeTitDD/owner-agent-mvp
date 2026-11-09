@@ -20,7 +20,7 @@ const project = (files) => {
 };
 
 test('模式规范化与优先级：项目覆盖 > 全局', () => {
-  assert.deepEqual(SANDBOX_MODES, ['auto', 'off', 'node-smoke']);
+  assert.deepEqual(SANDBOX_MODES, ['auto', 'off', 'node-smoke', 'node-fail', 'node-probe', 'godot-headless', 'python-pytest']);
   assert.equal(normalizeSandboxMode('nope', 'auto'), 'auto');
   assert.equal(normalizeSandboxMode('off'), 'off');
   assert.equal(effectiveSandboxMode({ globalMode: 'auto', projectMode: 'off' }), 'off');
@@ -54,12 +54,25 @@ test('auto：Node 项目启用并按缺失文件给出 actionable 计划', () =>
   assert.match(describeSandboxPlan(plan), /测试配置缺少/u);
 });
 
-test('auto：非 Node 项目不弹警告，静默降级为人工验证', () => {
-  const godot = project({ 'project.godot': '' });
-  const plan = resolveSandboxPlan({ root: godot, mode: 'auto', includePaths: ['package.json'] });
+test('auto：非 Node 生态按 profile 映射（Godot / Python），未知生态才降级', () => {
+  const godot = project({ 'project.godot': '', 'tests': '' });
+  const godotPlan = resolveSandboxPlan({ root: godot, mode: 'auto', includePaths: ['package.json'] });
+  assert.equal(godotPlan.enabled, true);
+  assert.equal(godotPlan.profile, 'godot-headless');
+  assert.equal(godotPlan.ecosystem, 'godot');
+  assert.equal(godotPlan.ok, true);
+  assert.equal(godotPlan.image, 'barichello/godot-ci:4.3');
+
+  const python = project({ 'pyproject.toml': '', 'tests/test_app.py': '' });
+  const pythonPlan = resolveSandboxPlan({ root: python, mode: 'auto', includePaths: [] });
+  assert.equal(pythonPlan.enabled, true);
+  assert.equal(pythonPlan.profile, 'python-pytest');
+
+  const unknown = project({ 'README.md': '' });
+  const plan = resolveSandboxPlan({ root: unknown, mode: 'auto', includePaths: ['package.json'] });
   assert.equal(plan.enabled, false);
   assert.equal(plan.profile, null);
-  assert.equal(plan.ecosystem, 'godot');
+  assert.equal(plan.ecosystem, 'unknown');
   assert.equal(plan.reason, 'no-profile');
   assert.match(describeSandboxPlan(plan), /没有可用沙箱 profile/u);
 });

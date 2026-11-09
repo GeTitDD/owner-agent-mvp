@@ -14,6 +14,15 @@ const PET_SIZE = 136;
 const PANEL_WIDTH = 440;
 const PANEL_HEIGHT = 640;
 const COMPANION_VERSION = '1.0.0';
+// 单实例：桌面快捷方式重复双击时聚焦已有窗口，而不是再起一个进程抢同一份 SQLite。
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
+app.on('second-instance', () => {
+  if (pet) { pet.show(); positionPet(); }
+  showPanel();
+});
 const screenshotArg = process.argv.find((arg) => arg.startsWith('--screenshot-dir='));
 const screenshotDir = screenshotArg ? screenshotArg.slice('--screenshot-dir='.length) : '';
 const userDataArg = process.argv.find((arg) => arg.startsWith('--user-data-dir='));
@@ -99,18 +108,23 @@ const knowledgeDbPath = () =>
   || process.env.DOMAIN_CONTEXT_DB
   || path.join(os.homedir(), '.domain-context', 'index.sqlite');
 
-const resolveDigest = () => {
+const digestCache = new Map();
+const resolveDigest = (imageRef = 'node:22-alpine') => {
   const explicit = process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST;
-  if (/^sha256:[0-9a-f]{64}$/u.test(explicit ?? '')) return explicit;
+  if (imageRef === 'node:22-alpine' && /^sha256:[0-9a-f]{64}$/u.test(explicit ?? '')) return explicit;
+  if (digestCache.has(imageRef)) return digestCache.get(imageRef);
+  let digest = '';
   try {
     const ref = execFileSync('docker', [
-      'image', 'inspect', 'node:22-alpine', '--format', '{{index .RepoDigests 0}}'
-    ], { encoding: 'utf8', timeout: 5000 }).trim();
-    const digest = ref.split('@')[1];
-    return /^sha256:[0-9a-f]{64}$/u.test(digest ?? '') ? digest : '';
+      'image', 'inspect', imageRef, '--format', '{{index .RepoDigests 0}}'
+    ], { encoding: 'utf8', timeout: 8000 }).trim();
+    const found = ref.split('@')[1];
+    if (/^sha256:[0-9a-f]{64}$/u.test(found ?? '')) digest = found;
   } catch {
-    return '';
+    digest = '';
   }
+  digestCache.set(imageRef, digest);
+  return digest;
 };
 
 const fakeSourceAgent = async () => {
@@ -291,14 +305,25 @@ const testConfigForProject = async (project) => {
   return { ...plan, projectId };
 };
 
-const createSandbox = (proposalId) => api('/owner/v1/sandbox-runs', {
-  method: 'POST',
-  body: {
-    proposalId,
-    // node-smoke 固定运行该文件，自动加入快照，避免用户漏配。
-    includePaths: [...new Set(['tests/sandbox-smoke.test.mjs', ...config.includePaths])]
+const createSandbox = async (proposalId) => {
+  const projects = (await api('/owner/v1/projects')).items ?? [];
+  const project = projects.find((item) => item.id === config.projectId) ?? projects[0] ?? null;
+  const plan = await testConfigForProject(project);
+  const image = plan.image || 'node:22-alpine';
+  const imageDigest = resolveDigest(image);
+  if (!imageDigest) {
+    throw new Error(`沙箱镜像未就绪：请先执行 docker pull ${image}`);
   }
-});
+  return api('/owner/v1/sandbox-runs', {
+    method: 'POST',
+    body: {
+      proposalId,
+      profile: plan.profile,
+      includePaths: plan.required,
+      imageDigest
+    }
+  });
+};
 
 const toPending = ({ jobs, patches, sandboxes, repairs }, projectNames = new Map()) => {
   const pending = [];
@@ -435,6 +460,61 @@ const mascotCatalog = async () => {
       id: item.id, label: item.label, builtin: item.builtin,
       url: pathToFileURL(item.file).href
     }))
+  };
+};
+
+/** 诊断快照：一次返回环境、沙箱计划、服务、最近任务/测试/Playbook 运行。 */
+const diagnosticsSnapshot = async () => {
+  const projects = (await api('/owner/v1/projects')).items ?? [];
+  const active = projects.find((item) => item.id === config.projectId) ?? projects[0] ?? null;
+  const [jobs, patches, runs, services, testConfig, knowledge] = await Promise.all([
+    api('/owner/v1/jobs?limit=20'),
+    api('/owner/v1/patches?limit=20'),
+    api('/owner/v1/sandbox-runs?limit=20'),
+    serviceStatus(),
+    testConfigForProject(active),
+    knowledgeSnapshot(active?.id ?? '')
+  ]);
+  const playbooks = [];
+  try {
+    const files = fs.readdirSync(playbookReportDir()).filter((name) => name.endsWith('.json')).sort().slice(-15);
+    for (const name of files) {
+      const data = JSON.parse(fs.readFileSync(path.join(playbookReportDir(), name), 'utf8'));
+      playbooks.push({
+        runId: data.runId,
+        playbookId: data.playbookId,
+        status: data.status,
+        category: data.category ?? '',
+        durationMs: data.durationMs,
+        startedAt: data.startedAt,
+        model: data.model,
+        summary: String(data.summary ?? '').slice(0, 160)
+      });
+    }
+  } catch { /* 没有 playbook 报告不视为错误 */ }
+  return {
+    generatedAt: new Date().toISOString(),
+    version: COMPANION_VERSION,
+    userData: app.getPath('userData'),
+    model: config.model,
+    projectId: config.projectId,
+    project: active ? { id: active.id, root: active.root, domain: active.primary_domain } : null,
+    sandbox: testConfig,
+    services,
+    knowledge: knowledge?.counts ?? null,
+    jobs: (jobs.items ?? []).map((job) => ({
+      id: job.id, status: job.status, title: job.title, updatedAt: job.updated_at
+    })),
+    patches: (patches.items ?? []).map((patch) => ({
+      id: patch.id, status: patch.status,
+      paths: (patch.files ?? []).map((file) => file.path),
+      updatedAt: patch.updated_at
+    })),
+    sandboxRuns: (runs.items ?? []).map((run) => ({
+      id: run.id, status: run.status, testStatus: run.test_status,
+      exitCode: run.exit_code, profile: run.profile?.id ?? '', updatedAt: run.updated_at
+    })),
+    playbooks
   };
 };
 
@@ -1387,9 +1467,7 @@ const registerIpc = () => {
   ipcMain.handle('companion:mascots:list', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return mascotCatalog();
-  });
-
-  ipcMain.handle('companion:mascots:set', async (event, input) => {
+  });  ipcMain.handle('companion:mascots:set', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const mod = await loadMascots();
     const skin = String(input?.skin ?? '');
@@ -1397,6 +1475,11 @@ const registerIpc = () => {
     config.mascotSkin = skin;
     saveConfig();
     return mascotCatalog();
+  });
+
+  ipcMain.handle('companion:diagnostics', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return diagnosticsSnapshot();
   });
 
   ipcMain.handle('companion:settings:get', async (event) => {
@@ -1556,10 +1639,6 @@ async function boot() {
   createPanel();
   createTray();
   registerDisplayHandlers();
-  app.on('second-instance', () => {
-    if (pet) { pet.show(); positionPet(); }
-    showPanel();
-  });
 
   // 自动化视觉验收：启动后截图并退出。
   if (screenshotDir) {
@@ -1585,16 +1664,11 @@ async function boot() {
   }
 }
 
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
+app.whenReady().then(boot).catch((error) => {
+  console.error('Owner Companion failed:', error);
+  dialog.showErrorBox('Owner Companion 启动失败', String(error?.stack ?? error));
   app.quit();
-} else {
-  app.whenReady().then(boot).catch((error) => {
-    console.error('Owner Companion failed:', error);
-    dialog.showErrorBox('Owner Companion 启动失败', String(error?.stack ?? error));
-    app.quit();
-  });
-}
+});
 
 app.on('window-all-closed', () => { /* tray keeps the app alive */ });
 app.on('before-quit', () => {

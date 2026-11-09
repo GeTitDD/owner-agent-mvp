@@ -121,6 +121,8 @@
             <option value="auto">自动</option>
             <option value="off">关闭</option>
             <option value="node-smoke">Node</option>
+            <option value="godot-headless">Godot</option>
+            <option value="python-pytest">Python</option>
           </select>
           <button id="fixTestConfig" class="ghost small">配置</button>
         </div>
@@ -129,7 +131,10 @@
 
     <footer class="footer">
       <span id="footerStatus">本地服务已启动</span>
-      <button id="quit" class="link">退出</button>
+      <span class="footer-actions">
+        <button id="diagnostics" class="link">诊断</button>
+        <button id="quit" class="link">退出</button>
+      </span>
     </footer>
   </div>
 
@@ -151,9 +156,11 @@
         <label class="field">
           <span>沙箱测试默认策略（按项目可覆盖）</span>
           <select id="sandboxMode" aria-label="沙箱测试默认策略">
-            <option value="auto">自动：Node 项目启用，其它生态跳过</option>
+            <option value="auto">自动：按项目生态选择 profile</option>
             <option value="off">关闭：一律跳过，只做人工验证</option>
-            <option value="node-smoke">强制 Node：任何项目都按 node-smoke 预检</option>
+            <option value="node-smoke">强制 Node（node-smoke）</option>
+            <option value="godot-headless">强制 Godot（godot-headless）</option>
+            <option value="python-pytest">强制 Python（python-pytest）</option>
           </select>
         </label>
         <div class="field">

@@ -78,7 +78,8 @@
     const sandboxSelect = $('sandboxModeSelect');
     if (sandboxSelect) {
       const projectMode = view?.config?.sandboxProjectMode || 'auto';
-      sandboxSelect.value = ['auto', 'off', 'node-smoke'].includes(projectMode) ? projectMode : 'auto';
+      const allowedModes = ['auto', 'off', 'node-smoke', 'godot-headless', 'python-pytest'];
+      sandboxSelect.value = allowedModes.includes(projectMode) ? projectMode : 'auto';
       sandboxSelect.disabled = !hasProjects;
     }
     $('footerStatus').textContent = view?.services?.docker
@@ -1074,6 +1075,59 @@
   $('openFull').onclick = () => { void window.companion.openFull().catch((error) => toast(String(error.message ?? error))); };
   $('openFullInline').onclick = $('openFull').onclick;
   $('quit').onclick = () => window.companion.quit();
+
+  const openDiagnostics = async () => {
+    try {
+      const data = await window.companion.diagnostics();
+      const sandbox = data.sandbox ?? {};
+      const nodes = [
+        el('div', 'section-title', '环境'),
+        detailRows([
+          ['版本', data.version],
+          ['userData', data.userData],
+          ['模型', data.model || 'Pi 默认'],
+          ['项目', data.project ? `${data.project.id} · ${data.project.root}` : '未注册']
+        ]),
+        el('div', 'section-title', '沙箱'),
+        detailRows([
+          ['策略', sandbox.mode ?? 'auto'],
+          ['profile', sandbox.profile ?? '无'],
+          ['状态', sandbox.reason ?? 'unknown'],
+          ['缺失', (sandbox.missing ?? []).join(', ') || '—']
+        ]),
+        el('div', 'section-title', '服务'),
+        detailRows([
+          ['Docker', data.services?.docker ? '可用' : '不可用'],
+          ['Gateway', data.services?.gateway ? '可连接' : '未连接'],
+          ['Pi 模型', data.services?.model ?? 'unknown']
+        ]),
+        el('div', 'section-title', '最近任务'),
+        el('pre', 'diff', (data.jobs ?? []).map((job) =>
+          `${job.status.padEnd(18)} ${String(job.updatedAt ?? '').slice(0, 19)}  ${job.title}`).join('\n') || '暂无'),
+        el('div', 'section-title', '最近测试'),
+        el('pre', 'diff', (data.sandboxRuns ?? []).map((run) =>
+          `${String(run.status).padEnd(12)} test=${run.testStatus ?? 'unknown'} exit=${run.exitCode ?? '-'} ${run.profile}`).join('\n') || '暂无'),
+        el('div', 'section-title', 'Playbook 运行'),
+        el('pre', 'diff', (data.playbooks ?? []).map((run) =>
+          `${String(run.status).padEnd(6)} ${run.category || '-'} ${run.durationMs ?? 0}ms ${run.playbookId} · ${run.summary}`).join('\n') || '暂无')
+      ];
+      const close = el('button', 'ghost', '关闭');
+      close.onclick = closeModal;
+      const copy = el('button', 'primary', '复制 JSON');
+      copy.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+          toast('诊断信息已复制');
+        } catch (error) {
+          toast(String(error?.message ?? error), 5000);
+        }
+      };
+      openModal('运行诊断', nodes, [close, copy]);
+    } catch (error) {
+      toast(String(error?.message ?? error), 5000);
+    }
+  };
+  $('diagnostics').onclick = () => { void openDiagnostics(); };
   $('closeModal').onclick = closeModal;
   $('modal').addEventListener('click', (event) => { if (event.target === $('modal')) closeModal(); });
 

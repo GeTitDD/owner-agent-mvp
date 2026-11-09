@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     list: () => invoke('companion:mascots:list'),
     set: (input) => invoke('companion:mascots:set', input)
   }),
+  diagnostics: () => invoke('companion:diagnostics'),
   openFull: () => invoke('companion:open-full'),
   showPanel: () => ipcRenderer.send('companion:show-panel'),
   hidePanel: () => ipcRenderer.send('companion:hide-panel'),

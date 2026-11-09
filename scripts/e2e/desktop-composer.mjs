@@ -87,6 +87,14 @@ const run = async () => {
     check('draft is cleared after send', draft === null, String(draft));
 
     await panel.screenshot({ path: path.join(evidence, 'panel-composer.png') });
+
+    await panel.locator('#diagnostics').click();
+    await panel.locator('#modalTitle').filter({ hasText: '运行诊断' }).waitFor({ timeout: 10000 });
+    const diag = await panel.locator('#modal').innerText();
+    check('diagnostics shows environment and sandbox plan',
+      /userData/u.test(diag) && /沙箱/u.test(diag) && /Playbook/u.test(diag), diag.slice(0, 120));
+    await panel.getByRole('button', { name: '关闭', exact: true }).click();
+
     if (failures.length > 0) throw new Error(`${failures.length} assertion(s) failed`);
     failed = false;
   } finally {
