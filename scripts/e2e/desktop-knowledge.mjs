@@ -93,7 +93,8 @@ const run = async () => {
       ...process.env,
       OWNER_AGENT_DB: ownerDb,
       OWNER_KNOWLEDGE_DB: knowledgeDb,
-      OWNER_AGENT_NOTIFICATIONS: '0'
+      OWNER_AGENT_NOTIFICATIONS: '0',
+      OWNER_AGENT_E2E_OFFSCREEN: '1'
     },
     timeout: 60000
   });

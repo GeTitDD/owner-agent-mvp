@@ -107,7 +107,8 @@ const run = async () => {
     env: {
       ...process.env,
       OWNER_AGENT_DB: ownerDb,
-      OWNER_AGENT_NOTIFICATIONS: '0'
+      OWNER_AGENT_NOTIFICATIONS: '0',
+      OWNER_AGENT_E2E_OFFSCREEN: '1'
     },
     timeout: 60000
   });

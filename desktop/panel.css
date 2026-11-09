@@ -1012,7 +1012,8 @@ pre.diff, pre.logs {
 .toast { max-width: 72%; font-size: 12px; }
 #runningBadge { color: var(--muted); background: transparent; border-color: var(--line); }
 
-.mascot-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+.mascot-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+.mascot-count { margin-right: auto; font-size: 9px; color: var(--muted); }
 .mascot-thumb {
   width: 34px;
   height: 34px;

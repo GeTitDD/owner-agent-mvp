@@ -62,15 +62,19 @@
       ? `有 ${pending} 项需要你确认；写入、补丁与测试在批准前不会改变真实项目。`
       : '现在没有需要你决定的事项。写入、补丁、测试和修复都会先停在这里。';
     const running = view?.worker?.running;
+    const playbookRunning = view?.playbook?.running === true;
     const chainItems = [view?.chain?.job, view?.chain?.patch, view?.chain?.sandbox, view?.chain?.cycle]
       .filter(Boolean);
     const activeStatuses = new Set(['running', 'leased', 'provisioning', 'collecting', 'test_pending', 'queued']);
     const activeSteps = chainItems.filter((item) => activeStatuses.has(String(item.status ?? '').toLowerCase())).length;
     const totalSteps = chainItems.length;
-    $('runningBadge').textContent = String(activeSteps || totalSteps);
-    $('runningCount').textContent = String(activeSteps);
-    $('runningChip').classList.toggle('active', Boolean(running || activeSteps > 0));
-    $('runningTitle').textContent = activeSteps > 0 ? '运行中' : (totalSteps > 0 ? '最近任务' : '运行中');
+    const activeCount = activeSteps + (playbookRunning ? 1 : 0);
+    $('runningBadge').textContent = String(activeCount || totalSteps);
+    $('runningCount').textContent = String(activeCount);
+    $('runningChip').classList.toggle('active', Boolean(running || playbookRunning || activeSteps > 0));
+    $('runningTitle').textContent = (activeSteps > 0 || playbookRunning)
+      ? '运行中'
+      : (totalSteps > 0 ? '最近任务' : '运行中');
     const hasProjects = (view?.projects?.length ?? 0) > 0;
     $('setup').hidden = hasProjects;
     $('composeSection').hidden = !hasProjects;
@@ -985,6 +989,14 @@
     list.replaceChildren();
     const chain = view?.chain ?? {};
     const steps = [];
+    if (view?.playbook?.running) {
+      steps.push({
+        label: 'pstack',
+        detail: view.playbook.title,
+        meta: '只读分析',
+        status: 'running'
+      });
+    }
     if (chain.job) {
       steps.push({
         label: '任务', detail: chain.job.title,
@@ -1508,6 +1520,11 @@
     }
   };
 
+  $('refreshMascots').onclick = async () => {
+    await renderMascotGrid();
+    toast('已重新扫描皮肤目录');
+  };
+
   $('importMascot').onclick = async () => {
     try {
       const result = await window.companion.mascots.import();
@@ -1526,6 +1543,12 @@
     try {
       const catalog = await window.companion.mascots.list();
       grid.replaceChildren();
+      const custom = catalog.skins.filter((skin) => !skin.builtin).length;
+      const count = $('mascotCount');
+      if (count) {
+        count.textContent = `共 ${catalog.skins.length} 个 · 自定义 ${custom}`;
+        count.title = `自定义皮肤目录：${catalog.userDir ?? ''}`;
+      }
       for (const skin of catalog.skins) {
         const option = el('button', 'mascot-option');
         option.type = 'button';

@@ -61,7 +61,8 @@ const run = async () => {
       ...process.env,
       OWNER_AGENT_DB: ownerDb,
       OWNER_KNOWLEDGE_DB: knowledgeDb,
-      OWNER_AGENT_NOTIFICATIONS: '0'
+      OWNER_AGENT_NOTIFICATIONS: '0',
+      OWNER_AGENT_E2E_OFFSCREEN: '1'
     },
     timeout: 60000
   });
@@ -93,6 +94,21 @@ const run = async () => {
     await snap('playbook-buttons.png');
 
     await panel.locator('.playbook-btn[data-playbook="how"]').click();
+    // 运行中：桌宠/面板应感知 pstack，而不是显示空闲。
+    const runningView = await panel.evaluate(async () => {
+      const deadline = Date.now() + 20000;
+      while (Date.now() < deadline) {
+        const snap = await window.companion.snapshot();
+        if (snap?.playbook?.running) {
+          return { state: snap.state, stage: snap.stage, playbook: snap.playbook };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      return null;
+    });
+    check('pet sees the running playbook',
+      runningView?.state === 'working' && /pstack/u.test(runningView.stage ?? ''),
+      JSON.stringify(runningView));
     await panel.locator('#playbookResult:not([hidden])').waitFor({ timeout: 240000 });
     const summary = await panel.locator('.playbook-summary').innerText();
     check('analysis returns a project summary', summary.length > 10, summary.slice(0, 80));

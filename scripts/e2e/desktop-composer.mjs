@@ -50,6 +50,7 @@ const run = async () => {
       OWNER_AGENT_DB: ownerDb,
       OWNER_KNOWLEDGE_DB: knowledgeDb,
       OWNER_AGENT_NOTIFICATIONS: '0',
+      OWNER_AGENT_E2E_OFFSCREEN: '1',
       // 测试环境没有真实模型：让只读分诊快速超时，验证“失败不伪造写请求”的 UI 路径。
       OWNER_TRIAGE_TIMEOUT_MS: '4000'
     },

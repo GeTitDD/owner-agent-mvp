@@ -64,7 +64,8 @@ const run = async () => {
       ...process.env,
       OWNER_AGENT_DB: dbPath,
       OWNER_COMPANION_FAKE_SOURCE: '1',
-      OWNER_AGENT_NOTIFICATIONS: '0'
+      OWNER_AGENT_NOTIFICATIONS: '0',
+      OWNER_AGENT_E2E_OFFSCREEN: '1'
     },
     timeout: 60000
   });

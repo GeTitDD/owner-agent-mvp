@@ -25,6 +25,8 @@ app.on('second-instance', () => {
 });
 const screenshotArg = process.argv.find((arg) => arg.startsWith('--screenshot-dir='));
 const screenshotDir = screenshotArg ? screenshotArg.slice('--screenshot-dir='.length) : '';
+// 验收/自动化实例不把桌宠和面板画到用户桌面上（否则会看到测试宠物一闪而过）。
+const e2eOffscreen = process.env.OWNER_AGENT_E2E_OFFSCREEN === '1';
 const selfTestArg = process.argv.find((arg) => arg.startsWith('--self-test='));
 const selfTest = selfTestArg ? selfTestArg.slice('--self-test='.length) : '';
 const selfTestOutArg = process.argv.find((arg) => arg.startsWith('--self-test-out='));
@@ -64,6 +66,8 @@ let playbookRunner = null;
 let triageRunner = null;
 let playbookRunnerError = '';
 let playbookRuns = new Map();
+const activePlaybookRuns = new Map();
+const lastPlaybookResults = new Map();
 const playbookAborts = new Map();
 let knowledgeSummaryModule = null;
 let harvestInFlight = false;
@@ -466,6 +470,27 @@ const stageText = (chain) => {
 
 const circleSafe = (value, expected) => value === expected;
 
+// pstack（只读 playbook）运行时的桌宠/面板状态。
+// 运行中的 playbook 由主进程记录；完成结果保留 3 分钟，用于“完成/失败”提示。
+const activePlaybookFor = (projectId) => {
+  const items = [...activePlaybookRuns.values()]
+    .filter((run) => run.projectId === projectId)
+    .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+  return items[0] ?? null;
+};
+
+const recentPlaybookFor = (projectId, windowMs = 3 * 60 * 1000) => {
+  const now = Date.now();
+  let best = null;
+  for (const run of lastPlaybookResults.values()) {
+    if (run.projectId !== projectId) continue;
+    const finished = Date.parse(String(run.finishedAt ?? ''));
+    if (!Number.isFinite(finished) || now - finished > windowMs) continue;
+    if (!best || finished > Date.parse(String(best.finishedAt))) best = run;
+  }
+  return best;
+};
+
 // ---- 桌宠皮肤（mascot / Codex 阶段） ----
 
 const mascotDirs = () => ({
@@ -497,6 +522,7 @@ const mascotCatalog = async () => {
   return {
     current: resolved.skin,
     fallback: resolved.fallback,
+    userDir: mascotDirs().userDir,
     skins: resolved.skins.map((item) => ({
       id: item.id, label: item.label, builtin: item.builtin, kind: item.kind ?? 'static',
       url: pathToFileURL(item.file).href,
@@ -848,8 +874,11 @@ const buildView = async () => {
   const latestJob = jobsInProject[0] ?? null;
   const workerOnProject = workerState.running
     && (!workerState.current?.projectId || workerState.current.projectId === activeProjectId);
+  const activePlaybook = activePlaybookFor(activeProjectId);
+  const recentPlaybook = activePlaybook ? null : recentPlaybookFor(activeProjectId);
   let state = 'idle';
   if (pending.length > 0) state = 'waiting';
+  else if (activePlaybook) state = 'working';
   else if (workerOnProject || activeJob || activeSandbox || activeCycle
     || sandboxesInProject.some((run) => ['queued', 'running'].includes(run.status))) {
     state = 'working';
@@ -862,6 +891,9 @@ const buildView = async () => {
   } else if (latestCycle && latestCycle.status === 'tested_pass'
     && recent(latestCycle.updated_at ?? latestCycle.created_at)) {
     state = 'done';
+  } else if (recentPlaybook) {
+    // pstack 只读分析完成后短暂显示结果，再回到 idle。
+    state = recentPlaybook.status === 'error' ? 'error' : 'done';
   }
   const finalCycle = repairsInProject.find((cycle) =>
     ['tested_pass', 'tested_fail'].includes(cycle.status)) ?? null;
@@ -888,14 +920,41 @@ const buildView = async () => {
     } : null
   };
   const services = await serviceStatus();
+  let stage = stageText(chain);
+  if (activePlaybook) stage = `pstack 正在分析：${activePlaybook.title}`;
+  else if (stage === '暂时没有进行中的任务' && recentPlaybook) {
+    stage = `pstack ${recentPlaybook.status === 'error' ? '失败' : '完成'}：${recentPlaybook.title}`;
+  }
+  if (activePlaybook) {
+    const idleLine = activity.findIndex((line) => line.text === '暂时没有进行中的任务');
+    if (idleLine >= 0) activity.splice(idleLine, 1);
+    activity.unshift({ kind: 'status', text: `pstack：${activePlaybook.title} · 分析中` });
+  }
   return {
     version: COMPANION_VERSION,
     state,
     pending,
-    stage: stageText(chain),
+    stage,
     activity,
     timeline,
     chain: chainView,
+    playbook: activePlaybook
+      ? {
+        running: true,
+        playbookId: activePlaybook.playbookId,
+        title: activePlaybook.title,
+        startedAt: activePlaybook.startedAt
+      }
+      : recentPlaybook
+        ? {
+          running: false,
+          playbookId: recentPlaybook.playbookId,
+          title: recentPlaybook.title,
+          status: recentPlaybook.status,
+          summary: String(recentPlaybook.summary ?? '').slice(0, 160),
+          finishedAt: recentPlaybook.finishedAt
+        }
+        : null,
     worker: {
       running: Boolean(workerState.running),
       onProject: Boolean(workerOnProject),
@@ -1076,6 +1135,10 @@ const createPet = () => {
   });
   safeWindow(pet);
   positionPet();
+  if (e2eOffscreen) {
+    pet.setOpacity(0);
+    pet.setIgnoreMouseEvents(true);
+  }
   pet.setAlwaysOnTop(true, 'floating');
   pet.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   pet.loadFile(path.join(__dirname, 'pet.html'));
@@ -1104,6 +1167,10 @@ const createPanel = () => {
     }
   });
   safeWindow(panel);
+  if (e2eOffscreen) {
+    panel.setOpacity(0);
+    panel.setIgnoreMouseEvents(true);
+  }
   panel.loadFile(path.join(__dirname, 'panel.html'));
   panel.on('closed', () => { panel = null; });
 };
@@ -1111,6 +1178,11 @@ const createPanel = () => {
 const showPanel = () => {
   if (!panel) createPanel();
   positionPanel();
+  if (e2eOffscreen) {
+    // 自动化实例只渲染不抢焦点，也不出现在任务栏。
+    panel.showInactive();
+    return;
+  }
   panel.show();
   panel.focus();
 };
@@ -1612,6 +1684,18 @@ const registerIpc = () => {
     const playbookId = String(input?.playbookId ?? '');
     const project = await projectForPlaybook(String(input?.projectId ?? ''));
     const runner = await getPlaybookRunner();
+    const registry = await loadPlaybookRegistry();
+    const playbook = registry.getPlaybook(playbookId);
+    const title = playbook?.title ?? playbookId;
+    const runKey = `${project.id}::${playbookId}`;
+    // 运行期间让桌宠/面板知道“正在跑 pstack”，而不是显示空闲。
+    activePlaybookRuns.set(runKey, {
+      playbookId,
+      title,
+      projectId: project.id,
+      projectName: project.name,
+      startedAt: new Date().toISOString()
+    });
     // 同一时刻只允许一个同名 playbook；取消按钮通过这张表精确中止。
     const controller = new AbortController();
     playbookAborts.set(playbookId, controller);
@@ -1625,12 +1709,38 @@ const registerIpc = () => {
       });
     } catch (error) {
       playbookRunnerError = String(error?.message ?? error);
+      lastPlaybookResults.set(runKey, {
+        playbookId,
+        title,
+        projectId: project.id,
+        status: 'error',
+        summary: playbookRunnerError,
+        finishedAt: new Date().toISOString()
+      });
       throw error;
     } finally {
+      activePlaybookRuns.delete(runKey);
       playbookAborts.delete(playbookId);
     }
-    persistPlaybookRun(result);
-    playbookRuns.set(`${project.id}::${result.playbookId}`, result);
+    persistPlaybookRun({
+      ...result,
+      projectId: project.id,
+      projectName: project.name,
+      playbookTitle: title
+    });
+    playbookRuns.set(runKey, result);
+    lastPlaybookResults.set(runKey, {
+      playbookId: result.playbookId,
+      title,
+      projectId: project.id,
+      status: result.status,
+      summary: result.summary,
+      finishedAt: new Date().toISOString()
+    });
+    if (lastPlaybookResults.size > 40) {
+      const oldest = lastPlaybookResults.keys().next().value;
+      lastPlaybookResults.delete(oldest);
+    }
     // 避免内存无限增长：只保留最近 40 次结果。
     if (playbookRuns.size > 40) {
       const oldest = playbookRuns.keys().next().value;
@@ -1672,7 +1782,7 @@ const registerIpc = () => {
       text,
       projectId: String(input?.projectId ?? ''),
       intent: summary.slice(0, 300),
-      title: `写请求：${summary.slice(0, 120)}`,
+      title: `写请求 [playbook:${playbookId}]：${summary.slice(0, 110)}`,
       analysisSummary: summary
     });
     const projects = (await api('/owner/v1/projects')).items ?? [];
@@ -1899,7 +2009,7 @@ async function boot() {
   await startServices();
   createPet();
   createPanel();
-  createTray();
+  if (!e2eOffscreen) createTray();
   registerDisplayHandlers();
 
   // 自动化视觉验收：启动后截图并退出。

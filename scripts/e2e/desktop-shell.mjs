@@ -23,7 +23,8 @@ const launch = async (userData) => electron.launch({
   env: {
     ...process.env,
     OWNER_AGENT_DB: path.join(userData, 'owner.sqlite'),
-    OWNER_AGENT_NOTIFICATIONS: '0'
+    OWNER_AGENT_NOTIFICATIONS: '0',
+      OWNER_AGENT_E2E_OFFSCREEN: '1'
   },
   timeout: 60000
 });

@@ -72,7 +72,8 @@ const run = async () => {
   const app = await electron.launch({
     executablePath: electronPath,
     args: [path.join(repoRoot, 'desktop', 'main.cjs'), `--user-data-dir=${userData}`],
-    env: { ...process.env, OWNER_AGENT_DB: ownerDb, OWNER_KNOWLEDGE_DB: knowledgeDb, OWNER_AGENT_NOTIFICATIONS: '0' },
+    env: { ...process.env, OWNER_AGENT_DB: ownerDb, OWNER_KNOWLEDGE_DB: knowledgeDb, OWNER_AGENT_NOTIFICATIONS: '0',
+      OWNER_AGENT_E2E_OFFSCREEN: '1' },
     timeout: 60000
   });
 
