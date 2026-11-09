@@ -12,7 +12,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, existsSync, realpathSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, realpathSync, statSync, mkdirSync } from 'node:fs';
 import { resolvePiModel } from './pi-model-catalog.mjs';
 import { PATCH_LIMITS } from './patch-protocol.mjs';
 
@@ -237,10 +237,28 @@ export class WriterAgent {
       if (stat.size > this.maxFileBytes) {
         throw Object.assign(new Error('written file exceeds size limit'), { category: 'invalid-proposal' });
       }
-      files.push({ path: relative.split(path.sep).join('/'), content: readFileSync(absolute, 'utf8') });
+      const action = entry.code.includes('?') || entry.code.includes('A') ? 'add' : 'modify';
+      files.push({
+        path: relative.split(path.sep).join('/'),
+        action,
+        content: readFileSync(absolute, 'utf8')
+      });
     }
     if (files.length > this.maxFiles) {
       throw Object.assign(new Error('writer changed too many files'), { category: 'invalid-proposal' });
+    }
+    // 校验与后续 apply 都以“base 状态”为前提：捕获内容后把 worktree 还原，
+    // 否则 add 会被判成“目标已存在”，modify 会被判成“没有变化”。
+    try {
+      execFileSync('git', ['-C', cwd, 'checkout', '--', '.'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      execFileSync('git', ['-C', cwd, 'clean', '-fd'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      // 新增文件所在的目录在 base 里可能不存在：补建目录，让校验与 apply 都能按 add 处理。
+      for (const file of files) {
+        if (file.action !== 'add') continue;
+        mkdirSync(path.dirname(path.join(cwd, file.path)), { recursive: true });
+      }
+    } catch (error) {
+      throw Object.assign(new Error(`writer workspace could not be restored: ${error.message}`), { category: 'workspace-error' });
     }
     return { model: this.model || 'unknown', files };
   }
