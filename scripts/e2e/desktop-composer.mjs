@@ -1,7 +1,7 @@
 // Companion 主界面验收：Cindy 式活动流、会话时间线、Composer 行为。
 //
 // 覆盖：活动行、消息列表、模型 chip、Shift+Enter 列表接续、Enter 直接交办、
-// 草稿清理、Job 进入 pending_approval。
+// 只读分析结果、草稿清理；没有「写入」开关，写入只能由分诊后生成 HITL 写请求。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,14 +36,23 @@ const run = async () => {
   }, null, 2));
 
   const owner = new OwnerStore(ownerDb);
+  let seededJobIds = new Set();
   try {
     createSyntheticProject({ store: owner, root: path.join(root, 'ui-demo'), projectId: 'ui-demo', name: 'UI Demo' });
+    seededJobIds = new Set(owner.listJobs({ projectId: 'ui-demo', limit: 100 }).map((job) => job.id));
   } finally { owner.close(); }
 
   const app = await electron.launch({
     executablePath: electronPath,
     args: [path.join(repoRoot, 'desktop', 'main.cjs'), `--user-data-dir=${userData}`],
-    env: { ...process.env, OWNER_AGENT_DB: ownerDb, OWNER_KNOWLEDGE_DB: knowledgeDb, OWNER_AGENT_NOTIFICATIONS: '0' },
+    env: {
+      ...process.env,
+      OWNER_AGENT_DB: ownerDb,
+      OWNER_KNOWLEDGE_DB: knowledgeDb,
+      OWNER_AGENT_NOTIFICATIONS: '0',
+      // 测试环境没有真实模型：让只读分诊快速超时，验证“失败不伪造写请求”的 UI 路径。
+      OWNER_TRIAGE_TIMEOUT_MS: '4000'
+    },
     timeout: 60000
   });
 
@@ -80,18 +89,23 @@ const run = async () => {
 
     await input.fill('回归：Enter 直接交办');
     await input.press('Enter');
-    await sleep(2500);
-    const pending = await panel.locator('#pendingList .pending-card').count();
-    check('Enter sends and creates a pending job', pending >= 1, String(pending));
+    // 先只读分析；没有可用模型时应如实显示失败，而不是伪造成写请求。
+    await panel.waitForSelector('#answerSection:not([hidden])', { timeout: 30000 });
+    const answer = await panel.evaluate(() => ({
+      badge: document.getElementById('answerBadge')?.textContent ?? '',
+      text: document.getElementById('answerCard')?.innerText ?? ''
+    }));
+    check('composer no longer shows a write toggle', await panel.locator('#writeMode').count() === 0);
+    check('submit renders a read-only analysis result', answer.text.trim().length > 0, answer.badge);
     const draft = await panel.evaluate(() => localStorage.getItem('owner-companion-draft'));
     check('draft is cleared after send', draft === null, String(draft));
 
-    check('write mode toggle is present', await panel.locator('#writeMode').count() === 1);
-    await panel.locator('#writeMode').check();
-    await input.fill('写入测试：新增一个说明文件');
-    await input.press('Enter');
-    await sleep(2000);
-    await panel.locator('#writeMode').uncheck();
+    if (answer.badge === '写请求') {
+      const pending = await panel.locator('#pendingList .pending-card').count();
+      check('write request creates a pending job', pending >= 1, String(pending));
+    }
+
+    await panel.screenshot({ path: path.join(evidence, 'panel-composer.png') });
 
     await panel.screenshot({ path: path.join(evidence, 'panel-composer.png') });
 
@@ -113,9 +127,13 @@ const run = async () => {
 
   const verify = new OwnerStore(ownerDb);
   try {
-    const jobs = verify.listJobs({ projectId: 'ui-demo', limit: 10 });
-    check('job recorded in the owner store', jobs.some((job) => job.status === 'pending_approval'));
-    check('write-mode job uses code-write', jobs.some((job) => job.job_type === 'code-write'));
+    const jobs = verify.listJobs({ projectId: 'ui-demo', limit: 100 });
+    const created = jobs.filter((job) => !seededJobIds.has(job.id));
+    check('composer never creates legacy code-patch jobs', created.every((job) => job.job_type !== 'code-patch'));
+    const pendingJobs = created.filter((job) => job.status === 'pending_approval');
+    if (pendingJobs.length) {
+      check('write request uses code-write', pendingJobs.every((job) => job.job_type === 'code-write'));
+    }
   } finally { verify.close(); }
 
   if (failures.length > 0) {

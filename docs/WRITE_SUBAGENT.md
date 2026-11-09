@@ -30,9 +30,11 @@ node scripts\e2e\monty-packaged-smoke.mjs --no-build   # 期望 ok=true / result
 ## 1. 链路
 
 ```
-你勾选「写入」并交办
-  → code-write Job（pending_approval）
-  → 你批准 Job
+你直接在 Composer 交办（没有「写入」开关）
+  → 只读分诊（read/grep/find/ls + 只读 own_python）
+  → 不需要写入？直接给结论，不创建 Job、不动文件
+  → 需要写入 → 自动生成写请求（code-write Job，pending_approval，HITL）
+  → 你批准写请求
   → 宿主创建一次性 git worktree（base 固定）
   → WriterAgent 在 worktree 内用受限工具改文件
   → 宿主收集变更 → PatchProposal（proposed）
@@ -66,8 +68,10 @@ WriterAgent 复用 `PatchCodingWorker` 的控制平面（lease / fencing / cance
 
 ## 4. 使用
 
-- 面板 Composer 的「写入」开关：开启后交办生成 `code-write` Job；关闭则是原来的只读/提案路径。
-- 批准 Job 后，Worker 才会启动 WriterAgent；模型不可用时失败而不是降级。
+- 面板 Composer **没有「写入」开关**：每次交办先跑只读分诊（`src/pstack/triage.mjs`）。
+- 分诊结论只需要回答 → 直接返回结论，不创建 Job、不写文件。
+- 分诊结论需要改文件 → 自动创建 `code-write` **写请求**（`pending_approval`，即 HITL）。
+- 你在「需要你决定」里批准写请求后，Worker 才会启动 WriterAgent；模型不可用时失败而不是降级。
 - 生成的仍然是普通 PatchProposal：审批、hash 绑定、沙箱测试、修复循环全部复用。
 
 ## 5. 边界

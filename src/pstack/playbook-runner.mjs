@@ -300,7 +300,7 @@ export class PlaybookRunner {
 }
 
 // 失败后给用户可执行的一句话，而不是只显示分类名。
-const FAILURE_ADVICE = {
+export const FAILURE_ADVICE = {
   timeout: '项目较大时先用「结构走读」缩小范围，或直接重试；单次预算已提高到 4 分钟。',
   canceled: '已按你的要求中止；可以换个更小的 playbook 再试。',
   'readonly-violation': '只读工具校验失败，已中止；这属于客户端缺陷，请不要继续执行写操作。',

@@ -910,6 +910,50 @@
     }
   };
 
+  // ---- 只读分析结果（Composer 交办的分诊结论） ----
+
+  let lastAnswer = null;
+
+  const renderAnswer = (result) => {
+    const section = $('answerSection');
+    const card = $('answerCard');
+    card.replaceChildren();
+    if (!result) {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+    $('answerBadge').textContent = result.mode === 'write-request'
+      ? '写请求'
+      : result.mode === 'triage-error' ? '失败' : '只读';
+    if (result.summary) card.append(el('p', 'result-summary', result.summary));
+    if (result.intent) card.append(el('p', 'pending-summary', `写入计划：${result.intent}`));
+    if (result.targets?.length) {
+      card.append(el('p', 'pending-summary', `目标文件：${result.targets.join(', ')}`));
+    }
+    for (const finding of (result.findings ?? []).slice(0, 3)) {
+      const row = el('div', 'playbook-finding');
+      row.append(el('strong', undefined, finding.title));
+      if (finding.detail) row.append(el('span', undefined, finding.detail));
+      const chips = playbookEvidenceChips(finding);
+      if (chips) row.append(chips);
+      card.append(row);
+    }
+    if (result.questions?.length) {
+      card.append(el('p', 'pending-summary', `需要你补充：${result.questions.join('；')}`));
+    }
+    if (result.advice) card.append(el('p', 'result-summary', result.advice));
+    if (result.mode === 'write-request') {
+      card.append(el('p', 'pending-summary',
+        '已生成写请求，在「需要你决定」里批准后才会调用写入子 Agent；补丁仍要再批准一次。'));
+    }
+    const actions = el('div', 'playbook-actions');
+    if (typeof result.durationMs === 'number') {
+      actions.append(el('span', 'playbook-more', `只读分析 ${result.durationMs} ms`));
+    }
+    if (actions.childNodes.length) card.append(actions);
+  };
+
   // ---- Composer（Cindy ComposerCard / ListComposerTextarea 行为） ----
 
   const DRAFT_KEY = 'owner-companion-draft';
@@ -938,29 +982,39 @@
     if (!text) { toast('先写下要交办的事情。'); return; }
     const projectId = $('projectSelect').value;
     const button = $('submitTask');
+    const hint = $('composerHint');
     button.disabled = true;
     button.classList.add('sending');
+    const startedAt = Date.now();
+    const tick = () => {
+      hint.textContent = `只读分析中… ${Math.round((Date.now() - startedAt) / 1000)}s（不写文件）`;
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
     try {
-      const created = await window.companion.createJob({
-        text,
-        projectId,
-        mode: $('writeMode').checked ? 'write' : 'patch'
-      });
+      // 先只读分析：需要写入时后台会生成 pending_approval 的写请求（HITL）。
+      const result = await window.companion.submit({ text, projectId });
       taskInput.value = '';
       try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
       autoGrow();
-      const missing = created?.testConfig?.missing ?? [];
-      if (created?.testConfig?.ok === false) {
+      lastAnswer = result ?? null;
+      renderAnswer(lastAnswer);
+      if (result?.mode === 'write-request') {
+        const missing = result?.testConfig?.missing ?? [];
         toast(missing.length
-          ? `任务已创建；测试配置缺少 ${missing.join(', ')}，补丁应用后将无法创建沙箱。`
-          : '任务已创建；但还没有可用的测试配置，补丁应用后将无法创建沙箱。', 7000);
+          ? `只读分析完成；已发起写请求，批准后子 Agent 才会动手。测试配置还缺 ${missing.join(', ')}。`
+          : '只读分析完成；已发起写请求，批准后子 Agent 才会动手。', 7000);
+      } else if (result?.mode === 'answer') {
+        toast('只读分析完成，没有改动任何文件。', 4000);
       } else {
-        toast('任务已创建，等你批准后开始');
+        toast(result?.advice || result?.summary || '只读分析失败，请重试。', 7000);
       }
       await refresh();
     } catch (error) {
       toast(String(error?.message ?? error), 5000);
     } finally {
+      window.clearInterval(timer);
+      hint.textContent = '先只读分析；需要写入时再请你批准';
       button.disabled = false;
       button.classList.remove('sending');
       taskInput.focus();
@@ -1018,6 +1072,8 @@
     playbookCurrent = null;
     playbookProjectId = projectId;
     renderPlaybookResult();
+    lastAnswer = null;
+    renderAnswer(null);
     await refresh();
     void loadPlaybooks();
   };

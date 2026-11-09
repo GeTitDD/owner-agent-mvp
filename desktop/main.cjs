@@ -61,6 +61,7 @@ let serviceCache = { at: 0, value: null };
 // pstack Playbook：注册表按需加载，runner 跟随当前模型，结果留在内存便于面板复读。
 let playbookRegistry = null;
 let playbookRunner = null;
+let triageRunner = null;
 let playbookRunnerError = '';
 let playbookRuns = new Map();
 const playbookAborts = new Map();
@@ -1085,6 +1086,14 @@ const getPlaybookRunner = async () => {
   return playbookRunner;
 };
 
+/** 只读分诊执行器：判断一条交办是否需要写入，再决定是否发起 HITL 写请求。 */
+const getTriageRunner = async () => {
+  if (triageRunner) return triageRunner;
+  const { TriageRunner } = await importEsm('../src/pstack/triage.mjs');
+  triageRunner = new TriageRunner({ model: config.model || '' });
+  return triageRunner;
+};
+
 /** 权限校验：只接受当前 Owner 已注册的项目，根目录必须与登记一致。 */
 const projectForPlaybook = async (projectId) => {
   const items = (await api('/owner/v1/projects')).items ?? [];
@@ -1132,33 +1141,64 @@ const playbookListPayload = async (projectId) => {
   };
 };
 
-/** 面板点“生成改动提案”时使用：只发任务，真正的写文件仍走既有审批/沙箱链路。 */
-const createPatchJob = async ({ text, projectId, jobType = 'code-patch' }) => {
-  const value = String(text ?? '').trim();
-  if (!value) throw new Error('请先输入要交办的事情。');
+/** 解析项目：只接受已登记项目；缺省用当前项目，再退到第一个。 */
+const resolveProject = async (projectId = '') => {
   const projects = (await api('/owner/v1/projects')).items ?? [];
   const project = projects.find((item) => item.id === projectId)
     ?? projects.find((item) => item.id === config.projectId)
     ?? projects[0];
   if (!project) throw new Error('还没有项目，请先在设置里添加一个项目目录。');
-  const task = await api('/owner/v1/tasks', {
-    method: 'POST',
-    body: { projectId: project.id, title: value.slice(0, 200) }
-  });
+  return project;
+};
+
+let companionSubmitModule = null;
+const loadCompanionSubmit = async () => {
+  companionSubmitModule ??= await importEsm('../src/companion-submit.mjs');
+  return companionSubmitModule;
+};
+
+const projectRootOf = (project) => project.root ?? project.root_path ?? project.rootPath ?? '';
+
+/**
+ * 创建一条 HITL 写请求：Job 仍是 pending_approval，Owner 批准后 Worker 才会启动写入子 Agent。
+ * 真正的文件写入依然发生在隔离 worktree，并继续走补丁审批与沙箱链路。
+ */
+const createWriteRequest = async ({
+  project,
+  text,
+  title = '',
+  intent = '',
+  targets = [],
+  allowedPaths = '',
+  analysisRunId = '',
+  analysisSummary = ''
+}) => {
+  const value = String(text ?? '').trim();
+  if (!value) throw new Error('请先输入要交办的事情。');
+  const { normalizeAllowedPaths } = await loadCompanionSubmit();
   const baseSha = project.baseSha ?? project.base_sha ?? '';
   if (!/^[0-9a-f]{40}$/u.test(baseSha)) {
-    throw new Error('项目目录不是有效的 Git 仓库，无法确定 base commit。');
+    throw new Error(`项目目录不是有效的 Git 仓库（${projectRootOf(project)}），无法确定 base commit。`);
   }
+  const jobTitle = String(title || `写请求：${intent || value}`).slice(0, 200);
+  const task = await api('/owner/v1/tasks', {
+    method: 'POST',
+    body: { projectId: project.id, title: jobTitle }
+  });
   const job = await api('/owner/v1/jobs', {
     method: 'POST',
     body: {
       projectId: project.id,
-      jobType: ['code-patch', 'code-write'].includes(jobType) ? jobType : 'code-patch',
-      title: value.slice(0, 200),
+      jobType: 'code-write',
+      title: jobTitle,
       payload: {
         baseSha,
-        allowedPaths: config.allowedPaths || 'src/',
-        focus: value.slice(0, 300)
+        allowedPaths: normalizeAllowedPaths(allowedPaths, config.allowedPaths || 'src/'),
+        focus: value.slice(0, 300),
+        intent: String(intent || value).slice(0, 300),
+        targets: (Array.isArray(targets) ? targets.join(',') : String(targets || '')).slice(0, 300),
+        analysisRunId: String(analysisRunId || '').slice(0, 300),
+        analysisSummary: String(analysisSummary || '').slice(0, 300)
       },
       idempotencyKey: `companion-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ownerTaskId: task.id
@@ -1167,6 +1207,40 @@ const createPatchJob = async ({ text, projectId, jobType = 'code-patch' }) => {
   config.projectId = project.id;
   saveConfig();
   return { jobId: job.id, status: job.status, projectId: project.id };
+};
+
+/** 兼容旧路径：面板“生成改动提案”也走同一个受控写入链路。 */
+const createPatchJob = async ({ text, projectId, jobType = 'code-write', ...rest }) => {
+  const project = await resolveProject(projectId);
+  return createWriteRequest({ project, text, ...rest });
+};
+
+/**
+ * Composer 交办：先只读分析（不写文件）。
+ * - 只需要回答 → 直接返回结论，不创建 Job；
+ * - 需要写入 → 创建 code-write 写请求（pending_approval，HITL），批准后才启动写入子 Agent。
+ */
+const submitCompanionTask = async ({ text, projectId }) => {
+  const project = await resolveProject(projectId);
+  const [{ submitCompanionTask: runSubmit }, triageRunner] = await Promise.all([
+    loadCompanionSubmit(),
+    getTriageRunner()
+  ]);
+  const result = await runSubmit({
+    text,
+    project: {
+      id: project.id,
+      root: projectRootOf(project),
+      domain: project.primary_domain ?? project.primaryDomain ?? '',
+      baseSha: project.baseSha ?? project.base_sha ?? ''
+    },
+    triageRunner,
+    createWriteRequest
+  });
+  if (result.mode === 'write-request') {
+    return { ...result, testConfig: await testConfigForProject(project) };
+  }
+  return result;
 };
 
 const registerIpc = () => {
@@ -1180,16 +1254,21 @@ const registerIpc = () => {
     return view;
   });
 
+  ipcMain.handle('companion:submit', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return submitCompanionTask({
+      text: String(input?.text ?? ''),
+      projectId: String(input?.projectId ?? '')
+    });
+  });
+
+  // 兼容旧渲染进程：同样走“只读分析 → HITL 写请求”，不再接受 mode 开关。
   ipcMain.handle('companion:create-job', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    const created = await createPatchJob({
+    return submitCompanionTask({
       text: String(input?.text ?? ''),
-      projectId: String(input?.projectId ?? ''),
-      jobType: input?.mode === 'write' ? 'code-write' : 'code-patch'
+      projectId: String(input?.projectId ?? '')
     });
-    const projects = (await api('/owner/v1/projects')).items ?? [];
-    const project = projects.find((item) => item.id === created.projectId);
-    return { jobId: created.jobId, status: created.status, testConfig: project ? await testConfigForProject(project) : null };
   });
 
   ipcMain.handle('companion:decide', async (event, input) => {
@@ -1465,7 +1544,10 @@ const registerIpc = () => {
     if (!text) throw new Error('没有可用的诊断结论，无法生成提案。');
     const created = await createPatchJob({
       text,
-      projectId: String(input?.projectId ?? '')
+      projectId: String(input?.projectId ?? ''),
+      intent: summary.slice(0, 300),
+      title: `写请求：${summary.slice(0, 120)}`,
+      analysisSummary: summary
     });
     const projects = (await api('/owner/v1/projects')).items ?? [];
     const project = projects.find((item) => item.id === created.projectId);
@@ -1553,7 +1635,7 @@ const registerIpc = () => {
     saveConfig();
     serviceCache = { at: 0, value: null };
     const modelChanged = config.model !== previousModel;
-    if (modelChanged) playbookRunner = null;
+    if (modelChanged) { playbookRunner = null; triageRunner = null; }
     let modelApplied = true;
     let modelPending = false;
     if (modelChanged && worker) {

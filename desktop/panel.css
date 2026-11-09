@@ -511,6 +511,20 @@ pre.diff, pre.logs {
 
 .playbook-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
+.answer-card {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.answer-card .result-summary,
+.answer-card .pending-summary { margin: 0; }
+
 .playbook-hint-row {
   display: flex;
   align-items: center;
@@ -709,11 +723,3 @@ pre.diff, pre.logs {
   width: auto;
 }
 
-.write-toggle {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 10px; color: var(--muted); cursor: pointer;
-  border: 1px solid var(--line); border-radius: 999px;
-  padding: 1px 8px 1px 6px;
-}
-.write-toggle input { margin: 0; width: 11px; height: 11px; }
-.write-toggle:has(input:checked) { color: var(--text); border-color: var(--text); background: var(--accent-soft); }

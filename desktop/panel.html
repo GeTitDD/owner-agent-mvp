@@ -83,6 +83,14 @@
         </div>
       </section>
 
+      <section id="answerSection" hidden>
+        <div class="section-title">
+          <h3>只读分析</h3>
+          <span id="answerBadge" class="count">分析</span>
+        </div>
+        <div id="answerCard" class="answer-card"></div>
+      </section>
+
       <section>
         <div class="section-title">
           <h3>需要你决定</h3>
@@ -107,11 +115,7 @@
           placeholder="交办一件事…（Enter 发送，Shift+Enter 换行）"></textarea>
         <div class="composer-bar">
           <span id="composerModel" class="composer-model" title="当前模型">—</span>
-          <span class="composer-hint">先创建任务，批准后执行</span>
-          <label class="write-toggle" title="开启后由受控书写子 Agent 在隔离 worktree 里改文件；仍要你批准补丁">
-            <input type="checkbox" id="writeMode" />
-            <span>写入</span>
-          </label>
+          <span id="composerHint" class="composer-hint">先只读分析；需要写入时再请你批准</span>
           <button id="submitTask" class="send-btn" title="发送（Enter）" aria-label="发送">
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
               <path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2"
