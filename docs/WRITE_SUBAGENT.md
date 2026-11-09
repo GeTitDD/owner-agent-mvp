@@ -13,7 +13,19 @@ WriterAgent 额外提供 `own_python` 工具，底层是 [Monty](https://github.
 - 限制：无三方包、无类继承、无生成器、无 `@classmethod/@staticmethod/@property`、无 `del`。
 
 它适合“确定性计算 / 格式转换”，不负责跑项目测试。项目测试仍然走 Docker 沙箱 profile。
-原生包需要在打包时 `asarUnpack`（`package.json → build.asarUnpack`）。
+
+原生包需要在打包时 `asarUnpack`（`package.json → build.asarUnpack`），否则会去 `app.asar`
+里找 `monty.exe` 而失败。打包后自检：
+
+```powershell
+npx electron-builder --win dir --x64
+node scripts\e2e\monty-packaged-smoke.mjs --no-build   # 期望 ok=true / result=5050 / packaged=true
+```
+
+`resolveMontyBinaryPath()` 会把路径改写到 `app.asar.unpacked`；也可用 `MONTY_BIN` 显式指定。
+
+同一 runner 也用于**只读分析**：Playbook 的 `own_python` 以 `read-only` 挂载仓库，
+只做统计/计数/确定性计算，写入会被文件系统拒绝。
 
 ## 1. 链路
 

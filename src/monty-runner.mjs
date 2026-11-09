@@ -6,6 +6,37 @@
 // - 资源上限：内存、单次执行时长、递归深度、输出字节。
 import { CollectString, Monty } from '@pydantic/monty';
 import { MountDir } from '@pydantic/monty/node';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+
+const requireFromHere = createRequire(import.meta.url);
+
+/** 解析 Monty worker 二进制；Electron 打包后需要指向 app.asar.unpacked。 */
+export function resolveMontyBinaryPath() {
+  if (process.env.MONTY_BIN) return process.env.MONTY_BIN;
+  try {
+    let nodeModules;
+    try {
+      const pkg = requireFromHere.resolve('@pydantic/monty/package.json');
+      nodeModules = path.dirname(path.dirname(pkg));
+    } catch {
+      // 包可能不允许从 exports 里取 package.json：退回主入口定位。
+      const entry = requireFromHere.resolve('@pydantic/monty');
+      nodeModules = path.resolve(path.dirname(entry), '..', '..', '..');
+    }
+    const scopeDir = path.join(nodeModules, '@pydantic');
+    const names = fs.readdirSync(scopeDir).filter((name) => name.startsWith('monty-'));
+    const binName = process.platform === 'win32' ? 'monty.exe' : 'monty';
+    for (const name of names) {
+      const raw = path.join(scopeDir, name, binName);
+      const unpacked = raw.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
+      if (unpacked !== raw && fs.existsSync(unpacked)) return unpacked;
+      if (fs.existsSync(raw)) return raw;
+    }
+  } catch { /* fall through to Monty's own resolution */ }
+  return null;
+}
 
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const RESULT_TEXT_CHARS = 20000;
@@ -41,10 +72,15 @@ export async function montyAvailable() {
  * 为一个 worktree 创建执行器。
  * @param {{cwd: string, limits?: object}} options
  */
-export async function createMontyRunner({ cwd, limits = {} } = {}) {
+export async function createMontyRunner({ cwd, mode = 'read-write', limits = {} } = {}) {
   if (!cwd) throw new Error('cwd is required');
-  const pool = await Monty.create({ minProcesses: 1, maxProcesses: 1 });
-  const mount = new MountDir({ hostPath: cwd, virtualPath: '/workspace', mode: 'read-write' });
+  const binaryPath = resolveMontyBinaryPath();
+  const pool = await Monty.create({
+    minProcesses: 1,
+    maxProcesses: 1,
+    ...(binaryPath ? { binaryPath } : {})
+  });
+  const mount = new MountDir({ hostPath: cwd, virtualPath: '/workspace', mode });
   const session = await pool.checkout({
     limits: {
       maxMemory: limits.maxMemory ?? 128 * 1024 * 1024,

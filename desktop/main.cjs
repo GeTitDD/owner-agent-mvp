@@ -25,6 +25,10 @@ app.on('second-instance', () => {
 });
 const screenshotArg = process.argv.find((arg) => arg.startsWith('--screenshot-dir='));
 const screenshotDir = screenshotArg ? screenshotArg.slice('--screenshot-dir='.length) : '';
+const selfTestArg = process.argv.find((arg) => arg.startsWith('--self-test='));
+const selfTest = selfTestArg ? selfTestArg.slice('--self-test='.length) : '';
+const selfTestOutArg = process.argv.find((arg) => arg.startsWith('--self-test-out='));
+const selfTestOut = selfTestOutArg ? selfTestOutArg.slice('--self-test-out='.length) : '';
 const userDataArg = process.argv.find((arg) => arg.startsWith('--user-data-dir='));
 if (userDataArg) app.setPath('userData', path.resolve(userDataArg.slice('--user-data-dir='.length)));
 // 开发期用 `electron desktop/main.cjs` 启动时 Electron 会把 userData 落到 `%APPDATA%\Electron`，
@@ -1689,7 +1693,50 @@ async function boot() {
   }
 }
 
-app.whenReady().then(boot).catch((error) => {
+/** 打包后自检：验证 asarUnpack 后的 Monty 原生包与 worker 能否运行。 */
+const runSelfTest = async () => {
+  const target = selfTestOut || path.join(os.tmpdir(), 'owner-companion-selftest.json');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-selftest-'));
+  let runner = null;
+  const payload = {
+    test: selfTest,
+    ok: false,
+    version: COMPANION_VERSION,
+    electron: process.versions.electron,
+    packaged: app.isPackaged,
+    at: new Date().toISOString()
+  };
+  try {
+    if (selfTest !== 'monty') throw new Error(`unknown self-test: ${selfTest}`);
+    const { createMontyRunner } = await importEsm('../src/monty-runner.mjs');
+    runner = await createMontyRunner({ cwd: dir, mode: 'read-only' });
+    const { result } = await runner.run('sum(range(101))');
+    payload.result = result;
+    payload.ok = result === '5050';
+  } catch (error) {
+    payload.error = String(error?.message ?? error);
+  } finally {
+    try { await runner?.close(); } catch { /* ignore */ }
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    console.error('self-test result write failed:', error.message);
+  }
+  console.log('SELF_TEST', JSON.stringify(payload));
+  return payload;
+};
+
+app.whenReady().then(async () => {
+  if (selfTest) {
+    const result = await runSelfTest();
+    app.exit(result.ok ? 0 : 1);
+    return;
+  }
+  await boot();
+}).catch((error) => {
   console.error('Owner Companion failed:', error);
   dialog.showErrorBox('Owner Companion 启动失败', String(error?.stack ?? error));
   app.quit();

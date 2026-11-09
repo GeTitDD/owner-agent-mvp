@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs';
 import { getPlaybook } from './playbooks.mjs';
 import { createReadonlySessionFactory, resolvePstackSkillsDir } from './readonly-session.mjs';
 import { sha256 } from '../utils.mjs';
+import { montyAvailable } from '../monty-runner.mjs';
 
 const MAX_FINDINGS = 5;
 const MAX_RISKS = 3;
@@ -19,7 +20,7 @@ const MAX_NEXT_STEPS = 4;
 const clean = (value, max = 2000) => String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, max);
 
 /** 组装只读分析提示词：项目边界 + playbook 目标 + 固定 JSON 输出契约。 */
-export function buildPlaybookPrompt({ playbook, project, task = '' }) {
+export function buildPlaybookPrompt({ playbook, project, task = '', python = false }) {
   return [
     `只读分析项目 ${project.id}（根目录 ${project.root}；主领域 ${project.domain || '未知'}）。`,
     `本次执行 pstack playbook「${playbook.title}」（${playbook.id}）：${playbook.hint}`,
@@ -28,6 +29,9 @@ export function buildPlaybookPrompt({ playbook, project, task = '' }) {
     '',
     '要求：',
     '1. 先用 read/grep/find/ls 实际查看关键文件再下结论；没有读到的内容标为未知。',
+    python
+      ? '1b. 需要统计/计数/确定性计算时用 own_python；仓库以只读方式挂载在 /workspace，禁止写入、禁止第三方包。'
+      : '',
     '2. 每条结论必须给证据：`相对路径` 或 `相对路径:行号`。',
     '3. 只输出 JSON，不要代码块、不要解释文字。',
     `4. 控制成本：先看 README/入口/配置，最多读 ${playbook.maxFiles ?? 20} 个文件；需要更多就说明还缺什么。`,
@@ -166,14 +170,20 @@ export class PlaybookRunner {
     skillsDir = process.env.PSTACK_DIR,
     timeoutMs = Number(process.env.OWNER_PLAYBOOK_TIMEOUT_MS) || 240000,
     logger = console,
-    sessionFactoryFor = (playbook, resolvedSkillsDir) =>
-      createReadonlySessionFactory({ playbook, skillsDir: resolvedSkillsDir })
+    python = true,
+    sessionFactoryFor = null
   } = {}) {
     this.model = model;
     this.skillsDir = skillsDir;
     this.timeoutMs = timeoutMs;
     this.logger = logger;
-    this.sessionFactoryFor = sessionFactoryFor;
+    this.python = python;
+    this.sessionFactoryFor = sessionFactoryFor ?? ((playbook, resolvedSkillsDir, options = {}) =>
+      createReadonlySessionFactory({
+        playbook,
+        skillsDir: resolvedSkillsDir,
+        python: options.python ?? this.python
+      }));
   }
 
   get skillsAvailable() {
@@ -189,8 +199,9 @@ export class PlaybookRunner {
     if (!skillsDir) throw new Error('pstack skills directory not found');
     const runId = `pb_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
     const startedAt = new Date().toISOString();
-    const prompt = buildPlaybookPrompt({ playbook, project, task });
-    const factory = this.sessionFactoryFor(playbook, skillsDir);
+    const python = this.python && await montyAvailable();
+    const prompt = buildPlaybookPrompt({ playbook, project, task, python });
+    const factory = this.sessionFactoryFor(playbook, skillsDir, { python });
     // 大仓库需要更长预算；单个 playbook 可以覆盖全局默认。
     const timeoutMs = Number(playbook.timeoutMs) > 0 ? Number(playbook.timeoutMs) : this.timeoutMs;
     let session = null;

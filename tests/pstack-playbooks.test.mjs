@@ -77,6 +77,18 @@ test('Playbook 提示词包含项目边界、只读约束与 JSON 输出契约',
   assert.match(prompt, /findings/u);
 });
 
+test('启用 Python 时提示词声明只读挂载与子集限制', () => {
+  const playbook = getPlaybook('how');
+  const prompt = buildPlaybookPrompt({
+    playbook,
+    project: { id: 'demo', root: 'D:\\demo', domain: 'software-engineering' },
+    python: true
+  });
+  assert.match(prompt, /own_python/u);
+  assert.match(prompt, /只读/u);
+  assert.match(prompt, /\/workspace/u);
+});
+
 test('解析 JSON 输出（含代码块包裹）', () => {
   const parsed = parsePlaybookOutput([
     '```json',

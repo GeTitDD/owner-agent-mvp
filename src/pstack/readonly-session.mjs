@@ -44,16 +44,19 @@ export function readSkillBody(skillsDir, skillId, maxChars = 6000) {
 }
 
 /** 只读会话工厂。skillsDir/skillBody 由调用方注入，便于测试。 */
-export function createReadonlySessionFactory({ playbook, skillsDir } = {}) {
+export function createReadonlySessionFactory({ playbook, skillsDir, python = false } = {}) {
   const skill = readSkillBody(skillsDir, playbook?.id ?? '');
   const directive = [
     'You are a read-only project analyst for Owner Companion.',
     'You may inspect the repository with read, grep, find and ls only.',
+    python
+      ? 'You may also run own_python: a restricted Python 3.14 subset with the repository mounted READ-ONLY at /workspace. No third-party packages, class inheritance, generators, @classmethod/property, del, or network.'
+      : '',
     'You cannot write files, run commands, or access the network. If a step would need that, say so instead of guessing.',
     'Ground every claim in something you actually read; cite `path` or `path:line`.',
     'Never invent files, commands, metrics or test results.',
     skill.body ? `\n# pstack skill: ${playbook.id}\n${skill.body}` : ''
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 
   return {
     requiresModel: true,
@@ -64,6 +67,16 @@ export function createReadonlySessionFactory({ playbook, skillsDir } = {}) {
       const sdk = await import('@earendil-works/pi-coding-agent');
       const agentDir = mkdtempSync(path.join(os.tmpdir(), 'owner-playbook-agent-'));
       const created = (async () => {
+        let pyRunner = null;
+        if (python) {
+          try {
+            const { createMontyRunner } = await import('../monty-runner.mjs');
+            pyRunner = await createMontyRunner({ cwd, mode: 'read-only' });
+          } catch {
+            pyRunner = null;
+          }
+        }
+        const allowedTools = [...READONLY_TOOLS, ...(pyRunner ? ['own_python'] : [])];
         const loader = new sdk.DefaultResourceLoader({
           cwd,
           agentDir,
@@ -76,9 +89,35 @@ export function createReadonlySessionFactory({ playbook, skillsDir } = {}) {
         });
         try {
           await loader.reload();
+          const customTools = [];
+          if (pyRunner) {
+            const { Type } = await import('typebox');
+            customTools.push({
+              name: 'own_python',
+              label: 'own_python',
+              description: 'Run Python in an isolated interpreter. The repository is mounted READ-ONLY at /workspace. No network, no environment variables, restricted Python 3.14 subset.',
+              promptSnippet: 'Run read-only Python against the repository',
+              promptGuidelines: [
+                'Use own_python only for deterministic computation or statistics over files you have read.',
+                'No third-party packages, no class inheritance, no generators, no del.'
+              ],
+              parameters: Type.Object({
+                code: Type.String({ description: 'Python source to execute inside the sandbox' })
+              }),
+              async execute(_toolCallId, { code }) {
+                const { output, result } = await pyRunner.run(code);
+                const text = [
+                  output ? `--- stdout ---\n${output}` : '',
+                  result ? `--- result ---\n${result}` : ''
+                ].filter(Boolean).join('\n') || '(no output)';
+                return { content: [{ type: 'text', text }] };
+              }
+            });
+          }
           const { session } = await sdk.createAgentSession({
             cwd,
-            tools: [...READONLY_TOOLS],
+            tools: allowedTools,
+            ...(customTools.length ? { customTools } : {}),
             excludeTools: [...FORBIDDEN_TOOLS],
             sessionManager: sdk.SessionManager.inMemory(),
             resourceLoader: loader,
@@ -90,11 +129,13 @@ export function createReadonlySessionFactory({ playbook, skillsDir } = {}) {
             : null;
           if (active === null) {
             session.dispose?.();
+            await pyRunner?.close();
             throw new Error('readonly-tools-unverified');
           }
-          const unexpected = active.filter((name) => !READONLY_TOOLS.includes(name));
+          const unexpected = active.filter((name) => !allowedTools.includes(name));
           if (unexpected.length) {
             session.dispose?.();
+            await pyRunner?.close();
             throw new Error(`readonly-tools-violation: ${unexpected.join(',')}`);
           }
           let disposed = false;
@@ -123,11 +164,13 @@ export function createReadonlySessionFactory({ playbook, skillsDir } = {}) {
               if (disposed) return;
               disposed = true;
               try { session.dispose?.(); } finally {
+                if (pyRunner) pyRunner.close().catch(() => {});
                 try { rmSync(agentDir, { recursive: true, force: true }); } catch { /* 最佳努力清理 */ }
               }
             }
           };
         } catch (error) {
+          try { await pyRunner?.close(); } catch { /* ignore */ }
           try { rmSync(agentDir, { recursive: true, force: true }); } catch { /* ignore */ }
           throw error;
         }
