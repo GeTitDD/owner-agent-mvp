@@ -41,6 +41,7 @@ const model = read('--model', '');
 const timeoutMs = Math.max(15000, Number(read('--timeout', '180000')) || 180000);
 const outPath = read('--out', '');
 const keep = read('--keep', '') === '1' || args.includes('--keep');
+const rootArg = read('--root', '');
 let imageDigest = read('--image-digest', process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST || '');
 
 if (![1, 2, 3].includes(level)) {
@@ -121,7 +122,8 @@ const describeFailure = (store, jobId, cycleId) => {
 
 async function runOnce({ round }) {
   const startedAt = new Date().toISOString();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), `owner-accept-l${level}-`));
+  const root = rootArg ? path.resolve(rootArg) : fs.mkdtempSync(path.join(os.tmpdir(), `owner-accept-l${level}-`));
+  fs.mkdirSync(root, { recursive: true });
   const repo = path.join(root, 'repo');
   const fixture = makeAcceptanceFixture({ root: repo });
   const store = new OwnerStore(path.join(root, 'owner.sqlite'));

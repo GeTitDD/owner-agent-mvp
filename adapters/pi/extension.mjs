@@ -1,6 +1,9 @@
 // Pi-compatible extension; no direct dependency on Pi's internals.
 // Usage: pi -e /absolute/path/to/domain-context-pi-starter/adapters/pi/extension.mjs
 import { createDomainEngine } from '../../src/engine.mjs';
+import { PersonalKnowledgeStore } from '../../src/personal-store.mjs';
+import { defaultDbPath } from '../../src/storage.mjs';
+import { KnowledgeReuse } from '../../src/knowledge-loop/reuse.mjs';
 
 const BEGIN = '<domain_context_extension>';
 const END = '</domain_context_extension>';
@@ -12,6 +15,9 @@ export async function registerPiDomainContext(pi, options = {}) {
   let engine = null;
   let snapshot = null;
   let activeRunId = null;
+  let personal = null;
+  let reuse = null;
+  const recordUsage = options.recordUsage ?? process.env.OWNER_KNOWLEDGE_USAGE === '1';
 
   // The recorder never stores prompt text, tool arguments or tool results.
   function ensureRun(ctx) {
@@ -32,9 +38,16 @@ export async function registerPiDomainContext(pi, options = {}) {
     activeRunId = null;
     engine?.close();
     engine = null;
+    personal?.close();
+    personal = null;
+    reuse = null;
     snapshot = null;
     if (typeof ctx.isProjectTrusted === 'function' && !ctx.isProjectTrusted()) return;
     engine = createDomainEngine(options);
+    if (recordUsage) {
+      personal = new PersonalKnowledgeStore(options.dbPath ?? defaultDbPath());
+      reuse = new KnowledgeReuse({ personalStore: personal, engine });
+    }
     snapshot = await engine.resolve({
       cwd: ctx.cwd,
       sessionId: ctx.sessionManager?.getSessionId?.()
@@ -72,6 +85,16 @@ export async function registerPiDomainContext(pi, options = {}) {
     if (event.messageType && event.messageType !== 'user') return;
     if (typeof event.prompt !== 'string' || !event.prompt.trim()) return;
     const plan = engine.compile({ snapshot, task: event.prompt });
+    if (reuse) {
+      try {
+        reuse.recordFromPlan({
+          plan,
+          task: event.prompt,
+          targetRunId: String(ctx.sessionManager?.getSessionId?.() ?? ''),
+          projectId: snapshot.profile.id
+        });
+      } catch { /* usage recording is best effort; never break the agent run */ }
+    }
     // Current Pi supports structured sections and can patch only changed parts.
     // Check feature at runtime to support earlier Pi versions as well.
     const sections = event.systemPromptOptions?.sections;
@@ -122,6 +145,9 @@ export async function registerPiDomainContext(pi, options = {}) {
   pi.on('session_shutdown', () => {
     engine?.close();
     engine = null;
+    personal?.close();
+    personal = null;
+    reuse = null;
     snapshot = null;
     activeRunId = null;
   });
