@@ -54,6 +54,8 @@
     $('pendingCount').textContent = `${pending} 项待决定`;
     $('pendingBadge').textContent = String(pending);
     $('pendingBadge').hidden = pending === 0;
+    // 没有待决定事项时不再占一整块空位，把顶部留给项目列表。
+    $('needsSection').hidden = pending === 0;
     $('needsCount').textContent = String(pending);
     $('needsChip').classList.toggle('warn', pending > 0);
     $('needsHint').textContent = pending > 0
@@ -142,6 +144,8 @@
     }
   };
 
+  const collapsedHosts = new Set();
+
   const renderProjects = () => {
     const select = $('projectSelect');
     const projects = view?.projects ?? [];
@@ -154,6 +158,88 @@
       select.append(option);
     }
     select.disabled = projects.length === 0;
+
+    // 顶部按来源主机分组：组头是主机，组内是项目（最近进展 + 时间）。
+    const list = $('projectList');
+    if (!list) return;
+    const query = ($('projectSearch')?.value ?? '').trim().toLowerCase();
+    const visible = projects.filter((project) => !query
+      || `${project.name} ${project.root} ${project.progress}`.toLowerCase().includes(query));
+    const groups = new Map();
+    for (const project of visible) {
+      const key = project.hostLabel || project.host || '其它来源';
+      if (!groups.has(key)) groups.set(key, { local: project.hostLocal === true, rows: [] });
+      groups.get(key).rows.push(project);
+    }
+    const ordered = [...groups.entries()].sort((a, b) =>
+      Number(b[1].local) - Number(a[1].local) || a[0].localeCompare(b[0]));
+    list.replaceChildren();
+    if (!visible.length) {
+      list.append(el('p', 'section-sub',
+        projects.length ? '没有匹配的项目。' : '还没有项目；添加一个本地 Git 仓库后就能在这里切换。'));
+    }
+    for (const [host, group] of ordered) {
+      group.rows.sort((a, b) => String(b.lastEventAt).localeCompare(String(a.lastEventAt)));
+      const wrap = el('div', 'project-group');
+      const head = el('button', 'project-group-head');
+      head.type = 'button';
+      head.dataset.host = host;
+      head.setAttribute('aria-expanded', String(!collapsedHosts.has(host)));
+      head.append(
+        el('span', 'group-caret', collapsedHosts.has(host) ? '▸' : '▾'),
+        el('span', 'group-name', host),
+        el('span', 'group-count', String(group.rows.length))
+      );
+      head.onclick = () => {
+        if (collapsedHosts.has(host)) collapsedHosts.delete(host);
+        else collapsedHosts.add(host);
+        renderProjects();
+      };
+      wrap.append(head);
+      if (!collapsedHosts.has(host)) {
+        const body = el('div', 'project-rows');
+        for (const project of group.rows) {
+          const row = el('button', 'project-row');
+          row.type = 'button';
+          row.dataset.project = project.id;
+          row.title = project.root || project.name;
+          if (project.id === selected) row.classList.add('selected');
+          const dot = el('span', 'project-dot');
+          dot.dataset.tone = project.pending > 0 ? 'warn' : (project.progressTone ?? 'muted');
+          const main = el('span', 'row-main');
+          const top = el('span', 'row-top');
+          top.append(el('span', 'row-name', project.name));
+          if (project.pending > 0) top.append(el('span', 'row-badge warn', `${project.pending} 待你`));
+          else if (project.progressTone === 'active') top.append(el('span', 'row-badge active', '进行中'));
+          const time = el('span', 'row-time', formatRelative(project.lastEventAt) || '暂无时间');
+          time.title = project.lastEventAt
+            ? new Date(project.lastEventAt).toLocaleString('zh-CN') : '';
+          top.append(time);
+          const progress = el('span', 'row-progress', project.progress || '还没有任务记录');
+          progress.dataset.tone = project.progressTone ?? 'muted';
+          main.append(top, progress);
+          row.append(dot, main);
+          row.onclick = () => { void selectProject(project.id); };
+          body.append(row);
+        }
+        wrap.append(body);
+      }
+      list.append(wrap);
+    }
+    const badge = $('projectBadge');
+    if (badge) badge.textContent = String(projects.length);
+  };
+
+  /** 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前 / 月-日。 */
+  const formatRelative = (value) => {
+    const at = Date.parse(String(value ?? ''));
+    if (!Number.isFinite(at)) return '';
+    const diff = Date.now() - at;
+    if (diff < 60 * 1000) return '刚刚';
+    if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)} 分钟前`;
+    if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)} 小时前`;
+    if (diff < 7 * 24 * 60 * 60 * 1000) return `${Math.floor(diff / 86400000)} 天前`;
+    return new Date(at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
   };
 
   const detailRows = (rows) => {
@@ -1251,8 +1337,8 @@
   restoreDraft();
   autoGrow();
 
-  $('projectSelect').onchange = async () => {
-    const projectId = $('projectSelect').value;
+  const selectProject = async (projectId) => {
+    if (!projectId || projectId === (view?.config?.projectId ?? '')) return;
     try {
       await window.companion.settings.set({ projectId });
     } catch { /* non-blocking */ }
@@ -1265,6 +1351,9 @@
     await refresh();
     void loadPlaybooks();
   };
+
+  $('projectSelect').onchange = () => { void selectProject($('projectSelect').value); };
+  $('projectSearch').oninput = () => { renderProjects(); };
 
   const openSettings = async (focusSkin = false) => {
     try {
@@ -1489,6 +1578,7 @@
     }
   };
   $('addProject').onclick = () => { void pickProject(); };
+  $('addProjectTop').onclick = () => { void pickProject(); };
   $('addProjectSettings').onclick = () => { void pickProject(); };
   $('retryServices').onclick = () => { void openSettings(); };
   $('fixTestConfig').onclick = () => { void openSettings(); };

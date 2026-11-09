@@ -733,6 +733,58 @@ const buildView = async () => {
     const exit = Number.isInteger(run.exit_code) ? ` · exit ${run.exit_code}` : '';
     return `${run.status} · 测试 ${test}${exit}`;
   };
+  const cycleLabel = (status) => ({
+    pending_approval: '等你批准', queued: '排队中', proposal_ready: '补丁就绪',
+    applied: '已应用', test_pending: '等待测试', tested_pass: '复测通过',
+    tested_fail: '复测未通过', failed: '失败', cancelled: '已取消'
+  }[status] ?? status);
+
+  // 每个项目最近一次进展：从任务 / 补丁 / 沙箱 / 修复里取时间最新的一条，
+  // 供面板顶部的项目列表显示「最近更新」。
+  const projectSource = await importEsm('../src/project-source.mjs');
+  const localHost = projectSource.localHostName();
+  const projectDigest = (projectId) => {
+    const items = [];
+    for (const job of allJobs) {
+      if (projectIdOf(job) !== projectId) continue;
+      items.push({
+        at: job.updated_at ?? job.created_at ?? '',
+        text: `任务：${job.title || '未命名'} · ${jobLabel(job.status)}`,
+        tone: job.status === 'failed' ? 'error'
+          : job.status === 'succeeded' ? 'ok'
+            : ['running', 'leased', 'queued'].includes(job.status) ? 'active' : 'muted'
+      });
+    }
+    for (const patch of allPatches) {
+      if (projectIdOf(patch) !== projectId) continue;
+      const files = (patch.files ?? []).map((file) => file.path).join(', ');
+      items.push({
+        at: patch.updated_at ?? patch.created_at ?? '',
+        text: `补丁：${files || patch.id.slice(0, 8)} · ${patch.status}`,
+        tone: patch.status === 'applied' ? 'ok' : 'muted'
+      });
+    }
+    for (const run of allSandboxes) {
+      if (projectIdOf(run) !== projectId) continue;
+      items.push({
+        at: run.updated_at ?? run.created_at ?? '',
+        text: `沙箱测试：${run.test_status === 'pass' ? '通过' : run.test_status === 'fail' ? '未通过' : run.status}`,
+        tone: run.test_status === 'pass' ? 'ok' : run.test_status === 'fail' ? 'error' : 'muted'
+      });
+    }
+    for (const cycle of allRepairs) {
+      if (projectIdOf(cycle) !== projectId) continue;
+      items.push({
+        at: cycle.updated_at ?? cycle.created_at ?? '',
+        text: `修复：${cycleLabel(cycle.status)}`,
+        tone: cycle.status === 'tested_pass' ? 'ok'
+          : ['tested_fail', 'failed'].includes(cycle.status) ? 'error' : 'muted'
+      });
+    }
+    items.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    return items[0] ?? null;
+  };
+
   const activity = [];
   if (chain.job) activity.push({ kind: 'status', text: `任务：${chain.job.title}（${jobLabel(chain.job.status)}）` });
   if (chain.patch) {
@@ -854,11 +906,28 @@ const buildView = async () => {
           : '空闲'
     },
     summary,
-    projects: projectList.map((project) => ({
-      id: project.id,
-      name: project.name,
-      baseSha: project.baseSha ?? project.base_sha ?? ''
-    })),
+    projects: projectList.map((project) => {
+      const digest = projectDigest(project.id);
+      const lastAt = digest?.at || project.last_event_at || project.updated_at
+        || project.created_at || '';
+      const host = projectSource.hostOfRoot(project.root, localHost);
+      return {
+        id: project.id,
+        name: project.name,
+        root: project.root ?? '',
+        goal: project.goal ?? '',
+        status: project.status ?? '',
+        baseSha: project.baseSha ?? project.base_sha ?? '',
+        host,
+        hostLabel: projectSource.hostLabelOf(host, localHost),
+        hostLocal: host === localHost,
+        lastEventAt: lastAt,
+        progress: digest?.text
+          ?? (project.goal ? `目标：${project.goal}` : '还没有任务记录'),
+        progressTone: digest?.tone ?? 'muted',
+        pending: pending.filter((item) => item.projectId === project.id).length
+      };
+    }),
     config: {
       projectId: activeProjectId,
       domain: activeProject?.primary_domain ?? activeProject?.primaryDomain ?? '',
