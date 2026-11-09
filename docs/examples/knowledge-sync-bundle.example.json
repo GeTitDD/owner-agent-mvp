@@ -1,0 +1,75 @@
+{
+  "contract": "knowledge-sync/v2",
+  "schemaVersion": 2,
+  "exportedAt": "2026-11-09T09:30:00.000Z",
+  "device": "dev_a1b2c3d4e5f6",
+  "cursor": {
+    "since": "",
+    "exportedAt": "2026-11-09T09:30:00.000Z",
+    "lastChangeAppliedAt": "2026-11-09T09:30:00.000Z"
+  },
+  "project": {
+    "projectId": "demo",
+    "projectIdentity": "prj_a97b5cf09e543d7455694e43",
+    "identityKind": "git-remote"
+  },
+  "units": [
+    {
+      "id": "personal.7b8f7b11a442409ea71ebd1e",
+      "knowledgeId": "personal.7b8f7b11a442409ea71ebd1e",
+      "revision": 1,
+      "createdAt": "2026-11-09T09:00:00.000Z",
+      "updatedAt": "2026-11-09T09:00:00.000Z",
+      "revisions": [
+        {
+          "revision": 1,
+          "revisionId": "rev_9a8b7c6d5e4f30211203f4e5d6c7b8a9",
+          "parentRevisionIds": [],
+          "payload": {
+            "title": "Retry bound",
+            "content": "loop with i < attempts",
+            "kind": "claim",
+            "layer": "project",
+            "scope": "project",
+            "projectId": "demo",
+            "domains": ["software-engineering"],
+            "tags": ["retry"],
+            "evidenceRefs": ["legacy:run-a"],
+            "verificationStatus": "unverified"
+          },
+          "payloadHash": "3f7a2c1b0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b",
+          "actor": "owner",
+          "note": "Created",
+          "timestamp": "2026-11-09T09:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "changeId": "chg_4f3e2d1c0b9a8f7e6d5c4b3a",
+      "schemaVersion": 1,
+      "knowledgeId": "personal.7b8f7b11a442409ea71ebd1e",
+      "operation": "create",
+      "baseRevisionId": null,
+      "resultRevisionId": "rev_9a8b7c6d5e4f30211203f4e5d6c7b8a9",
+      "actorId": "owner",
+      "originSystem": "owner",
+      "originDevice": "dev_a1b2c3d4e5f6",
+      "occurredAt": "2026-11-09T09:00:00.000Z",
+      "payloadHash": "5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a",
+      "payload": {
+        "revisionId": "rev_9a8b7c6d5e4f30211203f4e5d6c7b8a9",
+        "localRevision": 1,
+        "contentHash": "3f7a2c1b0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b",
+        "parents": []
+      }
+    }
+  ],
+  "candidates": [],
+  "sources": [],
+  "observations": [],
+  "links": [],
+  "adoptions": [],
+  "contextSnapshots": []
+}

@@ -12,12 +12,13 @@ export function personalRefsFromPlan(plan) {
 }
 
 export class KnowledgeReuse {
-  constructor({ personalStore, engine, ownerStore = null } = {}) {
+  constructor({ personalStore, engine, ownerStore = null, contextLedger = null } = {}) {
     if (!personalStore) throw new Error('personalStore is required');
     if (!engine) throw new Error('engine is required');
     this.personal = personalStore;
     this.engine = engine;
     this.owner = ownerStore;
+    this.ledger = contextLedger;
   }
 
   /** 检索当前项目可用的知识与适用性，不写入 usage。 */
@@ -28,7 +29,7 @@ export class KnowledgeReuse {
       return {
         ...rec,
         knowledgeId: match ? match[1] : null,
-        revision: unit?.revision ?? (match ? Number(match[2]) : null),
+        revision: match ? Number(match[2]) : null,
         personal: Boolean(unit)
       };
     });
@@ -48,11 +49,15 @@ export class KnowledgeReuse {
     for (const ref of personalRefsFromPlan(plan)) {
       const unit = this.personal.get(ref.knowledgeId);
       if (!unit) continue;
+      const revisionRow = this.personal.db
+        .prepare('SELECT payload_hash FROM personal_revisions WHERE unit_id=? AND revision=?')
+        .get(ref.knowledgeId, ref.revision);
+      if (!revisionRow) continue; // 计划中的修订已不存在：宁可少记，也不张冠李戴
       const state = applicability.get(ref.key);
       if (!['applicable', 'needs_verification'].includes(state)) continue;
       const usage = this.personal.addUsage(normalizeUsage({
         knowledgeId: ref.knowledgeId,
-        revision: unit.revision,
+        revision: ref.revision,
         targetRunId,
         projectId: projectId ?? snapshot.profile.id,
         retrievalReason: task,
@@ -64,22 +69,27 @@ export class KnowledgeReuse {
       }));
       usages.push(usage);
     }
+    this.recordContext({ plan, task, projectId: projectId ?? snapshot.profile.id, sessionId });
     return { snapshot, plan, usages };
   }
 
   /** Pi 扩展使用：从编译结果和 session 记录 usage，不返回项目内容。 */
-  recordFromPlan({ plan, task, targetRunId, projectId }) {
+  recordFromPlan({ plan, task, targetRunId, projectId, sessionId = '' }) {
     if (!plan || !targetRunId) return [];
     const applicability = new Map((plan.applicability ?? []).map((item) => [item.key, item.state]));
     const usages = [];
     for (const ref of personalRefsFromPlan(plan)) {
       const unit = this.personal.get(ref.knowledgeId);
       if (!unit) continue;
+      const revisionRow = this.personal.db
+        .prepare('SELECT payload_hash FROM personal_revisions WHERE unit_id=? AND revision=?')
+        .get(ref.knowledgeId, ref.revision);
+      if (!revisionRow) continue;
       const state = applicability.get(ref.key);
       if (!['applicable', 'needs_verification'].includes(state)) continue;
       usages.push(this.personal.addUsage(normalizeUsage({
         knowledgeId: ref.knowledgeId,
-        revision: unit.revision,
+        revision: ref.revision,
         targetRunId,
         projectId,
         retrievalReason: task,
@@ -90,6 +100,15 @@ export class KnowledgeReuse {
         unresolvedQuestions: []
       })));
     }
+    this.recordContext({ plan, task, projectId, sessionId: sessionId || targetRunId });
     return usages;
+  }
+
+  /** 记录上下文快照；失败不影响本次编译（只有审计价值，不是主路径）。 */
+  recordContext({ plan, task, projectId, sessionId = '' }) {
+    if (!this.ledger) return;
+    try {
+      this.ledger.record({ projectId, sessionId, task, plan });
+    } catch { /* 台账失败不回滚编译 */ }
   }
 }

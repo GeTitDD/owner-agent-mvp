@@ -13,10 +13,10 @@ function nameScope(scope){return ({personal:'个人',domain:'工作区领域',pr
 function nameLayer(layer){return ({domain:'L1 原理',applied:'L2 实践',project:'L3 项目'})[layer]||layer;}
 function nameStatus(status){return ({verified:'已验证',unverified:'未验证',needs_reverification:'待重新验证',disputed:'有争议'})[status]||status;}
 function setView(tab){state.tab=tab;for(const button of document.querySelectorAll('[data-tab]'))button.classList.toggle('active',button.dataset.tab===tab);
-  for(const name of ['owner','knowledge','review','projects'])$(`#${name}View`).hidden=tab!==name;
-  $('#pageTitle').textContent=({owner:'Owner Agent · 项目总览',knowledge:'我的领域知识',review:'知识审核中心',projects:'知识组合实验室'})[tab];
+  for(const name of ['owner','knowledge','review','maintenance','projects'])$(`#${name}View`).hidden=tab!==name;
+  $('#pageTitle').textContent=({owner:'Owner Agent · 项目总览',knowledge:'我的领域知识',review:'知识审核中心',maintenance:'知识维护 · 来源与同步',projects:'知识组合实验室'})[tab];
   $('#newBtn').hidden=tab!=='knowledge';$('#exportBtn').hidden=tab!=='knowledge';
-  if(tab==='review')void loadProposals();if(tab==='projects')renderProjects();if(tab==='owner')void loadOwner();
+  if(tab==='review')void loadProposals();if(tab==='projects')renderProjects();if(tab==='owner')void loadOwner();if(tab==='maintenance')void loadMaintenance();
 }
 async function loadSummary(){const [stats,domains,projects]=await Promise.all([api('/api/stats'),api('/api/domains'),api('/api/projects')]);
   state.domains=domains;state.projects=projects;
@@ -140,6 +140,57 @@ async function exportKnowledge(){try{const data={format:'domain-knowledge-person
   }
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='domain-knowledge-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }catch(e){hintError(e);}}
+async function loadMaintenance(){
+  try{
+    const [summary,conflicts,revalidations,sources]=await Promise.all([
+      api('/api/maintenance/summary'),api('/api/maintenance/conflicts?status=open'),
+      api('/api/maintenance/revalidations?status=pending'),api('/api/maintenance/sources?limit=50')
+    ]);
+    $('#maintenanceSummary').innerHTML=[
+      ['并发冲突',summary.openConflicts,'保留双方修订，等待 Owner 裁决'],
+      ['待重新验证',summary.pendingRevalidations,'来源版本变化或不可访问'],
+      ['远端候选',summary.openCandidates,'分叉分支，不自动覆盖 Head'],
+      ['来源',summary.sources,'Git / 文件 / GitHub / Run / Session']
+    ].map(v=>`<div class="stat"><label>${esc(v[0])}</label><strong>${esc(v[1])}</strong><small>${esc(v[2])}</small></div>`).join('');
+    $('#maintenanceConflicts').innerHTML=conflicts.length?conflicts.map(item=>`
+      <article class="review-card" data-conflict="${esc(item.id)}">
+        <div class="review-head"><strong>${esc(item.unitTitle)}</strong><span class="tag">${esc(item.field)}</span></div>
+        <p class="review-note">本地 r${esc(item.localRevision)} vs 远端 r${esc(item.incomingRevision)}（${esc(item.incomingOrigin)}）</p>
+        <pre class="review-diff">${esc(JSON.stringify({local:item.localValue,incoming:item.incomingValue},null,2).slice(0,900))}</pre>
+        <div class="review-actions">
+          <button class="button ghost small" data-decision="accept-local">保留本地</button>
+          <button class="button primary small" data-decision="accept-incoming">采用远端</button>
+          <button class="button ghost small" data-decision="dismiss">仅关闭提示</button>
+        </div>
+      </article>`).join(''):'<p class="empty-line">没有待处理冲突。</p>';
+    $('#maintenanceRevalidations').innerHTML=revalidations.length?revalidations.map(item=>`
+      <article class="review-card" data-revalidation="${esc(item.id)}">
+        <div class="review-head"><strong>${esc(item.unitTitle)}</strong><span class="tag">r${esc(item.revision)}</span></div>
+        <p class="review-note">${esc(item.reason)} · 来源 ${esc(item.sourceId)}</p>
+        <div class="review-actions">
+          <button class="button primary small" data-decision="accepted">标记待重验证</button>
+          <button class="button ghost small" data-decision="dismissed">忽略</button>
+        </div>
+      </article>`).join(''):'<p class="empty-line">没有待重新验证项。</p>';
+    $('#maintenanceSources').innerHTML=sources.length?sources.map(item=>`
+      <div class="owner-task"><span>${esc(item.sourceType)} · ${esc(item.objectId || item.namespace)}</span>
+      <small>${esc(item.sourceVersion||'version unknown')} · ${esc(item.availability)}</small></div>`).join(''):'<p class="empty-line">还没有登记来源。</p>';
+    $('#maintenanceSync').innerHTML=`<div class="owner-task"><span>协议版本</span><small>v${esc(summary.schemaVersion)} · knowledge-sync/v2</small></div>
+      <div class="owner-task"><span>最近导入游标</span><small>${esc(summary.lastImport?.value??'尚未导入')}</small></div>`;
+    $('#maintenanceConflicts').querySelectorAll('[data-conflict]').forEach(card=>{
+      card.querySelectorAll('[data-decision]').forEach(button=>button.addEventListener('click',async()=>{
+        const decision=button.dataset.decision;
+        if(decision==='accept-incoming'&&!confirm('采用远端修订会生成本地新修订，但仍需你之后确认采纳。继续？'))return;
+        try{await api(`/api/maintenance/conflicts/${encodeURIComponent(card.dataset.conflict)}/resolve`,'POST',{decision,actor:'owner'});toast('冲突已处理');await loadMaintenance();}catch(e){hintError(e);}
+      }));
+    });
+    $('#maintenanceRevalidations').querySelectorAll('[data-revalidation]').forEach(card=>{
+      card.querySelectorAll('[data-decision]').forEach(button=>button.addEventListener('click',async()=>{
+        try{await api(`/api/maintenance/revalidations/${encodeURIComponent(card.dataset.revalidation)}/resolve`,'POST',{decision:button.dataset.decision,actor:'owner'});toast('重验证项已处理');await loadMaintenance();}catch(e){hintError(e);}
+      }));
+    });
+  }catch(e){hintError(e);}
+}
 async function init(){try{document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.tab)));
   $('#searchInput').addEventListener('input',()=>void refresh());$('#scopeFilter').addEventListener('change',()=>void refresh());$('#layerFilter').addEventListener('change',()=>void refresh());
   $('#newBtn').addEventListener('click',newKnowledge);$('#addDomain').addEventListener('click',()=>void addDomain());$('#exportBtn').addEventListener('click',()=>void exportKnowledge());

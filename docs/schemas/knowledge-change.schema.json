@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owner-agent-mvp.local/schemas/knowledge-change.schema.json",
+  "title": "Knowledge Change Event v1",
+  "description": "可跨设备交换的不可变变更事件。changeId 是幂等键；重复导入不得产生重复修订。",
+  "type": "object",
+  "required": [
+    "changeId",
+    "schemaVersion",
+    "knowledgeId",
+    "operation",
+    "occurredAt",
+    "payloadHash"
+  ],
+  "properties": {
+    "changeId": { "type": "string", "pattern": "^chg_[a-z0-9]{8,64}$" },
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "knowledgeId": { "type": "string", "minLength": 8, "maxLength": 120 },
+    "operation": {
+      "type": "string",
+      "enum": [
+        "create",
+        "revise",
+        "adopt",
+        "link-source",
+        "observe-source",
+        "resolve-revalidation",
+        "conflict",
+        "resolve-conflict"
+      ]
+    },
+    "baseRevisionId": { "type": ["string", "null"], "pattern": "^rev_[a-f0-9]{32}$" },
+    "resultRevisionId": { "type": ["string", "null"], "pattern": "^rev_[a-f0-9]{32}$" },
+    "actorId": { "type": "string", "maxLength": 80 },
+    "originSystem": { "type": "string", "maxLength": 40 },
+    "originDevice": { "type": "string", "maxLength": 120 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "payloadHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "payload": { "type": "object" },
+    "appliedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

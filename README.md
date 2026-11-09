@@ -157,6 +157,31 @@ DOMAIN_CONTEXT_DB=/absolute/path/knowledge.sqlite DOMAIN_WORKBENCH_PORT=4321 npm
 
 完整 UI、知识数据与审核 API 文档见 **[Personal Knowledge Workbench 指南](docs/PERSONAL_WORKBENCH.md)**。
 
+## Knowledge Maintenance & Provenance v2（当前 PR）
+
+在既有 `PersonalKnowledgeStore` 之上增加来源身份、不可变修订索引、变更事件、Owner 采纳、重验证队列、图感知离线同步、冲突候选与会话上下文台账；不新建存储、不改 Harvest。
+
+```powershell
+node bin/knowledge-maint.mjs observe --kind git --project demo --root <repo> --path src/retry.js
+node bin/knowledge-maint.mjs explain --knowledge personal.x
+node bin/knowledge-maint.mjs revision list --knowledge personal.x
+node bin/knowledge-maint.mjs changes list --knowledge-id personal.x
+node bin/knowledge-maint.mjs conflicts list
+node bin/knowledge-maint.mjs conflicts resolve --id conflict_x --decision accept-incoming
+node bin/knowledge-maint.mjs sync export --project demo --out bundle.json
+node bin/knowledge-maint.mjs sync export --since 2026-11-09T00:00:00.000Z --out delta.json
+node bin/knowledge-maint.mjs sync import --in bundle.json --dry-run
+node bin/knowledge-maint.mjs sync import --in bundle.json --allow-project demo
+```
+
+- 来源与版本设计：[docs/KNOWLEDGE_SYNC_PROTOCOL.md](docs/KNOWLEDGE_SYNC_PROTOCOL.md)
+- 数据模型与 v1 基线：[docs/KNOWLEDGE_MAINTENANCE_V1.md](docs/KNOWLEDGE_MAINTENANCE_V1.md)
+- 三轮验收：[docs/ACCEPTANCE_KNOWLEDGE_MAINTENANCE_V2.md](docs/ACCEPTANCE_KNOWLEDGE_MAINTENANCE_V2.md)
+- 设计参考：[docs/DESIGN_REFERENCES.md](docs/DESIGN_REFERENCES.md)
+- 双设备离线验收：`npm run knowledge:sync:v2`（两个独立 SQLite，无需网络）
+- 真实来源验收：`node scripts/e2e/knowledge-provenance-smoke.mjs`（真实 git；GitHub 需 `gh` 登录）
+- Workbench「知识维护」：冲突、待重验证、来源、同步游标
+
 ## v0.3：从共享知识升级为分层可组合知识
 
 - **L1 Domain Knowledge：** 跨项目的概念、原理、不变量。

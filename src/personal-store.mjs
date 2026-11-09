@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { canonical, requireId, sha256 } from './utils.mjs';
 import { defaultDbPath } from './storage.mjs';
 import { rejectObviousSecrets } from './evolution.mjs';
+import { installProvenanceSchema } from './knowledge/provenance-schema.mjs';
 
 export class KnowledgeConflict extends Error { constructor(message) { super(message); this.status = 409; } }
 export class KnowledgeValidationError extends Error { constructor(message) { super(message); this.status = 400; } }
@@ -137,8 +138,18 @@ export class PersonalKnowledgeStore {
     if (!proposalColumns.includes('meta_json')) {
       this.db.exec("ALTER TABLE personal_proposals ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'");
     }
+    // Knowledge Maintenance & Provenance：加法式建表，旧库打开即升级。
+    installProvenanceSchema(this.db);
+    // 修订落库后的可选回调；KnowledgeProvenance 用它维护不可变修订索引与变更日志。
+    this.onRevision = null;
   }
   close() { this.db.close(); }
+
+  /** 通知已安装的观测者（例如 provenance 索引）；回调失败不影响主修订。 */
+  emitRevision(info) {
+    if (typeof this.onRevision !== 'function') return;
+    try { this.onRevision(info); } catch { /* 索引可回填，不让观测者阻塞知识写入 */ }
+  }
   list({q='',domain='',layer='',scope='',status='',projectId='',limit=500}={}) {
     const rows = this.db.prepare('SELECT * FROM personal_units ORDER BY updated_at DESC,id LIMIT ?').all(Math.min(Math.max(1,limit),2000));
     const query=q.trim().toLocaleLowerCase();
@@ -162,21 +173,25 @@ export class PersonalKnowledgeStore {
       this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,1,?,?,?,?,?)').run(id,body,safeText(actor,80,'actor',true),safeText(note,500,'note'),timestamp,sha256(body));
       this.db.exec('COMMIT');
     } catch(e) { this.db.exec('ROLLBACK'); throw e; }
+    this.emitRevision({unitId:id,revision:1,payload:normalized,payloadHash:sha256(body),actor,note,timestamp,parentRevisionIds:[]});
     return this.get(id);
   }
-  update(id,payload,{expectedRevision,actor='user',note='Edited'}={}) {
+  update(id,payload,{expectedRevision,actor='user',note='Edited',parents=[]}={}) {
     valid(Number.isSafeInteger(expectedRevision) && expectedRevision>0,'expectedRevision required');
+    valid(Array.isArray(parents),'parents must be an array');
+    let normalized, body, stamp, next;
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const existing=this.get(id);
       if(!existing) throw new KnowledgeValidationError('Knowledge not found');
       if(existing.revision!==expectedRevision) throw new KnowledgeConflict(`Revision conflict: expected ${expectedRevision}, actual ${existing.revision}`);
-      const normalized=normalize(payload,existing);
-      const body=canonical(normalized),stamp=now(),next=existing.revision+1;
+      normalized=normalize(payload,existing);
+      body=canonical(normalized);stamp=now();next=existing.revision+1;
       this.db.prepare('UPDATE personal_units SET revision=?,payload=?,updated_at=? WHERE id=?').run(next,body,stamp,id);
       this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,?,?,?,?,?,?)').run(id,next,body,safeText(actor,80,'actor',true),safeText(note,500,'note'),stamp,sha256(body));
       this.db.exec('COMMIT');
     } catch(e) { this.db.exec('ROLLBACK'); throw e; }
+    this.emitRevision({unitId:id,revision:next,payload:normalized,payloadHash:sha256(body),actor,note,timestamp:stamp,parentRevisionIds:parents.map(String)});
     return this.get(id);
   }
   revert(id, revision,expectedRevision) {
@@ -225,6 +240,7 @@ export class PersonalKnowledgeStore {
   }
   reviewProposal(id,{decision,reviewer='user',expectedRevision=null}) {
     valid(['approved','rejected'].includes(decision),'Invalid proposal decision');
+    let emitted=null;
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const proposal=this.proposal(id);
@@ -251,15 +267,18 @@ export class PersonalKnowledgeStore {
           this.db.prepare('UPDATE personal_units SET revision=?,payload=?,updated_at=? WHERE id=?').run(rev,body,stamp,existing.id);
           this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,?,?,?,?,?,?)').run(existing.id,rev,body,reviewer,note,stamp,sha256(body));
           appliedId=existing.id;
+          emitted={unitId:existing.id,revision:rev,payload:normalized,payloadHash:sha256(body),actor:reviewer,note,timestamp:stamp,parentRevisionIds:[]};
         } else {
           appliedId=`personal.${randomUUID().replaceAll('-','').slice(0,24)}`;
           this.db.prepare('INSERT INTO personal_units(id,revision,payload,created_at,updated_at) VALUES(?,1,?,?,?)').run(appliedId,body,stamp,stamp);
           this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,1,?,?,?,?,?)').run(appliedId,body,reviewer,note,stamp,sha256(body));
+          emitted={unitId:appliedId,revision:1,payload:normalized,payloadHash:sha256(body),actor:reviewer,note,timestamp:stamp,parentRevisionIds:[]};
         }
       }
       this.db.prepare('UPDATE personal_proposals SET status=?,reviewed_at=?,reviewer=?,applied_id=? WHERE id=?').run(decision,now(),safeText(reviewer,80,'reviewer',true),appliedId,id);
       this.db.exec('COMMIT');
     } catch(e) {this.db.exec('ROLLBACK');throw e;}
+    if(emitted) this.emitRevision(emitted);
     return this.proposal(id);
   }
 

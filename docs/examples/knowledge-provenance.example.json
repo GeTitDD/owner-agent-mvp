@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "knowledgeId": "personal.7b8f7b11a442409ea71ebd1e",
+  "revisionId": "rev_2f1c4b0f7a9d4e6b8c1a3d5e7f901234",
+  "revision": 2,
+  "parentRevisionIds": ["rev_9a8b7c6d5e4f30211203f4e5d6c7b8a9"],
+  "contentHash": "c0ffee1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+  "reason": "Offline edit: clarify retry bound",
+  "actorId": "owner",
+  "deviceId": "dev_3f2a1b0c9d8e7f6a5b4c3d2e",
+  "recordedAt": "2026-11-09T09:30:00.000Z",
+  "verificationStatus": "unverified",
+  "source": {
+    "sourceId": "src_90ed3c9de9748a540e92b5d9",
+    "sourceSystem": "local-file",
+    "sourceType": "file",
+    "sourceLocator": "docs/retry.md",
+    "sourceVersion": "v1",
+    "sourceContentHash": "a91749af64d68abffc57a8e23382899b356a6a9c",
+    "observedAt": "2026-11-09T09:00:00.000Z",
+    "availability": "available"
+  },
+  "observationId": "obs_e4f8dd88b81c4c1e4b206e0d",
+  "sessionId": "session-1",
+  "runId": "run-1"
+}

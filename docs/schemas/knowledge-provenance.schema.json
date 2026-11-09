@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owner-agent-mvp.local/schemas/knowledge-provenance.schema.json",
+  "title": "Knowledge Revision Provenance v1",
+  "description": "一条领域知识修订的来源与身份记录。身份、内容版本、来源版本、协议版本分开表达；未知字段必须为空字符串或 unknown，不得伪造。",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "knowledgeId",
+    "revisionId",
+    "parentRevisionIds",
+    "contentHash",
+    "recordedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "knowledgeId": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 120,
+      "description": "跨设备稳定的逻辑身份。首次记录时分配，随同步原样保留；不是本地 revision。"
+    },
+    "revisionId": {
+      "type": "string",
+      "pattern": "^rev_[a-f0-9]{32}$",
+      "description": "不可变修订身份，由 knowledgeId + 父修订 + 内容哈希 + 修订原因 + 主体计算。"
+    },
+    "revision": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "本地单调修订号；仅用于本设备排序，不是跨设备全局顺序。"
+    },
+    "parentRevisionIds": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^rev_[a-f0-9]{32}$" },
+      "uniqueItems": true,
+      "description": "修订因果关系；合并修订可以有两个父修订。"
+    },
+    "contentHash": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "canonical(payload) 的 sha256，用于校验知识内容。"
+    },
+    "reason": { "type": "string", "maxLength": 500 },
+    "actorId": { "type": "string", "maxLength": 80 },
+    "deviceId": { "type": "string", "maxLength": 120 },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "verificationStatus": {
+      "type": "string",
+      "enum": ["verified", "unverified", "needs_reverification", "disputed", "unknown"]
+    },
+    "source": {
+      "type": ["object", "null"],
+      "required": ["sourceId", "sourceSystem", "sourceType", "sourceLocator"],
+      "properties": {
+        "sourceId": { "type": "string", "pattern": "^src_[a-z0-9]{8,64}$" },
+        "sourceSystem": {
+          "type": "string",
+          "enum": ["github", "git", "pi", "chatgpt", "local-file", "owner", "manual", "unknown"]
+        },
+        "sourceType": {
+          "type": "string",
+          "enum": ["git", "github", "file", "document", "session", "run", "experiment", "manual"]
+        },
+        "sourceLocator": { "type": "string", "maxLength": 500 },
+        "sourceVersion": { "type": "string", "maxLength": 300 },
+        "sourceContentHash": { "type": "string", "maxLength": 128 },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "availability": { "type": "string", "enum": ["available", "unavailable", "unknown"] }
+      },
+      "additionalProperties": true
+    },
+    "observationId": { "type": "string", "pattern": "^obs_[a-z0-9]{8,64}$" },
+    "sessionId": { "type": "string", "maxLength": 120 },
+    "runId": { "type": "string", "maxLength": 120 }
+  },
+  "additionalProperties": true
+}

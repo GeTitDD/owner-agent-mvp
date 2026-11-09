@@ -17,9 +17,33 @@ export function applyWorkspaceOverlay(snapshot, options={}) {
   // An unimported domain is never loaded, even if listed in the allowlist.
   const activeAllowed=new Set([...allowedDomains].filter(id=>imported.has(id)));
   const store=new PersonalKnowledgeStore(options.dbPath ?? defaultDbPath());
+  const adoptedRevision=(id)=>{
+    try {
+      const row=store.db.prepare('SELECT adopted_revision FROM knowledge_adoptions WHERE unit_id=?').get(id);
+      return row ? row.adopted_revision : null;
+    } catch { return null; }
+  };
   let records;
   try {
-    records=store.list({limit:2000}).filter(item=>
+    records=store.list({limit:2000}).map(item=>{
+      const adopted=adoptedRevision(item.id);
+      // Owner 已采纳的修订优先；没有采纳记录时沿用 Head（旧库隐式行为）。
+      if(config.requireAdoption===true && adopted===null) return null;
+      const revision=adopted ?? item.revision;
+      const revisionRow=store.db.prepare('SELECT payload,payload_hash FROM personal_revisions WHERE unit_id=? AND revision=?')
+        .get(item.id,revision);
+      if(!revisionRow) return null; // fail closed：没有对应修订就不注入
+      const payload=JSON.parse(revisionRow.payload);
+      return {
+        ...item,
+        title:payload.title,content:payload.content,
+        kind:payload.kind,layer:payload.layer,scope:payload.scope,
+        projectId:payload.projectId,tags:payload.tags,domains:payload.domains,
+        evidenceRefs:payload.evidenceRefs,verificationStatus:payload.verificationStatus,
+        relations:payload.relations,revision,
+        _payloadHash:revisionRow.payload_hash
+      };
+    }).filter(Boolean).filter(item=>
       item.scope==='domain' && item.domains.some(domain=>activeAllowed.has(domain)) ||
       item.scope==='project' && config.includeProject===true && item.projectId===snapshot.profile.id
     );
@@ -35,7 +59,7 @@ export function applyWorkspaceOverlay(snapshot, options={}) {
       domain:item.scope==='project'?snapshot.profile.id:item.domains[0]??'personal',
       version:`workspace-r${item.revision}`,
       key:`workspace:${item.id}:r${item.revision}`,
-      contentHash:sha256(canonical(item))
+      contentHash:item._payloadHash ?? sha256(canonical(item))
     };
     validateKnowledgeApplicability(rec);
     return rec;

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { PersonalKnowledgeStore } from '../src/personal-store.mjs';
+import { KnowledgeProvenance } from '../src/knowledge/provenance.mjs';
 import { applyWorkspaceOverlay } from '../src/workspace-overlay.mjs';
 import { createDomainEngine } from '../src/engine.mjs';
 import { createWorkbenchServer } from '../src/workbench-server.mjs';
@@ -223,5 +224,44 @@ test('custom workbench database is used by both Pi engine resolution and HTTP pr
     assert.ok(local.dynamicContext.includes('Unique Workbench Context Marker'));
     assert.ok(remote.dynamicContext.includes('Unique Workbench Context Marker'));
     assert.ok(!remote.dynamicContext.includes('Never leak private project observation'));
+  } finally {await wb.close();}
+}));
+
+test('HTTP maintenance exposes provenance, conflicts, sources and resolution',()=>temp(async dbPath=>{
+  const store=new PersonalKnowledgeStore(dbPath);
+  let unitId='';
+  let conflictId='';
+  try {
+    const provenance=new KnowledgeProvenance({personalStore:store,device:'dev-test'});
+    const unit=store.create(item());unitId=unit.id;
+    const observed=provenance.observeSource({
+      sourceType:'file',namespace:'local-file',objectId:'src/context.js',sourceVersion:'v1',
+      locator:'src/context.js',contentHash:'abc123',availability:'available',
+      observedAt:new Date().toISOString(),projectId:null
+    });
+    provenance.linkRevision({unitId:unit.id,revision:1,observationId:observed.observation.observationId});
+    const conflict=provenance.addConflict({
+      unitId:unit.id,field:'content',baseValue:'a',localValue:'b',incomingValue:'c',
+      localRevision:1,incomingRevision:1,incomingOrigin:'dev-remote'
+    });
+    conflictId=conflict.id;
+  } finally {store.close();}
+  const wb=await createWorkbenchServer({port:0,dbPath});
+  const addr=await wb.listen();
+  const base=`http://127.0.0.1:${addr.port}`;
+  const request=async(path,method='GET',body)=>{
+    const res=await fetch(base+path,{method,headers:{...(method==='GET'?{}:{'content-type':'application/json','x-workbench-request':'1'})},body:body===undefined?undefined:JSON.stringify(body)});
+    return [res.status,await res.json()];
+  };
+  try {
+    let [code,summary]=await request('/api/maintenance/summary');assert.equal(code,200);assert.equal(summary.openConflicts,1);
+    let conflicts, resolved, explained, sources, changes;
+    [code,conflicts]=await request('/api/maintenance/conflicts?status=open');    assert.equal(code,200);assert.equal(conflicts.length,1);assert.ok(conflicts[0].unitTitle);
+    [code,resolved]=await request(`/api/maintenance/conflicts/${encodeURIComponent(conflictId)}/resolve`,'POST',{decision:'accept-local'});
+    assert.equal(code,200);assert.equal(resolved.conflict.status,'resolved');
+    [code,explained]=await request(`/api/knowledge/${encodeURIComponent(unitId)}/provenance`);
+    assert.equal(code,200);assert.equal(explained.revisions.length,1);assert.ok(explained.headRevisionId);
+    [code,sources]=await request('/api/maintenance/sources');assert.equal(code,200);assert.equal(sources.length,1);
+    [code,changes]=await request('/api/maintenance/changes');assert.equal(code,200);assert.ok(changes.length>=2);
   } finally {await wb.close();}
 }));
