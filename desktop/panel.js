@@ -718,6 +718,10 @@
     for (const button of document.querySelectorAll('.playbook-btn')) {
       button.disabled = busy || !playbookCatalog?.skillsAvailable;
     }
+    for (const id of ['reflectDistill', 'reflectDistillTop']) {
+      const button = $(id);
+      if (button) button.disabled = busy || !playbookCatalog?.skillsAvailable;
+    }
   };
 
   const renderPlaybookButtons = () => {
@@ -905,7 +909,7 @@
     openModal('生成改动提案（需要你批准）', nodes, [cancel, confirm]);
   };
 
-  const runPlaybook = async (id) => {
+  const runPlaybook = async (id, { distill = false } = {}) => {
     if (playbookBusy) { toast('上一个 playbook 还在运行。'); return; }
     if (!playbookCatalog?.skillsAvailable) { toast('未找到 pstack skills 目录。'); return; }
     const projectId = view?.config?.projectId ?? $('projectSelect').value ?? '';
@@ -917,16 +921,30 @@
     $('playbookCancel').hidden = false;
     const tick = () => {
       const seconds = Math.round((Date.now() - playbookStartedAt) / 1000);
-      $('playbookHint').textContent = `正在运行「${playbookLabelOf(id)}」· ${seconds}s（只读，可取消）`;
+      $('playbookHint').textContent = distill
+        ? `正在复盘并沉淀「${playbookLabelOf(id)}」· ${seconds}s（只读，可取消）`
+        : `正在运行「${playbookLabelOf(id)}」· ${seconds}s（只读，可取消）`;
     };
     tick();
     playbookTimer = window.setInterval(tick, 1000);
     try {
-      const result = await window.companion.playbooks.run({ playbookId: id, projectId });
+      const result = await window.companion.playbooks.run({ playbookId: id, projectId, distill });
       playbookCurrent = result;
       playbookProjectId = projectId;
       renderPlaybookResult();
-      if (result.status !== 'ok') toast(result.summary, 6000);
+      if (result.status !== 'ok') {
+        toast(result.summary, 6000);
+      } else if (distill) {
+        if (result.distill?.candidateId) {
+          knowledgeCache.delete(projectId);
+          await refresh();
+          toast(result.distill.duplicate
+            ? '这次复盘已经在知识候选里'
+            : '复盘完成，已沉淀为项目知识候选（未验证）', 5200);
+        } else if (result.distill?.error) {
+          toast(`复盘完成，但沉淀失败：${result.distill.error}`, 6000);
+        }
+      }
     } catch (error) {
       toast(String(error?.message ?? error), 6000);
     } finally {
@@ -940,11 +958,18 @@
     }
   };
 
+  /** 一键复盘并沉淀：跑 reflect，成功后自动写入项目知识候选。 */
+  const reflectAndDistill = () => {
+    if (!view?.config?.projectId) { toast('先选择一个项目。'); return; }
+    void runPlaybook('reflect', { distill: true });
+  };
+
   const loadPlaybooks = async () => {
     const projectId = view?.config?.projectId ?? '';
     try {
       playbookCatalog = await window.companion.playbooks.list({ projectId });
       renderPlaybookButtons();
+      playbookButtonState(playbookBusy);
       if (playbookProjectId && playbookProjectId !== projectId) {
         playbookCurrent = null;
         playbookProjectId = projectId;
@@ -1798,6 +1823,8 @@
   };
 
   $('harvestNow').onclick = () => { void harvestNow(); };
+  $('reflectDistill').onclick = reflectAndDistill;
+  $('reflectDistillTop').onclick = reflectAndDistill;
 
   $('playbookCancel').onclick = async () => {
     if (!playbookRunningId) return;

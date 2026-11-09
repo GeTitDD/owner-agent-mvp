@@ -160,6 +160,18 @@ const run = async () => {
     await panel.locator('#modal').waitFor({ state: 'hidden', timeout: 20000 });
     check('proposal path closes the modal and refreshes', true);
 
+    // 一键「复盘并沉淀」：跑 reflect，完成后自动写入知识候选。
+    const beforeReflect = await panel.evaluate(() => window.companion.knowledge.summary({ projectId: 'pb-demo' }));
+    await panel.locator('#reflectDistillTop').click();
+    await panel.locator('.playbook-result-head').filter({ hasText: '复盘' })
+      .waitFor({ timeout: 300000 });
+    await sleep(1200);
+    const afterReflect = await panel.evaluate(() => window.companion.knowledge.summary({ projectId: 'pb-demo' }));
+    check('one-click reflect creates a knowledge candidate',
+      (afterReflect.counts?.candidates ?? 0) === (beforeReflect.counts?.candidates ?? 0) + 1,
+      `${beforeReflect.counts?.candidates} -> ${afterReflect.counts?.candidates}`);
+    await snap('playbook-reflect-distill.png');
+
     if (failures.length > 0) throw new Error(`${failures.length} assertion(s) failed`);
     failed = false;
   } finally {
