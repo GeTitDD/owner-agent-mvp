@@ -269,6 +269,83 @@
 
   const knowledgeCache = new Map();
   const summaryLoading = new Set();
+  const githubActivityCache = new Map();
+  const githubLoading = new Set();
+
+  const openGithub = (url) => {
+    if (!url) return;
+    void window.companion.openExternal(url)
+      .catch((error) => toast(String(error?.message ?? error)));
+  };
+
+  const githubRow = (kind, item) => {
+    const row = el('button', 'github-item');
+    row.type = 'button';
+    row.append(el('span', `github-kind ${kind}`, kind === 'issue' ? `#${item.number}` : `PR #${item.number}`));
+    row.append(el('span', 'github-item-title', item.title || '（无标题）'));
+    row.append(el('span', 'github-item-time', formatRelative(item.updatedAt) || ''));
+    row.onclick = () => openGithub(item.url);
+    return row;
+  };
+
+  const loadGithubActivity = async (projectId) => {
+    if (!projectId || githubLoading.has(projectId)) return;
+    githubLoading.add(projectId);
+    try {
+      const data = await window.companion.github.activity({ projectId });
+      githubActivityCache.set(projectId, data);
+      if ((view?.config?.projectId ?? '') === projectId) renderProjectGithub();
+    } catch (error) {
+      githubActivityCache.set(projectId, {
+        linked: true, issues: [], prs: [], issueCount: 0, prCount: 0,
+        error: String(error?.message ?? error)
+      });
+      if ((view?.config?.projectId ?? '') === projectId) renderProjectGithub();
+    } finally {
+      githubLoading.delete(projectId);
+    }
+  };
+
+  /** 当前项目的 GitHub Issues / PR（只读）。 */
+  const renderProjectGithub = () => {
+    const box = $('githubPanel');
+    if (!box) return;
+    const projectId = view?.config?.projectId ?? '';
+    const project = (view?.projects ?? []).find((item) => item.id === projectId);
+    if (!project?.github) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    box.replaceChildren();
+    const data = githubActivityCache.get(projectId);
+    const head = el('div', 'github-head');
+    head.append(el('span', 'github-title', 'GitHub'));
+    const repo = el('button', 'github-repo', project.github.nameWithOwner);
+    repo.type = 'button';
+    repo.title = '在浏览器打开仓库';
+    repo.onclick = () => openGithub(project.github.url);
+    head.append(repo);
+    if (data) {
+      head.append(el('span', 'github-count', `Issues ${data.issueCount >= 20 ? '20+' : data.issueCount}`));
+      head.append(el('span', 'github-count', `PR ${data.prCount >= 20 ? '20+' : data.prCount}`));
+    }
+    box.append(head);
+    if (!data) {
+      box.append(el('div', 'github-empty', '正在读取 Issues / PR…'));
+      void loadGithubActivity(projectId);
+      return;
+    }
+    if (data.error) box.append(el('div', 'github-empty', data.error));
+    if (!data.issues?.length && !data.prs?.length) {
+      if (!data.error) box.append(el('div', 'github-empty', '没有打开的 Issues 或 PR。'));
+      return;
+    }
+    const list = el('div', 'github-list');
+    for (const issue of data.issues ?? []) list.append(githubRow('issue', issue));
+    for (const pr of data.prs ?? []) list.append(githubRow('pr', pr));
+    box.append(list);
+  };
 
   const knowledgeForProject = (projectId) => {
     const cached = knowledgeCache.get(projectId);
@@ -1422,6 +1499,7 @@
       renderTimeline();
       renderProjects();
       renderProjectSummary();
+      renderProjectGithub();
       renderPending();
       renderRunning();
       renderResult();

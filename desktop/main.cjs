@@ -77,6 +77,7 @@ let harvestInFlight = false;
 let mascotModule = null;
 let githubModule = null;
 const githubCache = new Map();
+const githubActivityCache = new Map();
 
 const configPath = () => path.join(app.getPath('userData'), 'companion.json');
 const defaults = () => ({
@@ -705,76 +706,6 @@ const knowledgeDetail = ({ id } = {}) => {
   throw new Error('未找到该知识或经验');
 };
 
-const buildView = async () => {
-  const projects = await api('/owner/v1/projects');
-  const projectList = projects.items ?? [];
-  const activeProjectId = config.projectId && projectList.some((item) => item.id === config.projectId)
-    ? config.projectId
-    : projectList[0]?.id ?? '';
-  const activeProject = projectList.find((item) => item.id === activeProjectId) ?? null;
-  const [summary, workerState, jobs, patches, sandboxes, repairs] = await Promise.all([
-    api('/owner/v1/summary'),
-    api('/owner/v1/worker/status'),
-    api('/owner/v1/jobs?limit=20'),
-    api('/owner/v1/patches?limit=20'),
-    api('/owner/v1/sandbox-runs?limit=20'),
-    api('/owner/v1/repair-cycles?limit=20')
-  ]);
-  const allJobs = jobs.items ?? [];
-  const allPatches = patches.items ?? [];
-  const allSandboxes = sandboxes.items ?? [];
-  const allRepairs = repairs.items ?? [];
-  const projectNames = new Map(projectList.map((project) => [project.id, project.name]));
-  const pending = toPending({
-    jobs: allJobs,
-    patches: allPatches,
-    sandboxes: allSandboxes,
-    repairs: allRepairs
-  }, projectNames);
-  // 任务链只关联当前选中的项目，避免把不同项目的 Job/Patch/Run/Cycle 拼成假进度。
-  const inProject = (item) => projectIdOf(item) === activeProjectId;
-  const jobsInProject = allJobs.filter(inProject);
-  const patchesInProject = allPatches.filter(inProject);
-  const sandboxesInProject = allSandboxes.filter(inProject);
-  const repairsInProject = allRepairs.filter(inProject);
-  const activeJob = jobsInProject.find((job) =>
-    ['pending_approval', 'queued', 'leased', 'running', 'cancel_requested'].includes(job.status)
-  );
-  const activeCycle = repairsInProject.find((cycle) =>
-    ['pending_approval', 'queued', 'proposal_ready', 'applied', 'test_pending'].includes(cycle.status)
-  );
-  const activeSandbox = sandboxesInProject.find((run) =>
-    ['pending_approval', 'queued', 'provisioning', 'running', 'collecting'].includes(run.status)
-  );
-  const latestPatch = patchesInProject[0] ?? null;
-  const chain = {
-    job: activeJob ?? jobsInProject[0] ?? null,
-    patch: latestPatch,
-    sandbox: activeSandbox ?? sandboxesInProject[0] ?? null,
-    cycle: activeCycle ?? repairsInProject[0] ?? null
-  };
-  // 活动流与会话时间线：给面板的 Cindy 式 activity / message 卡片用。
-  const jobLabel = (status) => ({
-    pending_approval: '等你批准', approved: '已批准', queued: '排队中', leased: '已领取',
-    running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已取消',
-    rejected: '已拒绝', needs_reconciliation: '需要核对'
-  }[status] ?? status);
-  const runLabel = (run) => {
-    const test = run.test_status ?? 'unknown';
-    const exit = Number.isInteger(run.exit_code) ? ` · exit ${run.exit_code}` : '';
-    return `${run.status} · 测试 ${test}${exit}`;
-  };
-  const cycleLabel = (status) => ({
-    pending_approval: '等你批准', queued: '排队中', proposal_ready: '补丁就绪',
-    applied: '已应用', test_pending: '等待测试', tested_pass: '复测通过',
-    tested_fail: '复测未通过', failed: '失败', cancelled: '已取消'
-  }[status] ?? status);
-
-  // 每个项目最近一次进展：从任务 / 补丁 / 沙箱 / 修复里取时间最新的一条，
-  // 供面板顶部的项目列表显示「最近更新」。
-  const projectSource = await importEsm('../src/project-source.mjs');
-  const localHost = projectSource.localHostName();
-
   const loadGithub = async () => (githubModule ??= await importEsm('../src/github.mjs'));
 
   const gitRemoteOf = async (root) => {
@@ -849,6 +780,149 @@ const buildView = async () => {
     githubCache.set(root, { at: Date.now(), value });
     return value;
   };
+
+  /** 读取仓库打开的 Issues / PR（只读，缓存 2 分钟）。 */
+  const githubActivityFor = async (root) => {
+    const repo = await githubForProject(root);
+    if (!repo) {
+      return { linked: false, repo: null, issues: [], prs: [], issueCount: 0, prCount: 0, error: '' };
+    }
+    const cached = githubActivityCache.get(repo.nameWithOwner);
+    if (cached && Date.now() - cached.at < 2 * 60 * 1000) return cached.value;
+    const value = {
+      linked: true,
+      repo: {
+        nameWithOwner: repo.nameWithOwner,
+        url: repo.url,
+        private: repo.private,
+        defaultBranch: repo.defaultBranch,
+        available: repo.available
+      },
+      issues: [],
+      prs: [],
+      issueCount: 0,
+      prCount: 0,
+      error: ''
+    };
+    if (!repo.available) {
+      value.error = repo.error || 'gh 无法读取仓库状态';
+      githubActivityCache.set(repo.nameWithOwner, { at: Date.now(), value });
+      return value;
+    }
+    const list = async (kind) => {
+      const common = ['--repo', repo.nameWithOwner, '--state', 'open', '--limit', '20'];
+      if (kind === 'issue') {
+        const { stdout } = await execFileAsync('gh', [
+          'issue', 'list', ...common, '--json', 'number,title,author,updatedAt,url'
+        ], { timeout: 5000, windowsHide: true });
+        return JSON.parse(stdout);
+      }
+      const { stdout } = await execFileAsync('gh', [
+        'pr', 'list', ...common, '--json', 'number,title,author,isDraft,updatedAt,url'
+      ], { timeout: 5000, windowsHide: true });
+      return JSON.parse(stdout);
+    };
+    const [issues, prs] = await Promise.allSettled([list('issue'), list('pr')]);
+    if (issues.status === 'fulfilled') {
+      value.issueCount = issues.value.length;
+      value.issues = issues.value.slice(0, 5).map((item) => ({
+        number: item.number,
+        title: item.title,
+        author: item.author?.login ?? '',
+        updatedAt: item.updatedAt ?? '',
+        url: item.url ?? ''
+      }));
+    } else {
+      value.error = ghErrorText(issues.reason);
+    }
+    if (prs.status === 'fulfilled') {
+      value.prCount = prs.value.length;
+      value.prs = prs.value.slice(0, 5).map((item) => ({
+        number: item.number,
+        title: item.title,
+        author: item.author?.login ?? '',
+        draft: item.isDraft === true,
+        updatedAt: item.updatedAt ?? '',
+        url: item.url ?? ''
+      }));
+    } else if (!value.error) {
+      value.error = ghErrorText(prs.reason);
+    }
+    githubActivityCache.set(repo.nameWithOwner, { at: Date.now(), value });
+    return value;
+  };
+
+
+const buildView = async () => {
+  const projects = await api('/owner/v1/projects');
+  const projectList = projects.items ?? [];
+  const activeProjectId = config.projectId && projectList.some((item) => item.id === config.projectId)
+    ? config.projectId
+    : projectList[0]?.id ?? '';
+  const activeProject = projectList.find((item) => item.id === activeProjectId) ?? null;
+  const [summary, workerState, jobs, patches, sandboxes, repairs] = await Promise.all([
+    api('/owner/v1/summary'),
+    api('/owner/v1/worker/status'),
+    api('/owner/v1/jobs?limit=20'),
+    api('/owner/v1/patches?limit=20'),
+    api('/owner/v1/sandbox-runs?limit=20'),
+    api('/owner/v1/repair-cycles?limit=20')
+  ]);
+  const allJobs = jobs.items ?? [];
+  const allPatches = patches.items ?? [];
+  const allSandboxes = sandboxes.items ?? [];
+  const allRepairs = repairs.items ?? [];
+  const projectNames = new Map(projectList.map((project) => [project.id, project.name]));
+  const pending = toPending({
+    jobs: allJobs,
+    patches: allPatches,
+    sandboxes: allSandboxes,
+    repairs: allRepairs
+  }, projectNames);
+  // 任务链只关联当前选中的项目，避免把不同项目的 Job/Patch/Run/Cycle 拼成假进度。
+  const inProject = (item) => projectIdOf(item) === activeProjectId;
+  const jobsInProject = allJobs.filter(inProject);
+  const patchesInProject = allPatches.filter(inProject);
+  const sandboxesInProject = allSandboxes.filter(inProject);
+  const repairsInProject = allRepairs.filter(inProject);
+  const activeJob = jobsInProject.find((job) =>
+    ['pending_approval', 'queued', 'leased', 'running', 'cancel_requested'].includes(job.status)
+  );
+  const activeCycle = repairsInProject.find((cycle) =>
+    ['pending_approval', 'queued', 'proposal_ready', 'applied', 'test_pending'].includes(cycle.status)
+  );
+  const activeSandbox = sandboxesInProject.find((run) =>
+    ['pending_approval', 'queued', 'provisioning', 'running', 'collecting'].includes(run.status)
+  );
+  const latestPatch = patchesInProject[0] ?? null;
+  const chain = {
+    job: activeJob ?? jobsInProject[0] ?? null,
+    patch: latestPatch,
+    sandbox: activeSandbox ?? sandboxesInProject[0] ?? null,
+    cycle: activeCycle ?? repairsInProject[0] ?? null
+  };
+  // 活动流与会话时间线：给面板的 Cindy 式 activity / message 卡片用。
+  const jobLabel = (status) => ({
+    pending_approval: '等你批准', approved: '已批准', queued: '排队中', leased: '已领取',
+    running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已取消',
+    rejected: '已拒绝', needs_reconciliation: '需要核对'
+  }[status] ?? status);
+  const runLabel = (run) => {
+    const test = run.test_status ?? 'unknown';
+    const exit = Number.isInteger(run.exit_code) ? ` · exit ${run.exit_code}` : '';
+    return `${run.status} · 测试 ${test}${exit}`;
+  };
+  const cycleLabel = (status) => ({
+    pending_approval: '等你批准', queued: '排队中', proposal_ready: '补丁就绪',
+    applied: '已应用', test_pending: '等待测试', tested_pass: '复测通过',
+    tested_fail: '复测未通过', failed: '失败', cancelled: '已取消'
+  }[status] ?? status);
+
+  // 每个项目最近一次进展：从任务 / 补丁 / 沙箱 / 修复里取时间最新的一条，
+  // 供面板顶部的项目列表显示「最近更新」。
+  const projectSource = await importEsm('../src/project-source.mjs');
+  const localHost = projectSource.localHostName();
+
   const projectDigest = (projectId) => {
     const items = [];
     for (const job of allJobs) {
@@ -1984,11 +2058,22 @@ const registerIpc = () => {
     return { ...created, testConfig: project ? await testConfigForProject(project) : null };
   });
 
+  ipcMain.handle('companion:github-activity', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const projectId = String(input?.projectId ?? '');
+    const projects = (await api('/owner/v1/projects')).items ?? [];
+    const project = projects.find((item) => item.id === projectId)
+      ?? projects.find((item) => item.id === config.projectId)
+      ?? null;
+    if (!project) return { linked: false, repo: null, issues: [], prs: [], issueCount: 0, prCount: 0, error: '' };
+    return githubActivityFor(project.root);
+  });
+
   // 只允许打开 GitHub 仓库链接，避免渲染进程打开任意网址。
   ipcMain.handle('companion:open-external', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const url = String(input?.url ?? '');
-    if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/u.test(url)) {
+    if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/(?:issues|pull)\/\d+)?\/?$/u.test(url)) {
       throw new Error('只允许打开 GitHub 仓库链接。');
     }
     await shell.openExternal(url);

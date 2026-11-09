@@ -146,6 +146,20 @@ const run = async () => {
       Boolean(github.chip) && /example\/alpha/u.test(github.chip.title),
       JSON.stringify(github.chip));
     check('projects without a github remote show no badge', github.betaChip === false);
+    await panel.waitForSelector('#githubPanel .github-head', { timeout: 20000 });
+    await panel.waitForFunction(() => {
+      const text = document.getElementById('githubPanel')?.innerText ?? '';
+      return /仓库|无权|没有打开|Issues \d/u.test(text) && !text.includes('正在读取');
+    }, { timeout: 20000 });
+    const githubPanel = await panel.evaluate(() => ({
+      text: document.getElementById('githubPanel')?.innerText ?? '',
+      hidden: document.getElementById('githubPanel')?.hidden
+    }));
+    check('github panel shows the linked repo and gh error',
+      githubPanel.hidden === false
+      && githubPanel.text.includes('example/alpha')
+      && /仓库|无权|gh/iu.test(githubPanel.text),
+      JSON.stringify(githubPanel.text));
     check('needs section is hidden when nothing is pending',
       await panel.evaluate(() => document.getElementById('needsSection').hidden) === true);
 

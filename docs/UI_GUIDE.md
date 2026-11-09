@@ -127,8 +127,12 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 - 复用本机已登录的 **gh CLI**，不新增 token 存储；未登录时提示 `需要 gh auth login`，仓库链接仍然可用。
 - 只读：不读取代码、不改动远端；创建 PR 等写操作暂不包含。
 - 状态按项目根目录缓存 5 分钟，避免每次轮询都调用 GitHub。
+- 项目下方「GitHub」区列出打开的 Issues / PR（各最多 5 条），点击条目在浏览器打开；显示打开总数（最多统计 20 条，超过显示 `20+`）。
+- Issues/PR 列表只读、缓存 2 分钟；仓库不可读时只显示错误与仓库链接，不影响项目切换。
 
 ![GitHub 关联](assets/companion/github-link.png)
+
+![GitHub Issues / PR 列表](assets/companion/github-activity.png)
 
 ## 4. 组件清单
 
@@ -174,6 +178,6 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | `npm run e2e:desktop:knowledge` | PASS（知识摘要、验证、复用、今日视图） |
 | `npm run e2e:desktop:sandbox-config` | PASS（缺少快照文件 → 失败弹窗 → 补齐后重试） |
 | `npm run e2e:desktop:mascots` | PASS（spritesheet 播放、一键换肤、静态回退、无底盘、有效帧） |
-| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、知识摘要、GitHub 关联、搜索、折叠、点击切换） |
+| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、知识摘要、GitHub 关联与 Issues/PR、搜索、折叠、点击切换） |
 | `npm run e2e:desktop:playbooks` | PASS（运行中状态、4 个一键沉淀预设、分析、取消、手动/一键沉淀、去重、提案 HITL） |
 | Workbench UI 冒烟 | 详情 5 个标签、修订对比、使用记录、维护降级提示 |

@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   patchDetail: (input) => invoke('companion:patch-detail', input),
   result: (input) => invoke('companion:result', input),
   openExternal: (url) => invoke('companion:open-external', { url }),
+  github: Object.freeze({
+    activity: (input) => invoke('companion:github-activity', input)
+  }),
   createSandbox: (input) => invoke('companion:create-sandbox', input),
   knowledge: Object.freeze({
     summary: (input) => invoke('companion:knowledge-summary', input),
