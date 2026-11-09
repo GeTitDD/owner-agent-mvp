@@ -242,6 +242,135 @@
     return new Date(at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
   };
 
+  const knowledgeCache = new Map();
+  const summaryLoading = new Set();
+
+  const knowledgeForProject = (projectId) => {
+    const cached = knowledgeCache.get(projectId);
+    if (cached) return cached;
+    if (view?.knowledge && view.knowledge.projectId === projectId) return view.knowledge;
+    return null;
+  };
+
+  const loadProjectSummary = async (projectId) => {
+    if (!projectId || summaryLoading.has(projectId)) return;
+    summaryLoading.add(projectId);
+    try {
+      const data = await window.companion.knowledge.summary({ projectId });
+      knowledgeCache.set(projectId, data);
+      if ((view?.config?.projectId ?? '') === projectId) renderProjectSummary();
+    } catch { /* 知识库不可用时不阻塞项目列表 */ }
+    finally { summaryLoading.delete(projectId); }
+  };
+
+  /** 当前项目的知识摘要：计数 + 已验证优先的条目 + 待提炼入口。 */
+  const renderProjectSummary = () => {
+    const box = $('projectSummary');
+    if (!box) return;
+    const projectId = view?.config?.projectId ?? '';
+    const project = (view?.projects ?? []).find((item) => item.id === projectId);
+    if (!projectId || !project) {
+      box.hidden = true;
+      return;
+    }
+    const data = knowledgeForProject(projectId);
+    box.hidden = false;
+    box.replaceChildren();
+
+    const head = el('div', 'summary-head');
+    head.append(el('span', 'summary-title', '知识摘要'));
+    head.append(el('span', 'summary-meta',
+      data?.lastKnowledgeAt ? `更新于 ${formatRelative(data.lastKnowledgeAt)}` : ''));
+    const openAll = el('button', 'ghost small', '完整知识库');
+    openAll.type = 'button';
+    openAll.onclick = () => {
+      void window.companion.knowledge.open().catch((error) => toast(String(error?.message ?? error)));
+    };
+    head.append(openAll);
+    box.append(head);
+
+    if (!data) {
+      box.append(el('div', 'summary-empty', '正在读取知识摘要…'));
+      void loadProjectSummary(projectId);
+      return;
+    }
+    if (!data.available) {
+      box.append(el('div', 'summary-empty', '知识库尚未建立；完成一次任务后会自动采集经验。'));
+      return;
+    }
+
+    const counts = data.counts ?? {};
+    const chips = el('div', 'summary-chips');
+    chips.append(
+      el('span', 'summary-chip', `经验 ${counts.experiences ?? 0}`),
+      el('span', 'summary-chip', `知识 ${counts.knowledge ?? 0}`),
+      el('span', 'summary-chip ok', `已验证 ${counts.verified ?? 0}`),
+      el('span', 'summary-chip warn', `待提炼 ${counts.pendingHarvest ?? 0}`),
+      el('span', 'summary-chip', `候选 ${counts.candidates ?? 0}`),
+      el('span', 'summary-chip', `复用 ${counts.usages ?? 0}`)
+    );
+    box.append(chips);
+
+    const units = data.topKnowledge ?? [];
+    if (units.length) {
+      const list = el('div', 'summary-items');
+      for (const unit of units) {
+        const item = el('button', 'summary-item');
+        item.type = 'button';
+        item.title = unit.title;
+        const dot = el('span', 'summary-dot');
+        dot.dataset.status = unit.status ?? 'unverified';
+        item.append(
+          dot,
+          el('span', 'summary-item-text', unit.title),
+          el('span', 'summary-time', formatRelative(unit.updatedAt) || '')
+        );
+        item.onclick = () => { void openKnowledgeDetail(unit.id); };
+        list.append(item);
+      }
+      box.append(list);
+    } else {
+      const experiences = (data.recentExperiences ?? []).slice(0, 3);
+      if (experiences.length) {
+        const list = el('div', 'summary-items');
+        for (const experience of experiences) {
+          const item = el('div', 'summary-item static');
+          const dot = el('span', 'summary-dot');
+          dot.dataset.status = experience.outcome === 'repaired' || experience.outcome === 'succeeded'
+            ? 'verified' : 'unverified';
+          item.append(
+            dot,
+            el('span', 'summary-item-text', experience.title),
+            el('span', 'summary-time', formatRelative(experience.createdAt) || '')
+          );
+          list.append(item);
+        }
+        box.append(list);
+      } else {
+        box.append(el('div', 'summary-empty',
+          '还没有收集到该项目的经验；完成一次任务后会自动采集，也可以点「提炼」生成候选。'));
+      }
+    }
+
+    if (data.tags?.length) {
+      const tags = el('div', 'summary-tags');
+      for (const item of data.tags) tags.append(el('span', 'summary-tag', `#${item.tag}`));
+      box.append(tags);
+    }
+
+    const foot = el('div', 'summary-foot');
+    foot.append(el('span', 'summary-shared',
+      `共享知识 ${counts.sharedKnowledge ?? 0} 条（已验证 ${counts.sharedVerified ?? 0}）`));
+    const pending = counts.pendingHarvest ?? 0;
+    const harvest = el('button', 'ghost small', pending > 0 ? `提炼 ${pending} 条` : '提炼');
+    harvest.type = 'button';
+    harvest.disabled = pending === 0;
+    harvest.title = pending === 0 ? '当前项目没有待提炼经验' : '把待提炼经验提炼成待审核候选';
+    harvest.onclick = () => { void harvestNow(); };
+    foot.append(harvest);
+    box.append(foot);
+  };
+
   const detailRows = (rows) => {
     const list = el('dl', 'detail-rows');
     for (const [label, value] of rows) {
@@ -1168,10 +1297,12 @@
     refreshing = true;
     try {
       view = await window.companion.snapshot();
+      if (view?.knowledge?.projectId) knowledgeCache.set(view.knowledge.projectId, view.knowledge);
       applyState();
       renderActivity();
       renderTimeline();
       renderProjects();
+      renderProjectSummary();
       renderPending();
       renderRunning();
       renderResult();

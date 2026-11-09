@@ -844,6 +844,69 @@ pre.diff, pre.logs {
   font-size: 10px;
 }
 .project-search:focus { outline: none; border-color: var(--accent); }
+.project-summary {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.035);
+}
+.summary-head { display: flex; align-items: center; gap: 8px; }
+.summary-title { font-size: 11px; font-weight: 600; color: var(--text); }
+.summary-meta { margin-right: auto; font-size: 9px; color: var(--muted); }
+.summary-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.summary-chip {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 9px;
+  color: var(--muted);
+}
+.summary-chip.ok { color: var(--ok); border-color: rgba(34, 197, 94, 0.35); }
+.summary-chip.warn { color: var(--warn); border-color: rgba(234, 107, 23, 0.35); background: var(--warn-soft); }
+.summary-items { display: grid; gap: 1px; }
+.summary-item {
+  display: grid;
+  grid-template-columns: 6px 1fr auto;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.summary-item:hover { background: var(--accent-soft); }
+.summary-item.static { cursor: default; }
+.summary-item.static:hover { background: transparent; }
+.summary-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.summary-dot[data-status='verified'] { background: var(--ok); }
+.summary-dot[data-status='needs_reverification'] { background: var(--warn); }
+.summary-dot[data-status='disputed'] { background: var(--danger); }
+.summary-item-text {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.summary-time { font-size: 9px; color: var(--muted); }
+.summary-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.summary-tag {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  font-size: 9px;
+  color: var(--muted);
+}
+.summary-foot { display: flex; align-items: center; gap: 8px; }
+.summary-shared { margin-right: auto; font-size: 9px; color: var(--muted); }
+.summary-empty { font-size: 10px; line-height: 1.45; color: var(--muted); }
 .needs-section { margin-bottom: 16px; }
 .running-section { margin-bottom: 14px; }
 .needs-section .section-title h3 { color: var(--text); font-size: 13px; }

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { OwnerStore } from '../../src/owner-store.mjs';
+import { PersonalKnowledgeStore } from '../../src/personal-store.mjs';
 import { createSyntheticProject } from '../knowledge-loop/fixtures.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
@@ -21,6 +22,7 @@ const run = async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'companion-projects-'));
   const userData = path.join(root, 'userdata');
   const ownerDb = path.join(root, 'owner.sqlite');
+  const knowledgeDb = path.join(root, 'knowledge.sqlite');
   const evidence = process.env.EVIDENCE_DIR ?? path.join(root, 'evidence');
   fs.mkdirSync(userData, { recursive: true });
   fs.mkdirSync(evidence, { recursive: true });
@@ -42,6 +44,37 @@ const run = async () => {
     );
   } finally { owner.close(); }
 
+  // 给 alpha 预置项目知识：一条已验证 + 一条未验证 + 一条经验，验证摘要排序与计数。
+  const personal = new PersonalKnowledgeStore(knowledgeDb);
+  try {
+    personal.addExperience({
+      contract: 'experience/v1',
+      sourceRunId: 'run-a', projectId: 'alpha', taskId: 'task-a',
+      domainIds: ['software-engineering'],
+      observedProblem: 'retry loop dropped the last attempt',
+      actionSummary: 'changed the loop bound and re-ran the smoke test',
+      observedOutcome: { status: 'repaired', testStatus: 'pass' },
+      evidenceRefs: ['sandbox:run-a'],
+      environment: { primaryDomain: 'software-engineering' },
+      facts: ['test passed after repair'], inferences: [], unknowns: [],
+      createdAt: new Date().toISOString(), collectorVersion: '1.0.0'
+    });
+    personal.create({
+      title: 'Retry loop bound',
+      content: 'Use i < attempts so the final retry executes.',
+      kind: 'claim', layer: 'project', scope: 'project', projectId: 'alpha',
+      domains: ['software-engineering'], tags: ['retry', 'off-by-one'],
+      evidenceRefs: ['sandbox:run-a'], verificationStatus: 'verified', sourceRef: 'test'
+    });
+    personal.create({
+      title: 'Run node smoke before patching',
+      content: 'Run the node smoke profile before proposing a patch.',
+      kind: 'procedure', layer: 'project', scope: 'project', projectId: 'alpha',
+      domains: ['software-engineering'], tags: ['sandbox'],
+      evidenceRefs: [], verificationStatus: 'unverified', sourceRef: 'test'
+    });
+  } finally { personal.close(); }
+
   fs.writeFileSync(path.join(userData, 'companion.json'), JSON.stringify({
     pet: { x: 240, y: 190 }, projectId: 'alpha', mascotSkin: 'erika',
     gatewayUrl: 'http://127.0.0.1:18789', model: '', includePaths: ['package.json']
@@ -50,7 +83,12 @@ const run = async () => {
   const app = await electron.launch({
     executablePath: electronPath,
     args: [path.join(repoRoot, 'desktop', 'main.cjs'), `--user-data-dir=${userData}`],
-    env: { ...process.env, OWNER_AGENT_DB: ownerDb, OWNER_AGENT_NOTIFICATIONS: '0' },
+    env: {
+      ...process.env,
+      OWNER_AGENT_DB: ownerDb,
+      OWNER_KNOWLEDGE_DB: knowledgeDb,
+      OWNER_AGENT_NOTIFICATIONS: '0'
+    },
     timeout: 60000
   });
 
@@ -92,6 +130,34 @@ const run = async () => {
     check('needs section is hidden when nothing is pending',
       await panel.evaluate(() => document.getElementById('needsSection').hidden) === true);
 
+    // 知识摘要：计数、已验证优先、标签、点击打开详情。
+    await panel.waitForSelector('#projectSummary .summary-chip', { timeout: 15000 });
+    const summary = await panel.evaluate(() => ({
+      hidden: document.getElementById('projectSummary').hidden,
+      title: document.querySelector('#projectSummary .summary-title')?.textContent,
+      chips: [...document.querySelectorAll('#projectSummary .summary-chip')].map((node) => node.textContent),
+      items: [...document.querySelectorAll('#projectSummary .summary-item-text')].map((node) => node.textContent),
+      tags: [...document.querySelectorAll('#projectSummary .summary-tag')].map((node) => node.textContent)
+    }));
+    check('project summary is visible under the list', summary.hidden === false && summary.title === '知识摘要', JSON.stringify(summary.title));
+    const chipValue = (chips, label) => Number(
+      (chips.find((chip) => chip.startsWith(label)) ?? '').replace(/\D+/gu, '')
+    ) || 0;
+    check('summary shows experience and knowledge counts',
+      chipValue(summary.chips, '经验') >= 1 && chipValue(summary.chips, '知识') >= 2
+      && chipValue(summary.chips, '已验证') === 1,
+      summary.chips.join(' '));
+    check('verified knowledge is listed first',
+      summary.items[0] === 'Retry loop bound', JSON.stringify(summary.items));
+    check('summary shows knowledge tags', summary.tags.includes('#retry'), summary.tags.join(' '));
+    await panel.locator('#projectSummary .summary-item').first().click();
+    await panel.waitForSelector('#modal:not([hidden])', { timeout: 10000 });
+    const detailTitle = await panel.locator('#modalTitle').textContent();
+    check('clicking a summary item opens knowledge detail', String(detailTitle).includes('知识详情'), detailTitle);
+    await panel.keyboard.press('Escape');
+    await sleep(300);
+    await panel.screenshot({ path: path.join(evidence, 'panel-project-summary.png') });
+
     // 搜索过滤
     await panel.fill('#projectSearch', 'beta');
     await sleep(300);
@@ -119,6 +185,23 @@ const run = async () => {
     }));
     check('clicking a project row switches the active project',
       switched.fromApi === 'beta' && switched.selected === 'beta', JSON.stringify(switched));
+
+    await panel.waitForSelector('#projectSummary .summary-chip', { timeout: 15000 });
+    await sleep(500);
+    const betaSummary = await panel.evaluate(() => ({
+      chips: [...document.querySelectorAll('#projectSummary .summary-chip')].map((node) => node.textContent),
+      items: [...document.querySelectorAll('#projectSummary .summary-item-text')].map((node) => node.textContent),
+      empty: document.querySelector('#projectSummary .summary-empty')?.textContent ?? '',
+      harvestDisabled: document.querySelector('#projectSummary .summary-foot button')?.disabled
+    }));
+    check('summary follows the selected project',
+      chipValue(betaSummary.chips, '经验') >= 1
+      && chipValue(betaSummary.chips, '已验证') === 0
+      && !betaSummary.items.includes('Retry loop bound'),
+      betaSummary.chips.join(' '));
+    check('project without knowledge lists its collected experiences',
+      betaSummary.items.length >= 1, JSON.stringify(betaSummary.items));
+    check('harvest entry reflects pending experiences', betaSummary.harvestDisabled === false);
 
     await panel.screenshot({ path: path.join(evidence, 'panel-projects.png') });
     if (failures.length) throw new Error(`${failures.length} assertion(s) failed`);

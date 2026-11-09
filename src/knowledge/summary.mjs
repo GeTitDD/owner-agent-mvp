@@ -31,6 +31,20 @@ export function knowledgeSummaryFor({ personalStore, projectId = '', limit = 200
     return (proposal.meta?.sourceExperienceIds ?? []).some((id) => projectExperienceIds.has(id));
   });
   const usages = personalStore.listUsages({ projectId, limit: 200 });
+  // 摘要列表：已验证优先，其次最近更新；只取少量，供面板首屏阅读。
+  const rankedUnits = projectUnits.slice().sort((a, b) => {
+    const verified = Number(b.verificationStatus === 'verified') - Number(a.verificationStatus === 'verified');
+    return verified || String(b.updatedAt).localeCompare(String(a.updatedAt));
+  });
+  const tagCounts = new Map();
+  for (const unit of projectUnits) {
+    for (const tag of unit.tags ?? []) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+  }
+  const lastKnowledgeAt = projectUnits
+    .map((unit) => unit.updatedAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1) ?? null;
   return {
     projectId,
     counts: {
@@ -45,6 +59,19 @@ export function knowledgeSummaryFor({ personalStore, projectId = '', limit = 200
       positiveUsages: usages.filter((usage) => usage.observedBenefit === 'positive').length,
       negativeUsages: usages.filter((usage) => usage.observedBenefit === 'negative').length
     },
+    topKnowledge: rankedUnits.slice(0, 5).map((unit) => ({
+      id: unit.id,
+      title: unit.title,
+      status: unit.verificationStatus,
+      layer: unit.layer,
+      revision: unit.revision,
+      updatedAt: unit.updatedAt
+    })),
+    tags: [...tagCounts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 5)
+      .map(([tag, count]) => ({ tag, count })),
+    lastKnowledgeAt,
     pendingExperiences: pending.slice(0, 10).map((experience) => ({
       id: experience.id,
       projectId: experience.projectId,
