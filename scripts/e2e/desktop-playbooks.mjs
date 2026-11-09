@@ -91,6 +91,11 @@ const run = async () => {
     check('renders 12 playbook buttons', buttons === 12, String(buttons));
     const groups = await panel.locator('.playbook-group-label').allInnerTexts();
     check('renders 4 groups', groups.length === 4, groups.join('/'));
+    const presetCount = await panel.locator('#distillPresets .distill-chip').count();
+    check('renders one-click distill presets', presetCount === 4, String(presetCount));
+    await panel.locator('#playbookSection').scrollIntoViewIfNeeded();
+    await sleep(300);
+    await panel.screenshot({ path: path.join(evidence, 'playbook-presets.png') });
     await snap('playbook-buttons.png');
 
     await panel.locator('.playbook-btn[data-playbook="how"]').click();
@@ -162,7 +167,7 @@ const run = async () => {
 
     // 一键「复盘并沉淀」：跑 reflect，完成后自动写入知识候选。
     const beforeReflect = await panel.evaluate(() => window.companion.knowledge.summary({ projectId: 'pb-demo' }));
-    await panel.locator('#reflectDistillTop').click();
+    await panel.locator('#distillPresets button[data-playbook="reflect"]').click();
     await panel.locator('.playbook-result-head').filter({ hasText: '复盘' })
       .waitFor({ timeout: 300000 });
     await sleep(1200);

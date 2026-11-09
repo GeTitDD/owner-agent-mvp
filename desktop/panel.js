@@ -714,13 +714,34 @@
     return id;
   };
 
+  // 一键“运行 + 沉淀”的预设：覆盖项目理解、结构、根因、验收四类知识。
+  const DISTILL_PRESETS = Object.freeze([
+    'reflect',
+    'how',
+    'principle-fix-root-causes',
+    'verify-app'
+  ]);
+
   const playbookButtonState = (busy) => {
-    for (const button of document.querySelectorAll('.playbook-btn')) {
+    for (const button of document.querySelectorAll('.playbook-btn, .distill-chip')) {
       button.disabled = busy || !playbookCatalog?.skillsAvailable;
     }
-    for (const id of ['reflectDistill', 'reflectDistillTop']) {
-      const button = $(id);
-      if (button) button.disabled = busy || !playbookCatalog?.skillsAvailable;
+    const reflect = $('reflectDistill');
+    if (reflect) reflect.disabled = busy || !playbookCatalog?.skillsAvailable;
+  };
+
+  const renderDistillPresets = () => {
+    const box = $('distillPresets');
+    if (!box) return;
+    box.replaceChildren();
+    box.append(el('span', 'distill-presets-label', '一键沉淀'));
+    for (const id of DISTILL_PRESETS) {
+      const button = el('button', 'distill-chip', playbookLabelOf(id));
+      button.type = 'button';
+      button.dataset.playbook = id;
+      button.title = `运行「${playbookLabelOf(id)}」并自动沉淀为项目知识候选`;
+      button.onclick = () => { reflectAndDistill(id); };
+      box.append(button);
     }
   };
 
@@ -939,8 +960,8 @@
           knowledgeCache.delete(projectId);
           await refresh();
           toast(result.distill.duplicate
-            ? '这次复盘已经在知识候选里'
-            : '复盘完成，已沉淀为项目知识候选（未验证）', 5200);
+            ? `这次「${playbookLabelOf(id)}」已经在知识候选里`
+            : `「${playbookLabelOf(id)}」完成，已沉淀为项目知识候选（未验证）`, 5200);
         } else if (result.distill?.error) {
           toast(`复盘完成，但沉淀失败：${result.distill.error}`, 6000);
         }
@@ -958,10 +979,10 @@
     }
   };
 
-  /** 一键复盘并沉淀：跑 reflect，成功后自动写入项目知识候选。 */
-  const reflectAndDistill = () => {
+  /** 一键“运行 + 沉淀”：默认跑复盘，也可指定结构走读/根因定位/验收。 */
+  const reflectAndDistill = (playbookId = 'reflect') => {
     if (!view?.config?.projectId) { toast('先选择一个项目。'); return; }
-    void runPlaybook('reflect', { distill: true });
+    void runPlaybook(playbookId, { distill: true });
   };
 
   const loadPlaybooks = async () => {
@@ -969,6 +990,7 @@
     try {
       playbookCatalog = await window.companion.playbooks.list({ projectId });
       renderPlaybookButtons();
+      renderDistillPresets();
       playbookButtonState(playbookBusy);
       if (playbookProjectId && playbookProjectId !== projectId) {
         playbookCurrent = null;
@@ -1823,8 +1845,7 @@
   };
 
   $('harvestNow').onclick = () => { void harvestNow(); };
-  $('reflectDistill').onclick = reflectAndDistill;
-  $('reflectDistillTop').onclick = reflectAndDistill;
+  $('reflectDistill').onclick = () => { reflectAndDistill('reflect'); };
 
   $('playbookCancel').onclick = async () => {
     if (!playbookRunningId) return;

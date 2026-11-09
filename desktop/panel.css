@@ -534,6 +534,21 @@ pre.diff, pre.logs {
 
 .playbook-hint-row .playbook-hint { flex: 1; }
 
+.distill-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.distill-presets-label { font-size: 9px; color: var(--muted); }
+.distill-chip {
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+.distill-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.distill-chip:disabled { opacity: 0.5; cursor: default; }
+
 .playbook-advice {
   margin: 0;
   font-size: 11px;

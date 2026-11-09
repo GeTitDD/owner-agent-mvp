@@ -113,6 +113,9 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 - 「生成改动提案」降为次要操作，只在确实要改代码/文档时使用，仍然走 HITL 审批。
 - 组别对应关系：`分析 / 验证 / 修复 / 沉淀` 都可以沉淀知识；「沉淀」组的复盘、讲清楚、文档体检最适合直接生成候选。
 - **一键「复盘并沉淀」**：在「项目 Playbook」标题右侧或「知识」操作栏点击，直接跑 `reflect`（复盘），成功后自动沉淀为知识候选，不需要再手动点一次；失败时保留分析结果并提示原因。
+- **预设按钮**：Playbook 标题行的「一键沉淀」提供 4 个预设——`复盘`、`结构走读`、`根因定位`、`怎么验收`；点击后运行对应 playbook 并自动沉淀。知识区保留「复盘并沉淀」快捷入口。
+
+![一键沉淀预设](assets/companion/distill-presets.png)
 
 ![复盘并沉淀](assets/companion/reflect-distill.png)
 
@@ -161,5 +164,5 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | `npm run e2e:desktop:sandbox-config` | PASS（缺少快照文件 → 失败弹窗 → 补齐后重试） |
 | `npm run e2e:desktop:mascots` | PASS（spritesheet 播放、一键换肤、静态回退、无底盘、有效帧） |
 | `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、知识摘要、搜索、折叠、点击切换） |
-| `npm run e2e:desktop:playbooks` | PASS（运行中状态、分析、取消、手动/一键沉淀知识候选、去重、提案 HITL） |
+| `npm run e2e:desktop:playbooks` | PASS（运行中状态、4 个一键沉淀预设、分析、取消、手动/一键沉淀、去重、提案 HITL） |
 | Workbench UI 冒烟 | 详情 5 个标签、修订对比、使用记录、维护降级提示 |
