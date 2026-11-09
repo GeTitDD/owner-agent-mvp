@@ -1,9 +1,13 @@
 // 桌宠窗口：渲染静态皮肤或 Codex Pet 精灵动画，并把 Owner 五态映射到会话阶段。
 //
 // 动画格式参考 Codex Pet / Petdex：
-//   - pet.json + spritesheet（默认 8 列 × 9/11 行，192×208 帧）；
-//   - states 指定每个状态所在的精灵行与帧时长；
-//   - 没有 spritesheet 的静态皮肤用 CSS 做呼吸/跳动/抖动。
+//   - pet.json + spritesheet（8 列 × 9 行 v1；8 列 × 11 行 v2），帧 192×208；
+//   - 每行是一个动作，列是帧；不同动作实际帧数不同（idle 6、waving 4、jumping 5…），
+//     行尾多余列是透明占位，播到就会闪空；
+//   - 动作分工与 Codex 一致：running 表示任务进行中，waiting 等用户确认，
+//     review 结果待查看，failed 失败，running-left/right 跟随拖动方向，
+//     waving / jumping 是一次性打招呼与庆祝。
+// 没有 spritesheet 的静态皮肤用 CSS 做呼吸/跳动/抖动。
 (() => {
   const pet = document.getElementById('pet');
   const mascot = document.getElementById('mascot');
@@ -13,6 +17,7 @@
   const phaseDot = document.getElementById('phaseDot');
   let startX = 0;
   let startY = 0;
+  let lastDragX = 0;
   let downAt = 0;
   let moved = false;
   let polling = false;
@@ -23,6 +28,9 @@
   let frameIndex = 0;
   let lastFrameAt = 0;
   let hintTimer = null;
+  let basePhase = 'idle';
+  let transient = null;
+  let dragging = false;
 
   const states = ['idle', 'working', 'waiting', 'done', 'error'];
   const phaseOf = (state) => ({
@@ -39,7 +47,8 @@
   const layoutSprite = () => {
     if (!spriteInfo) return;
     const info = spriteInfo;
-    const max = 96;
+    // 桌宠窗口 136px：宠物本体占 112px，不再画圆形底盘。
+    const max = 112;
     const scale = Math.min(max / info.frameWidth, max / info.frameHeight);
     const width = Math.max(1, Math.round(info.frameWidth * scale));
     const height = Math.max(1, Math.round(info.frameHeight * scale));
@@ -51,49 +60,81 @@
 
   const showFrame = (row, column) => {
     if (!spriteInfo) return;
-    const width = Number.parseFloat(sprite.style.width) || 1;
-    const height = Number.parseFloat(sprite.style.height) || 1;
+    // 用整数偏移，避免半像素导致边缘抖动。
+    const width = Math.round(Number.parseFloat(sprite.style.width) || 1);
+    const height = Math.round(Number.parseFloat(sprite.style.height) || 1);
     sprite.style.backgroundPosition = `-${column * width}px -${row * height}px`;
   };
 
-  const pickAnimation = (phase) => {
-    if (!spriteInfo) return null;
-    const candidates = {
+  /** 取一个动作；缺失时返回 null。 */
+  const animOf = (name) => {
+    if (!name) return null;
+    const state = spriteInfo?.states?.[name];
+    return state ? { name, ...state } : null;
+  };
+
+  /** 阶段 → 主循环动作（与 Codex 的状态语义一致）。 */
+  const phaseAnimation = (phase) => {
+    const order = {
       idle: ['idle'],
       running: ['running', 'running-right', 'idle'],
       'needs-interaction': ['waiting', 'review', 'idle'],
       completed: ['review', 'waving', 'idle'],
       error: ['failed', 'idle']
     }[phase] ?? ['idle'];
-    for (const name of candidates) {
-      const state = spriteInfo.states?.[name];
-      if (state) return { name, ...state };
+    for (const name of order) {
+      const anim = animOf(name);
+      if (anim) return anim;
     }
-    return null;
+    return animOf('idle');
   };
 
-  const setAnimation = (phase, force = false) => {
-    const next = pickAnimation(phase);
-    if (!next) return;
-    if (!force && activeAnimation?.name === next.name) return;
-    activeAnimation = next;
+  const startAnimation = (anim) => {
+    if (!anim) return;
+    activeAnimation = anim;
+    transient = null;
     frameIndex = 0;
     lastFrameAt = performance.now();
-    showFrame(next.row, 0);
+    showFrame(anim.row, 0);
+  };
+
+  /** 只播一遍再回到 fallback（Codex 的 waving / jumping 就是一次性动作）。 */
+  const playOnce = (name, fallbackName) => {
+    const anim = animOf(name);
+    if (!anim) return false;
+    activeAnimation = anim;
+    transient = { fallback: fallbackName ?? null };
+    frameIndex = 0;
+    lastFrameAt = performance.now();
+    showFrame(anim.row, 0);
+    return true;
   };
 
   const tick = (time) => {
     if (!spriteInfo || !activeAnimation) return;
     const anim = activeAnimation;
-    const duration = frameIndex >= (anim.frames ?? 1) - 1
+    const frames = Math.max(1, anim.frames ?? 1);
+    const duration = frameIndex >= frames - 1
       ? (anim.lastFrameDurationMs ?? anim.durationMs)
       : anim.durationMs;
     if (time - lastFrameAt >= duration) {
-      const frames = anim.frames ?? 1;
-      if (frameIndex < frames - 1) frameIndex += 1;
-      else if (anim.loop !== false) frameIndex = 0;
-      lastFrameAt = time;
-      showFrame(anim.row, frameIndex);
+      if (frameIndex < frames - 1) {
+        frameIndex += 1;
+        lastFrameAt = time;
+        showFrame(anim.row, frameIndex);
+      } else if (transient) {
+        // 一次性动作播完：回到指定动作，其次回到当前阶段的主循环。
+        const fallback = animOf(transient.fallback) ?? phaseAnimation(basePhase);
+        startAnimation(fallback);
+        lastFrameAt = time;
+      } else if (anim.loop) {
+        frameIndex = 0;
+        lastFrameAt = time;
+        showFrame(anim.row, 0);
+      } else {
+        // 非循环且没有后续动作：停在最后一帧。
+        lastFrameAt = time;
+      }
     }
     spriteRaf = requestAnimationFrame(tick);
   };
@@ -103,6 +144,7 @@
     spriteRaf = null;
     spriteInfo = null;
     activeAnimation = null;
+    transient = null;
     sprite.hidden = true;
     sprite.style.backgroundImage = '';
   };
@@ -114,7 +156,9 @@
     mascot.hidden = true;
     mascot.dataset.static = 'false';
     layoutSprite();
-    setAnimation(pet.dataset.phase || 'idle', true);
+    basePhase = pet.dataset.phase || 'idle';
+    // 换上动画皮肤时先挥手打招呼，再进入当前阶段。
+    if (!playOnce('waving', null)) startAnimation(phaseAnimation(basePhase));
     spriteRaf = requestAnimationFrame(tick);
   };
 
@@ -136,6 +180,19 @@
     pet.title = `${info.label ?? 'Owner Companion'} · ${pet.dataset.stage ?? ''}`;
   };
 
+  /** 阶段变化：running/waiting/review 循环，completed 先跳一下，error 直接哭。 */
+  const setPhase = (phase) => {
+    const previous = basePhase;
+    basePhase = phase;
+    if (!spriteInfo) return;
+    // 拖动时保持方向奔跑，松手后再回到阶段动作。
+    if (dragging) return;
+    if (transient) return;
+    if (phase === 'completed' && previous !== 'completed' && playOnce('jumping', 'review')) return;
+    const next = phaseAnimation(phase);
+    if (next && next.name !== activeAnimation?.name) startAnimation(next);
+  };
+
   const applyView = (view) => {
     const state = states.includes(view?.state) ? view.state : 'idle';
     const phase = phaseOf(state);
@@ -143,7 +200,7 @@
     pet.dataset.state = state;
     pet.dataset.stage = String(view?.stage ?? 'Owner Companion');
     applyMascot(view?.mascot);
-    if (spriteInfo) setAnimation(phase);
+    setPhase(phase);
     const pending = Array.isArray(view?.pending) ? view.pending.length : 0;
     badge.hidden = pending <= 0;
     if (pending > 0) badge.textContent = pending > 9 ? '9+' : String(pending);
@@ -168,8 +225,10 @@
   pet.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
     moved = false;
+    dragging = false;
     startX = event.screenX;
     startY = event.screenY;
+    lastDragX = event.screenX;
     downAt = Date.now();
     const rect = pet.getBoundingClientRect();
     window.companion.dragStart({
@@ -181,7 +240,22 @@
 
   pet.addEventListener('pointermove', (event) => {
     if (!downAt) return;
-    if (Math.hypot(event.screenX - startX, event.screenY - startY) > 4) moved = true;
+    if (Math.hypot(event.screenX - startX, event.screenY - startY) > 4) {
+      moved = true;
+      if (!dragging) {
+        dragging = true;
+        transient = null;
+        startAnimation(animOf('running-right') ?? phaseAnimation(basePhase));
+      }
+      // 与 Codex 相同：向左拖用 running-left，向右拖用 running-right。
+      if (event.screenX !== lastDragX) {
+        const direction = event.screenX - lastDragX;
+        lastDragX = event.screenX;
+        const name = direction < 0 ? 'running-left' : 'running-right';
+        const anim = animOf(name);
+        if (anim && anim.name !== activeAnimation?.name) startAnimation(anim);
+      }
+    }
   });
 
   const finish = () => {
@@ -189,6 +263,10 @@
     const wasClick = !moved && Date.now() - downAt < 600;
     downAt = 0;
     window.companion.dragEnd();
+    if (dragging) {
+      dragging = false;
+      startAnimation(phaseAnimation(basePhase));
+    }
     if (wasClick) window.companion.showPanel();
   };
 
@@ -197,6 +275,10 @@
     if (!downAt) return;
     downAt = 0;
     window.companion.dragEnd();
+    if (dragging) {
+      dragging = false;
+      startAnimation(phaseAnimation(basePhase));
+    }
   });
 
   // 右键直接打开皮肤选择，而不是隐藏宠物；隐藏放在悬停工具条里。

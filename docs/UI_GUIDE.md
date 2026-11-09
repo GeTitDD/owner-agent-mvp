@@ -71,7 +71,9 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 ### 3.4 动态桌宠与一键换肤
 
 - 支持 Cindy 静态 PNG/SVG/GIF 与 **Codex Pet 动画包**（`pet.json` + spritesheet，8×9 / 8×11）。
-- 状态 → 精灵行：idle / running / waiting / review / failed；静态皮肤用浮动/跳动/摇摆/抖动补足动态感。
+- 宠物直接浮在桌面上，没有白色圆盘或光环，只保留贴地阴影。
+- 状态 → 精灵行：idle / running / waiting / review / failed；完成时先 `jumping` 一次再进入 `review`，换皮肤先 `waving` 一次，拖动时按方向播 `running-left/right`。
+- 每行动作的实际帧数不同（idle 6、waving 4、jumping 5…），只播有效帧，不会闪到行尾透明占位。
 - 悬停工具条：`↻` 一键切到下一个皮肤、`▦` 打开皮肤选择、`×` 隐藏。
 - 右键桌宠打开皮肤选择；设置页点击任意皮肤立即生效，动画包显示首帧缩略图。
 - 「导入 Codex 宠物…」选择 `pet.json` 或文件夹，复制到用户目录并立即切换。

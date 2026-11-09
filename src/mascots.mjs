@@ -32,16 +32,19 @@ export const STATE_TO_PHASE = Object.freeze({
 export const MASCOT_FILE_PATTERN = /^[a-z0-9][a-z0-9._-]{0,40}\.(png|svg|webp|gif)$/iu;
 const IMAGE_PATTERN = MASCOT_FILE_PATTERN;
 const PET_MANIFEST = 'pet.json';
+// Codex 9 行动作的默认帧数来自 hatch-pet 规范：每行固定 8 列，但只用前 N 帧，
+// 其余列是透明占位。若按 8 帧播放，idle 会出现 2 帧空白（宠物闪烁/消失），
+// 这也是社区 spritesheet 最常见的问题。
 const DEFAULT_CODEX_STATES = Object.freeze({
-  idle: { row: 0, durationMs: 160, loop: true },
-  'running-right': { row: 1, durationMs: 120, loop: true },
-  'running-left': { row: 2, durationMs: 120, loop: true },
-  waving: { row: 3, durationMs: 140, loop: false },
-  jumping: { row: 4, durationMs: 120, loop: false },
-  failed: { row: 5, durationMs: 150, loop: false },
-  waiting: { row: 6, durationMs: 160, loop: true },
-  running: { row: 7, durationMs: 120, loop: true },
-  review: { row: 8, durationMs: 140, loop: true }
+  idle: { row: 0, frames: 6, durationMs: 160, loop: true },
+  'running-right': { row: 1, frames: 8, durationMs: 110, loop: true },
+  'running-left': { row: 2, frames: 8, durationMs: 110, loop: true },
+  waving: { row: 3, frames: 4, durationMs: 140, loop: false },
+  jumping: { row: 4, frames: 5, durationMs: 120, loop: false },
+  failed: { row: 5, frames: 8, durationMs: 140, loop: false },
+  waiting: { row: 6, frames: 6, durationMs: 150, loop: true },
+  running: { row: 7, frames: 6, durationMs: 120, loop: true },
+  review: { row: 8, frames: 6, durationMs: 140, loop: true }
 });
 
 const sanitizeId = (value) => String(value ?? '')
@@ -90,19 +93,23 @@ export function readMascotPackage(dir) {
     ?? manifest.animations?.states
     ?? manifest.animation?.states
     ?? {};
-  const states = { ...DEFAULT_CODEX_STATES };
+  const states = Object.fromEntries(
+    Object.entries(DEFAULT_CODEX_STATES).map(([name, value]) => [name, { ...value }])
+  );
   for (const [name, value] of Object.entries(rawStates)) {
     if (!value || typeof value !== 'object') continue;
     const row = Number(value.row);
     if (!Number.isSafeInteger(row) || row < 0 || row >= rows) continue;
-    const durationMs = Math.max(20, Number(value.durationMs ?? value.duration ?? 150));
-    const frames = Math.max(1, Math.min(columns, Number(value.frames) || columns));
+    // 自定义状态若同名，用该状态的 Codex 默认值兜底，避免把 jumping 的循环属性写错。
+    const base = states[name] ?? {};
+    const durationMs = Math.max(20, Number(value.durationMs ?? value.duration ?? base.durationMs ?? 150));
+    const frames = Math.max(1, Math.min(columns, Number(value.frames) || base.frames || columns));
     states[name] = {
       row,
       durationMs,
       lastFrameDurationMs: Math.max(20, Number(value.lastFrameDurationMs ?? durationMs)),
       frames,
-      loop: value.loop !== false
+      loop: (value.loop ?? base.loop) !== false
     };
   }
   for (const state of Object.values(states)) {

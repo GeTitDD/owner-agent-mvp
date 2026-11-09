@@ -101,6 +101,9 @@ test('Codex Pet 包：读取 pet.json / spritesheet，并默认 8x9 动画行', 
   assert.equal(pkg.sprite.frameHeight, 208);
   assert.equal(pkg.sprite.states.running.row, 7);
   assert.equal(pkg.sprite.states.running.durationMs, 90);
+  // 只覆写时长时，帧数仍用 Codex 标准的 idle 6 帧。
+  assert.equal(pkg.sprite.states.idle.frames, 6);
+  assert.equal(pkg.sprite.states.waving.frames, 4);
 
   const catalog = listMascots({ builtinDir: '', userDir: user });
   assert.equal(catalog.skins.length, 1);
@@ -170,4 +173,26 @@ test('阶段到动画行：waiting/review/failed 的优先顺序', () => {
   assert.equal(animationForPhase('completed', states).name, 'review');
   assert.equal(animationForPhase('error', states).name, 'failed');
   assert.equal(animationForPhase('running', states).name, 'idle');
+});
+
+test('Codex 默认帧数：每行只播有效帧，行尾透明占位不参与循环', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mascot-frames-'));
+  const dir = path.join(root, 'default-pet');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'sheet.png'), 'fake-png');
+  fs.writeFileSync(path.join(dir, 'pet.json'), JSON.stringify({
+    id: 'default-pet', spritesheetPath: 'sheet.png'
+  }));
+  const { sprite } = readMascotPackage(dir);
+  const frames = Object.fromEntries(Object.entries(sprite.states).map(([k, v]) => [k, v.frames]));
+  assert.deepEqual(frames, {
+    idle: 6, 'running-right': 8, 'running-left': 8, waving: 4, jumping: 5,
+    failed: 8, waiting: 6, running: 6, review: 6
+  });
+  // waving / jumping / failed 是一次性动作，默认不循环。
+  assert.equal(sprite.states.waving.loop, false);
+  assert.equal(sprite.states.jumping.loop, false);
+  assert.equal(sprite.states.failed.loop, false);
+  assert.equal(sprite.states.idle.loop, true);
+  assert.equal(sprite.states.review.loop, true);
 });

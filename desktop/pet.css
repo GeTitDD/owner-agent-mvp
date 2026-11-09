@@ -5,7 +5,6 @@
   color-scheme: light dark;
   --plate-bg: #ffffff;
   --plate-border: rgba(38, 38, 38, 0.10);
-  --plate-shadow: 0 12px 28px rgba(38, 38, 38, 0.16);
   --ink: #262626;
   --muted: #737373;
   --hint-bg: rgba(38, 38, 38, 0.88);
@@ -20,7 +19,6 @@
   :root {
     --plate-bg: #2c2c2a;
     --plate-border: rgba(255, 255, 255, 0.12);
-    --plate-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
     --ink: #d4d4d4;
     --muted: #a3a3a3;
     --hint-bg: rgba(212, 212, 212, 0.92);
@@ -42,22 +40,22 @@ html, body {
 }
 
 .stage {
+  position: relative;
   width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  padding: 4px;
+  padding: 2px;
 }
 
 .pet {
   position: relative;
-  width: 108px;
-  height: 108px;
+  width: 116px;
+  height: 116px;
   border: 0;
-  border-radius: 50%;
+  border-radius: 0;
   background: transparent;
   padding: 0;
   cursor: grab;
@@ -67,85 +65,46 @@ html, body {
 
 .pet:active { cursor: grabbing; transform: scale(0.97); }
 
-.plate {
-  position: absolute;
-  inset: 4px;
-  border-radius: 50%;
-  background: var(--plate-bg);
-  border: 1px solid var(--plate-border);
-  box-shadow: var(--plate-shadow);
-}
+/* 不再画白色圆盘：宠物直接浮在桌面上，只保留贴地阴影（见 .mascot / .sprite）。 */
 
 .mascot {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 88px;
-  height: 88px;
+  width: 112px;
+  height: 112px;
   transform: translate(-50%, -50%);
   object-fit: contain;
   pointer-events: none;
   -webkit-user-drag: none;
-  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.12));
+  filter: drop-shadow(0 8px 8px rgba(0, 0, 0, 0.18));
 }
 
 /* ---- 阶段 ---- */
 
-.ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  opacity: 0;
-  transition: opacity 160ms ease;
-}
-
-.pet[data-phase='running'] .ring {
-  opacity: 1;
-  border-color: color-mix(in srgb, var(--phase-running) 32%, transparent);
-  border-top-color: var(--phase-running);
-  animation: spin 1.1s linear infinite;
-}
-
-.pet[data-phase='needs-interaction'] .ring {
-  opacity: 1;
-  border-color: color-mix(in srgb, var(--phase-waiting) 45%, transparent);
-  animation: breathe 1.6s ease-in-out infinite;
-}
-
-.pet[data-phase='completed'] .ring {
-  opacity: 1;
-  border-color: color-mix(in srgb, var(--phase-done) 55%, transparent);
-}
-
-.pet[data-phase='error'] .ring {
-  opacity: 1;
-  border-color: color-mix(in srgb, var(--phase-error) 55%, transparent);
-  animation: breathe 1.2s ease-in-out infinite;
-}
-
 .phase-dot {
   position: absolute;
-  right: 12px;
-  bottom: 12px;
-  width: 10px;
-  height: 10px;
+  right: 22px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--phase-idle);
-  border: 2px solid var(--plate-bg);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.75), 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: opacity 160ms ease;
+  opacity: 0;
 }
+
+.pet[data-phase='idle'] .phase-dot { opacity: 0; }
+.pet[data-phase='running'] .phase-dot,
+.pet[data-phase='needs-interaction'] .phase-dot,
+.pet[data-phase='completed'] .phase-dot,
+.pet[data-phase='error'] .phase-dot { opacity: 1; }
 
 .phase-dot[data-phase='running'] { background: var(--phase-running); }
 .phase-dot[data-phase='needs-interaction'] { background: var(--phase-waiting); }
 .phase-dot[data-phase='completed'] { background: var(--phase-done); }
 .phase-dot[data-phase='error'] { background: var(--phase-error); }
-
-@keyframes spin { to { transform: rotate(360deg); } }
-
-@keyframes breathe {
-  0%, 100% { transform: scale(1); opacity: 0.55; }
-  50% { transform: scale(1.06); opacity: 1; }
-}
 
 .badge {
   position: absolute;
@@ -171,6 +130,10 @@ html, body {
 }
 
 .hint {
+  position: absolute;
+  left: 50%;
+  bottom: 1px;
+  transform: translateX(-50%);
   max-width: 128px;
   padding: 2px 7px;
   border-radius: 8px;
@@ -184,6 +147,7 @@ html, body {
   text-overflow: ellipsis;
   opacity: 0.92;
   pointer-events: none;
+  z-index: 3;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -191,12 +155,11 @@ html, body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ring, .badge { animation: none !important; }
+  .badge { animation: none !important; }
   .pet { transition: none; }
 }
 
 /* ---- 动态精灵与一键换肤 ---- */
-.stage { position: relative; }
 
 .sprite {
   position: absolute;
@@ -206,7 +169,7 @@ html, body {
   background-repeat: no-repeat;
   image-rendering: pixelated;
   pointer-events: none;
-  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.12));
+  filter: drop-shadow(0 7px 7px rgba(0, 0, 0, 0.18));
   z-index: 2;
 }
 

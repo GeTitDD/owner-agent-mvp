@@ -128,15 +128,31 @@ const run = async () => {
       skin: document.getElementById('pet')?.dataset.skin,
       spriteHidden: document.getElementById('sprite')?.hidden,
       mascotHidden: document.getElementById('mascot')?.hidden,
+      plateCount: document.querySelectorAll('.plate, .ring').length,
       position: getComputedStyle(document.getElementById('sprite')).backgroundPosition,
       size: `${getComputedStyle(document.getElementById('sprite')).width}x${getComputedStyle(document.getElementById('sprite')).height}`
     }));
     check('sprite pet is active', initial.skin === 'sprite-pet', initial.skin);
     check('spritesheet is rendered instead of img', initial.spriteHidden === false && initial.mascotHidden === true, JSON.stringify(initial));
+    check('no white plate or ring behind the pet', initial.plateCount === 0, String(initial.plateCount));
     check('sprite frame has a size', /^\d+pxx\d+px$/u.test(initial.size), initial.size);
     await sleep(400);
     const moved = await petPage.evaluate(() => getComputedStyle(document.getElementById('sprite')).backgroundPosition);
     check('idle animation advances frames', moved !== initial.position, `${initial.position} -> ${moved}`);
+
+    // idle 只有 6 帧有效：采样 1.4s，列号不应走到 6/7 的透明占位。
+    const columns = new Set();
+    for (let i = 0; i < 8; i += 1) {
+      const column = await petPage.evaluate(() => {
+        const el = document.getElementById('sprite');
+        const width = Number.parseFloat(getComputedStyle(el).width) || 1;
+        const left = Number.parseFloat(getComputedStyle(el).backgroundPositionX) || 1;
+        return Math.round(Math.abs(left) / width);
+      });
+      columns.add(column);
+      await sleep(180);
+    }
+    check('current animation never plays blank trailing frames', Math.max(...columns) <= 5, [...columns].join(','));
     await petPage.screenshot({ path: path.join(evidence, 'pet-sprite-idle.png') });
 
     // 一键换肤：点击悬停工具条的 ↻，切到下一个皮肤。
