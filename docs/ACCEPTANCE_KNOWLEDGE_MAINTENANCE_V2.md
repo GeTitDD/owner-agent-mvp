@@ -18,9 +18,9 @@
 
 ## CI 状态（平台侧阻塞）
 
-2026-11-09 10:03 UTC，GitHub Actions 对本分支的所有 job 在 1–2 秒内失败，`steps=0`、`runner_name` 为空、日志不可下载（run `42598066507`、`42597866546`）。同一仓库 08:35 UTC 的 run `42587081508` 仍成功，判断为平台侧 runner 调度/额度问题，与本 PR 代码无关。
+2026-11-09 10:03–10:56 UTC，GitHub Actions 对本分支的所有 job 在 1–2 秒内失败，`steps=0`、`runner_name` 为空、日志不可下载（run `42598066507`、`42597866546`、`42604916699`）。同一仓库 08:35 UTC 的 run `42587081508` 仍成功，判断为平台侧 runner 调度/额度问题，与本 PR 代码无关。
 
-本地按 CI 相同步骤验证：
+本地按 CI 相同步骤验证（HEAD `c6be9dc`）：
 
 ```text
 npm run check        -> 0
@@ -30,6 +30,8 @@ npm run demo:pi      -> 0
 npm run demo:patch   -> 0
 npm run demo:sandbox -> 0
 npm run demo:repair  -> 0
+npm run knowledge:sync:v2  -> 16/16
+provenance smoke            -> 10/10
 ```
 
 CI 恢复后需要重跑；本 PR 保持 Draft，不以平台失败作为合并依据。

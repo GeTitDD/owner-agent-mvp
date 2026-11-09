@@ -34,6 +34,8 @@ export class KnowledgeContextLedger {
     const refs = refsFromPlan(plan).map((ref) => {
       const revisionRow = this.db.prepare('SELECT payload,payload_hash FROM personal_revisions WHERE unit_id=? AND revision=?')
         .get(ref.knowledgeId, ref.revision);
+      const indexRow = this.db.prepare('SELECT revision_id FROM knowledge_revision_index WHERE knowledge_id=? AND local_revision=?')
+        .get(ref.knowledgeId, ref.revision);
       let verificationStatus = 'missing';
       if (revisionRow) {
         try { verificationStatus = JSON.parse(revisionRow.payload).verificationStatus ?? 'unknown'; }
@@ -43,6 +45,7 @@ export class KnowledgeContextLedger {
         key: ref.key,
         knowledgeId: ref.knowledgeId,
         revision: ref.revision,
+        revisionId: indexRow?.revision_id ?? '',
         payloadHash: revisionRow?.payload_hash ?? '',
         verificationStatus
       };

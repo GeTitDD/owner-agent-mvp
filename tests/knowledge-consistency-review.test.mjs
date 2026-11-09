@@ -332,7 +332,9 @@ test('真实 Harvest 提案 → 批准 → 同步 → 复用的修订一致', as
     assert.equal(compiled.usages[0].revision, 2);
     const snapshot = ledger.latest({ projectId: 'project-sync' });
     assert.equal(snapshot.refs[0].revision, 2);
-    assert.equal(snapshot.refs[0].payloadHash, provB.getRevision(provB.listRevisions({ unitId: unit.id }).find((row) => row.localRevision === 2).revisionId).payloadHash);
+    const r2 = provB.listRevisions({ unitId: unit.id }).find((row) => row.localRevision === 2);
+    assert.equal(snapshot.refs[0].revisionId, r2.revisionId);
+    assert.equal(snapshot.refs[0].payloadHash, provB.getRevision(r2.revisionId).payloadHash);
   } finally {
     engineB.close(); A.close(); B.close();
     fs.rmSync(dir, { recursive: true, force: true });
