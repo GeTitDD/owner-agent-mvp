@@ -86,6 +86,13 @@ const run = async () => {
     const draft = await panel.evaluate(() => localStorage.getItem('owner-companion-draft'));
     check('draft is cleared after send', draft === null, String(draft));
 
+    check('write mode toggle is present', await panel.locator('#writeMode').count() === 1);
+    await panel.locator('#writeMode').check();
+    await input.fill('写入测试：新增一个说明文件');
+    await input.press('Enter');
+    await sleep(2000);
+    await panel.locator('#writeMode').uncheck();
+
     await panel.screenshot({ path: path.join(evidence, 'panel-composer.png') });
 
     await panel.locator('#diagnostics').click();
@@ -108,6 +115,7 @@ const run = async () => {
   try {
     const jobs = verify.listJobs({ projectId: 'ui-demo', limit: 10 });
     check('job recorded in the owner store', jobs.some((job) => job.status === 'pending_approval'));
+    check('write-mode job uses code-write', jobs.some((job) => job.job_type === 'code-write'));
   } finally { verify.close(); }
 
   if (failures.length > 0) {

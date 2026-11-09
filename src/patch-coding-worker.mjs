@@ -59,6 +59,8 @@ export class PatchCodingWorker {
     abortConfirmMs = 5000,
     maxFiles = PATCH_LIMITS.maxFiles,
     maxFileBytes = PATCH_LIMITS.maxFileBytes,
+    jobTypes = ['code-patch'],
+    payloadLabel = 'code-patch',
     timers = {
       interval: (fn, ms) => setInterval(fn, ms),
       timeout: (fn, ms) => setTimeout(fn, ms),
@@ -78,6 +80,8 @@ export class PatchCodingWorker {
     this.abortConfirmMs = abortConfirmMs;
     this.maxFiles = maxFiles;
     this.maxFileBytes = maxFileBytes;
+    this.jobTypes = jobTypes;
+    this.payloadLabel = payloadLabel;
     this.timers = timers;
   }
 
@@ -94,7 +98,7 @@ export class PatchCodingWorker {
     const claim = this.store.claimNextJob(projectId, this.workerId, {
       now: this.clock(),
       leaseMs: this.leaseMs,
-      allowedTypes: ['code-patch']
+      allowedTypes: this.jobTypes
     });
     if (!claim.claimed) return claim;
 
@@ -195,7 +199,7 @@ export class PatchCodingWorker {
         allowedRaw = splitAllowed(job.payload.allowedPaths);
         entries = normalizeAllowedEntries(allowedRaw);
       } catch {
-        return fail('invalid code-patch payload');
+        return fail(`invalid ${this.payloadLabel} payload`);
       }
 
       // ---- v1.0 repair: trusted host re-verification before any workspace/model side effect ----

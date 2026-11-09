@@ -4,6 +4,7 @@
 // 单次运行互斥，以及给 UI 的进度快照。它不会批准任何对象，也不会自动 apply。
 import { PatchCodingWorker } from './patch-coding-worker.mjs';
 import { SandboxRunner } from './sandbox-runner.mjs';
+import { WriterAgent } from './writer-agent.mjs';
 
 const now = () => new Date().toISOString();
 
@@ -12,6 +13,7 @@ export class OwnerWorker {
     broker = null,
     provider = null,
     proposalAgent = null,
+    writerAgent = null,
     model = '',
     timeoutMs = 180000,
     workerId = 'owner-worker',
@@ -31,6 +33,17 @@ export class OwnerWorker {
       model,
       timeoutMs,
       leaseMs
+    });
+    // 写入子 Agent：与 code-patch 共用控制平面，但只消费 code-write Job，且在隔离 worktree 内写。
+    this.writerWorker = new PatchCodingWorker(store, {
+      broker,
+      workerId: `${workerId}-write`,
+      proposalAgent: writerAgent ?? new WriterAgent({ model, timeoutMs }),
+      model,
+      timeoutMs,
+      leaseMs,
+      jobTypes: ['code-write'],
+      payloadLabel: 'code-write'
     });
     this.sandboxRunner = provider
       ? new SandboxRunner(store, {
@@ -58,6 +71,10 @@ export class OwnerWorker {
     for (const id of projects) {
       const result = await this.patchWorker.runOnce({ projectId: id, allowModel: this.allowModel });
       if (result?.claimed) return { kind: 'patch', ...result };
+    }
+    for (const id of projects) {
+      const result = await this.writerWorker.runOnce({ projectId: id, allowModel: this.allowModel });
+      if (result?.claimed) return { kind: 'write', ...result };
     }
     if (!this.sandboxRunner) return { kind: 'idle', claimed: false };
     for (const id of projects) {

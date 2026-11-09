@@ -108,6 +108,10 @@
         <div class="composer-bar">
           <span id="composerModel" class="composer-model" title="当前模型">—</span>
           <span class="composer-hint">先创建任务，批准后执行</span>
+          <label class="write-toggle" title="开启后由受控书写子 Agent 在隔离 worktree 里改文件；仍要你批准补丁">
+            <input type="checkbox" id="writeMode" />
+            <span>写入</span>
+          </label>
           <button id="submitTask" class="send-btn" title="发送（Enter）" aria-label="发送">
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
               <path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2"

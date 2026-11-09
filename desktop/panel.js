@@ -941,7 +941,11 @@
     button.disabled = true;
     button.classList.add('sending');
     try {
-      const created = await window.companion.createJob({ text, projectId });
+      const created = await window.companion.createJob({
+        text,
+        projectId,
+        mode: $('writeMode').checked ? 'write' : 'patch'
+      });
       taskInput.value = '';
       try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
       autoGrow();

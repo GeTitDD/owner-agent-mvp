@@ -38,7 +38,7 @@ const originShape=(value)=>{
 // Job coordination (P0 control plane): explicit state machine, whitelisted job types only.
 const jobStatuses=new Set(['pending_approval','queued','leased','running','cancel_requested','succeeded','failed','cancelled','rejected','needs_reconciliation']);
 const activeJobStatuses=new Set(['queued','leased','running','cancel_requested']);
-const jobTypes=new Set(['noop','status-note','fake-analysis','pi-analysis','code-patch']);
+const jobTypes=new Set(['noop','status-note','fake-analysis','pi-analysis','code-patch','code-write']);
 const attemptStatuses=new Set(['claimed','running','succeeded','failed','cancelled','orphaned']);
 const jobFilterStatuses=new Set([...jobStatuses]);
 const safeArray=(v,label)=>{check(Array.isArray(v)&&v.length<=30&&v.every(x=>typeof x==='string'&&x.length<=80&&/^[\w.-]+$/.test(x)),`Invalid ${label}`);return [...new Set(v)].sort();};
@@ -513,13 +513,13 @@ export class OwnerStore {
       // The analysis input comes from the referenced owner task, never from free-form payloads.
       check(!!ownerTaskId,'pi-analysis jobs require an owner task reference');
     }
-    if(jobType==='code-patch'){
-      // A coding proposal is always scoped to one owner task and one explicit base commit.
-      check(!!ownerTaskId,'code-patch jobs require an owner task reference');
-      check(typeof payload.baseSha==='string'&&/^[0-9a-f]{40}$/.test(payload.baseSha),'code-patch payload.baseSha must be an explicit 40-hex commit SHA');
-      check(typeof payload.allowedPaths==='string'&&payload.allowedPaths.length<=300,'code-patch payload.allowedPaths is required');
+    if(jobType==='code-patch'||jobType==='code-write'){
+      // 写入类 Job 都绑定一个 OwnerTask 与显式 base commit；真正的写发生在隔离 worktree。
+      check(!!ownerTaskId,`${jobType} jobs require an owner task reference`);
+      check(typeof payload.baseSha==='string'&&/^[0-9a-f]{40}$/.test(payload.baseSha),`${jobType} payload.baseSha must be an explicit 40-hex commit SHA`);
+      check(typeof payload.allowedPaths==='string'&&payload.allowedPaths.length<=300,`${jobType} payload.allowedPaths is required`);
       const allowed=payload.allowedPaths.split(',').map(part=>part.trim()).filter(Boolean);
-      check(allowed.length>=1&&allowed.length<=5,'code-patch requires 1-5 allowed paths');
+      check(allowed.length>=1&&allowed.length<=5,`${jobType} requires 1-5 allowed paths`);
     }
     if(ownerTaskId){const task=this.getTask(ownerTaskId);check(!!task,'Unknown owner task',404);check(task.project_id===projectId,'Owner task belongs to a different project');}
     actor=txt(actor,'actor',80);

@@ -1129,7 +1129,7 @@ const playbookListPayload = async (projectId) => {
 };
 
 /** 面板点“生成改动提案”时使用：只发任务，真正的写文件仍走既有审批/沙箱链路。 */
-const createPatchJob = async ({ text, projectId }) => {
+const createPatchJob = async ({ text, projectId, jobType = 'code-patch' }) => {
   const value = String(text ?? '').trim();
   if (!value) throw new Error('请先输入要交办的事情。');
   const projects = (await api('/owner/v1/projects')).items ?? [];
@@ -1149,7 +1149,7 @@ const createPatchJob = async ({ text, projectId }) => {
     method: 'POST',
     body: {
       projectId: project.id,
-      jobType: 'code-patch',
+      jobType: ['code-patch', 'code-write'].includes(jobType) ? jobType : 'code-patch',
       title: value.slice(0, 200),
       payload: {
         baseSha,
@@ -1180,7 +1180,8 @@ const registerIpc = () => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const created = await createPatchJob({
       text: String(input?.text ?? ''),
-      projectId: String(input?.projectId ?? '')
+      projectId: String(input?.projectId ?? ''),
+      jobType: input?.mode === 'write' ? 'code-write' : 'code-patch'
     });
     const projects = (await api('/owner/v1/projects')).items ?? [];
     const project = projects.find((item) => item.id === created.projectId);

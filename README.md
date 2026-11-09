@@ -21,6 +21,7 @@
 - 桌宠皮肤：Cindy/Agent Island 皮肤集，`%APPDATA%\owner-agent-mvp\mascots` 可放自定义 PNG，见 [docs/MASCOT_PACK.md](docs/MASCOT_PACK.md)
 - 主界面：Cindy 式活动流 + 会话时间线 + Composer（Enter 发送 / Shift+Enter 列表接续）；页脚「诊断」可导出运行快照
 - 沙箱策略：`auto` 按生态与一层子目录选择 profile（node-smoke / godot-headless / python-pytest），可按项目覆盖；缺失方案可「让 Agent 识别」后由你采用
+- 受控写入：Composer「写入」开关 → 隔离 worktree 子 Agent（无 bash/网络）→ 待审批补丁，见 [docs/WRITE_SUBAGENT.md](docs/WRITE_SUBAGENT.md)
 - 第三方声明：[docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)
 - 交付报告：[docs/COMPANION_V1_DELIVERY.md](docs/COMPANION_V1_DELIVERY.md)
 - Release Notes：[docs/RELEASE_NOTES_V1.0.md](docs/RELEASE_NOTES_V1.0.md)
