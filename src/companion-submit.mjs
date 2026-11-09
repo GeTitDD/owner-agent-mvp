@@ -1,14 +1,18 @@
 // Composer 交办编排：先只读分诊，再决定“直接回答”还是“发起 HITL 写请求”。
 //
 // 这里不碰文件系统：分诊 runner 与写请求创建都由调用方注入，便于单元测试。
-import path from 'node:path';
+
+const isUnsafePath = (part) =>
+  /^[A-Za-z]:/u.test(part) // Windows 盘符
+  || /^[\\/]/u.test(part) // 绝对路径 / UNC
+  || part.split(/[\\/]/u).includes('..');
 
 /** 规范化写入范围：1-5 个相对路径；非法值回退到设置里的 allowedPaths。 */
 export function normalizeAllowedPaths(value, fallback = 'src/') {
   const entries = String(value || '')
     .split(',')
     .map((part) => part.trim())
-    .filter((part) => part && !path.isAbsolute(part) && !part.split(/[\\/]/u).includes('..'));
+    .filter((part) => part && !isUnsafePath(part));
   const picked = entries.slice(0, 5);
   return (picked.length ? picked.join(',') : (fallback || 'src/')).slice(0, 300);
 }

@@ -101,6 +101,8 @@ test('空交办直接拒绝', async () => {
 test('normalizeAllowedPaths 去掉越界项并回退', () => {
   assert.equal(normalizeAllowedPaths('src/, docs/'), 'src/,docs/');
   assert.equal(normalizeAllowedPaths('D:\\evil, ../x, src/'), 'src/');
+  assert.equal(normalizeAllowedPaths('/etc/passwd, src/'), 'src/');
+  assert.equal(normalizeAllowedPaths('\\\\server\\share, src/'), 'src/');
   assert.equal(normalizeAllowedPaths(''), 'src/');
   assert.equal(normalizeAllowedPaths('a/,b/,c/,d/,e/,f/'), 'a/,b/,c/,d/,e/');
 });
