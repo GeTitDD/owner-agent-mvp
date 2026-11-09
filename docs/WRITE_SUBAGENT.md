@@ -3,6 +3,18 @@
 Owner 默认只读：分析、检索、提案都可以，但不能直接改文件。
 当任务确实需要“写一点东西”时，走下面这条受控链路，而不是给主 Agent 开写权限。
 
+## 0. Python 执行（Monty）
+
+WriterAgent 额外提供 `own_python` 工具，底层是 [Monty](https://github.com/pydantic/monty)：
+
+- MIT、Rust 实现的 **Python 3.14 子集**解释器，跑在独立 worker 子进程；
+- 沙箱内没有环境变量与网络；只有当前 worktree 被挂载到 `/workspace`（可读写）；
+- 资源上限：内存 128MB、单次 8s、递归 200、stdout 上限 256KB；
+- 限制：无三方包、无类继承、无生成器、无 `@classmethod/@staticmethod/@property`、无 `del`。
+
+它适合“确定性计算 / 格式转换”，不负责跑项目测试。项目测试仍然走 Docker 沙箱 profile。
+原生包需要在打包时 `asarUnpack`（`package.json → build.asarUnpack`）。
+
 ## 1. 链路
 
 ```
@@ -24,7 +36,7 @@ Owner 默认只读：分析、检索、提案都可以，但不能直接改文�
 WriterAgent 复用 `PatchCodingWorker` 的控制平面（lease / fencing / cancel / quarantine），
 只替换“生成器”：
 
-- 工具：`own_read / own_write / own_edit / own_ls / own_find / own_grep`（自定义工具，显式白名单）。
+- 工具：`own_read / own_write / own_edit / own_ls / own_find / own_grep`（自定义工具，显式白名单）；可选 `own_python`（Monty）。
 - 没有 `bash`、`powershell`、网络工具。
 - 所有 `path` 参数先经过宿主校验：
   - 拒绝绝对路径；

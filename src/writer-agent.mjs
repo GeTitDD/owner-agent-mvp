@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync, existsSync, realpathSync, statSync, mkdirSync } from 'node:fs';
 import { resolvePiModel } from './pi-model-catalog.mjs';
 import { PATCH_LIMITS } from './patch-protocol.mjs';
+import { montyAvailable } from './monty-runner.mjs';
 
 const WRITER_TOOL_NAMES = Object.freeze([
   'own_read', 'own_write', 'own_edit', 'own_ls', 'own_find', 'own_grep'
@@ -68,13 +69,24 @@ const confineTool = (base, name, root) => ({
   }
 });
 
-export function createWriterSessionFactory({ model = '' } = {}) {
+export function createWriterSessionFactory({ model = '', python = false } = {}) {
   return {
     requiresModel: true,
     async create({ cwd, signal } = {}) {
       const sdk = await import('@earendil-works/pi-coding-agent');
       const agentDir = mkdtempSync(path.join(os.tmpdir(), 'owner-writer-agent-'));
       const created = (async () => {
+        // own_python：Monty 子进程沙箱，只有 worktree 被挂载到 /workspace。
+        let pyRunner = null;
+        if (python) {
+          try {
+            const { createMontyRunner } = await import('./monty-runner.mjs');
+            pyRunner = await createMontyRunner({ cwd });
+          } catch {
+            pyRunner = null; // 平台包缺失时降级为无 Python 工具
+          }
+        }
+        const toolNames = [...WRITER_TOOL_NAMES, ...(pyRunner ? ['own_python'] : [])];
         const loader = new sdk.DefaultResourceLoader({
           cwd,
           agentDir,
@@ -87,7 +99,9 @@ export function createWriterSessionFactory({ model = '' } = {}) {
             'You are a contained writing sub-agent for Owner.',
             'You may only modify files inside the isolated workspace using the own_write / own_edit tools.',
             'Paths are workspace-relative; absolute paths and .. are rejected.',
-            'You cannot run commands or access the network. Do not attempt to.',
+            pyRunner
+              ? 'You may run Python with own_python. It is a restricted Python 3.14 subset: no third-party packages, no class inheritance, no @classmethod/@staticmethod/@property, no yield, no del, no network. The workspace is mounted at /workspace.'
+              : 'You cannot run commands or access the network. Do not attempt to.',
             'Make the smallest coherent change. When finished, stop; the host will collect the diff and ask the Owner for approval.'
           ]
         });
@@ -101,9 +115,33 @@ export function createWriterSessionFactory({ model = '' } = {}) {
             confineTool(sdk.createFindToolDefinition(cwd), 'own_find', cwd),
             confineTool(sdk.createGrepToolDefinition(cwd), 'own_grep', cwd)
           ];
+          if (pyRunner) {
+            const { Type } = await import('typebox');
+            customTools.push({
+              name: 'own_python',
+              label: 'own_python',
+              description: 'Run Python in an isolated interpreter. The workspace is mounted read-write at /workspace. No network or environment variables. Supports a restricted Python 3.14 subset.',
+              promptSnippet: 'Run Python against the workspace',
+              promptGuidelines: [
+                'Use own_python for deterministic computation or file transforms; write final files with own_write.',
+                'No third-party packages, no class inheritance, no generators, no del.'
+              ],
+              parameters: Type.Object({
+                code: Type.String({ description: 'Python source to execute inside the sandbox' })
+              }),
+              async execute(_toolCallId, { code }) {
+                const { output, result } = await pyRunner.run(code);
+                const text = [
+                  output ? `--- stdout ---\n${output}` : '',
+                  result ? `--- result ---\n${result}` : ''
+                ].filter(Boolean).join('\n') || '(no output)';
+                return { content: [{ type: 'text', text }] };
+              }
+            });
+          }
           const { session } = await sdk.createAgentSession({
             cwd,
-            tools: [...WRITER_TOOL_NAMES],
+            tools: toolNames,
             customTools,
             sessionManager: sdk.SessionManager.inMemory(),
             resourceLoader: loader,
@@ -112,13 +150,15 @@ export function createWriterSessionFactory({ model = '' } = {}) {
           const active = typeof session.getActiveToolNames === 'function'
             ? [...session.getActiveToolNames()]
             : null;
-          if (!active || WRITER_TOOL_NAMES.some((name) => !active.includes(name))) {
+          if (!active || toolNames.some((name) => !active.includes(name))) {
             session.dispose?.();
+            await pyRunner?.close();
             throw new Error('writer tools are not active');
           }
-          const unexpected = active.filter((name) => !WRITER_TOOL_NAMES.includes(name));
+          const unexpected = active.filter((name) => !toolNames.includes(name));
           if (unexpected.length) {
             session.dispose?.();
+            await pyRunner?.close();
             throw new Error(`writer tools outside allowlist: ${unexpected.join(',')}`);
           }
           let disposed = false;
@@ -133,11 +173,13 @@ export function createWriterSessionFactory({ model = '' } = {}) {
               if (disposed) return;
               disposed = true;
               try { session.dispose?.(); } finally {
+                if (pyRunner) pyRunner.close().catch(() => {});
                 try { rmSync(agentDir, { recursive: true, force: true }); } catch { /* best effort */ }
               }
             }
           };
         } catch (error) {
+          try { await pyRunner?.close(); } catch { /* ignore */ }
           try { rmSync(agentDir, { recursive: true, force: true }); } catch { /* ignore */ }
           throw error;
         }
@@ -175,6 +217,7 @@ export class WriterAgent {
     timeoutMs = 180000,
     maxFiles = PATCH_LIMITS.maxFiles,
     maxFileBytes = PATCH_LIMITS.maxFileBytes,
+    python = true,
     sessionFactory = null
   } = {}) {
     this.requiresModel = true;
@@ -182,12 +225,15 @@ export class WriterAgent {
     this.timeoutMs = timeoutMs;
     this.maxFiles = maxFiles;
     this.maxFileBytes = maxFileBytes;
-    this.sessionFactory = sessionFactory ?? createWriterSessionFactory({ model });
+    this.python = python;
+    this.sessionFactory = sessionFactory;
   }
 
   /** 在给定的隔离 worktree 里执行一次写入任务，返回可被 PatchCodingWorker 校验的文件列表。 */
   async generate({ cwd, signal, taskTitle = '', taskNote = '', focus = '', material = [] }) {
     if (!cwd) throw new Error('cwd is required');
+    const pyEnabled = this.python && (this.sessionFactory ? false : await montyAvailable());
+    const factory = this.sessionFactory ?? createWriterSessionFactory({ model: this.model, python: pyEnabled });
     const materialText = (material ?? [])
       .map((item) => `--- ${item.path} ---\n${String(item.content ?? '').slice(0, 8000)}`)
       .join('\n');
@@ -198,13 +244,15 @@ export class WriterAgent {
       focus ? `关注点：${String(focus).slice(0, 300)}` : '',
       '约束：',
       '1. 只改与任务直接相关的文件，保持最小 diff；不要动 .git。',
-      '2. 只使用 own_read / own_write / own_edit / own_ls / own_find / own_grep。',
-      '3. 不要执行命令，不要访问网络。',
+      `2. 只使用 own_read / own_write / own_edit / own_ls / own_find / own_grep${pyEnabled ? ' / own_python' : ''}。`,
+      pyEnabled
+        ? '3. own_python 是受限 Python 3.14 子集：没有三方包，不支持类继承、生成器、@classmethod/@property、del；没有网络。'
+        : '3. 不要执行命令，不要访问网络。',
       '4. 完成后停止，不需要输出补丁，宿主会自动收集。',
       materialText ? `\n参考材料（可能不完整，可用 own_read 继续读）：\n${materialText}` : ''
     ].filter(Boolean).join('\n');
 
-    const session = await this.sessionFactory.create({ cwd, signal });
+    const session = await factory.create({ cwd, signal });
     let timer = null;
     try {
       const timedOut = new Promise((_, reject) => {
