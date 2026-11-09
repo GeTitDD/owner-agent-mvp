@@ -16,6 +16,24 @@
 
 最终判定：**两个独立 SQLite 环境可以可靠导出、导入、审查、修订并收敛到同一份知识；历史与来源可检查；冲突不丢失；旧会话仍指向运行时的修订。**
 
+## CI 状态（平台侧阻塞）
+
+2026-11-09 10:03 UTC，GitHub Actions 对本分支的所有 job 在 1–2 秒内失败，`steps=0`、`runner_name` 为空、日志不可下载（run `42598066507`、`42597866546`）。同一仓库 08:35 UTC 的 run `42587081508` 仍成功，判断为平台侧 runner 调度/额度问题，与本 PR 代码无关。
+
+本地按 CI 相同步骤验证：
+
+```text
+npm run check        -> 0
+npm test             -> 246 tests / 243 pass / 3 skip / 0 fail
+npm run demo:jobs    -> 0
+npm run demo:pi      -> 0
+npm run demo:patch   -> 0
+npm run demo:sandbox -> 0
+npm run demo:repair  -> 0
+```
+
+CI 恢复后需要重跑；本 PR 保持 Draft，不以平台失败作为合并依据。
+
 ---
 
 ## 第一轮：数据契约、迁移与版本完整性
