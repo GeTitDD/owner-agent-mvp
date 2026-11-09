@@ -118,6 +118,24 @@ const run = async () => {
     check('no evidence path is fabricated', missing === 0, String(missing));
     await snap('playbook-result.png');
 
+    // 结论沉淀为项目知识候选：不生成补丁、不自动验证。
+    await panel.getByRole('button', { name: '沉淀为项目知识' }).click();
+    await sleep(1500);
+    const knowledge = await panel.evaluate(() => window.companion.knowledge.summary({ projectId: 'pb-demo' }));
+    check('pstack result becomes a knowledge candidate',
+      (knowledge.counts?.candidates ?? 0) >= 1, JSON.stringify(knowledge.counts));
+    const candidate = (knowledge.candidates ?? [])[0];
+    check('candidate is project-scoped and pending',
+      Boolean(candidate) && candidate.status === 'pending' && candidate.layer === 'project',
+      JSON.stringify(candidate));
+    await panel.getByRole('button', { name: '沉淀为项目知识' }).click();
+    await sleep(1000);
+    const afterDuplicate = await panel.evaluate(() => window.companion.knowledge.summary({ projectId: 'pb-demo' }));
+    check('distilling the same run twice does not duplicate',
+      afterDuplicate.counts?.candidates === knowledge.counts?.candidates,
+      `${knowledge.counts?.candidates} -> ${afterDuplicate.counts?.candidates}`);
+    await snap('playbook-distilled.png');
+
     // 取消：长任务必须能被用户停掉，并给出受控结果而不是一直转圈。
     await panel.locator('.playbook-btn[data-playbook="architect"]').click();
     await panel.locator('#playbookCancel').waitFor({ state: 'visible', timeout: 10000 });

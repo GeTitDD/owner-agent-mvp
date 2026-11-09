@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   playbooks: Object.freeze({
     list: (input) => invoke('companion:playbooks', input),
     run: (input) => invoke('companion:playbook-run', input),
+    distill: (input) => invoke('companion:playbook-distill', input),
     cancel: (input) => invoke('companion:playbook-cancel', input),
     report: (input) => invoke('companion:playbook-report', input),
     propose: (input) => invoke('companion:playbook-propose', input)

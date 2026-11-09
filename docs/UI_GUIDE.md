@@ -104,6 +104,15 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 
 ![项目知识摘要](assets/companion/panel-project-summary.png)
 
+### 3.6 pstack 结果沉淀为项目知识
+
+- 所有 playbook 仍然只读：不改文件、不自动开补丁。
+- 结果页主操作是「**沉淀为项目知识**」：把结论、关键发现、风险/未知、下一步和证据引用写成一条 **项目级知识候选**。
+- 候选状态始终是 `unverified`（`scope=project`、`layer=project`），进入项目知识摘要的「候选」计数；在完整知识库里审核后才可能变为已验证。
+- 同一次 run 重复沉淀会自动去重；候选带 `pstack:<runId>` 与文件证据，可回溯。
+- 「生成改动提案」降为次要操作，只在确实要改代码/文档时使用，仍然走 HITL 审批。
+- 组别对应关系：`分析 / 验证 / 修复 / 沉淀` 都可以沉淀知识；「沉淀」组的复盘、讲清楚、文档体检最适合直接生成候选。
+
 ## 4. 组件清单
 
 | 组件 | 用途 |
@@ -141,7 +150,7 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | 验收 | 结果 |
 | --- | --- |
 | `npm run check` | 0 |
-| `npm test` | 271 tests / 268 pass / 3 skip / 0 fail |
+| `npm test` | 281 tests / 278 pass / 3 skip / 0 fail |
 | `npm run e2e:desktop:composer` | PASS（Composer、只读分析、无写入开关、pending） |
 | `npm run e2e:desktop:shell` | PASS（桌宠定位、面板、重启、模型切换、添加项目） |
 | `npm run e2e:desktop:multiproject` | PASS（多项目 pending / stage） |
@@ -149,4 +158,5 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | `npm run e2e:desktop:sandbox-config` | PASS（缺少快照文件 → 失败弹窗 → 补齐后重试） |
 | `npm run e2e:desktop:mascots` | PASS（spritesheet 播放、一键换肤、静态回退、无底盘、有效帧） |
 | `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、知识摘要、搜索、折叠、点击切换） |
+| `npm run e2e:desktop:playbooks` | PASS（运行中状态、分析、取消、沉淀知识候选、去重、提案 HITL） |
 | Workbench UI 冒烟 | 详情 5 个标签、修订对比、使用记录、维护降级提示 |

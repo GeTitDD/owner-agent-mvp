@@ -362,6 +362,19 @@
       box.append(tags);
     }
 
+    if ((counts.candidates ?? 0) > 0) {
+      const candidateRow = el('button', 'summary-candidate');
+      candidateRow.type = 'button';
+      candidateRow.append(
+        el('span', undefined, `候选 ${counts.candidates} 条待审核`),
+        el('span', 'summary-candidate-go', '去知识库')
+      );
+      candidateRow.onclick = () => {
+        void window.companion.knowledge.open().catch((error) => toast(String(error?.message ?? error)));
+      };
+      box.append(candidateRow);
+    }
+
     const foot = el('div', 'summary-foot');
     foot.append(el('span', 'summary-shared',
       `共享知识 ${counts.sharedKnowledge ?? 0} 条（已验证 ${counts.sharedVerified ?? 0}）`));
@@ -781,11 +794,37 @@
     full.onclick = () => { void openPlaybookReport(result.runId); };
     actions.append(full);
     if (result.status === 'ok' && result.summary) {
-      const propose = el('button', 'primary small', '生成改动提案');
+      const distill = el('button', 'primary small', '沉淀为项目知识');
+      distill.title = '把这次只读分析的结论写成项目知识候选（未验证，需你审核）';
+      distill.onclick = () => { void distillPlaybook(result); };
+      actions.append(distill);
+      const propose = el('button', 'ghost small', '生成改动提案');
       propose.onclick = () => { confirmPlaybookProposal(result); };
       actions.append(propose);
     }
     box.append(actions);
+  };
+
+  /** pstack 结果 → 项目知识候选（pending），不自动验证、不写文件。 */
+  const distillPlaybook = async (result) => {
+    const projectId = playbookProjectId || view?.config?.projectId || '';
+    if (!projectId) { toast('先选择一个项目。'); return; }
+    try {
+      const saved = await window.companion.playbooks.distill({
+        projectId,
+        playbookId: result.playbookId,
+        runId: result.runId,
+        summary: result.summary,
+        findings: result.findings ?? [],
+        risks: result.risks ?? [],
+        nextSteps: result.nextSteps ?? []
+      });
+      knowledgeCache.delete(projectId);
+      await refresh();
+      toast(saved?.duplicate ? '这条结果已经在知识候选里' : '已加入项目知识候选（未验证）', 4000);
+    } catch (error) {
+      toast(String(error?.message ?? error), 6000);
+    }
   };
 
   const openPlaybookReport = async (runId) => {
@@ -896,7 +935,7 @@
       playbookRunningId = '';
       $('playbookCancel').hidden = true;
       playbookButtonState(false);
-      $('playbookHint').textContent = '一键只读分析当前项目；改动会先生成提案等你批准。';
+      $('playbookHint').textContent = '一键只读分析当前项目；结论可沉淀为项目知识，改动会先生成提案等你批准。';
       void loadPlaybooks();
     }
   };

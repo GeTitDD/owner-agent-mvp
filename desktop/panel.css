@@ -897,6 +897,22 @@ pre.diff, pre.logs {
 }
 .summary-time { font-size: 9px; color: var(--muted); }
 .summary-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.summary-candidate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font: inherit;
+  font-size: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+.summary-candidate-go { margin-left: auto; font-size: 9px; opacity: 0.85; }
 .summary-tag {
   padding: 1px 5px;
   border-radius: 4px;

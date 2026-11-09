@@ -1750,6 +1750,80 @@ const registerIpc = () => {
     return summary;
   });
 
+  // 把 pstack 只读分析的结论沉淀成项目知识候选（pending，不自动验证）。
+  ipcMain.handle('companion:playbook-distill', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) throw new Error('知识库尚未初始化。');
+    const playbookId = String(input?.playbookId ?? '');
+    const registry = await loadPlaybookRegistry();
+    const playbook = registry.getPlaybook(playbookId);
+    if (!playbook) throw new Error('未知的 playbook');
+    const project = await projectForPlaybook(String(input?.projectId ?? ''));
+    const runId = String(input?.runId ?? '');
+    const summary = String(input?.summary ?? '').trim().slice(0, 2000);
+    if (!summary) throw new Error('这次结果没有可沉淀的结论。');
+    const existing = personalStore.proposals('pending').find((proposal) =>
+      proposal.meta?.contract === 'knowledge-candidate/v1'
+      && proposal.meta?.runId === runId
+      && proposal.meta?.playbookId === playbookId);
+    if (existing) {
+      return { duplicate: true, candidateId: existing.id, title: existing.payload?.title ?? '' };
+    }
+    const findings = Array.isArray(input?.findings) ? input.findings.slice(0, 8) : [];
+    const risks = Array.isArray(input?.risks) ? input.risks.slice(0, 6) : [];
+    const nextSteps = Array.isArray(input?.nextSteps) ? input.nextSteps.slice(0, 6) : [];
+    const evidence = [];
+    for (const finding of findings) {
+      for (const ref of (finding?.evidence ?? [])) {
+        if (typeof ref === 'string' && ref && !evidence.includes(ref)) evidence.push(ref);
+      }
+    }
+    const lines = ['## 结论', summary];
+    if (findings.length) {
+      lines.push('', '## 关键发现');
+      for (const finding of findings) {
+        const title = String(finding?.title ?? '').slice(0, 160);
+        const detail = String(finding?.detail ?? '').slice(0, 600);
+        if (title || detail) lines.push(`- ${title}${detail ? `：${detail}` : ''}`);
+      }
+    }
+    if (risks.length) {
+      lines.push('', '## 风险与未知');
+      for (const risk of risks) lines.push(`- ${String(risk).slice(0, 300)}`);
+    }
+    if (nextSteps.length) {
+      lines.push('', '## 下一步');
+      for (const step of nextSteps) lines.push(`- ${String(step).slice(0, 300)}`);
+    }
+    const title = `${playbook.label}：${summary.replace(/\s+/gu, ' ').slice(0, 50)}`;
+    const proposal = personalStore.submitProposal({
+      targetId: null,
+      payload: {
+        title,
+        content: lines.join('\n').slice(0, 6000),
+        kind: playbook.group === 'distill' ? 'procedure' : 'note',
+        layer: 'project',
+        scope: 'project',
+        projectId: project.id,
+        domains: project.domain ? [project.domain] : [],
+        tags: [playbook.id, 'pstack'],
+        evidenceRefs: [...new Set([`pstack:${runId}`, ...evidence])].slice(0, 10),
+        verificationStatus: 'unverified',
+        relations: {},
+        sourceRef: `pstack:${runId}`
+      },
+      meta: {
+        contract: 'knowledge-candidate/v1',
+        sourceExperienceIds: [],
+        confidence: 0.5,
+        source: 'pstack',
+        playbookId,
+        runId
+      }
+    });
+    return { duplicate: false, candidateId: proposal.id, title };
+  });
+
   ipcMain.handle('companion:playbook-cancel', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const playbookId = String(input?.playbookId ?? '');
