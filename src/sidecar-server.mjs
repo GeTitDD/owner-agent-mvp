@@ -680,6 +680,7 @@ export function createSidecarHandler({
         profileId: str(body.profile, 'profile', 40, false) || 'node-smoke',
         includePaths: strList(body.includePaths, 'includePaths'),
         imageDigest: str(body.imageDigest, 'imageDigest', 80, false) || imageDigest,
+        projectDir: str(body.projectDir, 'projectDir', 120, false) || '',
         repairCycleId: str(body.repairCycleId, 'repairCycleId', 90, false),
         sandboxRoot
       });

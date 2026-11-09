@@ -96,6 +96,18 @@ const validateCommand = (command, runtime = 'node') => {
   return [...command];
 };
 
+const validateProjectDir = (value) => {
+  const input = String(value ?? '').replace(/\\/gu, '/');
+  check(!input.startsWith('/') && !/^[A-Za-z]:\//u.test(input), 'invalid project directory');
+  const raw = input.replace(/^\.\//u, '').replace(/\/+$/u, '');
+  if (!raw) return '';
+  check(!raw.split('/').includes('..'), 'invalid project directory');
+  check(/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u.test(raw), 'invalid project directory');
+  return raw;
+};
+
+const workdirFor = (projectDir) => (projectDir ? `/workspace/${projectDir}` : '/workspace');
+
 const validateProfile = (profile) => {
   check(profile && typeof profile === 'object', 'test profile is required');
   check(typeof profile.id === 'string' && /^[a-z0-9][a-z0-9-]{0,60}$/.test(profile.id), 'invalid profile id');
@@ -119,15 +131,17 @@ const validateProfile = (profile) => {
   check(profile.network === false, 'sandbox network must be disabled');
   check(profile.readOnlyRootfs === true, 'sandbox rootfs must be read-only');
   check(profile.user === '65534:65534', 'sandbox user must be the non-root nobody uid/gid');
-  check(profile.workdir === '/workspace', 'sandbox workdir must be /workspace');
+  check(typeof profile.workdir === 'string' && /^\/workspace(?:\/[A-Za-z0-9._-]+)*$/u.test(profile.workdir),
+    'sandbox workdir must be /workspace or a safe subdirectory');
   return profile;
 };
 
-export function resolveTestProfile(id, { imageDigest } = {}) {
+export function resolveTestProfile(id, { imageDigest, projectDir = '' } = {}) {
   check(typeof id === 'string' && id.length > 0, 'test profile id is required');
   const def = SANDBOX_PROFILES[id];
   check(!!def, `unknown test profile: ${id}`);
   check(typeof imageDigest === 'string' && DIGEST_RE.test(imageDigest), 'imageDigest must be sha256:<64 hex>');
+  const normalizedProjectDir = validateProjectDir(projectDir);
   const profile = validateProfile({
     ...BASE_PROFILE,
     ...(Number.isSafeInteger(def.timeoutMs) ? { timeoutMs: def.timeoutMs } : {}),
@@ -135,6 +149,8 @@ export function resolveTestProfile(id, { imageDigest } = {}) {
     id,
     image: def.image,
     imageDigest,
+    workdir: workdirFor(normalizedProjectDir),
+    projectDir: normalizedProjectDir,
     command: [...def.command]
   });
   return {

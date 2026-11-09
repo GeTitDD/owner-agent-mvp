@@ -75,6 +75,7 @@ const defaults = () => ({
   mascotSkin: 'pululu',
   sandboxMode: 'auto',
   sandboxByProject: {},
+  sandboxProjectDirByProject: {},
   knowledgeAutoHarvest: false,
   panelPinned: false
 });
@@ -300,6 +301,7 @@ const testConfigForProject = async (project) => {
   const plan = sandboxPlanModule.resolveSandboxPlan({
     root: project?.root ?? '',
     mode,
+    projectDir: (config.sandboxProjectDirByProject ?? {})[projectId] ?? '',
     includePaths: config.includePaths
   });
   return { ...plan, projectId };
@@ -319,6 +321,7 @@ const createSandbox = async (proposalId) => {
     body: {
       proposalId,
       profile: plan.profile,
+      projectDir: plan.projectDir ?? '',
       includePaths: plan.required,
       imageDigest
     }
@@ -1482,6 +1485,18 @@ const registerIpc = () => {
     return diagnosticsSnapshot();
   });
 
+  // Agent 只给建议；采用动作仍由面板里的 Owner 点击触发。
+  ipcMain.handle('companion:sandbox-detect', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const project = await projectForPlaybook(String(input?.projectId ?? ''));
+    const { suggestSandboxPlan } = await importEsm('../src/sandbox-detect.mjs');
+    const suggestion = await suggestSandboxPlan({
+      projectRoot: project.root,
+      model: config.model || ''
+    });
+    return { ...suggestion, projectId: project.id };
+  });
+
   ipcMain.handle('companion:settings:get', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     // 设置页每次打开都重新探测，提供“重新检测”入口。
@@ -1513,6 +1528,15 @@ const registerIpc = () => {
         config.sandboxByProject = { ...(config.sandboxByProject ?? {}) };
         if (!mode || mode === 'auto') delete config.sandboxByProject[projectId];
         else config.sandboxByProject[projectId] = mod.normalizeSandboxMode(mode, 'auto');
+      }
+    }
+    if (input?.sandboxProjectDir && typeof input.sandboxProjectDir === 'object') {
+      const projectId = String(input.sandboxProjectDir.projectId ?? '');
+      const dir = String(input.sandboxProjectDir.dir ?? '').replace(/\\/gu, '/').replace(/^\.?\//u, '').replace(/\/+$/u, '');
+      if (projectId) {
+        config.sandboxProjectDirByProject = { ...(config.sandboxProjectDirByProject ?? {}) };
+        if (!dir) delete config.sandboxProjectDirByProject[projectId];
+        else config.sandboxProjectDirByProject[projectId] = dir.slice(0, 120);
       }
     }
     if (typeof input?.knowledgeAutoHarvest === 'boolean') {

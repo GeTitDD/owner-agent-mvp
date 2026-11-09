@@ -35,6 +35,20 @@ test('未知 profile 与不匹配的运行时被拒绝', () => {
   assert.notEqual(godot.command[0], 'node');
 });
 
+test('子目录项目映射到 profile workdir，非法目录被拒绝', () => {
+  const nested = resolveTestProfile('godot-headless', { imageDigest: DIGEST, projectDir: 'godot-project' });
+  assert.equal(nested.workdir, '/workspace/godot-project');
+  assert.equal(nested.projectDir, 'godot-project');
+  assert.throws(
+    () => resolveTestProfile('godot-headless', { imageDigest: DIGEST, projectDir: '../escape' }),
+    /invalid project directory/u
+  );
+  assert.throws(
+    () => resolveTestProfile('godot-headless', { imageDigest: DIGEST, projectDir: '/abs/path' }),
+    /invalid project directory/u
+  );
+});
+
 test('profileHash 覆盖镜像引用与命令，但镜像 digest 由审批哈希单独覆盖', () => {
   const a = resolveTestProfile('node-smoke', { imageDigest: DIGEST });
   const b = resolveTestProfile('node-smoke', { imageDigest: `sha256:${'b'.repeat(64)}` });

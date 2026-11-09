@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   SANDBOX_MODES, normalizeSandboxMode, effectiveSandboxMode,
-  detectEcosystem, resolveSandboxPlan, describeSandboxPlan
+  detectEcosystem, detectProject, resolveSandboxPlan, describeSandboxPlan
 } from '../src/sandbox-plan.mjs';
 
 const project = (files) => {
@@ -36,6 +36,27 @@ test('生态探测：node / godot / python / rust / go / unknown', () => {
   assert.equal(detectEcosystem(project({ 'go.mod': '' })), 'go');
   assert.equal(detectEcosystem(project({ 'README.md': '' })), 'unknown');
   assert.equal(detectEcosystem(''), 'unknown');
+});
+
+test('子目录项目：根目录没有标记时探测一层子目录并生成 projectDir', () => {
+  const root = project({
+    'Program.cs': '',
+    'godot-project/project.godot': 'config_version=5\n'
+  });
+  const detected = detectProject({ root });
+  assert.equal(detected.ecosystem, 'godot');
+  assert.equal(detected.projectDir, 'godot-project');
+
+  const plan = resolveSandboxPlan({ root, mode: 'auto', includePaths: ['package.json'] });
+  assert.equal(plan.enabled, true);
+  assert.equal(plan.profile, 'godot-headless');
+  assert.equal(plan.projectDir, 'godot-project');
+  assert.deepEqual(plan.required, ['godot-project/project.godot']);
+  assert.equal(plan.ok, true);
+
+  // 显式覆盖优先于自动探测
+  const overridden = resolveSandboxPlan({ root, mode: 'auto', projectDir: 'godot-project', includePaths: [] });
+  assert.equal(overridden.projectDir, 'godot-project');
 });
 
 test('auto：Node 项目启用并按缺失文件给出 actionable 计划', () => {

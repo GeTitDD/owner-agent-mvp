@@ -82,6 +82,7 @@
       sandboxSelect.value = allowedModes.includes(projectMode) ? projectMode : 'auto';
       sandboxSelect.disabled = !hasProjects;
     }
+    $('sandboxDetect').hidden = !(showWarning || showMuted);
     $('footerStatus').textContent = view?.services?.docker
       ? '本地服务已启动 · Docker 可用'
       : '本地服务已启动 · Docker 未检测到';
@@ -1092,6 +1093,7 @@
         detailRows([
           ['策略', sandbox.mode ?? 'auto'],
           ['profile', sandbox.profile ?? '无'],
+          ['项目子目录', sandbox.projectDir || '（仓库根）'],
           ['状态', sandbox.reason ?? 'unknown'],
           ['缺失', (sandbox.missing ?? []).join(', ') || '—']
         ]),
@@ -1128,6 +1130,52 @@
     }
   };
   $('diagnostics').onclick = () => { void openDiagnostics(); };
+
+  const detectSandboxPlan = async () => {
+    const projectId = view?.config?.projectId ?? '';
+    if (!projectId) { toast('先选择一个项目。'); return; }
+    const button = $('sandboxDetect');
+    button.disabled = true;
+    button.textContent = '识别中…';
+    try {
+      const suggestion = await window.companion.sandbox.detect({ projectId });
+      const nodes = [
+        el('p', 'result-summary', 'Agent 只给出建议；采用后才会写入本项目的沙箱设置，运行仍需你手动触发。'),
+        detailRows([
+          ['profile', suggestion.profile],
+          ['镜像', suggestion.image],
+          ['项目子目录', suggestion.projectDir || '（仓库根）'],
+          ['置信度', suggestion.confidence ?? 'unknown'],
+          ['依据', suggestion.reason || '—']
+        ])
+      ];
+      const cancel = el('button', 'ghost', '取消');
+      cancel.onclick = closeModal;
+      const adopt = el('button', 'primary', '采用建议');
+      adopt.onclick = async () => {
+        adopt.disabled = true;
+        try {
+          await window.companion.settings.set({
+            sandboxProjectMode: { projectId, mode: suggestion.profile },
+            sandboxProjectDir: { projectId, dir: suggestion.projectDir }
+          });
+          closeModal();
+          await refresh();
+          toast(`已采用 ${suggestion.profile}（${suggestion.projectDir || '仓库根'}）`);
+        } catch (error) {
+          adopt.disabled = false;
+          toast(String(error?.message ?? error), 5000);
+        }
+      };
+      openModal('Agent 建议的沙箱方案', nodes, [cancel, adopt]);
+    } catch (error) {
+      toast(String(error?.message ?? error), 6000);
+    } finally {
+      button.disabled = false;
+      button.textContent = '让 Agent 识别';
+    }
+  };
+  $('sandboxDetect').onclick = () => { void detectSandboxPlan(); };
   $('closeModal').onclick = closeModal;
   $('modal').addEventListener('click', (event) => { if (event.target === $('modal')) closeModal(); });
 

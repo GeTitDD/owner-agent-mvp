@@ -36,12 +36,48 @@ const ECOSYSTEM_FILES = [
   ['go', ['go.mod']]
 ];
 
-export function detectEcosystem(root, exists = fs.existsSync) {
-  if (!root) return 'unknown';
+const SKIP_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', 'out', '.next', 'target', 'vendor', '.venv', 'venv', 'bin', 'obj'
+]);
+
+const ecosystemAt = (dir, exists) => {
   for (const [ecosystem, files] of ECOSYSTEM_FILES) {
-    if (files.some((file) => exists(path.join(root, file)))) return ecosystem;
+    if (files.some((file) => exists(path.join(dir, file)))) return ecosystem;
   }
-  return 'unknown';
+  return '';
+};
+
+/**
+ * 探测项目根：先看仓库根，再看一层子目录。
+ * 返回 ecosystem + projectDir（相对仓库根，根目录为空串）。
+ */
+export function detectProject({ root = '', exists = fs.existsSync, listDirs = null } = {}) {
+  if (!root) return { ecosystem: 'unknown', projectDir: '' };
+  const atRoot = ecosystemAt(root, exists);
+  if (atRoot) return { ecosystem: atRoot, projectDir: '' };
+  let dirs = [];
+  if (listDirs) {
+    dirs = listDirs(root);
+  } else {
+    try {
+      dirs = fs.readdirSync(root, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort();
+    } catch {
+      dirs = [];
+    }
+  }
+  for (const name of dirs) {
+    if (SKIP_DIRS.has(name) || String(name).startsWith('.')) continue;
+    const ecosystem = ecosystemAt(path.join(root, name), exists);
+    if (ecosystem) return { ecosystem, projectDir: name };
+  }
+  return { ecosystem: 'unknown', projectDir: '' };
+}
+
+export function detectEcosystem(root, exists = fs.existsSync) {
+  return detectProject({ root, exists }).ecosystem;
 }
 
 const normalizeList = (values) => [...new Set(values
@@ -54,20 +90,29 @@ const normalizeList = (values) => [...new Set(values
  * - auto：按生态选择 profile；未知生态视为无 profile。
  * - 强制模式：任何项目都按该 profile 预检。
  */
-export function resolveSandboxPlan({ root = '', mode = 'auto', includePaths = [], exists = fs.existsSync } = {}) {
+export function resolveSandboxPlan({
+  root = '', mode = 'auto', includePaths = [], projectDir: projectDirOverride = '', exists = fs.existsSync
+} = {}) {
   const normalizedMode = normalizeSandboxMode(mode, 'auto');
   const fallbackRequired = normalizeList(['tests/sandbox-smoke.test.mjs', ...includePaths]);
   if (!root) {
     return {
       enabled: false, ok: false, profile: null, mode: normalizedMode,
-      ecosystem: 'unknown', required: fallbackRequired, missing: [], reason: 'no-project', image: ''
+      ecosystem: 'unknown', projectDir: '', required: fallbackRequired, missing: [],
+      reason: 'no-project', image: ''
     };
   }
-  const ecosystem = detectEcosystem(root, exists);
+  const detected = detectProject({ root, exists });
+  const override = String(projectDirOverride ?? '').replace(/\\/gu, '/').replace(/^\.?\//u, '').replace(/\/+$/u, '');
+  const projectDir = override || detected.projectDir;
+  const ecosystem = override
+    ? (ecosystemAt(path.join(root, projectDir), exists) || detected.ecosystem)
+    : detected.ecosystem;
+  const prefix = (rel) => (projectDir && !rel.startsWith(`${projectDir}/`) ? `${projectDir}/${rel}` : rel);
   if (normalizedMode === 'off') {
     return {
       enabled: false, ok: false, profile: null, mode: normalizedMode,
-      ecosystem, required: fallbackRequired, missing: [], reason: 'disabled', image: ''
+      ecosystem, projectDir, required: fallbackRequired, missing: [], reason: 'disabled', image: ''
     };
   }
   const profileId = normalizedMode === 'auto' ? ECOSYSTEM_PROFILE[ecosystem] : normalizedMode;
@@ -75,13 +120,13 @@ export function resolveSandboxPlan({ root = '', mode = 'auto', includePaths = []
   if (!def) {
     return {
       enabled: false, ok: false, profile: null, mode: normalizedMode,
-      ecosystem, required: fallbackRequired, missing: [], reason: 'no-profile', image: ''
+      ecosystem, projectDir, required: fallbackRequired, missing: [], reason: 'no-profile', image: ''
     };
   }
   const required = normalizeList([
-    ...(def.includePaths ?? []),
+    ...(def.includePaths ?? []).map(prefix),
     // 额外快照文件只对 Node 系列生效；Godot/Python 的全局 package.json 不应变成假缺失。
-    ...(profileId.startsWith('node-') ? includePaths : [])
+    ...(profileId.startsWith('node-') ? includePaths.map(prefix) : [])
   ]);
   const missing = required.filter((rel) => !exists(path.join(root, rel)));
   return {
@@ -90,6 +135,7 @@ export function resolveSandboxPlan({ root = '', mode = 'auto', includePaths = []
     profile: profileId,
     mode: normalizedMode,
     ecosystem,
+    projectDir,
     required,
     missing,
     image: def.image,
