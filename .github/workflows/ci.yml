@@ -131,7 +131,7 @@ jobs:
         # 验证 asarUnpack 后的 monty.exe 在打包产物内可运行（win-unpacked 由 portable 构建生成）
         shell: pwsh
         run: |
-          if (Test-Path dist-companion/win-unpacked/Owner Companion.exe) {
+          if (Test-Path "dist-companion/win-unpacked/Owner Companion.exe") {
             node scripts/e2e/monty-packaged-smoke.mjs --no-build
           } else {
             Write-Host "SKIP: dist-companion/win-unpacked not produced by portable build"
