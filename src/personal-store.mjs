@@ -240,6 +240,7 @@ export class PersonalKnowledgeStore {
   }
   reviewProposal(id,{decision,reviewer='user',expectedRevision=null}) {
     valid(['approved','rejected'].includes(decision),'Invalid proposal decision');
+    let emitted=null;
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const proposal=this.proposal(id);
@@ -266,15 +267,18 @@ export class PersonalKnowledgeStore {
           this.db.prepare('UPDATE personal_units SET revision=?,payload=?,updated_at=? WHERE id=?').run(rev,body,stamp,existing.id);
           this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,?,?,?,?,?,?)').run(existing.id,rev,body,reviewer,note,stamp,sha256(body));
           appliedId=existing.id;
+          emitted={unitId:existing.id,revision:rev,payload:normalized,payloadHash:sha256(body),actor:reviewer,note,timestamp:stamp,parentRevisionIds:[]};
         } else {
           appliedId=`personal.${randomUUID().replaceAll('-','').slice(0,24)}`;
           this.db.prepare('INSERT INTO personal_units(id,revision,payload,created_at,updated_at) VALUES(?,1,?,?,?)').run(appliedId,body,stamp,stamp);
           this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,1,?,?,?,?,?)').run(appliedId,body,reviewer,note,stamp,sha256(body));
+          emitted={unitId:appliedId,revision:1,payload:normalized,payloadHash:sha256(body),actor:reviewer,note,timestamp:stamp,parentRevisionIds:[]};
         }
       }
       this.db.prepare('UPDATE personal_proposals SET status=?,reviewed_at=?,reviewer=?,applied_id=? WHERE id=?').run(decision,now(),safeText(reviewer,80,'reviewer',true),appliedId,id);
       this.db.exec('COMMIT');
     } catch(e) {this.db.exec('ROLLBACK');throw e;}
+    if(emitted) this.emitRevision(emitted);
     return this.proposal(id);
   }
 

@@ -133,7 +133,7 @@ export function exportBundle({
       for (const link of provenance.linksFor({ unitId: unit.id, revision: revision.revision })) {
         sourceIds.add(link.sourceId);
         bundle.links.push({
-          unitId: unit.id, revision: revision.revision,
+          unitId: unit.id, revision: revision.revision, revisionId: revision.revisionId,
           observationId: link.observationId, relation: link.relation,
           createdAt: link.createdAt, createdBy: link.createdBy
         });
@@ -141,9 +141,11 @@ export function exportBundle({
     }
     const adoption = provenance.adoption(unit.id);
     if (adoption) {
+      const adoptedRevision = unit.revisions.find((row) => row.revision === adoption.revision);
       bundle.adoptions.push({
-        unitId: unit.id, revision: adoption.revision, adoptedAt: adoption.adoptedAt,
-        actor: adoption.actor, note: adoption.note, payloadHash: adoption.payloadHash
+        unitId: unit.id, revision: adoption.revision, revisionId: adoptedRevision?.revisionId ?? null,
+        adoptedAt: adoption.adoptedAt, actor: adoption.actor, note: adoption.note,
+        payloadHash: adoption.payloadHash
       });
     }
   }
@@ -290,16 +292,20 @@ function validateUnit(unit, version) {
   });
 }
 
-function scopeOfUnit(unit) {
-  const payload = unit.revisions[unit.revisions.length - 1]?.payload ?? {};
-  return { projectId: payload.projectId ?? '', scope: payload.scope ?? '' };
-}
-
 function scopeAllowed({ allowedProjectIds, unit }) {
   if (!allowedProjectIds || allowedProjectIds.size === 0) return true;
-  const { projectId, scope } = scopeOfUnit(unit);
-  if (!projectId) return scope !== 'project';
-  return allowedProjectIds.has(projectId);
+  // 每一版修订都必须满足作用域；只看最后一版会漏掉恶意历史修订。
+  for (const row of unit.revisions) {
+    const payload = row.payload ?? {};
+    const projectId = payload.projectId ?? '';
+    const scope = payload.scope ?? '';
+    if (projectId) {
+      if (!allowedProjectIds.has(projectId)) return false;
+    } else if (scope === 'project') {
+      return false;
+    }
+  }
+  return true;
 }
 
 function insertUnitRaw(db, unit, knowledgeId, provenance) {
@@ -362,17 +368,35 @@ function appendRevisions({ personalStore, provenance, unit, knowledgeId, missing
   }
 }
 
-function importProvenance({ provenance, bundle, unitIds, unitIdMap, allowedProjectIds }) {
+function importProvenance({ provenance, bundle, unitIds, unitIdMap, allowedProjectIds, revisionMaps }) {
   const db = provenance.db;
-  const counts = { sources: 0, observations: 0, links: 0, adoptions: 0, skippedScope: 0 };
-  const sourceProject = new Map();
+  const counts = {
+    sources: 0, observations: 0, links: 0, adoptions: 0,
+    skippedScope: 0, suspendedLinks: 0, suspendedAdoptions: 0
+  };
+  // 只允许被授权单元实际引用的“无项目”来源进入，避免跨项目泄漏元数据。
+  const linkedObservationIds = new Set(
+    (bundle.links ?? [])
+      .filter((link) => unitIds.has(unitIdMap.get(link.unitId) ?? link.unitId))
+      .map((link) => link.observationId)
+  );
+  const referencedSourceIds = new Set(
+    (bundle.observations ?? [])
+      .filter((observation) => linkedObservationIds.has(observation.observationId))
+      .map((observation) => observation.sourceId)
+  );
   for (const source of bundle.sources ?? []) {
     if (!source?.sourceId) continue;
-    if (allowedProjectIds && allowedProjectIds.size > 0 && source.projectId && !allowedProjectIds.has(source.projectId)) {
-      counts.skippedScope += 1;
-      continue;
+    if (allowedProjectIds && allowedProjectIds.size > 0) {
+      if (source.projectId && !allowedProjectIds.has(source.projectId)) {
+        counts.skippedScope += 1;
+        continue;
+      }
+      if (!source.projectId && !referencedSourceIds.has(source.sourceId)) {
+        counts.skippedScope += 1;
+        continue;
+      }
     }
-    sourceProject.set(source.sourceId, source.projectId ?? null);
     const existing = provenance.getSource(source.sourceId);
     if (!existing) {
       const payload = { ...source };
@@ -407,20 +431,47 @@ function importProvenance({ provenance, bundle, unitIds, unitIdMap, allowedProje
   }
   for (const link of bundle.links ?? []) {
     const localUnitId = unitIdMap.get(link.unitId) ?? link.unitId;
-    if (!unitIds.has(localUnitId) || !provenance.getObservation(link.observationId)) continue;
+    if (!unitIds.has(localUnitId)) continue;
+    let localRevision = null;
+    if (link.revisionId) {
+      localRevision = revisionMaps?.get(localUnitId)?.get(link.revisionId) ?? null;
+    } else {
+      // v1 兼容：没有 revisionId 时只能按线性顺序；仍要求该 revision 真实存在。
+      localRevision = link.revision ?? null;
+    }
+    if (localRevision === null || localRevision === undefined || !provenance.getObservation(link.observationId)) {
+      provenance.addPendingLink({
+        unitId: localUnitId, revisionId: link.revisionId ?? `legacy:r${link.revision}`,
+        observationId: link.observationId, relation: link.relation,
+        createdBy: link.createdBy ?? 'sync', createdAt: link.createdAt ?? bundle.exportedAt
+      });
+      counts.suspendedLinks += 1;
+      continue;
+    }
     const revisionExists = db.prepare('SELECT 1 AS hit FROM personal_revisions WHERE unit_id=? AND revision=?')
-      .get(localUnitId, link.revision);
-    if (!revisionExists) continue;
+      .get(localUnitId, localRevision);
+    if (!revisionExists) {
+      provenance.addPendingLink({
+        unitId: localUnitId, revisionId: link.revisionId ?? `legacy:r${link.revision}`,
+        observationId: link.observationId, relation: link.relation,
+        createdBy: link.createdBy ?? 'sync', createdAt: link.createdAt ?? bundle.exportedAt
+      });
+      counts.suspendedLinks += 1;
+      continue;
+    }
     const exists = db.prepare(`SELECT 1 AS hit FROM knowledge_source_links
       WHERE unit_id=? AND revision=? AND observation_id=? AND relation=?`)
-      .get(localUnitId, link.revision, link.observationId, link.relation);
+      .get(localUnitId, localRevision, link.observationId, link.relation);
     if (exists) continue;
     const stamp = link.createdAt ?? bundle.exportedAt;
-    const payload = { contract: 'knowledge-source-link/v1', ...link, unitId: localUnitId, createdAt: stamp };
+    const payload = {
+      contract: 'knowledge-source-link/v1', ...link,
+      unitId: localUnitId, revision: localRevision, createdAt: stamp
+    };
     db.prepare(`INSERT OR IGNORE INTO knowledge_source_links
       (unit_id,revision,observation_id,relation,created_at,created_by,payload,payload_hash)
       VALUES(?,?,?,?,?,?,?,?)`).run(
-      localUnitId, link.revision, link.observationId, link.relation,
+      localUnitId, localRevision, link.observationId, link.relation,
       stamp, link.createdBy ?? 'sync', canonical(payload), sha256(canonical(payload))
     );
     counts.links += 1;
@@ -429,14 +480,39 @@ function importProvenance({ provenance, bundle, unitIds, unitIdMap, allowedProje
     const localUnitId = unitIdMap.get(adoption.unitId) ?? adoption.unitId;
     if (!unitIds.has(localUnitId)) continue;
     if (provenance.adoption(localUnitId)) continue; // 本地已采纳：不覆盖 Owner 的决定
-    const row = db.prepare('SELECT payload_hash FROM personal_revisions WHERE unit_id=? AND revision=?')
-      .get(localUnitId, adoption.revision);
-    if (!row) continue;
-    provenance.adopt({ unitId: localUnitId, revision: adoption.revision, actor: adoption.actor ?? 'sync', note: adoption.note ?? 'Imported adoption' });
+    let localRevision = null;
+    if (adoption.revisionId) {
+      localRevision = revisionMaps?.get(localUnitId)?.get(adoption.revisionId) ?? null;
+    } else {
+      localRevision = adoption.revision ?? null;
+    }
+    const row = localRevision === null || localRevision === undefined
+      ? null
+      : db.prepare('SELECT payload_hash FROM personal_revisions WHERE unit_id=? AND revision=?')
+        .get(localUnitId, localRevision);
+    if (!row) {
+      provenance.addPendingAdoption({
+        unitId: localUnitId,
+        revisionId: adoption.revisionId ?? `legacy:r${adoption.revision}`,
+        actor: adoption.actor ?? 'sync', note: adoption.note ?? 'Imported adoption',
+        createdAt: adoption.adoptedAt ?? bundle.exportedAt
+      });
+      counts.suspendedAdoptions += 1;
+      continue;
+    }
+    provenance.adopt({
+      unitId: localUnitId, revision: localRevision,
+      actor: adoption.actor ?? 'sync', note: adoption.note ?? 'Imported adoption'
+    });
     counts.adoptions += 1;
   }
   for (const snapshot of bundle.contextSnapshots ?? []) {
     if (!snapshot?.snapshotId) continue;
+    if (allowedProjectIds && allowedProjectIds.size > 0
+      && snapshot.projectId && !allowedProjectIds.has(snapshot.projectId)) {
+      counts.skippedScope += 1;
+      continue;
+    }
     const body = canonical(snapshot);
     db.prepare(`INSERT OR IGNORE INTO knowledge_context_snapshots
       (snapshot_id,project_id,session_id,compilation_hash,task,created_at,payload,payload_hash)
@@ -446,15 +522,22 @@ function importProvenance({ provenance, bundle, unitIds, unitIdMap, allowedProje
       body, sha256(body)
     );
   }
+  for (const unitId of unitIds) {
+    try { provenance.resolvePending({ unitId }); } catch { /* best effort */ }
+  }
   return counts;
 }
 
-function importEvents({ provenance, events, device, report }) {
+function importEvents({ provenance, events, device, report, allowedKnowledgeIds = null }) {
   let applied = 0;
   let duplicates = 0;
   for (const event of events ?? []) {
     if (!event?.changeId || !event.knowledgeId || !event.operation) {
       report.errors.push({ eventId: event?.changeId ?? null, error: 'invalid-event' });
+      continue;
+    }
+    if (allowedKnowledgeIds && !allowedKnowledgeIds.has(event.knowledgeId)) {
+      report.skippedEvents += 1;
       continue;
     }
     const expected = hashOf(event.payload ?? {});
@@ -539,24 +622,11 @@ export function importBundle({
     imported: 0, fastForwarded: 0, merged: 0, unchanged: 0, localAhead: 0,
     diverged: 0, unrelated: 0, events: { applied: 0, duplicates: 0 },
     conflicts: [], candidates: [], errors: [], provenance: null, project: null,
-    skippedScope: 0, cursor: null
+    skippedScope: 0, skippedEvents: 0, suspendedLinks: 0, suspendedAdoptions: 0, cursor: null
   };
-  if (provenance && bundle.project?.projectIdentity) {
-    try {
-      const registered = provenance.ensureProject({
-        projectId: bundle.project.projectId,
-        identity: bundle.project.projectIdentity,
-        identityKind: bundle.project.identityKind ?? 'unknown',
-        aliases: bundle.project.aliases ?? []
-      });
-      report.project = registered?.aliasOf ? `alias-of:${registered.aliasOf}` : 'registered';
-    } catch (error) {
-      report.project = `skipped: ${error.message}`;
-    }
-  }
-  if (provenance && version >= 2) importEvents({ provenance, events: bundle.events, device, report });
-  const importedIds = new Set();
-  const unitIdMap = new Map();
+  // 先完成作用域与完整性预检，再决定哪些项目/事件/来源允许进入。
+  const validUnits = [];
+  const allowedKnowledgeIds = new Set();
   for (const unit of bundle.units ?? []) {
     try {
       validateUnit(unit, version);
@@ -569,6 +639,40 @@ export function importBundle({
       report.errors.push({ unitId: unit.id, error: 'scope-not-allowed' });
       continue;
     }
+    validUnits.push(unit);
+    allowedKnowledgeIds.add(unit.knowledgeId ?? unit.id);
+  }
+  const projectAllowed = !allowed
+    || !bundle.project?.projectId
+    || allowed.has(bundle.project.projectId);
+  if (provenance && bundle.project?.projectIdentity) {
+    if (!projectAllowed) {
+      report.project = 'skipped:scope';
+    } else if (!apply) {
+      report.project = 'dry-run';
+    } else {
+      try {
+        const registered = provenance.ensureProject({
+          projectId: bundle.project.projectId,
+          identity: bundle.project.projectIdentity,
+          identityKind: bundle.project.identityKind ?? 'unknown',
+          aliases: bundle.project.aliases ?? []
+        });
+        report.project = registered?.aliasOf ? `alias-of:${registered.aliasOf}` : 'registered';
+      } catch (error) {
+        report.project = `skipped: ${error.message}`;
+      }
+    }
+  }
+  if (apply && provenance && version >= 2) {
+    importEvents({
+      provenance, events: bundle.events, device, report,
+      allowedKnowledgeIds: allowed ? allowedKnowledgeIds : null
+    });
+  }
+  const importedIds = new Set();
+  const unitIdMap = new Map();
+  for (const unit of validUnits) {
     const knowledgeId = unit.knowledgeId ?? unit.id;
     const mappedUnitId = provenance ? provenance.unitForKnowledgeId(knowledgeId) : null;
     const targetId = mappedUnitId ?? unit.id;
@@ -744,11 +848,27 @@ export function importBundle({
   }
   if (provenance) {
     if (apply) {
+      // 远端整数 revision 不是本地身份：按 revisionId 映射到本地 revision。
+      const revisionMaps = new Map();
+      for (const unitId of importedIds) {
+        const map = new Map();
+        for (const row of provenance.listRevisions({ unitId, limit: 10000 })) {
+          if (row.localRevision !== null) map.set(row.revisionId, row.localRevision);
+        }
+        revisionMaps.set(unitId, map);
+      }
       report.provenance = importProvenance({
-        provenance, bundle, unitIds: importedIds, unitIdMap, allowedProjectIds: allowed
+        provenance, bundle, unitIds: importedIds, unitIdMap,
+        allowedProjectIds: allowed, revisionMaps
       });
+      report.suspendedLinks = report.provenance.suspendedLinks ?? 0;
+      report.suspendedAdoptions = report.provenance.suspendedAdoptions ?? 0;
+      report.skippedScope += report.provenance.skippedScope ?? 0;
     } else {
-      report.provenance = { sources: 0, observations: 0, links: 0, adoptions: 0, skipped: 'dry-run' };
+      report.provenance = {
+        sources: 0, observations: 0, links: 0, adoptions: 0,
+        suspendedLinks: 0, suspendedAdoptions: 0, skipped: 'dry-run'
+      };
     }
     if (apply && bundle.cursor?.lastChangeAppliedAt) {
       const cursor = provenance.setSyncState('last-import', bundle.cursor.lastChangeAppliedAt);

@@ -29,7 +29,7 @@ export class KnowledgeReuse {
       return {
         ...rec,
         knowledgeId: match ? match[1] : null,
-        revision: unit?.revision ?? (match ? Number(match[2]) : null),
+        revision: match ? Number(match[2]) : null,
         personal: Boolean(unit)
       };
     });
@@ -49,11 +49,15 @@ export class KnowledgeReuse {
     for (const ref of personalRefsFromPlan(plan)) {
       const unit = this.personal.get(ref.knowledgeId);
       if (!unit) continue;
+      const revisionRow = this.personal.db
+        .prepare('SELECT payload_hash FROM personal_revisions WHERE unit_id=? AND revision=?')
+        .get(ref.knowledgeId, ref.revision);
+      if (!revisionRow) continue; // 计划中的修订已不存在：宁可少记，也不张冠李戴
       const state = applicability.get(ref.key);
       if (!['applicable', 'needs_verification'].includes(state)) continue;
       const usage = this.personal.addUsage(normalizeUsage({
         knowledgeId: ref.knowledgeId,
-        revision: unit.revision,
+        revision: ref.revision,
         targetRunId,
         projectId: projectId ?? snapshot.profile.id,
         retrievalReason: task,
@@ -77,11 +81,15 @@ export class KnowledgeReuse {
     for (const ref of personalRefsFromPlan(plan)) {
       const unit = this.personal.get(ref.knowledgeId);
       if (!unit) continue;
+      const revisionRow = this.personal.db
+        .prepare('SELECT payload_hash FROM personal_revisions WHERE unit_id=? AND revision=?')
+        .get(ref.knowledgeId, ref.revision);
+      if (!revisionRow) continue;
       const state = applicability.get(ref.key);
       if (!['applicable', 'needs_verification'].includes(state)) continue;
       usages.push(this.personal.addUsage(normalizeUsage({
         knowledgeId: ref.knowledgeId,
-        revision: unit.revision,
+        revision: ref.revision,
         targetRunId,
         projectId,
         retrievalReason: task,

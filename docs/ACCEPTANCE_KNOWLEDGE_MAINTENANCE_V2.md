@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | 第一轮 | 数据契约、迁移与版本完整性 | 29/29 通过 |
 | 第二轮 | 两设备同步、冲突与恢复 | 19/19 单测 + 16/16 E2E 检查通过 |
-| 第三轮 | 真实项目维护、Compiler/Usage 回归、端到端复现 | 全量 246 tests / 243 pass / 3 skip / 0 fail；真实 git + GitHub 冒烟通过 |
+| 第三轮 | 真实项目维护、Compiler/Usage 回归、端到端复现 | 全量 254 tests / 251 pass / 3 skip / 0 fail；真实 git + GitHub 冒烟通过 |
 
 最终判定：**两个独立 SQLite 环境可以可靠导出、导入、审查、修订并收敛到同一份知识；历史与来源可检查；冲突不丢失；旧会话仍指向运行时的修订。**
 
@@ -24,7 +24,7 @@
 
 ```text
 npm run check        -> 0
-npm test             -> 246 tests / 243 pass / 3 skip / 0 fail
+npm test             -> 254 tests / 251 pass / 3 skip / 0 fail
 npm run demo:jobs    -> 0
 npm run demo:pi      -> 0
 npm run demo:patch   -> 0
@@ -127,8 +127,8 @@ npm run knowledge:sync:v2
 ### 结果
 
 ```text
-# tests 246
-# pass 243
+# tests 254
+# pass 251
 # skip 3
 # fail 0
 ```
@@ -158,7 +158,22 @@ Compiler / Usage 回归：
 
 ---
 
-## 覆盖矩阵（Phase 0–7）
+## 复审修复（PR #26 Review，HEAD b37ab75）
+
+针对复审指出的四组问题，先写失败测试再修复；回归文件：`tests/knowledge-consistency-review.test.mjs`（8 个用例）。
+
+| 问题 | 修复 | 回归 |
+| --- | --- | --- |
+| dry-run 写库；项目/事件/来源/快照作用域不完整 | `ensureProject`、`importEvents`、游标全部移到 `apply` 门后；预检所有修订；事件按 `knowledgeId` 过滤；来源/快照按项目过滤；无项目来源只允许被授权单元引用 | dry-run 前后 14 张表计数完全一致；越权包不写 project/event/source/snapshot |
+| 远端整数 revision 被当作本地身份 | 导出 `links/adoptions` 携带 `revisionId`；导入建立 `revisionId → local_revision` 映射；缺失目标写入 `knowledge_pending_links` / `knowledge_pending_adoptions`，落地后解析 | A/B 本地 revision 号不同时，R4 来源与采纳仍指向正确内容；缺失目标不猜数字 |
+| Compiler 消费未采纳 Head | Workspace Overlay 优先读取 `knowledge_adoptions.adopted_revision` 的不可变修订；无采纳记录才沿用 Head；`requireAdoption` 可强制 | 采纳 R1、Head 漂移到 R2 后，Compiler 仍只注入 `workspace:id:r1` 的 R1 内容与验证状态 |
+| Reuse/Ledger 漂移；proposal 审批漏钩子 | `retrieve/compileAsync/recordFromPlan` 使用计划中的 `ref.revision`；Ledger 从锁定修订读取 `payloadHash/verificationStatus`；`reviewProposal` 批准后调用 `onRevision` | 编译后 Head 变化，旧计划 Usage 仍是 R1；真实 Harvest 提案 → 批准 → 同步 → 复用使用 R2；批准立即产生索引与事件 |
+
+说明：
+- `listChanges` 增加 `rowid` 兜底排序，避免同一毫秒内 create/revise 乱序。
+- 复审修复不改变产品范围；仍保持 Draft，不自动合并。
+
+
 
 | Phase | 交付 | 证据 |
 | --- | --- | --- |

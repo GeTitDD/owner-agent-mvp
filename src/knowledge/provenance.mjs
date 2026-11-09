@@ -157,10 +157,13 @@ export class KnowledgeProvenance {
       ).get(knowledgeId, revision - 1);
       if (previous) parents = [previous.revision_id];
     }
-    return this.insertRevisionIndex({
+    const revisionId = this.insertRevisionIndex({
       unitId, knowledgeId, localRevision: revision, payload, payloadHash,
       actor, note, recordedAt: timestamp || this.clock(), parentRevisionIds: parents
     });
+    // 本地单条写入也尽快解析挂起项；失败不阻塞修订。
+    try { this.resolvePending({ unitId }); } catch { /* best effort */ }
+    return revisionId;
   }
 
   getRevision(revisionId) {
@@ -243,12 +246,107 @@ export class KnowledgeProvenance {
     if (knowledgeId) { where.push('knowledge_id=?'); params.push(knowledgeId); }
     const rows = this.db.prepare(`SELECT change_id FROM knowledge_changes
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-      ORDER BY applied_at ASC, change_id ASC LIMIT ?`).all(...params, limit);
+      ORDER BY applied_at ASC, rowid ASC LIMIT ?`).all(...params, limit);
     return rows.map(({ change_id }) => this.getChange(change_id));
   }
 
-  // ---- 分叉候选（不直接改本地 Head） ----
+  // ---- 挂起的来源/采纳（目标修订尚未落地） ----
 
+  localRevisionFor(unitId, revisionId) {
+    const row = this.db.prepare(
+      'SELECT local_revision FROM knowledge_revision_index WHERE unit_id=? AND revision_id=?'
+    ).get(unitId, revisionId);
+    return row?.local_revision ?? null;
+  }
+
+  addPendingLink({ unitId, revisionId, observationId, relation, createdBy = 'sync', createdAt = '' }) {
+    const stamp = createdAt || this.clock();
+    const payload = { contract: 'knowledge-pending-link/v1', unitId, revisionId, observationId, relation, createdAt: stamp, createdBy };
+    const body = canonical(payload);
+    this.db.prepare(`INSERT OR IGNORE INTO knowledge_pending_links
+      (unit_id,revision_id,observation_id,relation,created_at,created_by,payload,payload_hash)
+      VALUES(?,?,?,?,?,?,?,?)`).run(
+      unitId, revisionId, observationId, relation, stamp, createdBy, body, sha256(body)
+    );
+    return true;
+  }
+
+  addPendingAdoption({ unitId, revisionId, actor = 'sync', note = '', createdAt = '' }) {
+    const stamp = createdAt || this.clock();
+    const payload = { contract: 'knowledge-pending-adoption/v1', unitId, revisionId, actor, note, createdAt: stamp };
+    const body = canonical(payload);
+    this.db.prepare(`INSERT OR IGNORE INTO knowledge_pending_adoptions
+      (unit_id,revision_id,actor,note,created_at,payload_hash)
+      VALUES(?,?,?,?,?,?)`).run(unitId, revisionId, actor, String(note ?? '').slice(0, 500), stamp, sha256(body));
+    return true;
+  }
+
+  listPendingLinks({ unitId = '', limit = 200 } = {}) {
+    const rows = unitId
+      ? this.db.prepare('SELECT * FROM knowledge_pending_links WHERE unit_id=? ORDER BY created_at ASC LIMIT ?').all(unitId, limit)
+      : this.db.prepare('SELECT * FROM knowledge_pending_links ORDER BY created_at ASC LIMIT ?').all(limit);
+    return rows.map((row) => ({
+      unitId: row.unit_id, revisionId: row.revision_id, observationId: row.observation_id,
+      relation: row.relation, createdAt: row.created_at, createdBy: row.created_by
+    }));
+  }
+
+  listPendingAdoptions({ unitId = '', limit = 200 } = {}) {
+    const rows = unitId
+      ? this.db.prepare('SELECT * FROM knowledge_pending_adoptions WHERE unit_id=? ORDER BY created_at ASC LIMIT ?').all(unitId, limit)
+      : this.db.prepare('SELECT * FROM knowledge_pending_adoptions ORDER BY created_at ASC LIMIT ?').all(limit);
+    return rows.map((row) => ({
+      unitId: row.unit_id, revisionId: row.revision_id, actor: row.actor,
+      note: row.note, createdAt: row.created_at
+    }));
+  }
+
+  /** 目标修订落地后，把挂起的来源与采纳显式解析到本地 revision。 */
+  resolvePending({ unitId = '' } = {}) {
+    let links = 0;
+    let adoptions = 0;
+    for (const item of this.listPendingLinks({ unitId })) {
+      const localRevision = this.localRevisionFor(item.unitId, item.revisionId);
+      if (localRevision === null) continue;
+      if (!this.getObservation(item.observationId)) continue;
+      const exists = this.db.prepare(`SELECT 1 AS hit FROM knowledge_source_links
+        WHERE unit_id=? AND revision=? AND observation_id=? AND relation=?`)
+        .get(item.unitId, localRevision, item.observationId, item.relation);
+      if (!exists) {
+        const payload = {
+          contract: 'knowledge-source-link/v1', unitId: item.unitId, revision: localRevision,
+          observationId: item.observationId, relation: item.relation,
+          createdAt: item.createdAt, createdBy: item.createdBy
+        };
+        const body = canonical(payload);
+        this.db.prepare(`INSERT OR IGNORE INTO knowledge_source_links
+          (unit_id,revision,observation_id,relation,created_at,created_by,payload,payload_hash)
+          VALUES(?,?,?,?,?,?,?,?)`).run(
+          item.unitId, localRevision, item.observationId, item.relation,
+          item.createdAt, item.createdBy, body, sha256(body)
+        );
+        links += 1;
+      }
+      this.db.prepare('DELETE FROM knowledge_pending_links WHERE unit_id=? AND revision_id=? AND observation_id=? AND relation=?')
+        .run(item.unitId, item.revisionId, item.observationId, item.relation);
+    }
+    for (const item of this.listPendingAdoptions({ unitId })) {
+      const localRevision = this.localRevisionFor(item.unitId, item.revisionId);
+      if (localRevision === null) continue;
+      const row = this.db.prepare('SELECT payload_hash FROM personal_revisions WHERE unit_id=? AND revision=?')
+        .get(item.unitId, localRevision);
+      if (!row) continue;
+      if (!this.adoption(item.unitId)) {
+        this.adopt({ unitId: item.unitId, revision: localRevision, actor: item.actor, note: item.note });
+        adoptions += 1;
+      }
+      this.db.prepare('DELETE FROM knowledge_pending_adoptions WHERE unit_id=? AND revision_id=?')
+        .run(item.unitId, item.revisionId);
+    }
+    return { links, adoptions };
+  }
+
+  // ---- 分叉候选（不直接改本地 Head） ----
   addCandidate({
     knowledgeId, unitId, baseRevisionId = null, revisionId, payload, payloadHash,
     sourceBundle = {}, originDevice = ''

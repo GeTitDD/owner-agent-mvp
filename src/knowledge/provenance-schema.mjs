@@ -205,6 +205,28 @@ export const PROVENANCE_DDL = `
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+
+  -- v2：目标修订尚未落地时挂起来源链接与采纳，严禁猜本地整数 revision。
+  CREATE TABLE IF NOT EXISTS knowledge_pending_links (
+    unit_id TEXT NOT NULL,
+    revision_id TEXT NOT NULL,
+    observation_id TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    payload_hash TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(unit_id, revision_id, observation_id, relation)
+  );
+  CREATE TABLE IF NOT EXISTS knowledge_pending_adoptions (
+    unit_id TEXT NOT NULL,
+    revision_id TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    payload_hash TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(unit_id, revision_id)
+  );
 `;
 
 /** 在既有 PersonalKnowledgeStore 连接上安装新表；幂等。 */

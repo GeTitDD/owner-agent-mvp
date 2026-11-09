@@ -32,17 +32,19 @@ export class KnowledgeContextLedger {
     const existing = this.get(snapshotId);
     if (existing) return { snapshot: existing, created: false };
     const refs = refsFromPlan(plan).map((ref) => {
-      const unit = this.store.get(ref.knowledgeId);
-      const revisionRow = unit
-        ? this.db.prepare('SELECT payload_hash FROM personal_revisions WHERE unit_id=? AND revision=?')
-          .get(ref.knowledgeId, ref.revision)
-        : null;
+      const revisionRow = this.db.prepare('SELECT payload,payload_hash FROM personal_revisions WHERE unit_id=? AND revision=?')
+        .get(ref.knowledgeId, ref.revision);
+      let verificationStatus = 'missing';
+      if (revisionRow) {
+        try { verificationStatus = JSON.parse(revisionRow.payload).verificationStatus ?? 'unknown'; }
+        catch { verificationStatus = 'unknown'; }
+      }
       return {
         key: ref.key,
         knowledgeId: ref.knowledgeId,
         revision: ref.revision,
         payloadHash: revisionRow?.payload_hash ?? '',
-        verificationStatus: unit?.verificationStatus ?? 'missing'
+        verificationStatus
       };
     });
     const stamp = this.clock();

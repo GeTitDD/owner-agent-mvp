@@ -71,6 +71,8 @@ rev_ = sha256(canonical({
 2. 正文变化不继承旧的 `verificationStatus`；重验证由 Owner 显式接受。
 3. 不允许直接改数据库当前行绕过历史；旧库首次打开时自动补齐索引，缺失来源保持 `unknown`。
 4. `knowledge_adoptions` 记录 Owner 采纳的修订，与 Head 分离；编辑后 `explain` 报告 drift。
+5. **Compiler 只消费已采纳修订**：Workspace Overlay 优先读取 `knowledge_adoptions.adopted_revision` 对应的不可变修订；没有采纳记录时才沿用 Head（旧库兼容）。`workspace.requireAdoption=true` 可强制只接受显式采纳的修订。
+6. **Agent 候选审批走同一修订钩子**：`reviewProposal` 批准后在事务外调用 `onRevision`，立即产生修订索引与 `create/revise` 事件，不再等待下次回填。
 
 ## 4. 变更事件
 
@@ -135,24 +137,31 @@ rev_ = sha256(canonical({
 
 ## 6. 导入算法
 
-1. 校验 `contract` / `schemaVersion`（兼容 v1）。
-2. 校验每个修订：`payloadHash === sha256(canonical(payload))`；v2 额外校验 `revisionId` 复算一致。
-3. 校验事件：`payloadHash` 一致；`changeId` 重复且 hash 不同 → 拒绝。
-4. 作用域：若传入 `allowedProjectIds`，项目不匹配的单元、来源与观察整条拒绝（`scope-not-allowed`）。个人/非项目知识不因同步获得项目授权。
-5. 单元合并（图感知）：
+1. **先预检，后写入**：`apply=false` 时只读：不写 `knowledge_projects`、`knowledge_changes`、来源、快照、候选、冲突或游标。
+2. 校验 `contract` / `schemaVersion`（兼容 v1）。
+3. 校验每个修订：`payloadHash === sha256(canonical(payload))`；v2 额外校验 `revisionId` 复算一致。
+4. 校验事件：`payloadHash` 一致；`changeId` 重复且 hash 不同 → 拒绝。
+5. **作用域**：若传入 `allowedProjectIds`：
+   - 单元必须**每一版修订**都在允许项目内；项目范围但无 projectId 的修订整条拒绝；
+   - 项目身份、来源、观察、上下文快照同样过滤；
+   - 事件按 `knowledgeId` 过滤，只允许已通过预检的单元；
+   - 无项目来源只有在被授权单元实际引用时才导入；
+   - 个人/非项目知识不因同步获得项目授权。
+6. 单元合并（图感知）：
    - 所有远端 `revisionId` 本地已知 → `unchanged`；
    - 本地 Head 是远端 Head 的祖先 → `fast-forward`（保留 `parentRevisionIds`，按本地顺序追加）；
    - 远端 Head 是本地 Head 的祖先 → `local-ahead`；
    - 存在共同祖先且双方各有新修订 → `diverged`；
    - 无共同祖先 → `unrelated`。
-6. `diverged` 且字段级三方合并没有冲突 → 生成一条**元数据合并修订**（双亲），旧行为兼容。
-7. 有冲突（正文、验证状态、采纳状态或同一字段双边修改）→
+7. `diverged` 且字段级三方合并没有冲突 → 生成一条**元数据合并修订**（双亲），旧行为兼容。
+8. 有冲突（正文、验证状态、采纳状态或同一字段双边修改）→
    - 远端 Head 写入 `knowledge_candidates`（完整 payload + 来源包）；
    - 远端分支的全部未知修订以 `local_revision=NULL`、`status=candidate` 进入不可变索引；
    - 每个冲突字段写入 `knowledge_conflicts`；
    - **本地 Head 不动**，Owner 采纳状态不动。
-8. 导入来源/观察/链接/采纳/上下文快照；已存在的采纳不被覆盖。
-9. 写回游标；重复导入返回 `unchanged`，不产生新修订。
+9. **来源/采纳按 `revisionId` 映射**：导出 `links[].revisionId` 与 `adoptions[].revisionId`；导入用“远端 revisionId → 本地 revision”映射，绝不直接复用远端整数 revision。找不到目标时写入 `knowledge_pending_links` / `knowledge_pending_adoptions`，等目标修订落地后再解析。
+10. 导入来源/观察/链接/采纳/上下文快照；已存在的采纳不被覆盖。
+11. 写回游标；重复导入返回 `unchanged`，不产生新修订。
 
 ## 7. 冲突解决（R4）
 
