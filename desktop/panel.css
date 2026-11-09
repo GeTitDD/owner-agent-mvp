@@ -690,3 +690,21 @@ pre.diff, pre.logs {
 .send-btn:disabled { opacity: 0.5; }
 .send-btn.sending { animation: pulse 1s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.55; } }
+
+/* 沙箱预检：橙色=Node 项目缺文件；灰色=按设置跳过/无 profile */
+.test-warning.muted {
+  border-color: var(--line);
+  background: var(--accent-soft);
+  color: var(--muted);
+}
+.test-warning #testWarningText { flex: 1; min-width: 0; }
+.mode-select {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 2px 20px 2px 6px;
+  font-size: 10px;
+  flex: none;
+  width: auto;
+}

@@ -1,0 +1,82 @@
+// 沙箱计划：全局默认 / 项目覆盖 / 生态探测。
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  SANDBOX_MODES, normalizeSandboxMode, effectiveSandboxMode,
+  detectEcosystem, resolveSandboxPlan, describeSandboxPlan
+} from '../src/sandbox-plan.mjs';
+
+const project = (files) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sandbox-plan-'));
+  for (const [rel, content] of Object.entries(files)) {
+    const target = path.join(root, rel);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  }
+  return root;
+};
+
+test('模式规范化与优先级：项目覆盖 > 全局', () => {
+  assert.deepEqual(SANDBOX_MODES, ['auto', 'off', 'node-smoke']);
+  assert.equal(normalizeSandboxMode('nope', 'auto'), 'auto');
+  assert.equal(normalizeSandboxMode('off'), 'off');
+  assert.equal(effectiveSandboxMode({ globalMode: 'auto', projectMode: 'off' }), 'off');
+  assert.equal(effectiveSandboxMode({ globalMode: 'off', projectMode: 'auto' }), 'auto');
+  assert.equal(effectiveSandboxMode({ globalMode: 'node-smoke' }), 'node-smoke');
+});
+
+test('生态探测：node / godot / python / rust / go / unknown', () => {
+  assert.equal(detectEcosystem(project({ 'package.json': '{}' })), 'node');
+  assert.equal(detectEcosystem(project({ 'project.godot': '' })), 'godot');
+  assert.equal(detectEcosystem(project({ 'pyproject.toml': '' })), 'python');
+  assert.equal(detectEcosystem(project({ 'Cargo.toml': '' })), 'rust');
+  assert.equal(detectEcosystem(project({ 'go.mod': '' })), 'go');
+  assert.equal(detectEcosystem(project({ 'README.md': '' })), 'unknown');
+  assert.equal(detectEcosystem(''), 'unknown');
+});
+
+test('auto：Node 项目启用并按缺失文件给出 actionable 计划', () => {
+  const ready = project({ 'package.json': '{}', 'tests/sandbox-smoke.test.mjs': '' });
+  const ok = resolveSandboxPlan({ root: ready, mode: 'auto', includePaths: ['package.json'] });
+  assert.equal(ok.enabled, true);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.profile, 'node-smoke');
+  assert.equal(ok.reason, 'ready');
+
+  const missing = project({ 'package.json': '{}' });
+  const plan = resolveSandboxPlan({ root: missing, mode: 'auto', includePaths: ['package.json'] });
+  assert.equal(plan.enabled, true);
+  assert.equal(plan.ok, false);
+  assert.deepEqual(plan.missing, ['tests/sandbox-smoke.test.mjs']);
+  assert.match(describeSandboxPlan(plan), /测试配置缺少/u);
+});
+
+test('auto：非 Node 项目不弹警告，静默降级为人工验证', () => {
+  const godot = project({ 'project.godot': '' });
+  const plan = resolveSandboxPlan({ root: godot, mode: 'auto', includePaths: ['package.json'] });
+  assert.equal(plan.enabled, false);
+  assert.equal(plan.profile, null);
+  assert.equal(plan.ecosystem, 'godot');
+  assert.equal(plan.reason, 'no-profile');
+  assert.match(describeSandboxPlan(plan), /没有可用沙箱 profile/u);
+});
+
+test('off：任何项目都跳过，不提示缺失文件', () => {
+  const node = project({ 'package.json': '{}' });
+  const plan = resolveSandboxPlan({ root: node, mode: 'off', includePaths: ['package.json'] });
+  assert.equal(plan.enabled, false);
+  assert.equal(plan.missing.length, 0);
+  assert.equal(plan.reason, 'disabled');
+  assert.match(describeSandboxPlan(plan), /跳过沙箱测试/u);
+});
+
+test('node-smoke 强制模式：非 Node 项目也按 Node 预检', () => {
+  const godot = project({ 'project.godot': '' });
+  const plan = resolveSandboxPlan({ root: godot, mode: 'node-smoke', includePaths: ['package.json'] });
+  assert.equal(plan.enabled, true);
+  assert.equal(plan.ok, false);
+  assert.deepEqual(plan.missing.sort(), ['package.json', 'tests/sandbox-smoke.test.mjs']);
+});

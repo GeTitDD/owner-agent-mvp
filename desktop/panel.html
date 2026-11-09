@@ -117,7 +117,12 @@
         </div>
         <div id="testWarning" class="test-warning" hidden>
           <span id="testWarningText"></span>
-          <button id="fixTestConfig" class="ghost small">配置测试</button>
+          <select id="sandboxModeSelect" class="mode-select" aria-label="本项目的沙箱测试">
+            <option value="auto">自动</option>
+            <option value="off">关闭</option>
+            <option value="node-smoke">Node</option>
+          </select>
+          <button id="fixTestConfig" class="ghost small">配置</button>
         </div>
       </div>
     </section>
@@ -142,6 +147,14 @@
         <label class="field">
           <span>模型（留空使用 Pi 默认）</span>
           <input id="model" placeholder="provider/model" />
+        </label>
+        <label class="field">
+          <span>沙箱测试默认策略（按项目可覆盖）</span>
+          <select id="sandboxMode" aria-label="沙箱测试默认策略">
+            <option value="auto">自动：Node 项目启用，其它生态跳过</option>
+            <option value="off">关闭：一律跳过，只做人工验证</option>
+            <option value="node-smoke">强制 Node：任何项目都按 node-smoke 预检</option>
+          </select>
         </label>
         <div class="field">
           <span>桌宠皮肤（Codex 阶段兼容；把 PNG 放进 userData\mascots 即可自定义）</span>

@@ -62,11 +62,24 @@
     $('playbookSection').hidden = !hasProjects;
     const testConfig = view?.testConfig;
     const missing = testConfig?.missing ?? [];
-    $('testWarning').hidden = !(hasProjects && testConfig && testConfig.ok === false);
-    if (hasProjects && testConfig && testConfig.ok === false) {
+    const showWarning = Boolean(hasProjects && testConfig && testConfig.enabled && testConfig.ok === false);
+    const showMuted = Boolean(hasProjects && testConfig && !testConfig.enabled);
+    $('testWarning').hidden = !(showWarning || showMuted);
+    $('testWarning').classList.toggle('muted', !showWarning && showMuted);
+    if (showWarning) {
       $('testWarningText').textContent = missing.length
         ? `测试配置缺少 ${missing.join(', ')}；补丁应用后无法创建沙箱。`
         : '还没有可用的测试配置；补丁应用后无法创建沙箱。';
+    } else if (showMuted) {
+      $('testWarningText').textContent = testConfig.reason === 'disabled'
+        ? '已按设置跳过沙箱测试；补丁只做人工验证。'
+        : `当前项目（${testConfig.ecosystem || 'unknown'}）没有可用沙箱 profile；补丁只做人工验证。`;
+    }
+    const sandboxSelect = $('sandboxModeSelect');
+    if (sandboxSelect) {
+      const projectMode = view?.config?.sandboxProjectMode || 'auto';
+      sandboxSelect.value = ['auto', 'off', 'node-smoke'].includes(projectMode) ? projectMode : 'auto';
+      sandboxSelect.disabled = !hasProjects;
     }
     $('footerStatus').textContent = view?.services?.docker
       ? '本地服务已启动 · Docker 可用'
@@ -238,6 +251,11 @@
         if (!outcome.ok) return;
         if (!applying) {
           toast('补丁已批准；再次审阅即可应用');
+          return;
+        }
+        if (outcome.result?.testSkipped) {
+          toast('补丁已应用；按当前沙箱设置跳过测试（仅人工验证）', 6000);
+          await refresh();
           return;
         }
         if (outcome.result?.testRequested === false) {
@@ -1004,6 +1022,7 @@
       $('gatewayUrl').value = data.gatewayUrl ?? '';
       $('model').value = data.model ?? '';
       $('allowedPaths').value = data.allowedPaths ?? 'src/';
+      $('sandboxMode').value = data.sandboxMode ?? 'auto';
       $('includePaths').value = (data.includePaths ?? []).join(',');
       $('knowledgeAutoHarvest').checked = data.knowledgeAutoHarvest === true;
       renderServiceGrid($('serviceGrid'), data.services);
@@ -1065,6 +1084,7 @@
         model: $('model').value,
         allowedPaths: $('allowedPaths').value,
         includePaths: $('includePaths').value,
+        sandboxMode: $('sandboxMode').value,
         knowledgeAutoHarvest: $('knowledgeAutoHarvest').checked
       });
       $('settings').hidden = true;
@@ -1094,6 +1114,21 @@
   $('addProjectSettings').onclick = () => { void pickProject(); };
   $('retryServices').onclick = () => { void openSettings(); };
   $('fixTestConfig').onclick = () => { void openSettings(); };
+  $('sandboxModeSelect').onchange = async () => {
+    const projectId = view?.config?.projectId ?? $('projectSelect').value ?? '';
+    if (!projectId) return;
+    try {
+      await window.companion.settings.set({
+        sandboxProjectMode: { projectId, mode: $('sandboxModeSelect').value }
+      });
+      await refresh();
+      toast($('sandboxModeSelect').value === 'off'
+        ? '本项目已跳过沙箱测试；补丁只做人工验证'
+        : '本项目的沙箱策略已更新');
+    } catch (error) {
+      toast(String(error?.message ?? error), 5000);
+    }
+  };
   for (const button of document.querySelectorAll('[data-knowledge]')) {
     button.onclick = () => { void askKnowledge(button.dataset.knowledge); };
   }

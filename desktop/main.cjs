@@ -64,6 +64,8 @@ const defaults = () => ({
   gatewayUrl: 'http://127.0.0.1:18789',
   model: '',
   mascotSkin: 'pululu',
+  sandboxMode: 'auto',
+  sandboxByProject: {},
   knowledgeAutoHarvest: false,
   panelPinned: false
 });
@@ -272,29 +274,21 @@ const stateOf = (summary) => summary;
 
 const projectIdOf = (item) => item?.project_id ?? item?.projectId ?? '';
 
-/** 当前项目的测试配置自检：node-smoke 固定运行 tests/sandbox-smoke.test.mjs。 */
-const testConfigForProject = (project) => {
-  const required = [...new Set(['tests/sandbox-smoke.test.mjs', ...config.includePaths])]
-    .map((item) => String(item).replace(/\\/gu, '/').replace(/^\.\//u, ''))
-    .filter(Boolean);
-  if (!project?.root) {
-    return { ok: false, projectId: project?.id ?? '', profile: 'node-smoke', required, missing: [] };
-  }
-  const missing = required.filter((rel) => {
-    try {
-      fs.accessSync(path.join(project.root, rel));
-      return false;
-    } catch {
-      return true;
-    }
+/** 当前项目的沙箱预检：全局默认 + 按项目覆盖 + 生态探测。 */
+let sandboxPlanModule = null;
+const testConfigForProject = async (project) => {
+  sandboxPlanModule = sandboxPlanModule ?? await importEsm('../src/sandbox-plan.mjs');
+  const projectId = project?.id ?? '';
+  const mode = sandboxPlanModule.effectiveSandboxMode({
+    globalMode: config.sandboxMode,
+    projectMode: (config.sandboxByProject ?? {})[projectId] ?? ''
   });
-  return {
-    ok: missing.length === 0,
-    projectId: project.id,
-    profile: 'node-smoke',
-    required,
-    missing
-  };
+  const plan = sandboxPlanModule.resolveSandboxPlan({
+    root: project?.root ?? '',
+    mode,
+    includePaths: config.includePaths
+  });
+  return { ...plan, projectId };
 };
 
 const createSandbox = (proposalId) => api('/owner/v1/sandbox-runs', {
@@ -726,9 +720,11 @@ const buildView = async () => {
       allowedPaths: config.allowedPaths,
       includePaths: config.includePaths,
       gatewayUrl: config.gatewayUrl,
-      model: config.model
+      model: config.model,
+      sandboxMode: config.sandboxMode ?? 'auto',
+      sandboxProjectMode: (config.sandboxByProject ?? {})[activeProjectId] ?? ''
     },
-    testConfig: testConfigForProject(activeProject),
+    testConfig: await testConfigForProject(activeProject),
     services,
     mascot: await mascotView(),
     knowledge: await knowledgeSnapshot(activeProjectId),
@@ -1105,7 +1101,7 @@ const registerIpc = () => {
     });
     const projects = (await api('/owner/v1/projects')).items ?? [];
     const project = projects.find((item) => item.id === created.projectId);
-    return { jobId: created.jobId, status: created.status, testConfig: project ? testConfigForProject(project) : null };
+    return { jobId: created.jobId, status: created.status, testConfig: project ? await testConfigForProject(project) : null };
   });
 
   ipcMain.handle('companion:decide', async (event, input) => {
@@ -1142,7 +1138,11 @@ const registerIpc = () => {
       // 应用后自动创建待批准的沙箱运行；失败必须如实回传，不能假装测试已开始。
       const projects = (await api('/owner/v1/projects')).items ?? [];
       const project = projects.find((item) => item.id === config.projectId) ?? projects[0] ?? null;
-      const testConfig = testConfigForProject(project);
+      const testConfig = await testConfigForProject(project);
+      // 明确关闭 / 非 Node 生态：补丁照常应用，但按设置跳过测试，不弹失败弹窗。
+      if (!testConfig.enabled) {
+        return { ...applied, testRequested: false, testSkipped: true, testConfig };
+      }
       if (!testConfig.ok) {
         return {
           ...applied,
@@ -1246,6 +1246,15 @@ const registerIpc = () => {
 
   ipcMain.handle('companion:create-sandbox', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const projects = (await api('/owner/v1/projects')).items ?? [];
+    const project = projects.find((item) => item.id === config.projectId) ?? projects[0] ?? null;
+    const testConfig = await testConfigForProject(project);
+    if (!testConfig.enabled) {
+      throw new Error('当前项目未启用沙箱测试；到设置 → 沙箱测试里调整（自动 / 关闭 / Node）。');
+    }
+    if (!testConfig.ok) {
+      throw new Error(`测试配置缺少 ${testConfig.missing.join(', ')}，无法创建沙箱。`);
+    }
     return createSandbox(String(input?.proposalId ?? ''));
   });
 
@@ -1372,7 +1381,7 @@ const registerIpc = () => {
     });
     const projects = (await api('/owner/v1/projects')).items ?? [];
     const project = projects.find((item) => item.id === created.projectId);
-    return { ...created, testConfig: project ? testConfigForProject(project) : null };
+    return { ...created, testConfig: project ? await testConfigForProject(project) : null };
   });
 
   ipcMain.handle('companion:mascots:list', async (event) => {
@@ -1409,6 +1418,20 @@ const registerIpc = () => {
     if (typeof input?.gatewayUrl === 'string') config.gatewayUrl = input.gatewayUrl.trim();
     if (typeof input?.model === 'string') config.model = input.model.trim();
     if (typeof input?.projectId === 'string') config.projectId = input.projectId;
+    if (typeof input?.sandboxMode === 'string') {
+      const mod = sandboxPlanModule ?? await importEsm('../src/sandbox-plan.mjs');
+      config.sandboxMode = mod.normalizeSandboxMode(input.sandboxMode, config.sandboxMode ?? 'auto');
+    }
+    if (input?.sandboxProjectMode && typeof input.sandboxProjectMode === 'object') {
+      const mod = sandboxPlanModule ?? await importEsm('../src/sandbox-plan.mjs');
+      const projectId = String(input.sandboxProjectMode.projectId ?? '');
+      const mode = String(input.sandboxProjectMode.mode ?? '');
+      if (projectId) {
+        config.sandboxByProject = { ...(config.sandboxByProject ?? {}) };
+        if (!mode || mode === 'auto') delete config.sandboxByProject[projectId];
+        else config.sandboxByProject[projectId] = mod.normalizeSandboxMode(mode, 'auto');
+      }
+    }
     if (typeof input?.knowledgeAutoHarvest === 'boolean') {
       config.knowledgeAutoHarvest = input.knowledgeAutoHarvest;
       knowledgeRuntime?.setAutoHarvest(input.knowledgeAutoHarvest, { model: config.model });
