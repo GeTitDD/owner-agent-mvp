@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { OwnerStore } from '../../src/owner-store.mjs';
 import { PersonalKnowledgeStore } from '../../src/personal-store.mjs';
@@ -35,6 +36,10 @@ const run = async () => {
     createSyntheticProject({
       store: owner, root: path.join(root, 'beta'), projectId: 'beta', name: 'Beta Repo'
     });
+    execFileSync('git', [
+      '-C', path.join(root, 'alpha'),
+      'remote', 'add', 'origin', 'https://github.com/example/alpha.git'
+    ]);
     // 直接插入一个 UNC 根路径的项目，验证“按来源主机分组”的远端分组。
     owner.db.prepare(`INSERT INTO owner_projects(
       id,name,root,primary_domain,domains,imports,goal,status,owner_note,created_at,updated_at,root_identity
@@ -128,6 +133,19 @@ const run = async () => {
     check('project shows its latest progress', Boolean(alpha?.progress) && !alpha.progress.includes('还没有任务记录'), alpha?.progress);
     check('latest progress has a relative time', /刚刚|分钟前|小时前|天前/u.test(alpha?.time ?? ''), alpha?.time);
     check('active project is highlighted', alpha?.selected === true, String(alpha?.selected));
+    const github = await panel.evaluate(() => {
+      const row = document.querySelector('#projectList .project-row[data-project="alpha"]');
+      const chip = row?.parentElement?.querySelector('.project-gh');
+      const betaRow = document.querySelector('#projectList .project-row[data-project="beta"]');
+      return {
+        chip: chip ? { text: chip.textContent, title: chip.title } : null,
+        betaChip: Boolean(betaRow?.parentElement?.querySelector('.project-gh'))
+      };
+    });
+    check('github repo is linked from git remote',
+      Boolean(github.chip) && /example\/alpha/u.test(github.chip.title),
+      JSON.stringify(github.chip));
+    check('projects without a github remote show no badge', github.betaChip === false);
     check('needs section is hidden when nothing is pending',
       await panel.evaluate(() => document.getElementById('needsSection').hidden) === true);
 

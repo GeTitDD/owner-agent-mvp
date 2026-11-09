@@ -119,6 +119,17 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 
 ![复盘并沉淀](assets/companion/reflect-distill.png)
 
+### 3.7 GitHub 关联
+
+- 项目行自动从 `git remote get-url origin` 识别 GitHub 仓库（https / ssh / scp 写法都支持），显示 `GH` 徽章。
+- 点击 `GH` 在系统浏览器打开仓库；`GH` 绿色表示 gh 已成功读取状态，`GH?` 表示已关联但状态不可读（悬停看原因）。
+- 悬停可看 `owner/repo`、私有/公开、默认分支、星标、最近一次提交。
+- 复用本机已登录的 **gh CLI**，不新增 token 存储；未登录时提示 `需要 gh auth login`，仓库链接仍然可用。
+- 只读：不读取代码、不改动远端；创建 PR 等写操作暂不包含。
+- 状态按项目根目录缓存 5 分钟，避免每次轮询都调用 GitHub。
+
+![GitHub 关联](assets/companion/github-link.png)
+
 ## 4. 组件清单
 
 | 组件 | 用途 |
@@ -163,6 +174,6 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | `npm run e2e:desktop:knowledge` | PASS（知识摘要、验证、复用、今日视图） |
 | `npm run e2e:desktop:sandbox-config` | PASS（缺少快照文件 → 失败弹窗 → 补齐后重试） |
 | `npm run e2e:desktop:mascots` | PASS（spritesheet 播放、一键换肤、静态回退、无底盘、有效帧） |
-| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、知识摘要、搜索、折叠、点击切换） |
+| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、知识摘要、GitHub 关联、搜索、折叠、点击切换） |
 | `npm run e2e:desktop:playbooks` | PASS（运行中状态、4 个一键沉淀预设、分析、取消、手动/一键沉淀、去重、提案 HITL） |
 | Workbench UI 冒烟 | 详情 5 个标签、修订对比、使用记录、维护降级提示 |

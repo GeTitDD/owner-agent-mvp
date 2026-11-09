@@ -804,6 +804,23 @@ pre.diff, pre.logs {
 }
 .project-row:hover { background: var(--accent-soft); }
 .project-row.selected { background: var(--accent-soft); border-left-color: var(--accent); }
+.project-row-wrap { display: flex; align-items: stretch; gap: 3px; }
+.project-row-wrap .project-row { flex: 1; min-width: 0; }
+.project-gh {
+  flex: none;
+  align-self: center;
+  width: 30px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+.project-gh[data-state='ok'] { color: var(--ok); border-color: rgba(34, 197, 94, 0.35); }
+.project-gh:hover { border-color: var(--accent); color: var(--text); }
 .project-dot {
   width: 6px;
   height: 6px;

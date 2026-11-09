@@ -7,8 +7,11 @@ const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, dialog, No
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
+const { promisify } = require('node:util');
 const { pathToFileURL } = require('node:url');
+
+const execFileAsync = promisify(execFile);
 
 const PET_SIZE = 136;
 const PANEL_WIDTH = 440;
@@ -72,6 +75,8 @@ const playbookAborts = new Map();
 let knowledgeSummaryModule = null;
 let harvestInFlight = false;
 let mascotModule = null;
+let githubModule = null;
+const githubCache = new Map();
 
 const configPath = () => path.join(app.getPath('userData'), 'companion.json');
 const defaults = () => ({
@@ -769,6 +774,81 @@ const buildView = async () => {
   // 供面板顶部的项目列表显示「最近更新」。
   const projectSource = await importEsm('../src/project-source.mjs');
   const localHost = projectSource.localHostName();
+
+  const loadGithub = async () => (githubModule ??= await importEsm('../src/github.mjs'));
+
+  const gitRemoteOf = async (root) => {
+    try {
+      const { stdout } = await execFileAsync(
+        'git', ['-C', root, 'config', '--get', 'remote.origin.url'],
+        { timeout: 3000, windowsHide: true }
+      );
+      return stdout.trim();
+    } catch {
+      return '';
+    }
+  };
+
+  const ghErrorText = (error) => {
+    const stderr = String(error?.stderr ?? '').trim();
+    if (error?.code === 'ENOENT') return '未安装 gh CLI';
+    if (/auth|login|authentication/iu.test(stderr)) return '需要 gh auth login';
+    if (/not found|could not resolve|HTTP 404/iu.test(stderr)) return '仓库不存在或无权访问';
+    return (stderr.split('\n')[0] || String(error?.message ?? error)).slice(0, 120);
+  };
+
+  /** 关联项目根目录的 GitHub 仓库，并用 gh 读取只读状态；缓存 5 分钟。 */
+  const githubForProject = async (root) => {
+    if (!root) return null;
+    const cached = githubCache.get(root);
+    if (cached && Date.now() - cached.at < (cached.value ? 5 * 60 * 1000 : 60 * 1000)) {
+      return cached.value;
+    }
+    let value = null;
+    try {
+      const remote = await gitRemoteOf(root);
+      const { parseGitHubRemote } = await loadGithub();
+      const parsed = parseGitHubRemote(remote);
+      if (parsed) {
+        value = {
+          ...parsed,
+          available: false,
+          error: '',
+          private: null,
+          defaultBranch: '',
+          stars: null,
+          description: '',
+          lastCommit: ''
+        };
+        try {
+          const { stdout } = await execFileAsync('gh', [
+            'repo', 'view', parsed.nameWithOwner,
+            '--json', 'nameWithOwner,url,description,isPrivate,stargazerCount,defaultBranchRef'
+          ], { timeout: 3500, windowsHide: true });
+          const data = JSON.parse(stdout);
+          value.available = true;
+          value.url = data.url || value.url;
+          value.private = data.isPrivate === true;
+          value.description = data.description ?? '';
+          value.stars = Number(data.stargazerCount) || 0;
+          value.defaultBranch = data.defaultBranchRef?.name ?? '';
+        } catch (error) {
+          value.error = ghErrorText(error);
+        }
+        try {
+          const { stdout } = await execFileAsync(
+            'git', ['-C', root, 'log', '-1', '--format=%h %s'],
+            { timeout: 3000, windowsHide: true }
+          );
+          value.lastCommit = stdout.trim().slice(0, 160);
+        } catch { /* 没有提交也允许只显示仓库链接 */ }
+      }
+    } catch {
+      value = null;
+    }
+    githubCache.set(root, { at: Date.now(), value });
+    return value;
+  };
   const projectDigest = (projectId) => {
     const items = [];
     for (const job of allJobs) {
@@ -920,6 +1000,9 @@ const buildView = async () => {
     } : null
   };
   const services = await serviceStatus();
+  const projectGithubs = await Promise.all(
+    projectList.map((project) => githubForProject(project.root))
+  );
   let stage = stageText(chain);
   if (activePlaybook) stage = `pstack 正在分析：${activePlaybook.title}`;
   else if (stage === '暂时没有进行中的任务' && recentPlaybook) {
@@ -965,7 +1048,7 @@ const buildView = async () => {
           : '空闲'
     },
     summary,
-    projects: projectList.map((project) => {
+    projects: projectList.map((project, index) => {
       const digest = projectDigest(project.id);
       const lastAt = digest?.at || project.last_event_at || project.updated_at
         || project.created_at || '';
@@ -980,6 +1063,7 @@ const buildView = async () => {
         host,
         hostLabel: projectSource.hostLabelOf(host, localHost),
         hostLocal: host === localHost,
+        github: projectGithubs[index] ?? null,
         lastEventAt: lastAt,
         progress: digest?.text
           ?? (project.goal ? `目标：${project.goal}` : '还没有任务记录'),
@@ -1898,6 +1982,17 @@ const registerIpc = () => {
     const projects = (await api('/owner/v1/projects')).items ?? [];
     const project = projects.find((item) => item.id === created.projectId);
     return { ...created, testConfig: project ? await testConfigForProject(project) : null };
+  });
+
+  // 只允许打开 GitHub 仓库链接，避免渲染进程打开任意网址。
+  ipcMain.handle('companion:open-external', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const url = String(input?.url ?? '');
+    if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/u.test(url)) {
+      throw new Error('只允许打开 GitHub 仓库链接。');
+    }
+    await shell.openExternal(url);
+    return { opened: true };
   });
 
   ipcMain.handle('companion:mascots:list', async (event) => {

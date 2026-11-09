@@ -203,6 +203,7 @@
       if (!collapsedHosts.has(host)) {
         const body = el('div', 'project-rows');
         for (const project of group.rows) {
+          const wrapper = el('div', 'project-row-wrap');
           const row = el('button', 'project-row');
           row.type = 'button';
           row.dataset.project = project.id;
@@ -224,7 +225,27 @@
           main.append(top, progress);
           row.append(dot, main);
           row.onclick = () => { void selectProject(project.id); };
-          body.append(row);
+          wrapper.append(row);
+          if (project.github) {
+            const gh = el('button', 'project-gh', project.github.available ? 'GH' : 'GH?');
+            gh.type = 'button';
+            gh.dataset.state = project.github.available ? 'ok' : 'unknown';
+            gh.title = project.github.available
+              ? `${project.github.nameWithOwner} · ${project.github.private ? '私有' : '公开'}`
+                + `${project.github.defaultBranch ? ` · 默认分支 ${project.github.defaultBranch}` : ''}`
+                + `${Number.isFinite(project.github.stars) ? ` · ★ ${project.github.stars}` : ''}`
+                + `${project.github.lastCommit ? `\n${project.github.lastCommit}` : ''}`
+                + '\n点击打开 GitHub'
+              : `${project.github.nameWithOwner}\n${project.github.error || 'gh 暂时无法读取状态'}`
+                + '\n点击打开 GitHub';
+            gh.onclick = (event) => {
+              event.stopPropagation();
+              void window.companion.openExternal(project.github.url)
+                .catch((error) => toast(String(error?.message ?? error)));
+            };
+            wrapper.append(gh);
+          }
+          body.append(wrapper);
         }
         wrap.append(body);
       }
