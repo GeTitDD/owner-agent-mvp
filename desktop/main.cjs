@@ -326,7 +326,7 @@ const createSandbox = async (proposalId) => {
     body: {
       proposalId,
       profile: plan.profile,
-      projectDir: plan.projectDir ?? '',
+      ...(plan.projectDir ? { projectDir: plan.projectDir } : {}),
       includePaths: plan.required,
       imageDigest
     }
@@ -339,22 +339,39 @@ const toPending = ({ jobs, patches, sandboxes, repairs }, projectNames = new Map
     const projectId = projectIdOf(item);
     return { projectId, projectName: projectNames.get(projectId) ?? '' };
   };
+  const payloadOf = (job) => {
+    try { return typeof job.payload === 'string' ? JSON.parse(job.payload) : (job.payload ?? {}); }
+    catch { return {}; }
+  };
   for (const job of jobs) {
     if (job.status === 'pending_approval') {
+      const payload = payloadOf(job);
       pending.push({
         kind: 'job', id: job.id, hash: '',
         title: job.title,
         summary: `${job.job_type} · 等待你批准后才会开始`,
+        tier: 'write',
+        jobType: job.job_type,
+        intent: payload.intent ?? '',
+        targets: payload.targets ?? '',
+        allowedPaths: payload.allowedPaths ?? '',
+        analysisSummary: payload.analysisSummary ?? '',
+        next: '批准后：隔离 worktree 内写入 → 生成补丁 → 再审批 → 应用 → 沙箱',
+        createdAt: job.created_at ?? '',
         ...tag(job)
       });
     }
   }
   for (const patch of patches) {
+    const files = (patch.files ?? []).map((file) => file.path).join(', ');
     if (patch.status === 'proposed') {
       pending.push({
         kind: 'patch', id: patch.id, hash: patch.proposal_hash,
         title: `补丁 ${patch.id.slice(0, 8)}`,
-        summary: (patch.files ?? []).map((file) => file.path).join(', ') || '等待审阅冻结 Diff',
+        summary: files || '等待审阅冻结 Diff',
+        tier: 'write',
+        files,
+        next: '批准后：冻结当前 hash → 等你再次确认应用',
         ...tag(patch)
       });
     } else if (patch.status === 'approved') {
@@ -362,6 +379,9 @@ const toPending = ({ jobs, patches, sandboxes, repairs }, projectNames = new Map
         kind: 'patch-apply', id: patch.id, hash: patch.proposal_hash,
         title: `已批准补丁 ${patch.id.slice(0, 8)}`,
         summary: '下一步：应用到 Worktree，然后请求沙箱测试',
+        tier: 'write',
+        files,
+        next: '应用后：真实项目变更；随后创建沙箱测试等你批准',
         ...tag(patch)
       });
     }
@@ -373,6 +393,9 @@ const toPending = ({ jobs, patches, sandboxes, repairs }, projectNames = new Map
         kind: 'sandbox', id: run.id, hash: run.approval_hash,
         title: `测试 ${run.id.slice(0, 8)}`,
         summary: `${run.profile?.id ?? 'node-smoke'} · 等待你批准后运行`,
+        tier: 'run',
+        profile: run.profile?.id ?? 'node-smoke',
+        next: '批准后：Docker 沙箱内运行测试并收集证据',
         ...tag(run)
       });
     } else if (
@@ -383,6 +406,8 @@ const toPending = ({ jobs, patches, sandboxes, repairs }, projectNames = new Map
         kind: 'repair-create', id: run.id, hash: '',
         title: `测试失败 ${run.id.slice(0, 8)}`,
         summary: '可以先创建一个修复周期，再决定是否批准',
+        tier: 'write',
+        next: '创建后：基于失败证据生成新补丁，仍需你批准',
         ...tag(run)
       });
     }
@@ -396,6 +421,9 @@ const toPending = ({ jobs, patches, sandboxes, repairs }, projectNames = new Map
         kind: 'repair', id: cycle.id, hash: cycle.approval_hash,
         title: `修复 ${cycle.id.slice(0, 8)}`,
         summary: `范围 ${scope.join(', ') || '—'} · 等待你批准`,
+        tier: 'write',
+        scope: scope.join(', '),
+        next: '批准后：在原 base 上生成新补丁，再审批、应用、复测',
         ...tag(cycle)
       });
     }
@@ -779,6 +807,28 @@ const buildView = async () => {
   }
   const finalCycle = repairsInProject.find((cycle) =>
     ['tested_pass', 'tested_fail'].includes(cycle.status)) ?? null;
+  const chainView = {
+    job: chain.job ? {
+      id: chain.job.id, title: chain.job.title, status: chain.job.status,
+      jobType: chain.job.job_type, createdAt: chain.job.created_at, updatedAt: chain.job.updated_at
+    } : null,
+    patch: chain.patch ? {
+      id: chain.patch.id, status: chain.patch.status,
+      files: (chain.patch.files ?? []).map((file) => file.path),
+      createdAt: chain.patch.created_at, updatedAt: chain.patch.updated_at
+    } : null,
+    sandbox: chain.sandbox ? {
+      id: chain.sandbox.id, status: chain.sandbox.status,
+      testStatus: chain.sandbox.test_status, profile: chain.sandbox.profile?.id ?? '',
+      exitCode: chain.sandbox.exit_code, createdAt: chain.sandbox.created_at, updatedAt: chain.sandbox.updated_at
+    } : null,
+    cycle: chain.cycle ? {
+      id: chain.cycle.id, status: chain.cycle.status,
+      scope: Array.isArray(chain.cycle.repairScope) ? chain.cycle.repairScope
+        : Array.isArray(chain.cycle.repair_scope) ? chain.cycle.repair_scope : [],
+      createdAt: chain.cycle.created_at, updatedAt: chain.cycle.updated_at
+    } : null
+  };
   const services = await serviceStatus();
   return {
     version: COMPANION_VERSION,
@@ -787,6 +837,7 @@ const buildView = async () => {
     stage: stageText(chain),
     activity,
     timeline,
+    chain: chainView,
     worker: {
       running: Boolean(workerState.running),
       onProject: Boolean(workerOnProject),

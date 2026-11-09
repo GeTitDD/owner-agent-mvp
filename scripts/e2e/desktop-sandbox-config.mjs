@@ -46,14 +46,13 @@ const run = async () => {
     model: ''
   }, null, 2));
 
-  // 只建项目，不预置 Job；Job 从面板交办创建。
+  // 预置一个待批准 Job；Composer 现在先走只读分诊，测试环境没有模型，因此直接从 store 预置。
   execFileSync(process.execPath, [path.join(repoRoot, 'scripts', 'e2e', 'seed-p31.mjs')], {
     cwd: repoRoot,
     env: {
       ...process.env,
       OWNER_AGENT_DB: dbPath,
-      OWNER_E2E_ROOT: path.join(root, 'p31'),
-      P31_SKIP_JOB: '1'
+      OWNER_E2E_ROOT: path.join(root, 'p31')
     },
     stdio: 'ignore'
   });
@@ -95,11 +94,9 @@ const run = async () => {
       await panel.locator('#testWarning').isVisible(),
       await panel.locator('#testWarningText').innerText());
 
-    await panel.locator('#taskInput').fill('Fix the failing retry test');
-    await panel.locator('#submitTask').click();
-    await panel.getByRole('button', { name: '批准任务', exact: true }).waitFor({ timeout: 30000 });
-    const toastText = await panel.locator('#toast').innerText().catch(() => '');
-    check('job creation warns about missing test config', /测试配置缺少/u.test(toastText), toastText);
+    await panel.waitForSelector('#pendingList .pending-card', { timeout: 30000 });
+    check('seeded job is visible in the needs-you queue',
+      (await panel.locator('#pendingList .pending-card').count()) >= 1);
 
     const approveInModal = async (label) => {
       const modal = panel.locator('#modal');
@@ -109,7 +106,7 @@ const run = async () => {
     };
 
     await panel.getByRole('button', { name: '批准任务', exact: true }).click();
-    await approveInModal('批准');
+    await approveInModal('批准写请求');
     await panel.getByRole('button', { name: '审阅 Diff', exact: true }).waitFor({ timeout: 30000 });
     await panel.getByRole('button', { name: '审阅 Diff', exact: true }).click();
     await panel.locator('#modal pre.diff').waitFor({ timeout: 15000 });

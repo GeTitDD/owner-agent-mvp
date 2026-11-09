@@ -20,6 +20,7 @@
 - 知识报告：[docs/KNOWLEDGE_LOOP_V1_DELIVERY.md](docs/KNOWLEDGE_LOOP_V1_DELIVERY.md)
 - 桌宠皮肤：Cindy/Agent Island 皮肤集，`%APPDATA%\owner-agent-mvp\mascots` 可放自定义 PNG，见 [docs/MASCOT_PACK.md](docs/MASCOT_PACK.md)
 - 主界面：Cindy 式活动流 + 会话时间线 + Composer（Enter 发送 / Shift+Enter 列表接续）；页脚「诊断」可导出运行快照
+- UI 方向：任务驾驶舱（需要你 → 最近任务 → Composer 作用域）+ 任务详情 + 知识详情「内容/修订/来源/使用/冲突」；见 [docs/UI_GUIDE.md](docs/UI_GUIDE.md)
 - 沙箱策略：`auto` 按生态与一层子目录选择 profile（node-smoke / godot-headless / python-pytest），可按项目覆盖；缺失方案可「让 Agent 识别」后由你采用
 - 受控写入：交办先只读分诊；需要改文件时自动生成 HITL 写请求 → 你批准 → 隔离 worktree 子 Agent（own_python/Monty、无 bash/网络）→ 补丁审批 → 沙箱，见 [docs/WRITE_SUBAGENT.md](docs/WRITE_SUBAGENT.md)
 - 只读 Python：Playbook 分析也可用 `own_python`（仓库以只读方式挂载 `/workspace`）；打包自检 `npm run e2e:packaged:monty`

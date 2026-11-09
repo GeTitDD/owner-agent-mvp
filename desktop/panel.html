@@ -11,9 +11,13 @@
     <header class="header">
       <div class="brand">
         <span class="state-dot" id="stateDot"></span>
-        <div>
+        <div class="brand-text">
           <strong>Owner Companion</strong>
           <small id="stateText">空闲</small>
+        </div>
+        <div class="state-counts">
+          <span id="runningChip" class="count-chip"><span class="chip-dot"></span><span id="runningCount">0</span> 运行</span>
+          <span id="needsChip" class="count-chip warn"><span class="chip-dot"></span><span id="needsCount">0</span> 待你</span>
         </div>
       </div>
       <div class="header-actions">
@@ -24,17 +28,36 @@
     </header>
 
     <div class="scroll">
-      <section class="activity-card" id="activityCard">
-        <div class="activity-head">
-          <span id="activityPhase" class="state-dot"></span>
-          <span id="activityLabel" class="activity-state">空闲</span>
-          <span class="activity-meta">
-            <span id="workerLabel">Worker 空闲</span>
-            <span id="pendingCount">0 项待决定</span>
-          </span>
+      <section id="needsSection" class="needs-section">
+        <div class="section-title">
+          <h3>需要你决定</h3>
+          <span id="pendingBadge" class="count">0</span>
         </div>
-        <div class="activity-stage" id="stage">正在读取状态…</div>
-        <div id="activityLines" class="activity-lines"></div>
+        <p id="needsHint" class="section-sub">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
+        <div id="pendingList" class="pending-list"></div>
+      </section>
+
+      <section id="runningSection" class="running-section">
+        <div class="section-title">
+          <h3 id="runningTitle">运行中</h3>
+          <span id="runningBadge" class="count">0</span>
+        </div>
+        <div class="activity-card" id="activityCard">
+          <div class="activity-head">
+            <span id="activityPhase" class="state-dot"></span>
+            <span id="activityLabel" class="activity-state">空闲</span>
+            <span class="activity-meta">
+              <span id="workerLabel">Worker 空闲</span>
+              <span id="pendingCount">0 项待决定</span>
+            </span>
+          </div>
+          <div class="activity-stage" id="stage">正在读取状态…</div>
+          <div id="runningList" class="ledger"></div>
+          <details class="activity-more">
+            <summary>最近活动</summary>
+            <div id="activityLines" class="activity-lines"></div>
+          </details>
+        </div>
       </section>
 
       <section id="setup" class="setup" hidden>
@@ -42,6 +65,32 @@
         <p>选择本地 Git 仓库目录。桌宠会从这里读取项目并创建任务；L1 不依赖 OpenClaw，完整工作台才需要它。</p>
         <div id="setupServices" class="service-grid"></div>
         <button id="addProject" class="primary">选择项目目录</button>
+      </section>
+
+      <section id="answerSection" hidden>
+        <div class="section-title">
+          <h3>只读分析</h3>
+          <span id="answerBadge" class="count">分析</span>
+        </div>
+        <div id="answerCard" class="answer-card"></div>
+      </section>
+
+      <section class="knowledge-section compact" id="knowledgeSection">
+        <div class="section-title">
+          <h3>知识</h3>
+          <span id="knowledgeBadge" class="count">0</span>
+        </div>
+        <div class="knowledge-quick">
+          <button type="button" data-knowledge="today">今天学到什么</button>
+          <button type="button" data-knowledge="project">本项目经验</button>
+          <button type="button" data-knowledge="similar">类似问题</button>
+          <button type="button" data-knowledge="verified">验证与复用</button>
+        </div>
+        <div id="knowledgeSummaryText" class="knowledge-summary">正在读取知识库…</div>
+        <div class="knowledge-actions">
+          <button id="harvestNow" class="primary small" title="把当前项目的待提炼经验提炼成待审核候选">立即提炼</button>
+          <button id="openKnowledge" class="ghost small">完整知识库</button>
+        </div>
       </section>
 
       <section id="timelineSection" class="timeline-section" hidden>
@@ -65,40 +114,6 @@
         <div id="playbookResult" class="playbook-result" hidden></div>
       </section>
 
-      <section class="knowledge-section">
-        <div class="section-title">
-          <h3>知识</h3>
-          <span id="knowledgeBadge" class="count">0</span>
-        </div>
-        <div class="knowledge-quick">
-          <button type="button" data-knowledge="today">今天学到什么</button>
-          <button type="button" data-knowledge="project">本项目经验</button>
-          <button type="button" data-knowledge="similar">类似问题</button>
-          <button type="button" data-knowledge="verified">验证与复用</button>
-        </div>
-        <div id="knowledgeSummaryText" class="knowledge-summary">正在读取知识库…</div>
-        <div class="knowledge-actions">
-          <button id="harvestNow" class="primary small" title="把当前项目的待提炼经验提炼成待审核候选">立即提炼</button>
-          <button id="openKnowledge" class="ghost small">完整知识库</button>
-        </div>
-      </section>
-
-      <section id="answerSection" hidden>
-        <div class="section-title">
-          <h3>只读分析</h3>
-          <span id="answerBadge" class="count">分析</span>
-        </div>
-        <div id="answerCard" class="answer-card"></div>
-      </section>
-
-      <section>
-        <div class="section-title">
-          <h3>需要你决定</h3>
-          <span id="pendingBadge" class="count">0</span>
-        </div>
-        <div id="pendingList" class="pending-list"></div>
-      </section>
-
       <section id="resultSection" hidden>
         <div class="section-title"><h3>最近结果</h3></div>
         <div id="resultCard" class="result-card"></div>
@@ -109,6 +124,9 @@
       <div class="composer-card">
         <div class="composer-head">
           <select id="projectSelect" aria-label="项目"></select>
+          <span class="composer-scope-label">作用域</span>
+          <button id="scopeProfile" class="scope-chip" type="button" title="当前沙箱 profile">沙箱 · auto</button>
+          <button id="scopePaths" class="scope-chip" type="button" title="允许修改的路径">范围 · src/</button>
           <button id="openFullInline" class="ghost small" title="完整工作台">工作台</button>
         </div>
         <textarea id="taskInput" rows="1" maxlength="1200"

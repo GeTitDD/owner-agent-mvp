@@ -377,3 +377,35 @@ select {
 }
 input[type='search']::-webkit-search-decoration,
 input[type='search']::-webkit-search-cancel-button { -webkit-appearance: none; }
+
+/* ---- 知识详情：可信记录标签页 ---- */
+.detail-tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:10px 0 16px}
+.detail-tab{border:0;background:transparent;color:var(--muted);font-size:12px;padding:7px 10px;border-bottom:2px solid transparent;cursor:pointer}
+.detail-tab:hover{color:var(--text)}
+.detail-tab.active{color:var(--text);border-bottom-color:var(--accent)}
+.detail-tab-panel{min-height:120px}
+.history-actions{display:flex;gap:6px;flex-wrap:wrap}
+.revision-diff{margin-top:12px;border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px;background:var(--surface-2)}
+.diff-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--muted);margin-bottom:8px}
+.diff-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.diff-grid h4{margin:0 0 4px;font-size:11px;color:var(--muted)}
+.diff-grid pre{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:8px;max-height:320px;overflow:auto;font-size:11px;white-space:pre-wrap;word-break:break-word}
+.provenance-head{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.source-chip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:999px;padding:1px 7px;font-size:10px;color:var(--text-2);background:var(--surface-2)}
+.source-chip.ok{color:var(--ok);border-color:rgba(22,163,74,.35);background:rgba(22,163,74,.08)}
+.source-chip.warn{color:var(--warn);border-color:rgba(234,107,23,.35);background:var(--warn-soft)}
+.source-revision{border:1px solid var(--line);border-radius:var(--radius-sm);padding:9px;margin-bottom:8px}
+.source-revision-head{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.source-revision-head code{font-size:10px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.source-link{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;padding:4px 0;border-top:1px dashed var(--line);font-size:11px}
+.source-link small{color:var(--muted)}
+.usage-item{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;border-top:1px solid var(--line);padding:8px 0;font-size:12px}
+.usage-item small{color:var(--muted);font-size:11px}
+.maintenance-list{display:grid;gap:10px}
+.maintenance-item{border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px;background:var(--surface-2)}
+.maintenance-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px}
+.maintenance-item small{color:var(--muted);font-size:11px}
+.maintenance-actions{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.mini-diff{margin:8px 0 0;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:8px;font-size:10px;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.empty-line{color:var(--muted);font-size:12px;margin:6px 0}
+@media(max-width:900px){.diff-grid{grid-template-columns:1fr}}

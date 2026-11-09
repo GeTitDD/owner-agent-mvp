@@ -80,9 +80,10 @@ const run = async () => {
   } finally { personal.close(); }
 
   // 自动采集验收：先写入两个已完成 Sandbox Run，不运行任何 CLI。
+  // 使用与 companion.json 相同的 demo 项目，确保知识摘要与自动采集对齐。
   const owner = new OwnerStore(ownerDb);
   try {
-    createSyntheticProject({ store: owner, root: path.join(root, 'auto-a'), projectId: 'auto-a', name: 'Auto A' });
+    createSyntheticProject({ store: owner, root: path.join(root, 'demo'), projectId: 'demo', name: 'Demo' });
   } finally { owner.close(); }
 
   const app = await electron.launch({

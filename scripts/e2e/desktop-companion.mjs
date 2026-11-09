@@ -104,7 +104,7 @@ const run = async () => {
 
     // SOP-2：批准 Job
     await panel.getByRole('button', { name: '批准任务', exact: true }).click();
-    await approveInModal('批准');
+    await approveInModal('批准写请求');
     await panel.getByText('审阅 Diff', { exact: true }).waitFor({ timeout: 30000 });
     check('worker produced the source patch', true);
     await shot('02-patch-proposed');

@@ -723,3 +723,123 @@ pre.diff, pre.logs {
   width: auto;
 }
 
+
+/* ---- Task cockpit v1：状态、待办、步骤账本与风险层级 ---- */
+.brand-text { min-width: 0; }
+.state-counts { display: flex; align-items: center; gap: 6px; margin-left: 6px; }
+.count-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 2px 8px; font-size: 10px; color: var(--muted);
+  background: transparent; white-space: nowrap;
+}
+.count-chip .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.count-chip.active { color: var(--text); border-color: rgba(59, 130, 246, 0.45); }
+.count-chip.active .chip-dot { background: #3b82f6; animation: pulse 1.2s infinite; }
+.count-chip.warn { color: var(--warn); border-color: rgba(234, 107, 23, 0.45); background: var(--warn-soft); }
+.count-chip.warn .chip-dot { background: var(--warn); }
+.section-sub { margin: -2px 0 8px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.needs-section { margin-bottom: 16px; }
+.running-section { margin-bottom: 14px; }
+.needs-section .section-title h3 { color: var(--text); font-size: 13px; }
+.running-section .section-title h3 { color: var(--text); font-size: 13px; }
+
+.pending-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.tier-badge {
+  flex: none; display: inline-flex; align-items: center;
+  border-radius: 6px; padding: 1px 6px; font-size: 9px; line-height: 1.6;
+  border: 1px solid var(--line); color: var(--muted); background: transparent;
+}
+.tier-badge.write { color: #2563eb; border-color: rgba(37, 99, 235, 0.35); background: rgba(37, 99, 235, 0.08); }
+.tier-badge.run { color: #0f766e; border-color: rgba(15, 118, 110, 0.35); background: rgba(15, 118, 110, 0.08); }
+.tier-badge.danger { color: var(--danger); border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.08); }
+.pending-card.tier-write { border-left-color: #3b82f6; }
+.pending-card.tier-run { border-left-color: #0f766e; }
+.pending-card.tier-danger { border-left-color: var(--danger); }
+.pending-next { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.pending-head + .pending-project { margin-top: 2px; }
+
+.ledger { display: grid; gap: 2px; margin-top: 8px; }
+.ledger-step {
+  display: grid; grid-template-columns: 18px 16px minmax(0, 1fr) auto;
+  align-items: center; gap: 7px; padding: 6px 2px;
+  border-top: 1px dashed var(--line);
+}
+.ledger-step:first-child { border-top: 0; }
+.ledger-index { color: var(--muted); font-size: 10px; text-align: center; }
+.step-glyph {
+  width: 16px; height: 16px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 9px; border: 1px solid var(--line); color: var(--muted);
+}
+.step-glyph.done { color: var(--ok); border-color: rgba(34, 197, 94, 0.4); background: rgba(34, 197, 94, 0.08); }
+.step-glyph.running { color: #3b82f6; border-color: rgba(59, 130, 246, 0.45); background: rgba(59, 130, 246, 0.10); animation: pulse 1.3s infinite; }
+.step-glyph.failed { color: var(--danger); border-color: rgba(239, 68, 68, 0.45); background: rgba(239, 68, 68, 0.08); }
+.step-glyph.pending { color: var(--warn); border-color: rgba(234, 107, 23, 0.4); }
+.ledger-body { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ledger-body strong { font-size: 11px; flex: none; }
+.ledger-detail { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ledger-status { font-size: 10px; color: var(--muted); }
+.ledger-status.done { color: var(--ok); }
+.ledger-status.running { color: #3b82f6; }
+.ledger-status.failed { color: var(--danger); }
+.ledger-status.pending { color: var(--warn); }
+.ledger-empty { color: var(--muted); font-size: 11px; padding: 4px 0; }
+
+.activity-more { margin-top: 6px; }
+.activity-more summary { color: var(--muted); font-size: 10px; cursor: pointer; list-style: none; }
+.activity-more summary::-webkit-details-marker { display: none; }
+.activity-more summary::before { content: '▸ '; }
+.activity-more[open] summary::before { content: '▾ '; }
+.activity-more .activity-lines { margin-top: 6px; }
+
+.task-plan { display: grid; gap: 3px; }
+.plan-step { display: grid; grid-template-columns: 18px 1fr; gap: 6px; font-size: 12px; color: var(--text); }
+.plan-index { color: var(--muted); font-size: 10px; text-align: center; }
+
+.composer-scope-label { color: var(--muted); font-size: 9px; letter-spacing: 0.04em; text-transform: uppercase; }
+.scope-chip {
+  border: 1px solid var(--line); background: transparent;
+  border-radius: 999px; padding: 2px 7px; font-size: 10px;
+  color: var(--muted); cursor: pointer; white-space: nowrap;
+}
+.scope-chip:hover { color: var(--text); border-color: var(--text); }
+.scope-chip:disabled { opacity: 0.45; cursor: default; }
+.composer-mode { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.composer-mode .tier-badge { font-size: 9px; }
+
+.knowledge-section.compact .knowledge-summary { font-size: 11px; }
+.knowledge-section.compact .knowledge-quick button { padding: 5px 8px; font-size: 11px; }
+
+@media (max-width: 430px) {
+  .state-counts { display: none; }
+  .ledger-body { flex-direction: column; align-items: flex-start; gap: 1px; }
+}
+
+.composer-head { flex-wrap: wrap; }
+.composer-head select { flex: 1 1 120px; min-width: 0; }
+
+/* ---- 窄面板可读性修正 ---- */
+.header { gap: 8px; }
+.brand { flex: 1 1 auto; min-width: 0; }
+.brand-text { min-width: 0; flex: 1 1 auto; }
+.brand-text strong { white-space: nowrap; }
+.brand-text small { white-space: nowrap; }
+.state-counts { flex: none; }
+.header-actions { flex: none; }
+.scope-chip { font-size: 9px; padding: 1px 6px; max-width: 46%; overflow: hidden; text-overflow: ellipsis; }
+.composer-scope-label { display: none; }
+.composer-hint {
+  flex: 1 1 auto; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.composer-model {
+  flex: none; max-width: 42%; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.toast { bottom: 190px; }
+
+.toast { top: 70px; bottom: auto; right: 16px; max-width: calc(100% - 32px); }
+
+.toast { max-width: 72%; font-size: 12px; }
+#runningBadge { color: var(--muted); background: transparent; border-color: var(--line); }

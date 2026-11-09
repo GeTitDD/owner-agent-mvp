@@ -54,6 +54,21 @@
     $('pendingCount').textContent = `${pending} 项待决定`;
     $('pendingBadge').textContent = String(pending);
     $('pendingBadge').hidden = pending === 0;
+    $('needsCount').textContent = String(pending);
+    $('needsChip').classList.toggle('warn', pending > 0);
+    $('needsHint').textContent = pending > 0
+      ? `有 ${pending} 项需要你确认；写入、补丁与测试在批准前不会改变真实项目。`
+      : '现在没有需要你决定的事项。写入、补丁、测试和修复都会先停在这里。';
+    const running = view?.worker?.running;
+    const chainItems = [view?.chain?.job, view?.chain?.patch, view?.chain?.sandbox, view?.chain?.cycle]
+      .filter(Boolean);
+    const activeStatuses = new Set(['running', 'leased', 'provisioning', 'collecting', 'test_pending', 'queued']);
+    const activeSteps = chainItems.filter((item) => activeStatuses.has(String(item.status ?? '').toLowerCase())).length;
+    const totalSteps = chainItems.length;
+    $('runningBadge').textContent = String(activeSteps || totalSteps);
+    $('runningCount').textContent = String(activeSteps);
+    $('runningChip').classList.toggle('active', Boolean(running || activeSteps > 0));
+    $('runningTitle').textContent = activeSteps > 0 ? '运行中' : (totalSteps > 0 ? '最近任务' : '运行中');
     const hasProjects = (view?.projects?.length ?? 0) > 0;
     $('setup').hidden = hasProjects;
     $('composeSection').hidden = !hasProjects;
@@ -83,6 +98,24 @@
       sandboxSelect.disabled = !hasProjects;
     }
     $('sandboxDetect').hidden = !(showWarning || showMuted);
+    const profileValue = typeof testConfig?.profile === 'string'
+      ? testConfig.profile
+      : testConfig?.profile?.id;
+    const configuredMode = view?.config?.sandboxProjectMode || view?.config?.sandboxMode || 'auto';
+    const profileLabel = profileValue || (configuredMode === 'auto' ? 'auto' : configuredMode);
+    const profileButton = $('scopeProfile');
+    if (profileButton) {
+      profileButton.textContent = `沙箱 ${profileLabel}`;
+      profileButton.title = `沙箱 profile：${profileLabel}${testConfig?.projectDir ? ` · projectDir=${testConfig.projectDir}` : ''}`;
+      profileButton.disabled = !hasProjects;
+    }
+    const pathsButton = $('scopePaths');
+    if (pathsButton) {
+      const paths = view?.config?.allowedPaths || 'src/';
+      pathsButton.textContent = `范围 ${paths}`;
+      pathsButton.title = `允许修改的路径：${paths}`;
+      pathsButton.disabled = !hasProjects;
+    }
     $('footerStatus').textContent = view?.services?.docker
       ? '本地服务已启动 · Docker 可用'
       : '本地服务已启动 · Docker 未检测到';
@@ -93,10 +126,10 @@
     if (knowledge?.available) {
       const counts = knowledge.counts ?? {};
       $('knowledgeSummaryText').textContent =
-        `本项目：经验 ${counts.experiences ?? 0} · 待提炼 ${counts.pendingHarvest ?? 0} · ` +
-        `知识 ${counts.knowledge ?? 0}（已验证 ${counts.verified ?? 0}）· 候选 ${candidates} · ` +
-        `复用 ${counts.usages ?? 0}（正反馈 ${counts.positiveUsages ?? 0}）\n` +
-        `共享知识 ${counts.sharedKnowledge ?? 0} 条（已验证 ${counts.sharedVerified ?? 0}）`;
+        `本项目：经验 ${counts.experiences ?? 0} 条 · 待提炼 ${counts.pendingHarvest ?? 0} 条 · ` +
+        `知识 ${counts.knowledge ?? 0} 条（已验证 ${counts.verified ?? 0} 条）· 候选 ${candidates} 条 · ` +
+        `复用 ${counts.usages ?? 0} 次（正反馈 ${counts.positiveUsages ?? 0}）\n` +
+        `共享知识 ${counts.sharedKnowledge ?? 0} 条（已验证 ${counts.sharedVerified ?? 0} 条）`;
       const harvest = $('harvestNow');
       harvest.disabled = (counts.pendingHarvest ?? 0) === 0;
       harvest.textContent = '立即提炼';
@@ -187,8 +220,8 @@
     openModal('补丁已应用，但测试未创建', nodes, [later, configure, retry]);
   };
 
-  const confirmDecision = ({ title, rows, hash, confirmLabel, success, input, reason }) => {
-    const nodes = [detailRows(rows)];
+  const confirmDecision = ({ title, rows, hash, confirmLabel, success, input, reason, extraNodes = [] }) => {
+    const nodes = [detailRows(rows), ...extraNodes];
     if (hash) nodes.push(el('pre', 'diff', `hash: ${hash}`));
     const wrap = el('label', 'confirm-row');
     const checkbox = el('input');
@@ -700,11 +733,190 @@
     }
   };
 
+  const tierLabel = (tier) => ({ write: '写请求', run: '测试运行', danger: '高风险' }[tier] ?? '需批准');
+  const tierClass = (tier) => ['write', 'run', 'danger'].includes(tier) ? tier : 'write';
+  const statusMeta = (status) => {
+    const value = String(status ?? '').toLowerCase();
+    if (['succeeded', 'completed', 'tested_pass', 'applied'].includes(value)) return { tone: 'done', label: '完成' };
+    if (['running', 'leased', 'provisioning', 'collecting', 'test_pending'].includes(value)) return { tone: 'running', label: '进行中' };
+    if (['failed', 'cancelled', 'tested_fail', 'needs_reconciliation'].includes(value)) return { tone: 'failed', label: '失败' };
+    if (['pending_approval', 'proposal_ready', 'approved', 'queued'].includes(value)) return { tone: 'pending', label: '等你' };
+    return { tone: 'muted', label: status ? String(status) : '未知' };
+  };
+  const statusGlyph = (tone) => ({ done: '✓', running: '▶', failed: '×', pending: '○', muted: '·' }[tone] ?? '·');
+
+  const taskPlan = (item) => {
+    const plan = el('div', 'task-plan');
+    plan.append(el('div', 'section-title', '计划'));
+    const steps = [
+      '只读分诊：读取项目、检查证据（已完成）',
+      item.kind === 'job' ? '你批准写请求（HITL）' : '你确认这一步',
+      '写入子 Agent 在隔离 worktree 内改文件',
+      '生成补丁提案，等你再次审批',
+      '应用补丁，然后创建沙箱测试'
+    ];
+    for (const [index, text] of steps.entries()) {
+      const row = el('div', 'plan-step');
+      row.append(el('span', 'plan-index', String(index + 1)));
+      row.append(el('span', undefined, text));
+      plan.append(row);
+    }
+    return plan;
+  };
+
+  const renderRunning = () => {
+    const list = $('runningList');
+    if (!list) return;
+    list.replaceChildren();
+    const chain = view?.chain ?? {};
+    const steps = [];
+    if (chain.job) {
+      steps.push({
+        label: '任务', detail: chain.job.title,
+        meta: chain.job.jobType, status: chain.job.status
+      });
+    }
+    if (chain.patch) {
+      steps.push({
+        label: '补丁', detail: (chain.patch.files ?? []).join(', ') || chain.patch.id.slice(0, 8),
+        meta: 'diff', status: chain.patch.status
+      });
+    }
+    if (chain.sandbox) {
+      steps.push({
+        label: '测试', detail: `${chain.sandbox.profile || 'sandbox'}${chain.sandbox.testStatus ? ` · 测试 ${chain.sandbox.testStatus}` : ''}`,
+        meta: chain.sandbox.exitCode === null || chain.sandbox.exitCode === undefined ? '' : `exit ${chain.sandbox.exitCode}`,
+        status: chain.sandbox.status
+      });
+    }
+    if (chain.cycle) {
+      steps.push({
+        label: '修复', detail: (chain.cycle.scope ?? []).join(', ') || '有界修复',
+        meta: 'repair', status: chain.cycle.status
+      });
+    }
+    if (steps.length === 0) {
+      $('runningTitle').textContent = '运行中';
+      list.append(el('div', 'ledger-empty', '现在没有运行中的任务。交办后会在这里看到步骤账本。'));
+      return;
+    }
+    const activeStatuses = new Set(['running', 'leased', 'provisioning', 'collecting', 'test_pending', 'queued']);
+    const hasActive = steps.some((step) => activeStatuses.has(String(step.status ?? '').toLowerCase()));
+    $('runningTitle').textContent = hasActive ? '运行中' : '最近任务';
+    steps.forEach((step, index) => {
+      const meta = statusMeta(step.status);
+      const row = el('div', `ledger-step ${meta.tone}`);
+      row.append(el('span', 'ledger-index', String(index + 1)));
+      row.append(el('span', `step-glyph ${meta.tone}`, statusGlyph(meta.tone)));
+      const body = el('div', 'ledger-body');
+      body.append(el('strong', undefined, step.label));
+      body.append(el('span', 'ledger-detail', step.detail || ''));
+      row.append(body);
+      row.append(el('span', `ledger-status ${meta.tone}`, meta.label));
+      list.append(row);
+    });
+  };
+
+  const openApproval = (item) => {
+    if (item.kind === 'job') {
+      return confirmDecision({
+        title: `批准写请求：${item.title}`,
+        rows: [
+          ['项目', item.projectName || item.projectId],
+          ['类型', item.jobType || 'code-write'],
+          ['写入意图', item.intent || item.title],
+          ['目标文件', item.targets || '由子 Agent 在允许范围内选择'],
+          ['允许范围', item.allowedPaths || '—'],
+          ['只读分析', item.analysisSummary || '—']
+        ],
+        extraNodes: [taskPlan(item)],
+        confirmLabel: '批准写请求',
+        success: '写请求已批准，Worker 会启动写入子 Agent',
+        input: { kind: 'job', id: item.id, action: 'approve' }
+      });
+    }
+    if (item.kind === 'sandbox') {
+      return confirmDecision({
+        title: `批准测试 ${item.id.slice(0, 8)}`,
+        rows: [
+          ['项目', item.projectName || item.projectId],
+          ['沙箱', item.profile || 'node-smoke'],
+          ['说明', item.summary]
+        ],
+        extraNodes: [el('p', 'pending-next', '批准后：Docker 沙箱内运行测试并收集证据；失败会进入修复选项。')],
+        hash: item.hash,
+        confirmLabel: '批准测试',
+        success: '测试已批准，Worker 会自动运行',
+        input: { kind: 'sandbox', id: item.id, hash: item.hash, action: 'approve' }
+      });
+    }
+    if (item.kind === 'repair') {
+      return confirmDecision({
+        title: `批准修复 ${item.id.slice(0, 8)}`,
+        rows: [
+          ['项目', item.projectName || item.projectId],
+          ['修复范围', item.scope || '源测试允许范围'],
+          ['说明', item.summary]
+        ],
+        extraNodes: [el('p', 'pending-next', '批准后：在原 base 上生成新补丁，再审批、应用、复测。')],
+        hash: item.hash,
+        confirmLabel: '批准修复',
+        success: '修复已批准，Worker 会自动生成新补丁',
+        input: { kind: 'repair', id: item.id, hash: item.hash, action: 'approve' }
+      });
+    }
+    if (item.kind === 'repair-create') {
+      return confirmDecision({
+        title: `从失败测试创建修复 ${item.id.slice(0, 8)}`,
+        rows: [
+          ['项目', item.projectName || item.projectId],
+          ['源运行', item.id],
+          ['说明', item.summary]
+        ],
+        extraNodes: [el('p', 'pending-next', '创建后：基于失败证据生成新补丁，仍需你批准。')],
+        confirmLabel: '创建',
+        success: '修复周期已创建，接下来需要你批准',
+        input: { kind: 'repair-create', id: item.id, action: 'create' }
+      });
+    }
+    return openPatch(item);
+  };
+
+  const openPendingDetail = (item) => {
+    if (item.kind === 'patch' || item.kind === 'patch-apply') {
+      void openPatch(item);
+      return;
+    }
+    const rows = [
+      ['项目', item.projectName || item.projectId],
+      ['类型', item.jobType || item.kind],
+      ['当前状态', item.summary],
+      ['风险', tierLabel(item.tier)]
+    ];
+    if (item.intent) rows.push(['写入意图', item.intent]);
+    if (item.targets) rows.push(['目标文件', item.targets]);
+    if (item.allowedPaths) rows.push(['允许范围', item.allowedPaths]);
+    if (item.analysisSummary) rows.push(['只读分析', item.analysisSummary]);
+    if (item.profile) rows.push(['沙箱', item.profile]);
+    if (item.scope) rows.push(['修复范围', item.scope]);
+    const nodes = [detailRows(rows)];
+    if (item.kind === 'job') nodes.push(taskPlan(item));
+    if (item.next) nodes.push(el('p', 'pending-next', `批准后：${item.next}`));
+    const close = el('button', 'ghost', '关闭');
+    close.onclick = closeModal;
+    const approve = el('button', 'primary', '去批准');
+    approve.onclick = () => { closeModal(); openApproval(item); };
+    openModal('审阅请求', nodes, [close, approve]);
+  };
+
+
   const pendingCard = (item) => {
-    const card = el('div', 'pending-card');
-    if (item.kind.startsWith('patch')) card.classList.add('patch');
-    if (item.kind === 'repair-create') card.classList.add('error');
-    card.append(el('div', 'pending-title', item.title));
+    const tier = tierClass(item.tier);
+    const card = el('div', `pending-card tier-${tier}`);
+    const head = el('div', 'pending-head');
+    head.append(el('div', 'pending-title', item.title));
+    head.append(el('span', `tier-badge ${tier}`, tierLabel(item.tier)));
+    card.append(head);
     if (item.projectName) {
       const current = item.projectId === view?.config?.projectId;
       card.append(el('div', 'pending-project',
@@ -712,20 +924,18 @@
     }
     card.append(el('div', 'pending-summary',
       item.hash ? `${item.summary} · ${fmtHash(item.hash)}` : item.summary));
+    if (item.next) card.append(el('div', 'pending-next', `批准后：${item.next}`));
     const actions = el('div', 'pending-actions');
+    const detail = el('button', 'ghost small', '详情');
+    detail.onclick = () => openPendingDetail(item);
+    actions.append(detail);
     if (item.kind === 'job') {
       const approve = el('button', 'primary', '批准任务');
-      approve.onclick = () => confirmDecision({
-        title: `批准任务：${item.title}`,
-        rows: [['任务', item.title], ['说明', item.summary]],
-        confirmLabel: '批准',
-        success: '任务已批准，Worker 会开始生成补丁',
-        input: { kind: 'job', id: item.id, action: 'approve' }
-      });
+      approve.onclick = () => openApproval(item);
       const reject = el('button', 'danger', '拒绝');
       reject.onclick = () => confirmDecision({
         title: `拒绝任务：${item.title}`,
-        rows: [['任务', item.title]],
+        rows: [['任务', item.title], ['说明', item.summary]],
         confirmLabel: '确认拒绝',
         success: '任务已拒绝',
         reason: true,
@@ -747,35 +957,15 @@
       actions.append(review, reject);
     } else if (item.kind === 'sandbox') {
       const approve = el('button', 'primary', '批准测试');
-      approve.onclick = () => confirmDecision({
-        title: `批准测试 ${item.id.slice(0, 8)}`,
-        rows: [['运行', item.id], ['说明', item.summary]],
-        hash: item.hash,
-        confirmLabel: '批准测试',
-        success: '测试已批准，Worker 会自动运行',
-        input: { kind: 'sandbox', id: item.id, hash: item.hash, action: 'approve' }
-      });
+      approve.onclick = () => openApproval(item);
       actions.append(approve);
     } else if (item.kind === 'repair') {
       const approve = el('button', 'primary', '批准修复');
-      approve.onclick = () => confirmDecision({
-        title: `批准修复 ${item.id.slice(0, 8)}`,
-        rows: [['修复周期', item.id], ['说明', item.summary]],
-        hash: item.hash,
-        confirmLabel: '批准修复',
-        success: '修复已批准，Worker 会自动生成新补丁',
-        input: { kind: 'repair', id: item.id, hash: item.hash, action: 'approve' }
-      });
+      approve.onclick = () => openApproval(item);
       actions.append(approve);
     } else if (item.kind === 'repair-create') {
       const create = el('button', 'primary', '创建修复周期');
-      create.onclick = () => confirmDecision({
-        title: `从失败测试创建修复 ${item.id.slice(0, 8)}`,
-        rows: [['源运行', item.id], ['说明', item.summary]],
-        confirmLabel: '创建',
-        success: '修复周期已创建，接下来需要你批准',
-        input: { kind: 'repair-create', id: item.id, action: 'create' }
-      });
+      create.onclick = () => openApproval(item);
       actions.append(create);
     }
     card.append(actions);
@@ -786,10 +976,7 @@
     const list = $('pendingList');
     list.replaceChildren();
     const pending = view?.pending ?? [];
-    if (pending.length === 0) {
-      list.append(el('div', 'pending-summary', '现在没有需要你决定的事项。'));
-      return;
-    }
+    if (pending.length === 0) return;
     for (const item of pending) list.append(pendingCard(item));
   };
 
@@ -900,6 +1087,7 @@
       renderTimeline();
       renderProjects();
       renderPending();
+      renderRunning();
       renderResult();
     } catch (error) {
       $('stateDot').className = 'state-dot error';
@@ -1131,6 +1319,8 @@
   };
 
   $('openSettings').onclick = () => { void openSettings(); };
+  $('scopeProfile').onclick = () => { void openSettings(); };
+  $('scopePaths').onclick = () => { void openSettings(); };
   $('closeSettings').onclick = () => { $('settings').hidden = true; };
   $('hidePanel').onclick = () => window.companion.hidePanel();
   $('openFull').onclick = () => { void window.companion.openFull().catch((error) => toast(String(error.message ?? error))); };
