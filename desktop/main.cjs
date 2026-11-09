@@ -481,8 +481,13 @@ const mascotView = async () => {
   return {
     skin: resolved.skin,
     label: resolved.label,
+    kind: resolved.kind,
     fallback: resolved.fallback,
-    url: resolved.file ? pathToFileURL(resolved.file).href : ''
+    url: resolved.file ? pathToFileURL(resolved.file).href : '',
+    sprite: resolved.sprite ? {
+      ...resolved.sprite,
+      url: pathToFileURL(resolved.file).href
+    } : null
   };
 };
 
@@ -493,8 +498,9 @@ const mascotCatalog = async () => {
     current: resolved.skin,
     fallback: resolved.fallback,
     skins: resolved.skins.map((item) => ({
-      id: item.id, label: item.label, builtin: item.builtin,
-      url: pathToFileURL(item.file).href
+      id: item.id, label: item.label, builtin: item.builtin, kind: item.kind ?? 'static',
+      url: pathToFileURL(item.file).href,
+      sprite: item.sprite ? { ...item.sprite, url: pathToFileURL(item.file).href } : null
     }))
   };
 };
@@ -1608,7 +1614,9 @@ const registerIpc = () => {
   ipcMain.handle('companion:mascots:list', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return mascotCatalog();
-  });  ipcMain.handle('companion:mascots:set', async (event, input) => {
+  });
+
+  ipcMain.handle('companion:mascots:set', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const mod = await loadMascots();
     const skin = String(input?.skin ?? '');
@@ -1616,6 +1624,29 @@ const registerIpc = () => {
     config.mascotSkin = skin;
     saveConfig();
     return mascotCatalog();
+  });
+
+  ipcMain.handle('companion:mascots:import', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const mod = await loadMascots();
+    const result = await dialog.showOpenDialog(panel ?? pet, {
+      title: '导入 Codex 宠物（选择 pet.json 或所在文件夹）',
+      properties: ['openDirectory', 'openFile'],
+      filters: [{ name: 'Codex Pet manifest', extensions: ['json'] }]
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { canceled: true };
+    const imported = mod.importMascot({
+      sourcePath: result.filePaths[0],
+      userDir: mascotDirs().userDir
+    });
+    config.mascotSkin = imported.skin;
+    saveConfig();
+    return { canceled: false, ...imported, catalog: await mascotCatalog() };
+  });
+
+  ipcMain.on('companion:open-skin-picker', () => {
+    showPanel();
+    try { panel?.webContents.send('companion:open-settings'); } catch { /* best effort */ }
   });
 
   ipcMain.handle('companion:diagnostics', async (event) => {

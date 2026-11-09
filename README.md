@@ -18,7 +18,7 @@
 - 知识闭环：`npm run knowledge:demo`；自动采集 `npm run knowledge:auto -- --once`；CLI `npm run knowledge -- --help`
 - A→B 实验：`npm run knowledge:eval:ab -- --root <dir> --allow-model`；Oracle Control 用 `knowledge:eval:hard`
 - 知识报告：[docs/KNOWLEDGE_LOOP_V1_DELIVERY.md](docs/KNOWLEDGE_LOOP_V1_DELIVERY.md)
-- 桌宠皮肤：Cindy/Agent Island 皮肤集，`%APPDATA%\owner-agent-mvp\mascots` 可放自定义 PNG，见 [docs/MASCOT_PACK.md](docs/MASCOT_PACK.md)
+- 桌宠皮肤：Cindy 静态皮肤 + Codex Pet `pet.json` / spritesheet 动画包；悬停 `↻` 一键换肤、右键打开皮肤选择、设置页可导入动画包，见 [docs/MASCOT_PACK.md](docs/MASCOT_PACK.md)
 - 主界面：Cindy 式活动流 + 会话时间线 + Composer（Enter 发送 / Shift+Enter 列表接续）；页脚「诊断」可导出运行快照
 - UI 方向：任务驾驶舱（需要你 → 最近任务 → Composer 作用域）+ 任务详情 + 知识详情「内容/修订/来源/使用/冲突」；见 [docs/UI_GUIDE.md](docs/UI_GUIDE.md)
 - 沙箱策略：`auto` 按生态与一层子目录选择 profile（node-smoke / godot-headless / python-pytest），可按项目覆盖；缺失方案可「让 Agent 识别」后由你采用

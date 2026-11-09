@@ -843,3 +843,15 @@ pre.diff, pre.logs {
 
 .toast { max-width: 72%; font-size: 12px; }
 #runningBadge { color: var(--muted); background: transparent; border-color: var(--line); }
+
+.mascot-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+.mascot-thumb {
+  width: 34px;
+  height: 34px;
+  display: block;
+  border-radius: 6px;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.mascot-thumb.sprite { background-color: var(--accent-soft); }

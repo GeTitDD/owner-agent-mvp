@@ -17,6 +17,12 @@
     `ComposerCard.tsx`、`ListComposerTextarea.tsx` 与 Agent Island 活动行模型。
 - 未使用：Cindy 的 React 渲染栈、macOS 原生灵动岛实现、声音系统与远程会话同步。
 
+## Codex Pet / Petdex package convention
+
+- 参考：Codex Pet 社区包格式（`pet.json` + spritesheet，8×9 / 8×11）与 Petdex 的“导入/一键切换”体验。
+- 使用范围：仅借鉴公开的包字段与状态行命名；`src/mascots.mjs`、`desktop/pet.js` 中的解析与动画逻辑为本项目实现。
+- 未包含：Codex Pet / Petdex 的代码、运行时、在线图库或美术资源。
+
 Apache License 2.0 全文：https://www.apache.org/licenses/LICENSE-2.0
 
 ```

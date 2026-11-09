@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   MASCOT_SKINS, DEFAULT_MASCOT_SKIN, SESSION_PHASES,
-  listMascots, resolveMascot, isValidMascotSelection, phaseForState
+  listMascots, resolveMascot, isValidMascotSelection, phaseForState,
+  readMascotPackage, importMascot, animationForPhase
 } from '../src/mascots.mjs';
 
 const makeDirs = () => {
@@ -78,4 +79,95 @@ test('五态映射到 Codex/Agent Island 阶段', () => {
   assert.equal(phaseForState('done'), 'completed');
   assert.equal(phaseForState('error'), 'error');
   assert.equal(phaseForState('unknown'), 'idle');
+});
+
+test('Codex Pet 包：读取 pet.json / spritesheet，并默认 8x9 动画行', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mascot-pkg-'));
+  const user = path.join(root, 'user');
+  const dir = path.join(user, 'demo-pet');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'spritesheet.webp'), 'fake-webp');
+  fs.writeFileSync(path.join(dir, 'pet.json'), JSON.stringify({
+    id: 'demo-pet', displayName: 'Demo Pet', spriteVersionNumber: 1,
+    spritesheetPath: 'spritesheet.webp',
+    states: { idle: { row: 0, durationMs: 120 }, running: { row: 7, durationMs: 90 } }
+  }));
+  const pkg = readMascotPackage(dir);
+  assert.equal(pkg.id, 'demo-pet');
+  assert.equal(pkg.kind, 'sprite');
+  assert.equal(pkg.sprite.columns, 8);
+  assert.equal(pkg.sprite.rows, 9);
+  assert.equal(pkg.sprite.frameWidth, 192);
+  assert.equal(pkg.sprite.frameHeight, 208);
+  assert.equal(pkg.sprite.states.running.row, 7);
+  assert.equal(pkg.sprite.states.running.durationMs, 90);
+
+  const catalog = listMascots({ builtinDir: '', userDir: user });
+  assert.equal(catalog.skins.length, 1);
+  assert.equal(catalog.skins[0].kind, 'sprite');
+  const resolved = resolveMascot({ builtinDir: '', userDir: user, skin: 'demo-pet' });
+  assert.equal(resolved.kind, 'sprite');
+  assert.match(resolved.file, /spritesheet\.webp$/u);
+  assert.equal(resolved.sprite.states.idle.row, 0);
+});
+
+test('Codex v2 包默认 8x11，并接受 animations.states 覆盖', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mascot-v2-'));
+  const dir = path.join(root, 'v2-pet');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'sheet.png'), 'fake-png');
+  fs.writeFileSync(path.join(dir, 'pet.json'), JSON.stringify({
+    id: 'v2-pet', spriteVersionNumber: 2, spritesheet: 'sheet.png',
+    animations: { states: { idle: { row: 0, durationMs: 100 }, review: { row: 8, durationMs: 80 } } }
+  }));
+  const pkg = readMascotPackage(dir);
+  assert.equal(pkg.sprite.rows, 11);
+  assert.equal(pkg.sprite.states.review.row, 8);
+  assert.equal(pkg.sprite.states.review.durationMs, 80);
+});
+
+test('无效 Codex 包被忽略：缺失 spritesheet、路径穿越、坏 JSON', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mascot-bad-'));
+  const user = path.join(root, 'user');
+  fs.mkdirSync(path.join(user, 'missing-sheet'), { recursive: true });
+  fs.writeFileSync(path.join(user, 'missing-sheet', 'pet.json'), JSON.stringify({
+    id: 'missing-sheet', spritesheetPath: 'nope.webp'
+  }));
+  fs.mkdirSync(path.join(user, 'escape'), { recursive: true });
+  fs.writeFileSync(path.join(user, 'escape', 'pet.json'), JSON.stringify({
+    id: 'escape', spritesheetPath: '../outside.webp'
+  }));
+  fs.mkdirSync(path.join(user, 'broken'), { recursive: true });
+  fs.writeFileSync(path.join(user, 'broken', 'pet.json'), '{bad json');
+  const catalog = listMascots({ builtinDir: '', userDir: user });
+  assert.equal(catalog.skins.length, 0);
+});
+
+test('importMascot 只复制 manifest 与 spritesheet，并返回可直接切换的 id', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mascot-import-'));
+  const source = path.join(root, 'source', 'my-pet');
+  const user = path.join(root, 'user');
+  fs.mkdirSync(source, { recursive: true });
+  fs.writeFileSync(path.join(source, 'sheet.png'), 'sheet-bytes');
+  fs.writeFileSync(path.join(source, 'preview.png'), 'preview-bytes');
+  fs.writeFileSync(path.join(source, 'pet.json'), JSON.stringify({
+    id: 'my-pet', displayName: 'My Pet', spritesheetPath: 'sheet.png'
+  }));
+  const imported = importMascot({ sourcePath: path.join(source, 'pet.json'), userDir: user });
+  assert.equal(imported.skin, 'my-pet');
+  assert.equal(fs.readFileSync(path.join(user, 'my-pet', 'sheet.png'), 'utf8'), 'sheet-bytes');
+  assert.equal(fs.existsSync(path.join(user, 'my-pet', 'preview.png')), true);
+  const resolved = resolveMascot({ builtinDir: '', userDir: user, skin: 'my-pet' });
+  assert.equal(resolved.kind, 'sprite');
+});
+
+test('阶段到动画行：waiting/review/failed 的优先顺序', () => {
+  const states = {
+    idle: { row: 0 }, review: { row: 8 }, waiting: { row: 6 }, failed: { row: 5 }
+  };
+  assert.equal(animationForPhase('idle', states).name, 'idle');
+  assert.equal(animationForPhase('needs-interaction', states).name, 'waiting');
+  assert.equal(animationForPhase('completed', states).name, 'review');
+  assert.equal(animationForPhase('error', states).name, 'failed');
+  assert.equal(animationForPhase('running', states).name, 'idle');
 });

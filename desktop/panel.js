@@ -1266,7 +1266,7 @@
     void loadPlaybooks();
   };
 
-  const openSettings = async () => {
+  const openSettings = async (focusSkin = false) => {
     try {
       const data = await window.companion.settings.get();
       $('gatewayUrl').value = data.gatewayUrl ?? '';
@@ -1276,10 +1276,27 @@
       $('includePaths').value = (data.includePaths ?? []).join(',');
       $('knowledgeAutoHarvest').checked = data.knowledgeAutoHarvest === true;
       renderServiceGrid($('serviceGrid'), data.services);
-      void renderMascotGrid();
+      await renderMascotGrid();
       $('settings').hidden = false;
+      if (focusSkin) {
+        setTimeout(() => {
+          try { $('mascotGrid').scrollIntoView({ block: 'center' }); } catch { /* best effort */ }
+        }, 50);
+      }
     } catch (error) {
       toast(String(error?.message ?? error), 5000);
+    }
+  };
+
+  $('importMascot').onclick = async () => {
+    try {
+      const result = await window.companion.mascots.import();
+      if (result?.canceled) return;
+      await renderMascotGrid();
+      toast(`已导入并切换到 ${result?.label ?? result?.skin ?? '新皮肤'}`);
+      await refresh();
+    } catch (error) {
+      toast(String(error?.message ?? error), 6000);
     }
   };
 
@@ -1293,13 +1310,22 @@
         const option = el('button', 'mascot-option');
         option.type = 'button';
         option.dataset.skin = skin.id;
+        option.dataset.kind = skin.kind ?? 'static';
         option.title = skin.builtin ? `${skin.label}（内置）` : `${skin.label}（自定义）`;
         if (skin.id === catalog.current) option.classList.add('selected');
-        const image = el('img');
-        image.src = skin.url;
-        image.alt = skin.label;
-        image.draggable = false;
-        option.append(image, el('span', undefined, skin.label));
+        if (skin.kind === 'sprite' && skin.sprite) {
+          const thumb = el('span', 'mascot-thumb sprite');
+          thumb.style.backgroundImage = `url("${skin.url}")`;
+          thumb.style.backgroundSize = `${(skin.sprite.columns ?? 8) * 100}% ${(skin.sprite.rows ?? 9) * 100}%`;
+          thumb.style.backgroundPosition = '0 0';
+          option.append(thumb, el('span', undefined, skin.label));
+        } else {
+          const image = el('img');
+          image.src = skin.url;
+          image.alt = skin.label;
+          image.draggable = false;
+          option.append(image, el('span', undefined, skin.label));
+        }
         option.onclick = async () => {
           try {
             await window.companion.mascots.set({ skin: skin.id });
@@ -1500,7 +1526,7 @@
     }
   };
 
-  window.companion.onOpenSettings(() => { void openSettings(); });
+  window.companion.onOpenSettings(() => { void openSettings(true); });
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {

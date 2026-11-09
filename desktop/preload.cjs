@@ -31,8 +31,10 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   }),
   mascots: Object.freeze({
     list: () => invoke('companion:mascots:list'),
-    set: (input) => invoke('companion:mascots:set', input)
+    set: (input) => invoke('companion:mascots:set', input),
+    import: () => invoke('companion:mascots:import')
   }),
+  openSkinPicker: () => ipcRenderer.send('companion:open-skin-picker'),
   diagnostics: () => invoke('companion:diagnostics'),
   sandbox: Object.freeze({
     detect: (input) => invoke('companion:sandbox-detect', input)

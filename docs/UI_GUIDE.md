@@ -68,6 +68,16 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 - 冲突：本地/远端/字段；解决入口。
 - 维护页：冲突、待重验证、来源、同步状态；后端未启用时明确降级提示。
 
+### 3.4 动态桌宠与一键换肤
+
+- 支持 Cindy 静态 PNG/SVG/GIF 与 **Codex Pet 动画包**（`pet.json` + spritesheet，8×9 / 8×11）。
+- 状态 → 精灵行：idle / running / waiting / review / failed；静态皮肤用浮动/跳动/摇摆/抖动补足动态感。
+- 悬停工具条：`↻` 一键切到下一个皮肤、`▦` 打开皮肤选择、`×` 隐藏。
+- 右键桌宠打开皮肤选择；设置页点击任意皮肤立即生效，动画包显示首帧缩略图。
+- 「导入 Codex 宠物…」选择 `pet.json` 或文件夹，复制到用户目录并立即切换。
+
+![桌宠皮肤网格与动画包缩略图](assets/companion/ui-mascot-grid.png)
+
 ## 4. 组件清单
 
 | 组件 | 用途 |
@@ -111,4 +121,5 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | `npm run e2e:desktop:multiproject` | PASS（多项目 pending / stage） |
 | `npm run e2e:desktop:knowledge` | PASS（知识摘要、验证、复用、今日视图） |
 | `npm run e2e:desktop:sandbox-config` | PASS（缺少快照文件 → 失败弹窗 → 补齐后重试） |
+| `npm run e2e:desktop:mascots` | PASS（spritesheet 播放、一键换肤、静态回退、设置页缩略图） |
 | Workbench UI 冒烟 | 详情 5 个标签、修订对比、使用记录、维护降级提示 |
