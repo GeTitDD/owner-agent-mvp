@@ -1,7 +1,22 @@
 # Knowledge Maintenance & Provenance v1
 
-> 基线：`feat/v1.3-knowledge-loop`（PR #23，`94c0c7d`）。本 PR 栈式开发，不复制 #23 已有模块；
-> 合并顺序仍建议 #23 先进入 `main`，本分支随后 rebase。
+> 基线：`main` 已合并 Knowledge Loop（PR #23）。本 PR 栈式开发，不复制 #23 已有模块。
+> v2 增量：不可变修订索引、变更事件、图感知同步、冲突候选与 Workbench 维护界面，见
+> [KNOWLEDGE_SYNC_PROTOCOL.md](KNOWLEDGE_SYNC_PROTOCOL.md) 与 [ACCEPTANCE_KNOWLEDGE_MAINTENANCE_V2.md](ACCEPTANCE_KNOWLEDGE_MAINTENANCE_V2.md)。
+
+## 0. v2 增量（本轮）
+
+| 能力 | 实现 |
+| --- | --- |
+| 跨设备逻辑身份 | `knowledge_identities` 把 `knowledgeId` ↔ 本地 `unit_id` 绑定；旧库按 unit id 自动补齐 |
+| 不可变修订 | `knowledge_revision_index`：`revisionId`、父子关系、actor、device、内容哈希、完整 payload |
+| 变更事件 | `knowledge_changes`：`changeId`、base/result revision、actor/origin、payloadHash、schemaVersion |
+| 分叉候选 | `knowledge_candidates`：保留远端完整修订与来源包，不覆盖本地 Head |
+| 图感知同步 | `knowledge-sync/v2`：按 `revisionId + parentRevisionIds` 判断后代/fast-forward/分叉/无关 |
+| 冲突解决 | `accept-local / accept-incoming / merge / dismiss`；R4 为双亲修订，仍需 Owner 显式采纳 |
+| 增量游标 | `knowledge_sync_state('last-import')`；`export --since` 只导出变更单元 |
+| 作用域 | `importBundle({ allowedProjectIds })`；越权项目数据整条拒绝 |
+| 维护界面 | Workbench「知识维护」：冲突、重验证、来源、同步状态 |
 
 ## 1. 目标与边界
 

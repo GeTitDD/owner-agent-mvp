@@ -17,6 +17,7 @@
       <button class="nav-btn active" data-tab="owner"><span>✦</span> Owner Agent</button>
       <button class="nav-btn" data-tab="knowledge"><span>▤</span> 知识目录</button>
       <button class="nav-btn" data-tab="review"><span>◇</span> 审核中心 <span id="pendingBadge" class="count-badge" hidden></span></button>
+      <button class="nav-btn" data-tab="maintenance"><span>⇄</span> 知识维护</button>
       <button class="nav-btn" data-tab="projects"><span>▣</span> 项目组合</button>
     </nav>
     <div class="section-header"><span>知识领域</span><button id="addDomain" class="mini-icon" title="添加领域" aria-label="添加领域">＋</button></div>
@@ -65,6 +66,16 @@
       </div>
     </section>
     <section id="reviewView" class="view" hidden><div class="section-intro"><h2>知识变更提案</h2><p>Agent 的发现必须经人工审核。接受提案会创建新条目或更新现有条目，拒绝则不修改知识库。</p></div><div id="reviewList" class="review-list"></div></section>
+    <section id="maintenanceView" class="view" hidden>
+      <div class="section-intro"><h2>知识维护</h2><p>来源、修订与同步冲突都保留历史。冲突与重验证必须由 Owner 显式处理，不会静默覆盖已采纳知识。</p></div>
+      <div id="maintenanceSummary" class="overview"></div>
+      <div class="owner-grid">
+        <section class="owner-panel"><h3>并发冲突</h3><div id="maintenanceConflicts" class="review-list"></div></section>
+        <section class="owner-panel"><h3>待重新验证</h3><div id="maintenanceRevalidations" class="review-list"></div></section>
+      </div>
+      <section class="owner-panel owner-task-panel"><h3>来源与观察</h3><div id="maintenanceSources"></div></section>
+      <section class="owner-panel owner-task-panel"><h3>同步状态</h3><div id="maintenanceSync"></div></section>
+    </section>
     <section id="projectsView" class="view" hidden><div class="section-intro"><h2>项目知识组合</h2><p>预览 L1/L2 共享知识与 L3 项目知识在不同运行环境下的适用性。个人知识只在项目显式启用 Workspace 导入时参与编译。</p></div><div class="preview-layout"><div id="projectList" class="project-list"></div><div class="preview-panel"><label for="taskInput">研究任务</label><textarea id="taskInput" rows="3">研究 Pi Context 生命周期，验证跨项目共享知识和前缀缓存的适用边界</textarea><button id="previewBtn" class="button primary">生成上下文预览</button><div id="previewResult" class="preview-result"></div></div></div></section>
   </main>
 </div>

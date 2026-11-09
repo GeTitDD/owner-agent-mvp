@@ -17,7 +17,7 @@ import { PersonalKnowledgeStore } from '../src/personal-store.mjs';
 import { KnowledgeProvenance } from '../src/knowledge/provenance.mjs';
 import { KnowledgeContextLedger } from '../src/knowledge/context-ledger.mjs';
 import { resolveGitFileSource, resolveLocalFileSource, resolveGitHubSource, resolveOwnerRunSource, resolveSessionSource } from '../src/knowledge/resolvers.mjs';
-import { exportBundle, importBundle } from '../src/knowledge/sync.mjs';
+import { exportBundle, importBundle, bundleToJsonl, bundleFromJsonl } from '../src/knowledge/sync.mjs';
 import { deviceId } from '../src/knowledge/sources.mjs';
 
 const args = process.argv.slice(2);
@@ -27,6 +27,10 @@ const read = (flag, fallback = '') => {
   const index = args.indexOf(flag);
   return index === -1 ? fallback : args[index + 1];
 };
+const readAll = (flag) => args.reduce((acc, value, index) => {
+  if (value === flag && args[index + 1]) acc.push(args[index + 1]);
+  return acc;
+}, []);
 const has = (flag) => args.includes(flag);
 const json = (value) => process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 const fail = (message) => { console.error(message); process.exitCode = 1; };
@@ -97,14 +101,17 @@ async function main() {
   link --knowledge <id> --revision <n> --observation <id> [--relation supports|contradicts|derived_from|validates]
   adopt --knowledge <id> [--revision <n>] [--note <text>]
   explain --knowledge <id>
+  revision list --knowledge <id>
+  changes list [--knowledge <id>] [--since <iso>]
+  candidates list [--knowledge <id>] [--status open]
   revalidate list [--status pending] [--knowledge <id>]
   revalidate resolve --id <id> --decision accepted|dismissed [--note <text>]
   context latest --project <id> [--session <id>]
   context restore --snapshot <id>
   conflicts list [--knowledge <id>] [--status open]
-  conflicts resolve --id <id>
-  sync export [--project <id>] [--all] --out <file>
-  sync import --in <file> [--dry-run]
+  conflicts resolve --id <id> [--decision accept-local|accept-incoming|merge|dismiss] [--payload-file <json>]
+  sync export [--project <id>] [--all] [--since <iso>] [--jsonl] --out <file>
+  sync import --in <file> [--jsonl] [--dry-run] [--allow-project <id> ...]
 
 DB: --knowledge-db <path> (default ${knowledgeDb})
     --owner-db <path> (default ${ownerDb})
@@ -172,6 +179,30 @@ DB: --knowledge-db <path> (default ${knowledgeDb})
       json(stores.provenance.explain(read('--knowledge')));
       return;
     }
+    if (command === 'revision' && group === 'list') {
+      json(stores.provenance.listRevisions({
+        unitId: read('--knowledge'),
+        knowledgeId: read('--knowledge-id'),
+        limit: Number(read('--limit', '500'))
+      }));
+      return;
+    }
+    if (command === 'changes' && group === 'list') {
+      json(stores.provenance.listChanges({
+        knowledgeId: read('--knowledge-id'),
+        since: read('--since'),
+        limit: Number(read('--limit', '500'))
+      }));
+      return;
+    }
+    if (command === 'candidates' && group === 'list') {
+      json(stores.provenance.listCandidates({
+        unitId: read('--knowledge'),
+        status: read('--status', 'open'),
+        limit: Number(read('--limit', '100'))
+      }));
+      return;
+    }
     if (command === 'revalidate' && group === 'list') {
       json(stores.provenance.listRevalidations({ status: read('--status', 'pending'), unitId: read('--knowledge') }));
       return;
@@ -201,7 +232,14 @@ DB: --knowledge-db <path> (default ${knowledgeDb})
       return;
     }
     if (command === 'conflicts' && group === 'resolve') {
-      json(stores.provenance.resolveConflict({ id: read('--id'), actor: read('--actor', 'owner') }));
+      const payloadFile = read('--payload-file');
+      json(stores.provenance.resolveConflict({
+        id: read('--id'),
+        decision: read('--decision', 'dismiss'),
+        payload: payloadFile ? JSON.parse(fs.readFileSync(payloadFile, 'utf8')) : null,
+        actor: read('--actor', 'owner'),
+        note: read('--note')
+      }));
       return;
     }
     if (command === 'sync' && group === 'export') {
@@ -212,22 +250,31 @@ DB: --knowledge-db <path> (default ${knowledgeDb})
         provenance: stores.provenance,
         projectId: read('--project'),
         all: has('--all'),
+        since: read('--since'),
         device: deviceId()
       });
-      fs.writeFileSync(out, `${JSON.stringify(bundle, null, 2)}\n`, 'utf8');
-      json({ out, units: bundle.units.length, sources: bundle.sources.length, observations: bundle.observations.length });
+      fs.writeFileSync(out, has('--jsonl') ? bundleToJsonl(bundle) : `${JSON.stringify(bundle, null, 2)}\n`, 'utf8');
+      json({
+        out, format: has('--jsonl') ? 'jsonl' : 'json',
+        contract: bundle.contract, schemaVersion: bundle.schemaVersion,
+        units: bundle.units.length, events: bundle.events.length,
+        sources: bundle.sources.length, observations: bundle.observations.length
+      });
       return;
     }
     if (command === 'sync' && group === 'import') {
       const file = read('--in');
       if (!file) throw new Error('--in is required');
-      const bundle = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const raw = fs.readFileSync(file, 'utf8');
+      const bundle = has('--jsonl') || file.endsWith('.jsonl') ? bundleFromJsonl(raw) : JSON.parse(raw);
+      const allowed = readAll('--allow-project');
       json(importBundle({
         personalStore: stores.personal,
         provenance: stores.provenance,
         bundle,
         apply: !has('--dry-run'),
-        device: deviceId()
+        device: deviceId(),
+        allowedProjectIds: allowed.length ? allowed : null
       }));
       return;
     }

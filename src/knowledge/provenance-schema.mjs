@@ -3,7 +3,7 @@
 // 只新增表与索引，不改动 personal_units / personal_revisions 的既有语义；
 // 旧库打开时自动建表，无需手工迁移。所有写入都带 payload_hash，便于跨设备校验
 // 与“不静默覆盖”的导入合并。
-export const PROVENANCE_SCHEMA_VERSION = 1;
+export const PROVENANCE_SCHEMA_VERSION = 2;
 
 export const PROVENANCE_DDL = `
   CREATE TABLE IF NOT EXISTS knowledge_projects (
@@ -125,6 +125,86 @@ export const PROVENANCE_DDL = `
   );
   CREATE INDEX IF NOT EXISTS knowledge_context_snapshots_project
     ON knowledge_context_snapshots(project_id, created_at DESC);
+
+  -- v2：跨设备稳定的逻辑身份 ↔ 本地 unit 的映射。旧库首次打开时按 unit id 补齐。
+  CREATE TABLE IF NOT EXISTS knowledge_identities (
+    knowledge_id TEXT PRIMARY KEY,
+    unit_id TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS knowledge_identities_unit ON knowledge_identities(unit_id);
+
+  -- v2：不可变修订索引。local_revision 为 NULL 表示来自其他设备的祖先修订。
+  CREATE TABLE IF NOT EXISTS knowledge_revision_index (
+    revision_id TEXT PRIMARY KEY,
+    knowledge_id TEXT NOT NULL,
+    unit_id TEXT NOT NULL,
+    local_revision INTEGER,
+    schema_version INTEGER NOT NULL,
+    parent_revision_ids TEXT NOT NULL DEFAULT '[]',
+    reason TEXT NOT NULL DEFAULT '',
+    actor_id TEXT NOT NULL DEFAULT '',
+    device_id TEXT NOT NULL DEFAULT '',
+    recorded_at TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    verification_status TEXT NOT NULL DEFAULT 'unknown',
+    payload TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    UNIQUE(knowledge_id, local_revision)
+  );
+  CREATE INDEX IF NOT EXISTS knowledge_revision_index_unit
+    ON knowledge_revision_index(unit_id, local_revision);
+  CREATE INDEX IF NOT EXISTS knowledge_revision_index_knowledge
+    ON knowledge_revision_index(knowledge_id, recorded_at);
+
+  -- v2：跨设备变更日志。change_id 是操作身份；重复导入不产生新修订。
+  CREATE TABLE IF NOT EXISTS knowledge_changes (
+    change_id TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
+    knowledge_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    base_revision_id TEXT,
+    result_revision_id TEXT,
+    actor_id TEXT NOT NULL DEFAULT '',
+    origin_system TEXT NOT NULL DEFAULT '',
+    origin_device TEXT NOT NULL DEFAULT '',
+    occurred_at TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    applied_at TEXT NOT NULL,
+    UNIQUE(change_id)
+  );
+  CREATE INDEX IF NOT EXISTS knowledge_changes_knowledge
+    ON knowledge_changes(knowledge_id, occurred_at);
+  CREATE INDEX IF NOT EXISTS knowledge_changes_applied
+    ON knowledge_changes(applied_at);
+
+  -- v2：分叉时保留远端分支修订（候选），不直接改本地 Head。
+  CREATE TABLE IF NOT EXISTS knowledge_candidates (
+    candidate_id TEXT PRIMARY KEY,
+    knowledge_id TEXT NOT NULL,
+    unit_id TEXT NOT NULL,
+    base_revision_id TEXT,
+    revision_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    source_bundle TEXT NOT NULL DEFAULT '{}',
+    origin_device TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    resolved_revision_id TEXT,
+    UNIQUE(knowledge_id, revision_id)
+  );
+  CREATE INDEX IF NOT EXISTS knowledge_candidates_unit
+    ON knowledge_candidates(unit_id, status, created_at DESC);
+
+  -- v2：同步游标（按来源设备记录最后处理的 change/applied 时间）。
+  CREATE TABLE IF NOT EXISTS knowledge_sync_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `;
 
 /** 在既有 PersonalKnowledgeStore 连接上安装新表；幂等。 */

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owner-agent-mvp.local/schemas/knowledge-sync-bundle.schema.json",
+  "title": "Knowledge Sync Bundle v2 (JSON / JSONL)",
+  "description": "离线优先的知识同步包。完整快照与增量变化共用同一结构；cursor.since 表示增量起点。传输层与协议分离。",
+  "type": "object",
+  "required": ["contract", "schemaVersion", "exportedAt", "device", "units"],
+  "properties": {
+    "contract": { "type": "string", "const": "knowledge-sync/v2" },
+    "schemaVersion": { "type": "integer", "const": 2 },
+    "exportedAt": { "type": "string", "format": "date-time" },
+    "device": { "type": "string", "maxLength": 120 },
+    "cursor": {
+      "type": "object",
+      "properties": {
+        "since": { "type": "string" },
+        "exportedAt": { "type": "string", "format": "date-time" },
+        "lastChangeAppliedAt": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "project": {
+      "type": ["object", "null"],
+      "description": "Project Identity；跨设备优先 git remote，其次首个 commit，最后 local-root。"
+    },
+    "units": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "knowledgeId", "revision", "revisions"],
+        "properties": {
+          "id": { "type": "string" },
+          "knowledgeId": { "type": "string" },
+          "revision": { "type": "integer", "minimum": 1 },
+          "createdAt": { "type": "string" },
+          "updatedAt": { "type": "string" },
+          "revisions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["revision", "revisionId", "payload", "payloadHash"],
+              "properties": {
+                "revision": { "type": "integer", "minimum": 1 },
+                "revisionId": { "type": "string", "pattern": "^rev_[a-f0-9]{32}$" },
+                "parentRevisionIds": { "type": "array", "items": { "type": "string" } },
+                "payload": { "type": "object" },
+                "payloadHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+                "actor": { "type": "string" },
+                "note": { "type": "string" },
+                "timestamp": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": { "$ref": "knowledge-change.schema.json" }
+    },
+    "candidates": { "type": "array" },
+    "sources": { "type": "array" },
+    "observations": { "type": "array" },
+    "links": { "type": "array" },
+    "adoptions": { "type": "array" },
+    "contextSnapshots": { "type": "array" }
+  },
+  "additionalProperties": true
+}

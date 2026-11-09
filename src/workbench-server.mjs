@@ -4,6 +4,7 @@ import path from 'node:path';
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { PersonalKnowledgeStore, KnowledgeValidationError } from './personal-store.mjs';
+import { KnowledgeProvenance } from './knowledge/provenance.mjs';
 import { OwnerStore, OwnerInputError } from './owner-store.mjs';
 import { OwnerAgent } from './owner-agent.mjs';
 import { loadSnapshot } from './loader.mjs';
@@ -78,6 +79,7 @@ const filterEntries=(items,filters)=>items.filter(x=>(!filters.q||[x.title,x.con
 export async function createWorkbenchServer({host='127.0.0.1',port=4317,dbPath=defaultDbPath()}={}) {
   if(!['127.0.0.1','::1','localhost'].includes(host)) throw new Error('Workbench must bind to loopback');
   const store=new PersonalKnowledgeStore(dbPath),owner=new OwnerStore(dbPath),ownerAgent=new OwnerAgent(owner),staticCatalog=await catalog();
+  const provenance=new KnowledgeProvenance({ personalStore: store });
   const allUnits=()=>[...store.list({limit:2000}).map(x=>({...x,readOnly:false})),...staticCatalog.knowledge];
   const handler=async(req,res)=>{
     try {
@@ -198,6 +200,93 @@ export async function createWorkbenchServer({host='127.0.0.1',port=4317,dbPath=d
             knowledgeRefs:compiled.knowledgeRefs,stableContext:compiled.stableContext,dynamicContext:compiled.dynamicContext,
             applicability:compiled.applicability,estimatedTokens:compiled.estimatedTokens});
         } finally {engine.close();}
+      }
+      if(method==='GET'&&fragments[1]==='knowledge'&&fragments[2]&&fragments[3]==='provenance') {
+        const id=decodeURIComponent(fragments[2]);
+        const item=allUnits().find(x=>x.id===id);
+        if(!item)return notFound('Knowledge not found');
+        if(item.readOnly){
+          return json(res,{unitId:id,readOnly:true,sourceRef:item.sourceRef,revisions:[],sources:[],conflicts:[],pendingRevalidations:[]});
+        }
+        return json(res,provenance.explain(id));
+      }
+      if(method==='GET'&&url.pathname==='/api/maintenance/summary') {
+        const projectId=url.searchParams.get('projectId')??'';
+        const conflicts=provenance.listConflicts({status:'open',limit:200});
+        const revalidations=provenance.listRevalidations({status:'pending',limit:200});
+        const candidates=provenance.listCandidates({status:'open',limit:200});
+        const scoped=(items)=>projectId?items.filter((item)=>{
+          const unit=store.get(item.unitId);
+          return unit?.projectId===projectId;
+        }):items;
+        return json(res,{
+          projectId,
+          openConflicts:scoped(conflicts).length,
+          pendingRevalidations:scoped(revalidations).length,
+          openCandidates:scoped(candidates).length,
+          sources:provenance.listSources({projectId,limit:200}).length,
+          lastImport:provenance.getSyncState('last-import'),
+          schemaVersion:2
+        });
+      }
+      if(method==='GET'&&url.pathname==='/api/maintenance/conflicts') {
+        const status=url.searchParams.get('status')??'open';
+        const projectId=url.searchParams.get('projectId')??'';
+        const items=provenance.listConflicts({status,limit:200})
+          .map((item)=>({...item,unitTitle:store.get(item.unitId)?.title??item.unitId}))
+          .filter((item)=>!projectId||store.get(item.unitId)?.projectId===projectId);
+        return json(res,items);
+      }
+      if(method==='POST'&&fragments[1]==='maintenance'&&fragments[2]==='conflicts'&&fragments[3]&&fragments[4]==='resolve') {
+        const p=await body(req);
+        return json(res,provenance.resolveConflict({
+          id:decodeURIComponent(fragments[3]),
+          decision:p.decision??'dismiss',
+          payload:p.payload??null,
+          actor:p.actor??'owner',
+          note:p.note??''
+        }));
+      }
+      if(method==='GET'&&url.pathname==='/api/maintenance/revalidations') {
+        const status=url.searchParams.get('status')??'pending';
+        return json(res,provenance.listRevalidations({status,unitId:url.searchParams.get('knowledge')??'',limit:200})
+          .map((item)=>({...item,unitTitle:store.get(item.unitId)?.title??item.unitId})));
+      }
+      if(method==='POST'&&fragments[1]==='maintenance'&&fragments[2]==='revalidations'&&fragments[3]&&fragments[4]==='resolve') {
+        const p=await body(req);
+        return json(res,provenance.resolveRevalidation({
+          id:decodeURIComponent(fragments[3]),
+          decision:p.decision??'dismissed',
+          actor:p.actor??'owner',
+          note:p.note??''
+        }));
+      }
+      if(method==='GET'&&url.pathname==='/api/maintenance/sources') {
+        return json(res,provenance.listSources({
+          projectId:url.searchParams.get('projectId')??'',
+          limit:Math.min(500,Math.max(1,Number(url.searchParams.get('limit')??100)))
+        }));
+      }
+      if(method==='GET'&&url.pathname==='/api/maintenance/changes') {
+        return json(res,provenance.listChanges({
+          knowledgeId:url.searchParams.get('knowledgeId')??'',
+          since:url.searchParams.get('since')??'',
+          limit:Math.min(500,Math.max(1,Number(url.searchParams.get('limit')??100)))
+        }));
+      }
+      if(method==='GET'&&url.pathname==='/api/maintenance/revisions') {
+        return json(res,provenance.listRevisions({
+          unitId:url.searchParams.get('unitId')??'',
+          knowledgeId:url.searchParams.get('knowledgeId')??'',
+          limit:Math.min(500,Math.max(1,Number(url.searchParams.get('limit')??100)))
+        }));
+      }
+      if(method==='GET'&&url.pathname==='/api/maintenance/candidates') {
+        return json(res,provenance.listCandidates({
+          unitId:url.searchParams.get('unitId')??'',
+          status:url.searchParams.get('status')??'open',
+          limit:100
+        }).map((item)=>({...item,unitTitle:store.get(item.unitId)?.title??item.unitId})));
       }
       return notFound();
     } catch(e) {

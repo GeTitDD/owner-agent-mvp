@@ -17,9 +17,22 @@ import { canonical } from '../utils.mjs';
 const SOURCE_TYPES = new Set([
   'git', 'github', 'file', 'document', 'session', 'run', 'experiment', 'manual'
 ]);
+const SOURCE_SYSTEMS = new Set([
+  'github', 'git', 'pi', 'chatgpt', 'local-file', 'owner', 'manual', 'unknown'
+]);
 const AVAILABILITY = new Set(['available', 'unavailable', 'unknown']);
 const RELATIONS = new Set(['supports', 'contradicts', 'derived_from', 'validates']);
 const ID_PATTERN = /^[a-z][a-z0-9]*_[a-z0-9]{8,64}$/u;
+const KNOWN_SYSTEMS_BY_TYPE = {
+  github: 'github',
+  git: 'git',
+  session: 'pi',
+  run: 'owner',
+  experiment: 'owner',
+  file: 'local-file',
+  document: 'local-file',
+  manual: 'manual'
+};
 
 const sha = (value) => createHash('sha256').update(String(value)).digest('hex');
 const clean = (value, max = 500) => {
@@ -63,16 +76,27 @@ export function normalizeSourceDescriptor(input) {
   const namespace = clean(input.namespace, 300);
   const objectId = clean(input.objectId, 500);
   const sourceVersion = clean(input.sourceVersion, 300);
-  const locator = clean(input.locator, 500);
+  // 兼容新旧命名：sourceLocator / sourceContentHash 是协议字段，locator / contentHash 是 v1 字段。
+  const locator = clean(input.sourceLocator ?? input.locator, 500);
+  const contentHash = input.sourceContentHash ?? input.contentHash;
+  const sourceSystem = clean(
+    input.sourceSystem ?? KNOWN_SYSTEMS_BY_TYPE[sourceType] ?? 'unknown',
+    40
+  );
+  if (!SOURCE_SYSTEMS.has(sourceSystem)) throw new Error(`Unknown source system: ${sourceSystem}`);
   const descriptor = {
     contract: 'source-descriptor/v1',
+    schemaVersion: 1,
     sourceId: input.sourceId ?? sourceIdFor({ namespace, sourceType, objectId }),
+    sourceSystem,
     sourceType,
     namespace,
     objectId,
     sourceVersion,
     locator,
-    contentHash: input.contentHash ? clean(input.contentHash, 128) : '',
+    sourceLocator: locator,
+    contentHash: contentHash ? clean(contentHash, 128) : '',
+    sourceContentHash: contentHash ? clean(contentHash, 128) : '',
     observedAt: input.observedAt ?? new Date().toISOString(),
     captureRunId: input.captureRunId ? clean(input.captureRunId, 120) : '',
     availability
@@ -85,8 +109,10 @@ export function normalizeSourceDescriptor(input) {
 /** 观察记录：source identity + 版本 + 内容哈希 + 采集运行。 */
 export function normalizeObservation(input) {
   const descriptor = normalizeSourceDescriptor(input);
+  const recordedAt = input.recordedAt ?? new Date().toISOString();
   const observation = {
     contract: 'source-observation/v1',
+    schemaVersion: 1,
     observationId: input.observationId ?? observationIdFor({
       sourceId: descriptor.sourceId,
       sourceVersion: descriptor.sourceVersion,
@@ -94,10 +120,19 @@ export function normalizeObservation(input) {
       captureRunId: descriptor.captureRunId
     }),
     sourceId: descriptor.sourceId,
+    sourceSystem: descriptor.sourceSystem,
+    sourceType: descriptor.sourceType,
     sourceVersion: descriptor.sourceVersion,
+    sourceLocator: descriptor.sourceLocator,
+    sourceContentHash: descriptor.sourceContentHash,
     contentHash: descriptor.contentHash,
     locator: descriptor.locator,
     observedAt: descriptor.observedAt,
+    recordedAt,
+    actorId: clean(input.actorId ?? input.observedBy ?? 'agent', 80),
+    sessionId: input.sessionId ? clean(input.sessionId, 120) : '',
+    runId: input.runId ?? (descriptor.captureRunId || ''),
+    deviceId: input.deviceId ? clean(input.deviceId, 120) : '',
     captureRunId: descriptor.captureRunId,
     observedBy: clean(input.observedBy ?? 'agent', 80),
     availability: descriptor.availability
@@ -156,6 +191,25 @@ export function normalizeRelation(value) {
   const relation = String(value ?? 'supports');
   if (!RELATIONS.has(relation)) throw new Error(`Unknown source relation: ${relation}`);
   return relation;
+}
+
+/**
+ * 修订身份：同一知识、同一父修订、同一内容/原因/主体 → 同一 revisionId。
+ * 这样两个设备独立产生相同修订时可以幂等去重；内容不同则天然分叉。
+ */
+export function revisionIdFor({ knowledgeId, contentHash, parentRevisionIds = [], reason = '', actorId = '' }) {
+  return `rev_${sha(canonical({
+    knowledgeId: clean(knowledgeId, 120),
+    contentHash: clean(contentHash, 128),
+    parentRevisionIds: [...new Set(parentRevisionIds)].sort(),
+    reason: String(reason ?? '').slice(0, 500),
+    actorId: String(actorId ?? '').slice(0, 80)
+  })).slice(0, 32)}`;
+}
+
+/** 知识逻辑身份：默认沿用本地 unit id；导入时由 Sync 原样保留。 */
+export function knowledgeIdFor(unitId) {
+  return String(unitId ?? '').slice(0, 120);
 }
 
 export const SOURCE_CONTRACT = 'source-descriptor/v1';

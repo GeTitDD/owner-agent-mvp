@@ -140,8 +140,16 @@ export class PersonalKnowledgeStore {
     }
     // Knowledge Maintenance & Provenance：加法式建表，旧库打开即升级。
     installProvenanceSchema(this.db);
+    // 修订落库后的可选回调；KnowledgeProvenance 用它维护不可变修订索引与变更日志。
+    this.onRevision = null;
   }
   close() { this.db.close(); }
+
+  /** 通知已安装的观测者（例如 provenance 索引）；回调失败不影响主修订。 */
+  emitRevision(info) {
+    if (typeof this.onRevision !== 'function') return;
+    try { this.onRevision(info); } catch { /* 索引可回填，不让观测者阻塞知识写入 */ }
+  }
   list({q='',domain='',layer='',scope='',status='',projectId='',limit=500}={}) {
     const rows = this.db.prepare('SELECT * FROM personal_units ORDER BY updated_at DESC,id LIMIT ?').all(Math.min(Math.max(1,limit),2000));
     const query=q.trim().toLocaleLowerCase();
@@ -165,21 +173,25 @@ export class PersonalKnowledgeStore {
       this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,1,?,?,?,?,?)').run(id,body,safeText(actor,80,'actor',true),safeText(note,500,'note'),timestamp,sha256(body));
       this.db.exec('COMMIT');
     } catch(e) { this.db.exec('ROLLBACK'); throw e; }
+    this.emitRevision({unitId:id,revision:1,payload:normalized,payloadHash:sha256(body),actor,note,timestamp,parentRevisionIds:[]});
     return this.get(id);
   }
-  update(id,payload,{expectedRevision,actor='user',note='Edited'}={}) {
+  update(id,payload,{expectedRevision,actor='user',note='Edited',parents=[]}={}) {
     valid(Number.isSafeInteger(expectedRevision) && expectedRevision>0,'expectedRevision required');
+    valid(Array.isArray(parents),'parents must be an array');
+    let normalized, body, stamp, next;
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const existing=this.get(id);
       if(!existing) throw new KnowledgeValidationError('Knowledge not found');
       if(existing.revision!==expectedRevision) throw new KnowledgeConflict(`Revision conflict: expected ${expectedRevision}, actual ${existing.revision}`);
-      const normalized=normalize(payload,existing);
-      const body=canonical(normalized),stamp=now(),next=existing.revision+1;
+      normalized=normalize(payload,existing);
+      body=canonical(normalized);stamp=now();next=existing.revision+1;
       this.db.prepare('UPDATE personal_units SET revision=?,payload=?,updated_at=? WHERE id=?').run(next,body,stamp,id);
       this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,?,?,?,?,?,?)').run(id,next,body,safeText(actor,80,'actor',true),safeText(note,500,'note'),stamp,sha256(body));
       this.db.exec('COMMIT');
     } catch(e) { this.db.exec('ROLLBACK'); throw e; }
+    this.emitRevision({unitId:id,revision:next,payload:normalized,payloadHash:sha256(body),actor,note,timestamp:stamp,parentRevisionIds:parents.map(String)});
     return this.get(id);
   }
   revert(id, revision,expectedRevision) {

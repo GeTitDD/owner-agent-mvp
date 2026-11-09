@@ -1,4 +1,4 @@
-# 设计参考：Knowledge Maintenance & Provenance v1
+# 设计参考：Knowledge Maintenance & Provenance v2
 
 > 目标不是引入这些系统，而是借用它们的领域模型，补上 Owner 在“来源、版本、维护、同步”上的缺口。
 > 结论先行：**只借鉴模型，不引入新依赖**；所有能力落在现有 SQLite + 现有知识存储之上。

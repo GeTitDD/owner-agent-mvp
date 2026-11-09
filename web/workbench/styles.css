@@ -33,3 +33,8 @@
 @media(max-width:900px){.owner-grid{grid-template-columns:1fr}.owner-inline-form,.owner-task{grid-template-columns:1fr}.companion{bottom:10px;right:10px}}
 
 .owner-state-select{display:flex;gap:8px;align-items:center;font-size:11px;color:#a1b6cf;margin-top:10px}.owner-state-select select{border:1px solid #3b536b;border-radius:6px;padding:5px;color:#dae9ff;background:#15293d}
+
+.review-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+.review-note{color:#899aad;font-size:12px;margin:0 0 8px}
+.review-diff{background:#0e1520;border:1px solid #2c394a;border-radius:8px;padding:10px;color:#c4d0df;font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:240px;overflow:auto}
+.empty-line{color:#748ba4;font-size:12px;margin:0}
