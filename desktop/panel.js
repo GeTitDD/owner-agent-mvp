@@ -46,6 +46,8 @@
     const state = view?.state ?? 'idle';
     $('stateDot').className = `state-dot ${state}`;
     $('stateText').textContent = stateText[state] ?? '空闲';
+    $('activityPhase').className = `state-dot ${state}`;
+    $('activityLabel').textContent = stateText[state] ?? '空闲';
     $('stage').textContent = view?.stage ?? '正在读取状态…';
     $('workerLabel').textContent = view?.worker?.label ? `Worker · ${view.worker.label}` : 'Worker 空闲';
     const pending = view?.pending?.length ?? 0;
@@ -771,6 +773,88 @@
     for (const item of pending) list.append(pendingCard(item));
   };
 
+  const renderActivity = () => {
+    const box = $('activityLines');
+    box.replaceChildren();
+    const kindLabel = { user: '你', assistant: '助手', status: '状态', tool: '工具' };
+    for (const line of view?.activity ?? []) {
+      const row = el('div', `activity-line kind-${line.kind}`);
+      row.append(el('span', 'activity-kind', kindLabel[line.kind] ?? line.kind));
+      row.append(el('span', 'activity-text', line.text));
+      box.append(row);
+    }
+    const model = view?.config?.model || 'Pi 默认模型';
+    $('composerModel').textContent = model;
+    $('composerModel').title = `当前模型：${model}`;
+  };
+
+  const fmtTime = (value) => {
+    const at = new Date(String(value ?? ''));
+    if (Number.isNaN(at.getTime())) return '';
+    return at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const showTimelineItem = async (item) => {
+    try {
+      const nodes = [el('p', 'result-summary', item.title), detailRows([
+        ['类型', item.tool],
+        ['状态', item.detail],
+        ['时间', String(item.at ?? '').replace('T', ' ').slice(0, 19)]
+      ])];
+      if (item.ref?.type === 'patch') {
+        const patch = await window.companion.patchDetail({ id: item.ref.id });
+        nodes.push(detailRows([
+          ['Paths', (patch.files ?? []).map((file) => file.path).join(', ') || '—'],
+          ['Proposal hash', patch.proposal_hash ?? '—']
+        ]));
+        if (patch.proposal_diff) {
+          nodes.push(el('div', 'section-title', 'Diff'));
+          nodes.push(el('pre', 'diff', patch.proposal_diff));
+        }
+      }
+      const close = el('button', 'ghost', '关闭');
+      close.onclick = closeModal;
+      openModal('会话详情', nodes, [close]);
+    } catch (error) {
+      toast(String(error?.message ?? error), 5000);
+    }
+  };
+
+  const renderTimeline = () => {
+    const section = $('timelineSection');
+    const list = $('timeline');
+    const items = view?.timeline ?? [];
+    list.replaceChildren();
+    section.hidden = items.length === 0;
+    $('timelineCount').textContent = String(items.length);
+    const toolLabel = { job: '任务', patch: '补丁', test: '测试', repair: '修复' };
+    for (const item of items) {
+      if (item.kind === 'user') {
+        const row = el('article', 'msg msg-user');
+        const head = el('header', 'msg-head');
+        head.append(el('span', 'msg-role', '你'));
+        head.append(el('time', 'msg-time', fmtTime(item.at)));
+        row.append(head, el('p', 'msg-body', item.title));
+        if (item.detail) row.append(el('p', 'msg-sub', item.detail));
+        list.append(row);
+        continue;
+      }
+      const card = el('details', 'msg msg-tool');
+      const summary = el('summary', 'tool-row');
+      summary.append(el('span', `tool-dot tone-${item.tone ?? 'muted'}`));
+      summary.append(el('span', 'tool-name', toolLabel[item.tool] ?? item.tool));
+      summary.append(el('span', 'tool-detail', item.detail));
+      summary.append(el('time', 'msg-time', fmtTime(item.at)));
+      card.append(summary);
+      const body = el('div', 'tool-body');
+      const more = el('button', 'ghost small', '查看详情');
+      more.onclick = () => { void showTimelineItem(item); };
+      body.append(more);
+      card.append(body);
+      list.append(card);
+    }
+  };
+
   const renderResult = () => {
     const section = $('resultSection');
     const card = $('resultCard');
@@ -792,6 +876,8 @@
     try {
       view = await window.companion.snapshot();
       applyState();
+      renderActivity();
+      renderTimeline();
       renderProjects();
       renderPending();
       renderResult();
@@ -804,15 +890,41 @@
     }
   };
 
+  // ---- Composer（Cindy ComposerCard / ListComposerTextarea 行为） ----
+
+  const DRAFT_KEY = 'owner-companion-draft';
+  const taskInput = $('taskInput');
+
+  const autoGrow = () => {
+    taskInput.style.height = 'auto';
+    taskInput.style.height = `${Math.min(160, taskInput.scrollHeight)}px`;
+  };
+
+  const applyEdit = (edit) => {
+    taskInput.value = edit.value;
+    taskInput.dispatchEvent(new Event('input', { bubbles: true }));
+    taskInput.setSelectionRange(edit.caret, edit.caret);
+  };
+
+  const restoreDraft = () => {
+    try {
+      const saved = localStorage.getItem(DRAFT_KEY);
+      if (saved) { taskInput.value = saved; autoGrow(); }
+    } catch { /* 本地草稿不可用不影响发送 */ }
+  };
+
   $('submitTask').onclick = async () => {
-    const text = $('taskInput').value.trim();
+    const text = taskInput.value.trim();
     if (!text) { toast('先写下要交办的事情。'); return; }
     const projectId = $('projectSelect').value;
     const button = $('submitTask');
     button.disabled = true;
+    button.classList.add('sending');
     try {
       const created = await window.companion.createJob({ text, projectId });
-      $('taskInput').value = '';
+      taskInput.value = '';
+      try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+      autoGrow();
       const missing = created?.testConfig?.missing ?? [];
       if (created?.testConfig?.ok === false) {
         toast(missing.length
@@ -826,15 +938,52 @@
       toast(String(error?.message ?? error), 5000);
     } finally {
       button.disabled = false;
+      button.classList.remove('sending');
+      taskInput.focus();
     }
   };
 
-  $('taskInput').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+  taskInput.addEventListener('input', () => {
+    autoGrow();
+    try { localStorage.setItem(DRAFT_KEY, taskInput.value); } catch { /* ignore */ }
+  });
+
+  taskInput.addEventListener('keydown', (event) => {
+    if (event.isComposing) return; // 输入法组字期间不拦截
+    const list = window.OwnerComposerList;
+    const start = taskInput.selectionStart;
+    const end = taskInput.selectionEnd;
+    if (event.key === 'Enter') {
+      if (event.shiftKey || event.altKey) {
+        const edit = list?.computeTextareaContinuation(taskInput.value, start, end);
+        if (edit) {
+          event.preventDefault();
+          applyEdit(edit);
+          return;
+        }
+        if (event.altKey) {
+          // Alt+Enter 一律当换行消费，避免落入“Enter=发送”。
+          event.preventDefault();
+          const next = `${taskInput.value.slice(0, start)}\n${taskInput.value.slice(end)}`;
+          applyEdit({ value: next, caret: start + 1 });
+        }
+        return; // Shift+Enter 交给默认换行
+      }
       event.preventDefault();
       $('submitTask').click();
+      return;
+    }
+    if (event.key === 'Backspace' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+      const edit = list?.computeTextareaBackspace(taskInput.value, start, end);
+      if (edit) {
+        event.preventDefault();
+        applyEdit(edit);
+      }
     }
   });
+
+  restoreDraft();
+  autoGrow();
 
   $('projectSelect').onchange = async () => {
     const projectId = $('projectSelect').value;

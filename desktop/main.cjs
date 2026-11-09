@@ -606,6 +606,70 @@ const buildView = async () => {
     sandbox: activeSandbox ?? sandboxesInProject[0] ?? null,
     cycle: activeCycle ?? repairsInProject[0] ?? null
   };
+  // 活动流与会话时间线：给面板的 Cindy 式 activity / message 卡片用。
+  const jobLabel = (status) => ({
+    pending_approval: '等你批准', approved: '已批准', queued: '排队中', leased: '已领取',
+    running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已取消',
+    rejected: '已拒绝', needs_reconciliation: '需要核对'
+  }[status] ?? status);
+  const runLabel = (run) => {
+    const test = run.test_status ?? 'unknown';
+    const exit = Number.isInteger(run.exit_code) ? ` · exit ${run.exit_code}` : '';
+    return `${run.status} · 测试 ${test}${exit}`;
+  };
+  const activity = [];
+  if (chain.job) activity.push({ kind: 'status', text: `任务：${chain.job.title}（${jobLabel(chain.job.status)}）` });
+  if (chain.patch) {
+    activity.push({
+      kind: 'tool',
+      text: `补丁：${(chain.patch.files ?? []).map((file) => file.path).join(', ') || chain.patch.id.slice(0, 8)} · ${chain.patch.status}`
+    });
+  }
+  if (chain.sandbox) activity.push({ kind: 'tool', text: `沙箱：${runLabel(chain.sandbox)}` });
+  if (chain.cycle) activity.push({ kind: 'status', text: `修复：${chain.cycle.status}` });
+  if (activity.length === 0) activity.push({ kind: 'status', text: '暂时没有进行中的任务' });
+
+  const timeline = [];
+  for (const job of jobsInProject.slice(0, 6)) {
+    timeline.push({
+      id: `job:${job.id}`, kind: 'user', tool: 'job',
+      title: job.title || '未命名任务',
+      detail: `任务 · ${jobLabel(job.status)}`,
+      at: job.updated_at ?? job.created_at ?? '',
+      ref: { type: 'job', id: job.id }
+    });
+  }
+  for (const patch of patchesInProject.slice(0, 6)) {
+    timeline.push({
+      id: `patch:${patch.id}`, kind: 'tool', tool: 'patch',
+      title: '补丁提案',
+      detail: `${(patch.files ?? []).map((file) => file.path).join(', ') || patch.id.slice(0, 8)} · ${patch.status}`,
+      at: patch.updated_at ?? patch.created_at ?? '',
+      ref: { type: 'patch', id: patch.id, status: patch.status }
+    });
+  }
+  for (const run of sandboxesInProject.slice(0, 6)) {
+    timeline.push({
+      id: `sandbox:${run.id}`, kind: 'tool', tool: 'test',
+      title: '沙箱测试',
+      detail: runLabel(run),
+      tone: run.test_status === 'pass' ? 'ok' : run.test_status === 'fail' ? 'error' : 'muted',
+      at: run.updated_at ?? run.created_at ?? '',
+      ref: { type: 'sandbox', id: run.id }
+    });
+  }
+  for (const cycle of repairsInProject.slice(0, 4)) {
+    timeline.push({
+      id: `repair:${cycle.id}`, kind: 'tool', tool: 'repair',
+      title: '修复循环',
+      detail: cycle.status,
+      tone: cycle.status === 'tested_pass' ? 'ok' : cycle.status === 'tested_fail' ? 'error' : 'muted',
+      at: cycle.updated_at ?? cycle.created_at ?? '',
+      ref: { type: 'repair', id: cycle.id }
+    });
+  }
+  timeline.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+
   // 状态只反映“最近一次结果”，避免很久以前的失败/成功让桌宠永久变色。
   const nowMs = Date.now();
   const recent = (value, windowMs = 30 * 60 * 1000) => {
@@ -639,6 +703,8 @@ const buildView = async () => {
     state,
     pending,
     stage: stageText(chain),
+    activity,
+    timeline,
     worker: {
       running: Boolean(workerState.running),
       onProject: Boolean(workerOnProject),

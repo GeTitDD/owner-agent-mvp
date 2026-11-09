@@ -24,14 +24,17 @@
     </header>
 
     <div class="scroll">
-      <section class="stage-card">
-        <div class="stage-line">
-          <span id="stage" class="stage-text">正在读取状态…</span>
+      <section class="activity-card" id="activityCard">
+        <div class="activity-head">
+          <span id="activityPhase" class="state-dot"></span>
+          <span id="activityLabel" class="activity-state">空闲</span>
+          <span class="activity-meta">
+            <span id="workerLabel">Worker 空闲</span>
+            <span id="pendingCount">0 项待决定</span>
+          </span>
         </div>
-        <div class="stage-meta">
-          <span id="workerLabel">Worker 空闲</span>
-          <span id="pendingCount">0 项待决定</span>
-        </div>
+        <div class="activity-stage" id="stage">正在读取状态…</div>
+        <div id="activityLines" class="activity-lines"></div>
       </section>
 
       <section id="setup" class="setup" hidden>
@@ -41,21 +44,12 @@
         <button id="addProject" class="primary">选择项目目录</button>
       </section>
 
-      <section class="compose" id="composeSection">
-        <div class="compose-row">
-          <select id="projectSelect" aria-label="项目"></select>
-          <button id="openFullInline" class="ghost small" title="完整工作台">工作台</button>
+      <section id="timelineSection" class="timeline-section" hidden>
+        <div class="section-title">
+          <h3>会话</h3>
+          <span id="timelineCount" class="count">0</span>
         </div>
-        <textarea id="taskInput" rows="2" maxlength="1200"
-          placeholder="交办一件事：例如“帮我修复这个项目里的 Bug”"></textarea>
-        <div class="compose-actions">
-          <span class="compose-hint">会先创建任务，等你批准后才执行。</span>
-          <button id="submitTask" class="primary">交办</button>
-        </div>
-        <div id="testWarning" class="test-warning" hidden>
-          <span id="testWarningText"></span>
-          <button id="fixTestConfig" class="ghost small">配置测试</button>
-        </div>
+        <div id="timeline" class="timeline-list"></div>
       </section>
 
       <section id="playbookSection" class="playbook-section" hidden>
@@ -102,6 +96,31 @@
         <div id="resultCard" class="result-card"></div>
       </section>
     </div>
+
+    <section class="composer-dock" id="composeSection">
+      <div class="composer-card">
+        <div class="composer-head">
+          <select id="projectSelect" aria-label="项目"></select>
+          <button id="openFullInline" class="ghost small" title="完整工作台">工作台</button>
+        </div>
+        <textarea id="taskInput" rows="1" maxlength="1200"
+          placeholder="交办一件事…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <div class="composer-bar">
+          <span id="composerModel" class="composer-model" title="当前模型">—</span>
+          <span class="composer-hint">先创建任务，批准后执行</span>
+          <button id="submitTask" class="send-btn" title="发送（Enter）" aria-label="发送">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+        <div id="testWarning" class="test-warning" hidden>
+          <span id="testWarningText"></span>
+          <button id="fixTestConfig" class="ghost small">配置测试</button>
+        </div>
+      </div>
+    </section>
 
     <footer class="footer">
       <span id="footerStatus">本地服务已启动</span>
@@ -162,6 +181,7 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
+  <script src="./composer-list.js"></script>
   <script src="./panel.js"></script>
 </body>
 </html>
