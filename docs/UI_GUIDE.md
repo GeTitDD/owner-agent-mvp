@@ -75,6 +75,16 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 - 冲突：本地/远端/字段；解决入口。
 - 维护页：冲突、待重验证、来源、同步状态；后端未启用时明确降级提示。
 
+#### 审核中心（知识变更提案）
+
+- 「完整知识库 → 审核中心」列出所有 `pending` 提案，可直接接受 / 拒绝；
+- 提案正文默认按 Markdown 预览渲染（标题 / 列表 / 行内代码 / 代码块），长文默认折叠，可展开全文；
+- 提案来源：一键提炼（`harvest`）、复盘（`reflect`）、结构走读（`how`）等 pstack 结果；
+- 提案数据存放在知识库（默认 `~/.domain-context/index.sqlite`），桌面版 Owner 数据在 `userData/owner.sqlite`，两者不同库；
+- 审核通过才会生成或更新知识条目，拒绝不改动知识库。
+
+![知识审核中心](assets/companion/knowledge-review.png)
+
 ### 3.4 动态桌宠与一键换肤
 
 - 支持 Cindy 静态 PNG/SVG/GIF 与 **Codex Pet 动画包**（`pet.json` + spritesheet，8×9 / 8×11）。

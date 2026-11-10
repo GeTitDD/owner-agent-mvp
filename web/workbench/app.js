@@ -1,5 +1,7 @@
 const $=selector=>document.querySelector(selector);
 const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+import { renderMarkdown } from './markdown.js';
+
 const state={tab:'owner',selected:null,domain:'',items:[],domains:[],projects:[],project:null,mode:'view',proposals:[],isNew:false,detailTab:'content',revisions:[]};
 async function api(route,method='GET',body) {
   const res=await fetch(route,{method,headers:{...(method==='GET'?{}:{'content-type':'application/json','x-workbench-request':'1'})},body:body===undefined?undefined:JSON.stringify(body)});
@@ -35,7 +37,7 @@ async function refresh(){await loadSummary();const query=new URLSearchParams({q:
 }
 function renderList(){const list=$('#knowledgeList');$('#resultCount').textContent=`${state.items.length} 条知识`;
   list.innerHTML=state.items.length?state.items.map(item=>`<button class="knowledge-item ${item.id===state.selected?.id?'active':''}" data-id="${esc(item.id)}"><div class="item-top"><h3>${esc(item.title)}</h3><small>${item.readOnly?'只读':`r${item.revision}`}</small></div><p>${esc(item.excerpt)}</p><div class="tags">${tag(nameLayer(item.layer))}${tag(nameScope(item.scope),'dim')}${item.verificationStatus==='needs_reverification'?tag('需重新验证','warn'):''}${item.domains.slice(0,2).map(x=>tag(x,'dim')).join('')}</div></button>`).join(''):
-    '<div class="empty-state" style="margin:40px auto"><p>没有匹配的知识。尝试改变筛选条件，或者新建一条。</p></div>';
+    '<div class="empty-state empty-state-spaced"><p>没有匹配的知识。尝试改变筛选条件，或者新建一条。</p></div>';
   list.querySelectorAll('button[data-id]').forEach(btn=>btn.addEventListener('click',()=>void selectKnowledge(btn.dataset.id)));
 }
 const defaultKnowledge=()=>({title:'',content:'',kind:'note',layer:'applied',scope:'personal',projectId:null,domains:state.domain?[state.domain]:[],tags:[],evidenceRefs:[],verificationStatus:'unverified',relations:{},sourceRef:null});
@@ -187,11 +189,22 @@ async function loadConflicts(id){
   }catch(e){panel.innerHTML='<p class="empty-line">冲突接口尚未启用（合并知识维护后端后自动可用）。</p>';}
 }
 async function loadProposals(){try{state.proposals=await api('/api/proposals');
-  $('#reviewList').innerHTML=state.proposals.length?state.proposals.map(x=>`<div class="review-card"><div class="item-top"><h3>${esc(x.payload.title)}</h3>${tag(x.status,x.status==='pending'?'warn':'dim')}</div>
+  $('#reviewList').innerHTML=state.proposals.length?state.proposals.map(x=>{
+    const content=String(x.payload.content??'');
+    const long=content.length>900;
+    const domains=(x.payload.domains??[]).map(d=>tag(d,'dim')).join('');
+    return `<div class="review-card"><div class="item-top"><h3>${esc(x.payload.title)}</h3>${tag(x.status,x.status==='pending'?'warn':'dim')}</div>
     <div class="review-meta"><span>提议者：${esc(x.actor)}</span><span>${esc(x.created_at?.slice(0,16))}</span><span>${x.target_id?'基于修订 r'+esc(x.target_revision??'?'):'创建新知识'}</span></div>
-    <p>${esc(x.payload.content)}</p><div class="tags">${tag(nameLayer(x.payload.layer))}${x.payload.domains.map(d=>tag(d,'dim')).join('')}</div>
-    ${x.status==='pending'?`<div class="review-actions" style="margin-top:14px"><button data-approve="${esc(x.id)}" class="button primary small">接受提案</button><button data-reject="${esc(x.id)}" class="button danger small">拒绝</button></div>`:''}
-  </div>`).join(''):'<div class="empty-state"><h2>暂无提案</h2><p>Agent 可以通过本地 API 提交知识变更建议，等待你审核。</p></div>';
+    <div class="markdown${long?' clamped':''}">${renderMarkdown(content)}</div>
+    ${long?'<button class="button ghost small expand-md" type="button">展开全文</button>':''}
+    <div class="tags">${tag(nameLayer(x.payload.layer))}${domains}</div>
+    ${x.status==='pending'?`<div class="review-actions"><button data-approve="${esc(x.id)}" class="button primary small">接受提案</button><button data-reject="${esc(x.id)}" class="button danger small">拒绝</button></div>`:''}
+  </div>`;}).join(''):'<div class="empty-state"><h2>暂无提案</h2><p>Agent 可以通过本地 API 提交知识变更建议，等待你审核。</p></div>';
+  $('#reviewList').querySelectorAll('.expand-md').forEach(button=>button.addEventListener('click',()=>{
+    const body=button.previousElementSibling;
+    const clamped=body.classList.toggle('clamped');
+    button.textContent=clamped?'展开全文':'收起';
+  }));
   $('#reviewList').querySelectorAll('[data-approve],[data-reject]').forEach(button=>button.addEventListener('click',async()=>{
     const id=button.dataset.approve??button.dataset.reject;
     const proposal=state.proposals.find(x=>x.id===id);

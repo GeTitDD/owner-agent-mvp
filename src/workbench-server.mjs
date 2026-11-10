@@ -75,16 +75,24 @@ const filterEntries=(items,filters)=>items.filter(x=>(!filters.q||[x.title,x.con
   &&(!filters.scope||x.scope===filters.scope)&&(!filters.status||x.verificationStatus===filters.status)
   &&(!filters.projectId||x.projectId===filters.projectId));
 
-export async function createWorkbenchServer({host='127.0.0.1',port=4317,dbPath=defaultDbPath()}={}) {
+export async function createWorkbenchServer({
+  host = '127.0.0.1',
+  port = 4317,
+  dbPath = defaultDbPath(),
+  // 桌面版把知识库放在 ~/.domain-context，Owner 数据放在 userData/owner.sqlite，
+  // 两者可能是不同文件；不传时退回单库模式（CLI 与测试）。
+  personalDbPath = dbPath,
+  ownerDbPath = dbPath
+} = {}) {
   if(!['127.0.0.1','::1','localhost'].includes(host)) throw new Error('Workbench must bind to loopback');
-  const store=new PersonalKnowledgeStore(dbPath),owner=new OwnerStore(dbPath),ownerAgent=new OwnerAgent(owner),staticCatalog=await catalog();
+  const store=new PersonalKnowledgeStore(personalDbPath),owner=new OwnerStore(ownerDbPath),ownerAgent=new OwnerAgent(owner),staticCatalog=await catalog();
   const allUnits=()=>[...store.list({limit:2000}).map(x=>({...x,readOnly:false})),...staticCatalog.knowledge];
   const handler=async(req,res)=>{
     try {
       const hostname=req.headers.host??'';
       if(!/^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(hostname)) {json(res,{error:'Invalid Host header'},403);return;}
       const url=new URL(req.url,`http://${hostname}`);
-      if(req.method==='GET' && ['/', '/app.js','/styles.css'].includes(url.pathname)) {
+      if(req.method==='GET' && ['/', '/app.js', '/markdown.js', '/styles.css'].includes(url.pathname)) {
         const name=url.pathname==='/'?'index.html':url.pathname.slice(1);
         const data=await readFile(path.join(WEB,name));
         res.writeHead(200,{'content-type':name.endsWith('.js')?'application/javascript; charset=utf-8':name.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8',

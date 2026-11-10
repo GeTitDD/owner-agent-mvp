@@ -270,6 +270,51 @@ input:disabled, textarea:disabled, select:disabled { opacity: 0.7; }
 .review-card p { color: var(--text-2); font-size: 12.5px; white-space: pre-wrap; }
 .review-meta { font-size: 11px; color: var(--muted); display: flex; gap: 14px; margin: 8px 0; }
 .review-actions { display: flex; gap: 8px; }
+.review-card .review-actions { margin-top: 14px; }
+.empty-state-spaced { margin: 40px auto; }
+
+/* 审核卡片正文：Markdown 预览 */
+.markdown { font-size: 14px; line-height: 1.65; color: var(--text); }
+.markdown.clamped { max-height: 320px; overflow: hidden; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown h3,
+.markdown h4,
+.markdown h5 { margin: 14px 0 6px; line-height: 1.35; color: var(--text); }
+.markdown h3 { font-size: 16px; }
+.markdown h4 { font-size: 14px; }
+.markdown h5 { font-size: 13px; color: var(--text-2); }
+.markdown p { margin: 8px 0; }
+.markdown ul,
+.markdown ol { margin: 8px 0; padding-left: 20px; }
+.markdown li { margin: 4px 0; }
+.markdown code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  word-break: break-word;
+}
+.markdown pre {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  overflow: auto;
+}
+.markdown pre code { padding: 0; border: 0; background: transparent; font-size: 12px; }
+.markdown blockquote {
+  margin: 10px 0;
+  padding: 2px 12px;
+  border-left: 3px solid var(--line-strong);
+  color: var(--text-2);
+}
+.markdown hr { margin: 14px 0; border: 0; border-top: 1px solid var(--line); }
+.markdown a { color: inherit; text-decoration: underline; }
+.expand-md { margin-top: 8px; }
 
 /* ---------- 项目预览 ---------- */
 

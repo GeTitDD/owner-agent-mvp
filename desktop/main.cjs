@@ -290,7 +290,11 @@ async function startServices() {
 
   try {
     const { createWorkbenchServer } = await importEsm('../src/workbench-server.mjs');
-    workbench = await createWorkbenchServer({ port: 0, dbPath: file });
+    workbench = await createWorkbenchServer({
+      port: 0,
+      personalDbPath: knowledgeDbPath(),
+      ownerDbPath: file
+    });
     const address = await workbench.listen();
     workbenchUrl = `http://127.0.0.1:${address.port}`;
   } catch (error) {
