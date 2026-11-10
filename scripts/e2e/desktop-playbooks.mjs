@@ -98,7 +98,9 @@ const run = async () => {
     await panel.screenshot({ path: path.join(evidence, 'playbook-presets.png') });
     await snap('playbook-buttons.png');
 
-    await panel.locator('.playbook-btn[data-playbook="how"]').click();
+    await panel.locator('#projectSection').scrollIntoViewIfNeeded();
+    await sleep(300);
+    await panel.locator('#projectBrief button').click();
     // 运行中：桌宠/面板应感知 pstack，而不是显示空闲。
     const runningView = await panel.evaluate(async () => {
       const deadline = Date.now() + 20000;
@@ -122,6 +124,11 @@ const run = async () => {
     const missing = await panel.locator('.evidence-chip.missing').count();
     check('no evidence path is fabricated', missing === 0, String(missing));
     await snap('playbook-result.png');
+
+    const briefText = await panel.evaluate(() => document.getElementById('projectBrief')?.innerText ?? '');
+    check('one-click understand saves the project brief',
+      briefText.includes('项目画像') && !briefText.includes('还没有项目画像'),
+      briefText.slice(0, 100));
 
     // 结论沉淀为项目知识候选：不生成补丁、不自动验证。
     await panel.getByRole('button', { name: '沉淀为项目知识' }).click();

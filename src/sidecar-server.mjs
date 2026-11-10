@@ -407,6 +407,24 @@ export function createSidecarHandler({
       return;
     }
 
+    if (rest.length === 3 && head === 'projects' && rest[2] === 'brief') {
+      const projectId = rest[1];
+      if (method === 'GET') {
+        send(res, 200, store.getProjectBrief(projectId) ?? null);
+        return;
+      }
+      requireMethod(method, 'PUT');
+      const body = await readJson(req);
+      const saved = store.saveProjectBrief({
+        projectId,
+        payload: body.payload,
+        basedOnCommit: body.basedOnCommit ?? '',
+        sourceRunId: body.sourceRunId ?? ''
+      });
+      send(res, 200, saved);
+      return;
+    }
+
     if (rest.length === 1 && head === 'tasks') {
       if (method === 'GET') {
         send(res, 200, { items: store.listTasks(url.searchParams.get('projectId') ?? '') });

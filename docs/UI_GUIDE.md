@@ -41,7 +41,9 @@
 项目（顶部，按来源主机分组 + 搜索）
   组头：本机 · HOST / 远程 · HOST（可折叠）
   行：项目名 + 最近进展 + 相对时间 + 待你/进行中徽章
+  项目画像：一句话 / 怎么跑 / 关键模块 / 怎么验收 / 风险 / 依据
   知识摘要：经验/知识/已验证/待提炼计数 + 已验证优先条目 + 标签 + 提炼
+下一步建议：只显示当前最值得做的一件事
 需要你决定（仅有待办时出现）
   卡片：标题 + 风险徽章 + 为什么 + 批准后会发生什么 + 详情/批准/拒绝
 最近任务 / 运行中
@@ -149,6 +151,31 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 
 ![创建 PR 预览与二次确认](assets/companion/pr-preview.png)
 
+### 3.9 普通用户语义层：理解 / 整理 / 下一步
+
+内部有四条 SOP、pstack、知识闭环和 GitHub，但首页只暴露普通用户能懂的动词：
+
+| 用户动作 | 背后能力 | 输出 |
+| --- | --- | --- |
+| 一键理解项目 | pstack `how` + 仓库事实 | 项目画像：一句话、怎么跑、关键模块、怎么验收、风险、依据 |
+| 一键整理知识 | 重复/需复核/冲突/未验证扫描 | 整理报告；不自动合并或改写 |
+| 一键复盘沉淀 | `reflect` + distill | 一条项目知识候选 |
+| 一键验收 / 修复 / 交付 | 现有 SOP-2/3 + PR 流程 | 审批、修复循环或 Draft PR |
+
+**项目画像**字段：`一句话 / 它是做什么的 / 怎么跑 / 关键模块 / 代码约定 / 怎么验收 / 风险 / 还不确定 / 依据 / 版本 / 是否过期`。画像按 commit 基线判断过期；代码变化后显示“已过期”。
+
+![项目画像](assets/companion/project-brief.png)
+
+**下一步建议**只显示一个最值得做的动作，优先级为：
+
+```text
+待审批 → pstack 运行中 → 画像缺失/过期 → 有待整理知识 → 测试通过可交付 → 失败查看 → 交办新任务
+```
+
+![下一步建议](assets/companion/next-action.png)
+
+知识整理只做扫描与建议（重复组、需复核、冲突、未验证），合并/复核/批准仍走完整知识库的 HITL。
+
 ## 4. 组件清单
 
 | 组件 | 用途 |
@@ -186,13 +213,13 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | 验收 | 结果 |
 | --- | --- |
 | `npm run check` | 0 |
-| `npm test` | 281 tests / 278 pass / 3 skip / 0 fail |
+| `npm test` | 297 tests / 294 pass / 3 skip / 0 fail |
 | `npm run e2e:desktop:composer` | PASS（Composer、只读分析、无写入开关、pending） |
 | `npm run e2e:desktop:shell` | PASS（桌宠定位、面板、重启、模型切换、添加项目） |
 | `npm run e2e:desktop:multiproject` | PASS（多项目 pending / stage） |
 | `npm run e2e:desktop:knowledge` | PASS（知识摘要、验证、复用、今日视图） |
 | `npm run e2e:desktop:sandbox-config` | PASS（缺少快照文件 → 失败弹窗 → 补齐后重试） |
 | `npm run e2e:desktop:mascots` | PASS（spritesheet 播放、一键换肤、静态回退、无底盘、有效帧） |
-| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、知识摘要、GitHub 关联与 Issues/PR、PR 预览保护、搜索、折叠、点击切换） |
+| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、项目画像、下一步建议、知识摘要与整理、GitHub 关联/Issues/PR、PR 预览保护、搜索、折叠、点击切换） |
 | `npm run e2e:desktop:playbooks` | PASS（运行中状态、4 个一键沉淀预设、分析、取消、手动/一键沉淀、去重、提案 HITL） |
 | Workbench UI 冒烟 | 详情 5 个标签、修订对比、使用记录、维护降级提示 |

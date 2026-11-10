@@ -16,6 +16,7 @@
 - Windows 打包：`npm run desktop:pack`（CI `desktop-package` 上传私有 RC Artifact + SHA256）
 - 桌面 E2E：`npm run e2e:desktop`（真实 Docker + 真实 Pi）
 - 定向回归：`npm run e2e:desktop:sandbox-config`、`npm run e2e:desktop:multiproject`、`npm run e2e:desktop:knowledge`、`npm run e2e:desktop:playbooks`
+- 用户语义层：首页只暴露「理解项目 / 整理知识 / 复盘沉淀 / 验收 / 修复 / 交付」，并给出一个「下一步建议」；项目画像按 commit 判断过期
 - 知识闭环：`npm run knowledge:demo`；自动采集 `npm run knowledge:auto -- --once`；CLI `npm run knowledge -- --help`
 - A→B 实验：`npm run knowledge:eval:ab -- --root <dir> --allow-model`；Oracle Control 用 `knowledge:eval:hard`
 - 知识报告：[docs/KNOWLEDGE_LOOP_V1_DELIVERY.md](docs/KNOWLEDGE_LOOP_V1_DELIVERY.md)

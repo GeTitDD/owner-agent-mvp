@@ -365,7 +365,180 @@
     finally { summaryLoading.delete(projectId); }
   };
 
-  /** 当前项目的知识摘要：计数 + 已验证优先的条目 + 待提炼入口。 */
+  /** 项目画像：普通用户视角的“是什么 / 怎么跑 / 怎么验收”。 */
+  const renderProjectBrief = () => {
+    const box = $('projectBrief');
+    if (!box) return;
+    const projectId = view?.config?.projectId ?? '';
+    const project = (view?.projects ?? []).find((item) => item.id === projectId);
+    if (!project) {
+      box.hidden = true;
+      return;
+    }
+    const brief = view?.brief;
+    box.hidden = false;
+    box.replaceChildren();
+    const head = el('div', 'brief-head');
+    head.append(el('span', 'brief-title', '项目画像'));
+    if (brief?.stale) head.append(el('span', 'brief-badge warn', '已过期'));
+    else if (brief) {
+      head.append(el('span', 'brief-badge', `更新于 ${formatRelative(brief.generatedAt) || '—'}`));
+    }
+    const action = el('button', 'ghost small', brief ? '重新理解' : '一键理解');
+    action.type = 'button';
+    action.onclick = () => { generateBrief(); };
+    head.append(action);
+    box.append(head);
+    if (!brief) {
+      box.append(el('div', 'brief-empty',
+        '还没有项目画像。一键理解会看代码和文档，给出“是什么、怎么跑、关键模块、怎么验收”。'));
+      return;
+    }
+    box.append(el('div', 'brief-one', brief.oneLiner || ''));
+    if (brief.whatItIs && brief.whatItIs !== brief.oneLiner) {
+      box.append(el('div', 'brief-text', brief.whatItIs));
+    }
+    const section = (label, content) => {
+      const row = el('div', 'brief-row');
+      row.append(el('span', 'brief-label', label));
+      row.append(content);
+      box.append(row);
+    };
+    if (brief.howToRun?.length) {
+      const list = el('span', 'brief-chips');
+      for (const item of brief.howToRun.slice(0, 4)) list.append(el('code', 'brief-chip', item));
+      section('怎么跑', list);
+    }
+    if (brief.modules?.length) {
+      const list = el('span', 'brief-modules');
+      for (const module of brief.modules.slice(0, 3)) {
+        list.append(el('span', 'brief-module', `${module.name}${module.role ? ` · ${module.role}` : ''}`));
+      }
+      section('关键模块', list);
+    }
+    if (brief.verify?.commands?.length) {
+      const list = el('span', 'brief-chips');
+      for (const command of brief.verify.commands.slice(0, 3)) {
+        list.append(el('code', 'brief-chip', command));
+      }
+      section('怎么验收', list);
+    }
+    if (brief.risks?.length) {
+      section('风险', el('span', 'brief-text', brief.risks.slice(0, 2).join('；')));
+    }
+    if (brief.unknowns?.length) {
+      section('还不确定', el('span', 'brief-text', brief.unknowns.slice(0, 2).join('；')));
+    }
+    const details = el('details', 'brief-details');
+    details.append(el('summary', undefined, '查看依据与版本'));
+    details.append(el('div', 'brief-evidence',
+      `依据：${(brief.evidence ?? []).slice(0, 8).join(' · ') || '—'}`));
+    details.append(el('div', 'brief-evidence',
+      `版本 r${brief.version ?? 1} · 基于 ${String(brief.basedOnCommit ?? '').slice(0, 8) || '—'}`));
+    box.append(details);
+  };
+
+  /** 一键理解：跑 how，并把结果保存为项目画像。 */
+  const generateBrief = () => {
+    if (!view?.config?.projectId) { toast('先选择一个项目。'); return; }
+    if (!playbookCatalog?.skillsAvailable) { toast('未找到 pstack skills 目录。'); return; }
+    void runPlaybook('how', { brief: true });
+  };
+
+  const openKnowledgeTidy = async () => {
+    const projectId = view?.config?.projectId ?? '';
+    if (!projectId) { toast('先选择一个项目。'); return; }
+    try {
+      const report = await window.companion.knowledge.tidy({ projectId });
+      const counts = report.counts ?? {};
+      const nodes = [
+        el('p', 'result-summary',
+          `重复 ${counts.duplicates ?? 0} 组 · 需复核 ${counts.stale ?? 0} 条 · 冲突 ${counts.conflicts ?? 0} 条 · 未验证 ${counts.unverified ?? 0} 条`),
+        el('p', 'pending-summary', '整理只做扫描和建议，不会自动合并、删除或改写知识。')
+      ];
+      if (report.duplicates?.length) {
+        nodes.push(el('div', 'section-title', '可能重复'));
+        for (const pair of report.duplicates) {
+          nodes.push(el('div', 'tidy-item',
+            `${pair.a.title}  ↔  ${pair.b.title}（相似度 ${pair.score}）`));
+        }
+      }
+      if (report.stale?.length) {
+        nodes.push(el('div', 'section-title', '需要复核'));
+        for (const item of report.stale) nodes.push(el('div', 'tidy-item', item.title));
+      }
+      if (report.conflicts?.length) {
+        nodes.push(el('div', 'section-title', '冲突'));
+        for (const item of report.conflicts) nodes.push(el('div', 'tidy-item', item.title));
+      }
+      if (!counts.duplicates && !counts.stale && !counts.conflicts && !counts.unverified) {
+        nodes.push(el('p', 'pending-summary', '知识库很干净，没有需要整理的内容。'));
+      }
+      const pending = view?.knowledge?.counts?.pendingHarvest ?? 0;
+      if (pending > 0) {
+        nodes.push(el('p', 'pending-summary', `还有 ${pending} 条待提炼经验，可以先提炼成候选。`));
+      }
+      const close = el('button', 'ghost', '关闭');
+      close.onclick = closeModal;
+      const harvest = el('button', 'primary', '立即提炼');
+      harvest.disabled = pending === 0;
+      harvest.onclick = () => {
+        closeModal();
+        void harvestNow();
+      };
+      const open = el('button', 'primary', '去知识库处理');
+      open.onclick = () => {
+        closeModal();
+        void window.companion.knowledge.open().catch((error) => toast(String(error?.message ?? error)));
+      };
+      openModal('整理项目知识', nodes, pending > 0 ? [close, harvest, open] : [close, open]);
+    } catch (error) {
+      toast(String(error?.message ?? error), 6000);
+    }
+  };
+
+  /** 下一步建议：只展示一个最值得做的动作。 */
+  const renderNextAction = () => {
+    const box = $('nextActionCard');
+    if (!box) return;
+    const action = view?.nextAction;
+    if (!action) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    box.dataset.tone = action.tone ?? 'muted';
+    box.replaceChildren();
+    const text = el('div', 'next-action-text');
+    text.append(el('div', 'next-action-label', action.label));
+    if (action.detail) text.append(el('div', 'next-action-detail', action.detail));
+    box.append(text);
+    const labels = {
+      understand: '开始理解', tidy: '去整理', decide: '去处理',
+      deliver: '创建 PR', inspect: '查看结果', compose: '去交办', wait: '进行中'
+    };
+    const button = el('button', 'primary small', labels[action.command] ?? '去做');
+    button.type = 'button';
+    if (action.command === 'wait') button.disabled = true;
+    button.onclick = () => {
+      if (action.command === 'understand') generateBrief();
+      else if (action.command === 'tidy') void openKnowledgeTidy();
+      else if (action.command === 'decide') {
+        const section = $('needsSection');
+        if (section && !section.hidden) section.scrollIntoView({ block: 'start' });
+      } else if (action.command === 'deliver') {
+        if (action.cycleId) void openPrPreview(action.cycleId);
+        else $('resultSection')?.scrollIntoView({ block: 'start' });
+      } else if (action.command === 'inspect') {
+        if (view?.result?.cycleId) void openResult(view.result.cycleId);
+      } else if (action.command === 'compose') {
+        $('composeSection')?.scrollIntoView({ block: 'center' });
+        $('taskInput')?.focus();
+      }
+    };
+    box.append(button);
+  };
+
   const renderProjectSummary = () => {
     const box = $('projectSummary');
     if (!box) return;
@@ -1028,7 +1201,7 @@
     openModal('生成改动提案（需要你批准）', nodes, [cancel, confirm]);
   };
 
-  const runPlaybook = async (id, { distill = false } = {}) => {
+  const runPlaybook = async (id, { distill = false, brief = false } = {}) => {
     if (playbookBusy) { toast('上一个 playbook 还在运行。'); return; }
     if (!playbookCatalog?.skillsAvailable) { toast('未找到 pstack skills 目录。'); return; }
     const projectId = view?.config?.projectId ?? $('projectSelect').value ?? '';
@@ -1040,19 +1213,28 @@
     $('playbookCancel').hidden = false;
     const tick = () => {
       const seconds = Math.round((Date.now() - playbookStartedAt) / 1000);
-      $('playbookHint').textContent = distill
-        ? `正在复盘并沉淀「${playbookLabelOf(id)}」· ${seconds}s（只读，可取消）`
-        : `正在运行「${playbookLabelOf(id)}」· ${seconds}s（只读，可取消）`;
+      $('playbookHint').textContent = brief
+        ? `正在理解项目「${playbookLabelOf(id)}」· ${seconds}s（只读，可取消）`
+        : distill
+          ? `正在复盘并沉淀「${playbookLabelOf(id)}」· ${seconds}s（只读，可取消）`
+          : `正在运行「${playbookLabelOf(id)}」· ${seconds}s（只读，可取消）`;
     };
     tick();
     playbookTimer = window.setInterval(tick, 1000);
     try {
-      const result = await window.companion.playbooks.run({ playbookId: id, projectId, distill });
+      const result = await window.companion.playbooks.run({ playbookId: id, projectId, distill, brief });
       playbookCurrent = result;
       playbookProjectId = projectId;
       renderPlaybookResult();
       if (result.status !== 'ok') {
         toast(result.summary, 6000);
+      } else if (brief) {
+        if (result.brief?.error) {
+          toast(`分析完成，但画像保存失败：${result.brief.error}`, 6000);
+        } else {
+          await refresh();
+          toast('项目画像已更新', 4200);
+        }
       } else if (distill) {
         if (result.distill?.candidateId) {
           knowledgeCache.delete(projectId);
@@ -1563,8 +1745,10 @@
       renderActivity();
       renderTimeline();
       renderProjects();
+      renderProjectBrief();
       renderProjectSummary();
       renderProjectGithub();
+      renderNextAction();
       renderPending();
       renderRunning();
       renderResult();
@@ -2009,6 +2193,7 @@
   };
 
   $('harvestNow').onclick = () => { void harvestNow(); };
+  $('tidyKnowledge').onclick = () => { void openKnowledgeTidy(); };
   $('reflectDistill').onclick = () => { reflectAndDistill('reflect'); };
 
   $('playbookCancel').onclick = async () => {

@@ -103,6 +103,24 @@ export class OwnerStore {
         approved_at TEXT NOT NULL, PRIMARY KEY(project_id,knowledge_id,revision)
       );
       CREATE INDEX IF NOT EXISTS owner_suggestions_target ON owner_suggestions(target_project_id,status);
+      CREATE TABLE IF NOT EXISTS owner_project_briefs(
+        project_id TEXT PRIMARY KEY REFERENCES owner_projects(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        generated_at TEXT NOT NULL,
+        based_on_commit TEXT NOT NULL DEFAULT '',
+        source_run_id TEXT NOT NULL DEFAULT '',
+        payload TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS owner_project_brief_revisions(
+        project_id TEXT NOT NULL REFERENCES owner_projects(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        generated_at TEXT NOT NULL,
+        based_on_commit TEXT NOT NULL DEFAULT '',
+        source_run_id TEXT NOT NULL DEFAULT '',
+        payload TEXT NOT NULL,
+        PRIMARY KEY(project_id,version)
+      );
       CREATE TABLE IF NOT EXISTS owner_jobs(
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL REFERENCES owner_projects(id),
@@ -364,6 +382,46 @@ export class OwnerStore {
   }
   getProject(id){return entry(this.db.prepare('SELECT * FROM owner_projects WHERE id=?').get(id));}
   getProjectByRoot(root){let resolved;try{resolved=realpathSync(root);}catch{return null;}return entry(this.db.prepare('SELECT * FROM owner_projects WHERE root=?').get(resolved));}
+  getProjectBrief(projectId){
+    const row=this.db.prepare('SELECT * FROM owner_project_briefs WHERE project_id=?').get(projectId);
+    if(!row)return null;
+    return {
+      projectId:row.project_id, version:row.version, generatedAt:row.generated_at,
+      basedOnCommit:row.based_on_commit, sourceRunId:row.source_run_id,
+      payload:parse(row.payload), updatedAt:row.updated_at
+    };
+  }
+  saveProjectBrief({projectId,payload,basedOnCommit='',sourceRunId='',now=stamp()}={}){
+    check(!!this.getProject(projectId),'Unknown project',404);
+    check(payload&&typeof payload==='object'&&!Array.isArray(payload),'Brief payload must be an object');
+    const current=this.db.prepare('SELECT version FROM owner_project_briefs WHERE project_id=?').get(projectId);
+    const version=(current?.version??0)+1;
+    const body=json(payload);
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      this.db.prepare(`INSERT INTO owner_project_briefs(
+        project_id,version,generated_at,based_on_commit,source_run_id,payload,updated_at
+      ) VALUES(?,?,?,?,?,?,?)
+      ON CONFLICT(project_id) DO UPDATE SET version=excluded.version,generated_at=excluded.generated_at,
+        based_on_commit=excluded.based_on_commit,source_run_id=excluded.source_run_id,
+        payload=excluded.payload,updated_at=excluded.updated_at`)
+        .run(projectId,version,now,String(basedOnCommit??''),String(sourceRunId??''),body,now);
+      this.db.prepare(`INSERT INTO owner_project_brief_revisions(
+        project_id,version,generated_at,based_on_commit,source_run_id,payload
+      ) VALUES(?,?,?,?,?,?)`).run(projectId,version,now,String(basedOnCommit??''),String(sourceRunId??''),body);
+      this.db.exec('COMMIT');
+    }catch(error){try{this.db.exec('ROLLBACK');}catch{/* ignore */}throw error;}
+    return this.getProjectBrief(projectId);
+  }
+  listProjectBriefRevisions(projectId,{limit=10}={}){
+    check(Number.isSafeInteger(limit)&&limit>=1&&limit<=50,'Invalid limit');
+    return this.db.prepare(`SELECT * FROM owner_project_brief_revisions WHERE project_id=? ORDER BY version DESC LIMIT ?`)
+      .all(projectId,limit).map((row)=>({
+        projectId:row.project_id, version:row.version, generatedAt:row.generated_at,
+        basedOnCommit:row.based_on_commit, sourceRunId:row.source_run_id,
+        payload:parse(row.payload)
+      }));
+  }
   listProjects(){return this.db.prepare('SELECT * FROM owner_projects ORDER BY updated_at DESC,id').all().map(entry);}
   updateProject(id,{status,goal,ownerNote}={}){
     const p=this.getProject(id);check(!!p,'Unknown project',404);

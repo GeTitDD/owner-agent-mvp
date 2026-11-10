@@ -30,8 +30,25 @@ const run = async () => {
 
   const owner = new OwnerStore(ownerDb);
   try {
-    createSyntheticProject({
+    const alphaSeed = createSyntheticProject({
       store: owner, root: path.join(root, 'alpha'), projectId: 'alpha', name: 'Alpha Repo'
+    });
+    owner.saveProjectBrief({
+      projectId: 'alpha',
+      basedOnCommit: alphaSeed.baseSha,
+      sourceRunId: 'pb_test',
+      payload: {
+        oneLiner: '一个用于验收的零依赖 Node 项目',
+        whatItIs: 'Alpha Repo 是测试夹具，包含 format 与 retry 两个模块。',
+        howToRun: ['npm test'],
+        modules: [{ name: 'retry', role: '重试循环', paths: ['src/retry.js'] }],
+        conventions: ['写操作先提案'],
+        verify: { commands: ['npm test'], criteria: ['退出码为 0'] },
+        risks: ['没有 CI'],
+        unknowns: [],
+        evidence: ['package.json', 'src/retry.js'],
+        confidence: '中'
+      }
     });
     createSyntheticProject({
       store: owner, root: path.join(root, 'beta'), projectId: 'beta', name: 'Beta Repo'
@@ -133,6 +150,27 @@ const run = async () => {
     check('project shows its latest progress', Boolean(alpha?.progress) && !alpha.progress.includes('还没有任务记录'), alpha?.progress);
     check('latest progress has a relative time', /刚刚|分钟前|小时前|天前/u.test(alpha?.time ?? ''), alpha?.time);
     check('active project is highlighted', alpha?.selected === true, String(alpha?.selected));
+    const briefText = await panel.evaluate(() => document.getElementById('projectBrief')?.innerText ?? '');
+    check('project brief renders user-friendly fields',
+      briefText.includes('一个用于验收的零依赖 Node 项目')
+      && briefText.includes('怎么跑')
+      && briefText.includes('怎么验收'),
+      briefText.slice(0, 120));
+    await panel.locator('#projectBrief').scrollIntoViewIfNeeded();
+    await sleep(300);
+    await panel.screenshot({ path: path.join(evidence, 'panel-brief.png') });
+    const nextText = await panel.evaluate(() => document.getElementById('nextActionCard')?.innerText ?? '');
+    check('next action suggests the most useful next step', nextText.length > 0, nextText);
+    await panel.locator('#tidyKnowledge').click();
+    await panel.waitForSelector('#modal:not([hidden])', { timeout: 10000 });
+    const tidyText = await panel.locator('#modalBody').innerText();
+    check('knowledge tidy scans duplicates and keeps changes manual',
+      tidyText.includes('重复') && tidyText.includes('整理只做扫描'), tidyText.slice(0, 120));
+    await panel.keyboard.press('Escape');
+    await sleep(300);
+    await panel.locator('#nextActionCard').scrollIntoViewIfNeeded();
+    await sleep(300);
+    await panel.screenshot({ path: path.join(evidence, 'panel-brief-next.png') });
     const github = await panel.evaluate(() => {
       const row = document.querySelector('#projectList .project-row[data-project="alpha"]');
       const chip = row?.parentElement?.querySelector('.project-gh');

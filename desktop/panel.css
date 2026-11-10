@@ -890,6 +890,62 @@ pre.diff, pre.logs {
   font-size: 10px;
 }
 .project-search:focus { outline: none; border-color: var(--accent); }
+.project-brief {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.035);
+}
+.brief-head { display: flex; align-items: center; gap: 8px; }
+.brief-title { font-size: 11px; font-weight: 600; color: var(--text); }
+.brief-badge { font-size: 9px; color: var(--muted); }
+.brief-badge.warn { color: var(--warn); }
+.brief-one { font-size: 12px; font-weight: 600; color: var(--text); line-height: 1.4; }
+.brief-text {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.brief-row { display: grid; grid-template-columns: 60px 1fr; gap: 6px; align-items: start; }
+.brief-label { font-size: 9px; color: var(--muted); padding-top: 2px; }
+.brief-chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.brief-chip {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  font-size: 9px;
+  color: var(--text);
+}
+.brief-modules { display: grid; gap: 2px; }
+.brief-module { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brief-details summary { font-size: 9px; color: var(--muted); cursor: pointer; }
+.brief-evidence { font-size: 9px; line-height: 1.45; color: var(--muted); word-break: break-all; }
+.brief-empty { font-size: 10px; line-height: 1.5; color: var(--muted); }
+.next-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.next-action[data-tone='warn'] { border-color: rgba(234, 107, 23, 0.35); background: var(--warn-soft); }
+.next-action[data-tone='active'] { border-color: rgba(59, 130, 246, 0.35); }
+.next-action[data-tone='ok'] { border-color: rgba(34, 197, 94, 0.35); }
+.next-action[data-tone='error'] { border-color: rgba(239, 68, 68, 0.35); }
+.next-action-text { flex: 1; min-width: 0; }
+.next-action-label { font-size: 12px; font-weight: 600; color: var(--text); }
+.next-action-detail { margin-top: 2px; font-size: 10px; color: var(--muted); }
+.tidy-item { padding: 3px 0; font-size: 10px; line-height: 1.4; color: var(--muted); }
 .project-summary {
   display: grid;
   gap: 6px;

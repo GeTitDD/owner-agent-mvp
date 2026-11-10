@@ -77,8 +77,12 @@ let harvestInFlight = false;
 let mascotModule = null;
 let githubModule = null;
 let githubPrModule = null;
+let projectBriefModule = null;
+let nextActionModule = null;
+let knowledgeTidyModule = null;
 const githubCache = new Map();
 const githubActivityCache = new Map();
+const briefCache = new Map();
 
 const configPath = () => path.join(app.getPath('userData'), 'companion.json');
 const defaults = () => ({
@@ -854,6 +858,76 @@ const knowledgeDetail = ({ id } = {}) => {
   };
 
   const loadGithubPr = async () => (githubPrModule ??= await importEsm('../src/github-pr.mjs'));
+  const loadProjectBrief = async () => (projectBriefModule ??= await importEsm('../src/project-brief.mjs'));
+  const loadNextAction = async () => (nextActionModule ??= await importEsm('../src/next-action.mjs'));
+  const loadKnowledgeTidy = async () => (knowledgeTidyModule ??= await importEsm('../src/knowledge/tidy.mjs'));
+
+  /** 读取项目画像所需的仓库事实：HEAD、脏状态、npm scripts、测试命令、证据文件。 */
+  const repoFactsFor = async (project) => {
+    const head = await gitAt(project.root, ['rev-parse', 'HEAD']).catch(() => '');
+    const status = await execFileAsync('git', ['-C', project.root, 'status', '--porcelain'], {
+      timeout: 10000, windowsHide: true
+    }).then((result) => result.stdout).catch(() => '');
+    const scripts = [];
+    const evidence = [];
+    let testCommands = [];
+    const dirtyLines = String(status).split('\n').filter(Boolean).filter((line) => {
+      const file = line.slice(3).trim();
+      return file !== '.owner-root-identity' && !file.startsWith('.fixture-workspaces/');
+    });
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(project.root, 'package.json'), 'utf8'));
+      evidence.push('package.json');
+      for (const [name, command] of Object.entries(pkg.scripts ?? {})) {
+        scripts.push(name === 'test' ? `npm test` : `npm run ${name}`);
+        if (name === 'test') testCommands = ['npm test'];
+        if (scripts.length >= 8) break;
+        void command;
+      }
+    } catch { /* 非 Node 项目允许没有 package.json */ }
+    for (const name of ['README.md', 'README.zh-CN.md', 'pyproject.toml', 'go.mod', 'Cargo.toml']) {
+      if (fs.existsSync(path.join(project.root, name))) evidence.push(name);
+    }
+    if (!testCommands.length) {
+      if (fs.existsSync(path.join(project.root, 'pytest.ini'))) testCommands = ['python -m pytest'];
+      else if (fs.existsSync(path.join(project.root, 'pyproject.toml'))) testCommands = ['python -m pytest'];
+    }
+    return {
+      head,
+      dirty: dirtyLines.length > 0,
+      scripts,
+      testCommands,
+      testCriteria: testCommands.length ? ['命令退出码为 0'] : [],
+      evidence,
+      unknowns: dirtyLines.length > 0 ? ['工作区有未提交改动，画像可能不完整'] : []
+    };
+  };
+
+  const projectBriefFor = async (project) => {
+    if (!project) return null;
+    const cached = briefCache.get(project.id);
+    if (cached && Date.now() - cached.at < 20000) return cached.value;
+    const stored = await api(`/owner/v1/projects/${encodeURIComponent(project.id)}/brief`)
+      .catch(() => null);
+    if (!stored) {
+      briefCache.set(project.id, { at: Date.now(), value: null });
+      return null;
+    }
+    const facts = await repoFactsFor(project);
+    const mod = await loadProjectBrief();
+    const value = {
+      ...stored.payload,
+      version: stored.version,
+      generatedAt: stored.generatedAt,
+      basedOnCommit: stored.basedOnCommit,
+      sourceRunId: stored.sourceRunId,
+      stale: mod.briefIsStale(stored, { head: facts.head, dirty: facts.dirty }),
+      head: facts.head
+    };
+    briefCache.set(project.id, { at: Date.now(), value });
+    return value;
+  };
+
 
   const gitAt = async (cwd, args, timeout = 15000) => {
     const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
@@ -1249,6 +1323,29 @@ const buildView = async () => {
     if (idleLine >= 0) activity.splice(idleLine, 1);
     activity.unshift({ kind: 'status', text: `pstack：${activePlaybook.title} · 分析中` });
   }
+  const knowledgeView = await knowledgeSnapshot(activeProjectId);
+  const briefView = await projectBriefFor(activeProject);
+  const resultView = finalCycle
+    ? {
+      cycleId: finalCycle.id,
+      status: finalCycle.status,
+      testStatus: finalCycle.status === 'tested_pass' ? 'pass' : 'fail',
+      label: finalCycle.status === 'tested_pass'
+        ? `修复 ${finalCycle.id.slice(0, 8)} 已通过复测`
+        : `修复 ${finalCycle.id.slice(0, 8)} 复测未通过`
+    }
+    : null;
+  const { nextActionFor } = await loadNextAction();
+  const nextAction = nextActionFor({
+    pending: pending.length,
+    playbookRunning: Boolean(activePlaybook),
+    brief: briefView,
+    briefStale: briefView?.stale === true,
+    knowledge: knowledgeView?.counts ?? {},
+    result: resultView,
+    state,
+    cycleId: finalCycle?.id ?? ''
+  });
   return {
     version: COMPANION_VERSION,
     state,
@@ -1320,17 +1417,10 @@ const buildView = async () => {
     testConfig: await testConfigForProject(activeProject),
     services,
     mascot: await mascotView(),
-    knowledge: await knowledgeSnapshot(activeProjectId),
-    result: finalCycle
-      ? {
-        cycleId: finalCycle.id,
-        status: finalCycle.status,
-        testStatus: finalCycle.status === 'tested_pass' ? 'pass' : 'fail',
-        label: finalCycle.status === 'tested_pass'
-          ? `修复 ${finalCycle.id.slice(0, 8)} 已通过复测`
-          : `修复 ${finalCycle.id.slice(0, 8)} 复测未通过`
-      }
-      : null
+    brief: briefView,
+    nextAction,
+    knowledge: knowledgeView,
+    result: resultView
   };
 };
 
@@ -2023,6 +2113,20 @@ const registerIpc = () => {
   });
 
   // 显式人工动作：只对当前项目的待提炼经验调用 Harvest，产出 pending 候选。
+  ipcMain.handle('companion:knowledge-tidy', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const projectId = String(input?.projectId ?? '') || config.projectId;
+    if (!personalStore) {
+      return {
+        projectId,
+        counts: { total: 0, duplicates: 0, stale: 0, conflicts: 0, unverified: 0 },
+        duplicates: [], stale: [], conflicts: [], unverified: []
+      };
+    }
+    const mod = await loadKnowledgeTidy();
+    return mod.knowledgeTidyFor({ personalStore, projectId });
+  });
+
   ipcMain.handle('companion:knowledge-harvest', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     if (!personalStore) throw new Error('知识库尚未初始化。');
@@ -2157,8 +2261,25 @@ const registerIpc = () => {
         distill = { error: String(error?.message ?? error) };
       }
     }
+    // 一键“理解项目”：成功结果保存为项目画像（带 commit 基线）。
+    let brief = null;
+    if (input?.brief === true && result.status === 'ok') {
+      try {
+        const facts = await repoFactsFor(project);
+        const briefModule = await loadProjectBrief();
+        const payload = briefModule.buildProjectBrief({ project, result, repoFacts: facts });
+        const saved = await api(`/owner/v1/projects/${encodeURIComponent(project.id)}/brief`, {
+          method: 'PUT',
+          body: { payload, basedOnCommit: facts.head, sourceRunId: result.runId }
+        });
+        briefCache.delete(project.id);
+        brief = { ...saved.payload, version: saved.version, generatedAt: saved.generatedAt, basedOnCommit: saved.basedOnCommit };
+      } catch (error) {
+        brief = { error: String(error?.message ?? error) };
+      }
+    }
     const { text, ...summary } = result;
-    return { ...summary, distill };
+    return { ...summary, distill, brief };
   });
 
   // 把 pstack 只读分析的结论沉淀成项目知识候选（pending，不自动验证）。

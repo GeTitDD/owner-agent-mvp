@@ -38,9 +38,12 @@
           </span>
         </div>
         <div id="projectList" class="project-list"></div>
+        <div id="projectBrief" class="project-brief" hidden></div>
         <div id="projectSummary" class="project-summary" hidden></div>
         <div id="githubPanel" class="github-panel" hidden></div>
       </section>
+
+      <section id="nextActionCard" class="next-action" hidden></section>
 
       <section id="needsSection" class="needs-section">
         <div class="section-title">
@@ -103,6 +106,7 @@
         <div id="knowledgeSummaryText" class="knowledge-summary">正在读取知识库…</div>
         <div class="knowledge-actions">
           <button id="reflectDistill" class="primary small" title="跑一次 pstack 复盘，并自动沉淀为项目知识候选">复盘并沉淀</button>
+          <button id="tidyKnowledge" class="ghost small" title="扫描重复、需复核、冲突和未验证知识">整理知识</button>
           <button id="harvestNow" class="primary small" title="把当前项目的待提炼经验提炼成待审核候选">立即提炼</button>
           <button id="openKnowledge" class="ghost small">完整知识库</button>
         </div>
