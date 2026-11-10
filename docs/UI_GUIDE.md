@@ -179,6 +179,7 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 ### 3.10 长任务与稳定性
 
 - pstack / 一键理解在**独立子进程**运行，模型调用不会阻塞 Electron 主进程；面板、桌宠和取消按钮保持可操作。
+- 子进程关闭 Monty/Python，并对 git / docker 等外部命令统一 `windowsHide`，不会每次弹出终端窗口。
 - 取消会直接终止子进程，返回受控的“执行失败：canceled”，不会留下后台任务。
 - 渲染进程 3 秒无响应会自动 reload；未捕获异常写入 `%APPDATA%\owner-agent-mvp\companion-errors.log`。
 - 设置页动画皮肤使用 `thumb.png` 首帧缩略图，避免一次解码 100 张大图。

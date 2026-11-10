@@ -257,6 +257,7 @@ const baseShaOf = (root) => {
   try {
     const sha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
       encoding: 'utf8',
+      windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore']
     }).trim();
     return /^[0-9a-f]{40}$/u.test(sha) ? sha : '';

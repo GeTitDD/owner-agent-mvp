@@ -199,7 +199,7 @@ export function createWriterSessionFactory({ model = '', python = false } = {}) 
 
 const gitStatus = (cwd) => {
   const output = execFileSync('git', ['-C', cwd, 'status', '--porcelain', '-z', '--untracked-files=all'], {
-    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
+    encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']
   });
   const entries = [];
   for (const chunk of output.split('\0')) {
@@ -298,8 +298,8 @@ export class WriterAgent {
     // 校验与后续 apply 都以“base 状态”为前提：捕获内容后把 worktree 还原，
     // 否则 add 会被判成“目标已存在”，modify 会被判成“没有变化”。
     try {
-      execFileSync('git', ['-C', cwd, 'checkout', '--', '.'], { stdio: ['ignore', 'pipe', 'pipe'] });
-      execFileSync('git', ['-C', cwd, 'clean', '-fd'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      execFileSync('git', ['-C', cwd, 'checkout', '--', '.'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      execFileSync('git', ['-C', cwd, 'clean', '-fd'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       // 新增文件所在的目录在 base 里可能不存在：补建目录，让校验与 apply 都能按 add 处理。
       for (const file of files) {
         if (file.action !== 'add') continue;

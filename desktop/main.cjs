@@ -149,7 +149,7 @@ const resolveDigest = (imageRef = 'node:22-alpine') => {
   try {
     const ref = execFileSync('docker', [
       'image', 'inspect', imageRef, '--format', '{{index .RepoDigests 0}}'
-    ], { encoding: 'utf8', timeout: 8000 }).trim();
+    ], { encoding: 'utf8', windowsHide: true, timeout: 8000 }).trim();
     const found = ref.split('@')[1];
     if (/^sha256:[0-9a-f]{64}$/u.test(found ?? '')) digest = found;
   } catch {

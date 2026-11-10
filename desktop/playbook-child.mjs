@@ -8,7 +8,9 @@ process.on('message', async (message) => {
   try {
     const runner = new PlaybookRunner({
       model: message.model || '',
-      timeoutMs: Number(message.timeoutMs) || 240000
+      timeoutMs: Number(message.timeoutMs) || 240000,
+      // 只读分析不需要 Monty/Python；关闭它可以避免额外弹出控制台进程。
+      python: false
     });
     const result = await runner.run({
       playbookId: message.playbookId,
