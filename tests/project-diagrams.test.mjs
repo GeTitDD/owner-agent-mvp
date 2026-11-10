@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  scanDependencyGraph, normalizeDiagram, toMermaid
+  scanDependencyGraph, normalizeDiagram, toMermaid, buildProjectDigest
 } from '../src/project-diagrams.mjs';
 
 test('本地依赖扫描生成 nodes/edges 与 Mermaid', () => {
@@ -60,4 +60,22 @@ test('状态图与时序图校验并生成 Mermaid', () => {
 test('非法图数据被拒绝', () => {
   assert.throws(() => normalizeDiagram('state', { states: [] }), /states/u);
   assert.throws(() => normalizeDiagram('dependency', { nodes: [] }), /nodes/u);
+});
+
+test('本地摘要带真实行号，并遵守 scope', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-'));
+  try {
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src', 'main.js'),
+      "import x from './x.js';\n\nif (x) {\n  for (const item of x) { console.log(item); }\n}\nthrow new Error('done');\n");
+    fs.writeFileSync(path.join(root, 'docs', 'notes.md'), '# notes\n');
+    const digest = buildProjectDigest(root, 'src');
+    assert.ok(digest.files.includes('src/main.js'));
+    assert.match(digest.text, /### src\/main\.js/u);
+    assert.match(digest.text, /\s1\| import x/u);
+    assert.ok(!digest.text.includes('### docs/'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

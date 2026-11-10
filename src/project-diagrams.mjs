@@ -225,6 +225,75 @@ const resolveModule = (root, fromFile, spec) => {
   return null;
 };
 
+/** 本地预扫描摘要：给图谱模型一段有界、带行号的代码摘录，避免它在超大仓库里 wander 到超时。 */
+export function buildProjectDigest(root, scope = 'project', {
+  maxFiles = 6, maxChars = 30000, maxLineChars = 200
+} = {}) {
+  let base = root;
+  const trimmed = String(scope ?? '').trim();
+  if (trimmed && trimmed !== 'project') {
+    const candidate = path.resolve(root, trimmed);
+    if ((candidate === root || candidate.startsWith(`${root}${path.sep}`))) {
+      try { if (fs.statSync(candidate).isDirectory()) base = candidate; } catch { /* 目录不存在则退回项目根 */ }
+    }
+  }
+  const rel = (file) => path.relative(root, file).replace(/\\/gu, '/');
+  const scanned = walk(base, 600);
+  const scored = [];
+  for (const file of scanned) {
+    let content = '';
+    try { content = fs.readFileSync(file, 'utf8'); } catch { continue; }
+    const relative = rel(file);
+    const baseName = path.basename(file).replace(/\.[^.]+$/u, '');
+    const depth = relative.split('/').length - 1;
+    const branches = (content.match(/\b(?:if|switch|case|for|while|catch|return|throw|await)\b/gu) ?? []).length;
+    const entryBonus = /^(?:readme|program|main|index|app|server|cli|manage|entry|bootstrap|start)$/iu.test(baseName)
+      ? 40
+      : 0;
+    scored.push({ file, relative, content, score: entryBonus + Math.min(branches, 60) - depth * 3 });
+  }
+  scored.sort((a, b) => b.score - a.score);
+
+  const perFile = Math.max(1200, Math.floor(maxChars / Math.max(1, maxFiles)));
+  const picked = [];
+  for (const item of scored) {
+    if (picked.length >= maxFiles) break;
+    const lines = item.content.split(/\r?\n/u);
+    const body = [];
+    let used = 0;
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = `${String(index + 1).padStart(4, ' ')}| ${lines[index].slice(0, maxLineChars)}`;
+      if (used + line.length > perFile) break;
+      body.push(line);
+      used += line.length + 1;
+    }
+    if (!body.length) continue;
+    picked.push({
+      relative: item.relative,
+      lines: lines.length,
+      block: `### ${item.relative}（共 ${lines.length} 行）\n${body.join('\n')}`
+    });
+  }
+
+  const topLevel = [];
+  try {
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
+      topLevel.push(entry.isDirectory() ? `${entry.name}/` : entry.name);
+    }
+  } catch { /* 读不到目录就只给文件摘要 */ }
+
+  const text = [
+    `项目根：${root}`,
+    `分析范围：${trimmed || 'project'}（实际读取：${rel(base) || '.'}）`,
+    `扫描到的源文件：${scanned.length} 个；以下摘录 ${picked.length} 个最相关文件。`,
+    topLevel.length ? `顶层条目：${topLevel.slice(0, 24).join('、')}` : '',
+    '说明：行号已对齐真实文件，可直接作为 evidence；摘录之外的代码视为未知。',
+    ...picked.map((item) => item.block)
+  ].filter(Boolean).join('\n\n');
+  return { text, files: picked.map((item) => item.relative) };
+}
+
 /**
  * 本地扫描依赖图：不调用模型，解析 import/require/using。
  * 节点过多时按顶层目录折叠。

@@ -44,12 +44,14 @@ export function readSkillBody(skillsDir, skillId, maxChars = 6000) {
 }
 
 /** 只读会话工厂。skillsDir/skillBody 由调用方注入，便于测试。 */
-export function createReadonlySessionFactory({ playbook, skillsDir, python = false } = {}) {
+export function createReadonlySessionFactory({ playbook, skillsDir, python = false, noTools = false } = {}) {
   const skill = readSkillBody(skillsDir, playbook?.id ?? '');
   const directive = [
     'You are a read-only project analyst for Owner Companion.',
-    'You may inspect the repository with read, grep, find and ls only.',
-    python
+    noTools
+      ? 'This run has NO tools. Answer only from the provided digest; mark anything outside it as unknown.'
+      : 'You may inspect the repository with read, grep, find and ls only.',
+    python && !noTools
       ? 'You may also run own_python: a restricted Python 3.14 subset with the repository mounted READ-ONLY at /workspace. No third-party packages, class inheritance, generators, @classmethod/property, del, or network.'
       : '',
     'You cannot write files, run commands, or access the network. If a step would need that, say so instead of guessing.',
@@ -68,7 +70,7 @@ export function createReadonlySessionFactory({ playbook, skillsDir, python = fal
       const agentDir = mkdtempSync(path.join(os.tmpdir(), 'owner-playbook-agent-'));
       const created = (async () => {
         let pyRunner = null;
-        if (python) {
+        if (python && !noTools) {
           try {
             const { createMontyRunner } = await import('../monty-runner.mjs');
             pyRunner = await createMontyRunner({ cwd, mode: 'read-only' });
@@ -76,7 +78,7 @@ export function createReadonlySessionFactory({ playbook, skillsDir, python = fal
             pyRunner = null;
           }
         }
-        const allowedTools = [...READONLY_TOOLS, ...(pyRunner ? ['own_python'] : [])];
+        const allowedTools = noTools ? [] : [...READONLY_TOOLS, ...(pyRunner ? ['own_python'] : [])];
         const loader = new sdk.DefaultResourceLoader({
           cwd,
           agentDir,

@@ -392,8 +392,13 @@
   const DIAGRAM_KINDS = ['dependency', 'control', 'dataflow', 'state', 'sequence'];
   let activeDiagramKind = 'dependency';
   let diagramRenderToken = 0;
-  let lastDiagramKey = '';
   const autoDependencyProjects = new Set();
+  // 正在生成的图谱：refresh 每 2 秒轮询一次，必须记住生成中状态，
+  // 否则轮询会把「正在生成」覆盖回空状态，看起来像点了没反应。
+  const diagramJobs = new Map();
+  // 生成失败信息同样要跨轮询保留，用户才能看到错误并点重试。
+  const diagramErrors = new Map();
+  let diagramProjectId = '';
   if (window.mermaid) {
     window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
   }
@@ -433,22 +438,52 @@
     meta.title = (diagram.unknowns ?? []).join('\n');
   };
 
+  const diagramLoadingText = (kind, startedAt) => {
+    if (kind === 'dependency') return '正在扫描依赖…';
+    const seconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+    return `正在生成${DIAGRAM_LABELS[kind]}…已用 ${seconds}s，通常需要 30–120 秒`;
+  };
+
+  // Electron IPC 会给错误加一长串前缀，展示给用户前先去掉。
+  const cleanIpcError = (value) => String(value ?? '')
+    .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/u, '')
+    .trim();
+
   const renderDiagramSvg = async (diagram) => {
     const box = $('diagramView');
     const token = ++diagramRenderToken;
+    const kind = activeDiagramKind;
+    const job = diagramJobs.get(kind);
+    const jobActive = job && job.projectId === (view?.config?.projectId ?? '');
+    const errorMessage = diagramErrors.get(kind) ?? '';
+    // 用 dataset 记录当前渲染的内容，避免 2 秒轮询把「生成中/失败」覆盖成空状态。
     const key = diagram
-      ? `${activeDiagramKind}:${diagram.version}:${diagram.mermaid.length}`
-      : `none:${activeDiagramKind}`;
-    if (key === lastDiagramKey && (box.querySelector('svg') || box.querySelector('.diagram-empty'))) return;
-    lastDiagramKey = key;
+      ? `svg:${kind}:${diagram.version}:${diagram.mermaid.length}:${diagram.updatedAt ?? ''}`
+      : jobActive ? `busy:${kind}` : errorMessage ? `error:${kind}` : `none:${kind}`;
+    if (box.dataset.key === key) return;
+    box.dataset.key = key;
+    box.dataset.view = kind;
     box.replaceChildren();
     if (!diagram) {
+      if (jobActive) {
+        box.append(el('div', 'diagram-loading', diagramLoadingText(kind, job.startedAt)));
+        return;
+      }
       const empty = el('div', 'diagram-empty');
-      empty.append(el('div', undefined, `还没有${DIAGRAM_LABELS[activeDiagramKind]}`));
-      const generate = el('button', 'primary small', activeDiagramKind === 'dependency' ? '扫描依赖' : `生成${DIAGRAM_LABELS[activeDiagramKind]}`);
-      generate.type = 'button';
-      generate.onclick = () => { void generateDiagram(activeDiagramKind); };
-      empty.append(generate);
+      if (errorMessage) {
+        empty.append(el('div', undefined, `生成失败：${errorMessage}`));
+        const retry = el('button', 'primary small', '重试');
+        retry.type = 'button';
+        retry.onclick = () => { void generateDiagram(kind); };
+        empty.append(retry);
+      } else {
+        empty.append(el('div', undefined, `还没有${DIAGRAM_LABELS[kind]}`));
+        const generate = el('button', 'primary small',
+          kind === 'dependency' ? '扫描依赖' : `生成${DIAGRAM_LABELS[kind]}`);
+        generate.type = 'button';
+        generate.onclick = () => { void generateDiagram(kind); };
+        empty.append(generate);
+      }
       box.append(empty);
       return;
     }
@@ -476,18 +511,26 @@
     const projectId = view?.config?.projectId ?? '';
     if (!projectId) { section.hidden = true; return; }
     section.hidden = false;
+    if (diagramProjectId !== projectId) {
+      diagramProjectId = projectId;
+      diagramErrors.clear();
+    }
     const generated = (view?.diagrams ?? []).length;
     $('diagramBadge').textContent = `${generated}/5`;
     $('diagramBadge').title = `已生成 ${generated} / 5 类图谱`;
     renderDiagramTabs();
     const diagram = currentDiagram();
+    const busy = diagramJobs.get(activeDiagramKind)?.projectId === projectId;
     const scope = $('diagramScope');
     if (document.activeElement !== scope && !scope.value) scope.value = diagram?.scope ?? 'project';
-    $('diagramGenerate').disabled = false;
+    $('diagramGenerate').disabled = busy;
+    $('diagramGenerate').textContent = busy ? '生成中…' : '生成/重新生成';
     $('diagramCopy').disabled = !diagram;
     $('diagramExport').disabled = !diagram;
     renderDiagramMeta(diagram);
     void renderDiagramSvg(diagram);
+    // 轮询期间不要把正在生成的按钮重置成可点状态。
+    if (busy) return;
     if (activeDiagramKind === 'dependency' && !diagram && !autoDependencyProjects.has(projectId)) {
       autoDependencyProjects.add(projectId);
       void generateDiagram('dependency', { silent: true });
@@ -512,35 +555,55 @@
   };
 
   const generateDiagram = async (kind, { silent = false } = {}) => {
+    if (diagramJobs.has(kind)) {
+      toast(`${DIAGRAM_LABELS[kind]}正在生成，请稍候。`, 2600);
+      return null;
+    }
     const projectId = view?.config?.projectId ?? '';
-    if (!projectId) { toast('先选择一个项目。'); return; }
+    if (!projectId) { toast('先选择一个项目。'); return null; }
     const scope = String($('diagramScope').value ?? '').trim() || 'project';
-    const box = $('diagramView');
-    box.replaceChildren(el('div', 'diagram-loading',
-      `正在生成${DIAGRAM_LABELS[kind]}…${kind === 'dependency' ? '' : '（只读分析，可在 Playbook 区取消）'}`));
+    const job = { startedAt: Date.now(), ticker: 0, projectId };
+    diagramJobs.set(kind, job);
+    diagramErrors.delete(kind);
     $('diagramGenerate').disabled = true;
+    $('diagramGenerate').textContent = '生成中…';
+    void renderDiagramSvg(currentDiagram());
+    // 每秒刷新已用时间，让用户知道任务还在跑。
+    job.ticker = window.setInterval(() => {
+      if (kind !== activeDiagramKind) return;
+      const node = $('diagramView').querySelector('.diagram-loading');
+      if (node) node.textContent = diagramLoadingText(kind, job.startedAt);
+    }, 1000);
+    let saved = null;
+    let failure = '';
     try {
-      const result = kind === 'dependency'
+      saved = kind === 'dependency'
         ? await window.companion.diagrams.dependency({ projectId })
         : await window.companion.diagrams.generate({ projectId, kind, scope });
-      await refresh();
-      if (!silent) toast(`${DIAGRAM_LABELS[kind]}已生成`, 4200);
-      return result;
     } catch (error) {
-      const message = String(error?.message ?? error);
-      box.replaceChildren();
-      const empty = el('div', 'diagram-empty');
-      empty.append(el('div', undefined, `生成失败：${message}`));
-      const retry = el('button', 'primary small', '重试');
-      retry.type = 'button';
-      retry.onclick = () => { void generateDiagram(kind); };
-      empty.append(retry);
-      box.append(empty);
-      toast(message, 7000);
-      return null;
+      failure = cleanIpcError(error?.message ?? error) || '未知错误';
+      diagramErrors.set(kind, failure);
+      toast(`生成${DIAGRAM_LABELS[kind]}失败：${failure}`, 8000);
     } finally {
-      $('diagramGenerate').disabled = false;
+      window.clearInterval(job.ticker);
+      diagramJobs.delete(kind);
     }
+    // 先把结果合并进本地视图，避免 refresh 正在轮询时新图迟迟不显示。
+    if (saved?.kind && view && view.config?.projectId === projectId) {
+      view.diagrams = [
+        ...(view.diagrams ?? []).filter((item) => item.kind !== saved.kind),
+        saved
+      ];
+    }
+    renderDiagrams();
+    void refresh();
+    if (saved && !silent) {
+      const primary = view?.config?.model ?? '';
+      toast(saved.usedModel && saved.usedModel !== primary
+        ? `${DIAGRAM_LABELS[kind]}已生成（使用 ${saved.usedModel}）`
+        : `${DIAGRAM_LABELS[kind]}已生成`, 5200);
+    }
+    return saved ?? null;
   };
 
   $('diagramGenerate').onclick = () => { void generateDiagram(activeDiagramKind); };
@@ -2254,6 +2317,7 @@
       const data = await window.companion.settings.get();
       $('gatewayUrl').value = data.gatewayUrl ?? '';
       $('model').value = data.model ?? '';
+      $('diagramModel').value = data.diagramModel ?? '';
       $('allowedPaths').value = data.allowedPaths ?? 'src/';
       $('sandboxMode').value = data.sandboxMode ?? 'auto';
       $('includePaths').value = (data.includePaths ?? []).join(',');
@@ -2464,6 +2528,7 @@
       const saved = await window.companion.settings.set({
         gatewayUrl: $('gatewayUrl').value,
         model: $('model').value,
+        diagramModel: $('diagramModel').value,
         allowedPaths: $('allowedPaths').value,
         includePaths: $('includePaths').value,
         sandboxMode: $('sandboxMode').value,

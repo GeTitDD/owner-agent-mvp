@@ -89,6 +89,19 @@ test('启用 Python 时提示词声明只读挂载与子集限制', () => {
   assert.match(prompt, /\/workspace/u);
 });
 
+test('带本地预扫描摘要时不再要求模型调用工具', () => {
+  const playbook = getPlaybook('diagram-control');
+  const prompt = buildPlaybookPrompt({
+    playbook,
+    project: { id: 'demo', root: 'D:\\demo', domain: 'software-engineering' },
+    digest: '### src/main.js（共 5 行）\n   1| if (x) {'
+  });
+  assert.match(prompt, /本次不提供工具/u);
+  assert.match(prompt, /### src\/main\.js/u);
+  assert.match(prompt, /1\| if \(x\)/u);
+  assert.ok(!prompt.includes('先用 read/grep/find/ls'));
+});
+
 test('解析 JSON 输出（含代码块包裹）', () => {
   const parsed = parsePlaybookOutput([
     '```json',

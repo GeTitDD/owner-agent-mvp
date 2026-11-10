@@ -192,6 +192,18 @@ const run = async () => {
     await panel.waitForSelector('#diagramView svg', { timeout: 30000 });
     const dependencySvg = await panel.locator('#diagramView svg').count();
     check('dependency diagram is scanned and rendered locally', dependencySvg > 0, String(dependencySvg));
+
+    // 回归：面板每 2 秒轮询一次，生成中的提示不能被轮询覆盖回空状态。
+    await panel.locator('#diagramTabs button[data-kind="control"]').click();
+    await panel.locator('#diagramGenerate').click();
+    await panel.waitForTimeout(3000);
+    const controlState = await panel.evaluate(() => ({
+      text: document.getElementById('diagramView')?.innerText ?? '',
+      disabled: document.getElementById('diagramGenerate')?.disabled === true
+    }));
+    check('clicking generate keeps a visible state across refresh polling',
+      !controlState.text.includes('还没有控制流图') && controlState.disabled,
+      JSON.stringify(controlState).slice(0, 160));
     await panel.locator('#diagramSection').scrollIntoViewIfNeeded();
     await sleep(300);
     await panel.screenshot({ path: path.join(evidence, 'panel-diagram.png') });

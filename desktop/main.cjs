@@ -94,6 +94,8 @@ const defaults = () => ({
   includePaths: ['package.json'],
   gatewayUrl: 'http://127.0.0.1:18789',
   model: '',
+  // 图谱生成专用模型：主模型不可用时的备用模型（留空则只用主模型）。
+  diagramModel: '',
   mascotSkin: 'pululu',
   sandboxMode: 'auto',
   sandboxByProject: {},
@@ -115,8 +117,9 @@ process.on('unhandledRejection', (reason) => { logError('unhandledRejection', re
 
 const loadConfig = () => {
   try {
-    const raw = JSON.parse(fs.readFileSync(configPath(), 'utf8'));
-    config = { ...defaults(), ...raw };
+    // PowerShell 写出的 JSON 可能带 UTF-8 BOM，JSON.parse 会直接失败。
+    const raw = fs.readFileSync(configPath(), 'utf8').replace(/^\uFEFF/u, '');
+    config = { ...defaults(), ...JSON.parse(raw) };
     if (!Array.isArray(config.includePaths)) config.includePaths = defaults().includePaths;
   } catch {
     config = defaults();
@@ -1810,7 +1813,7 @@ const getPlaybookRunner = async () => {
  * 在独立 Node 子进程里跑 playbook，避免 Pi SDK / 模型调用阻塞 Electron 主进程。
  * 取消时直接 kill 子进程，并返回一个受控的“取消”结果。
  */
-const runPlaybookInChild = ({ playbookId, playbook, project, task = '' }) => new Promise((resolve, reject) => {
+const runPlaybookInChild = ({ playbookId, playbook, project, task = '', model = '', digest = '' }) => new Promise((resolve, reject) => {
   const startedAt = new Date().toISOString();
   const began = Date.now();
   const child = fork(path.join(__dirname, 'playbook-child.mjs'), [], {
@@ -1834,7 +1837,7 @@ const runPlaybookInChild = ({ playbookId, playbook, project, task = '' }) => new
   };
   const timer = setTimeout(() => {
     finish(reject, new Error('playbook 执行超时，请稍后重试'));
-  }, 360000);
+  }, 600000);
   child.stderr?.on('data', (chunk) => { stderr += String(chunk); });
   child.on('message', (message) => {
     if (message?.type === 'ready') {
@@ -1843,7 +1846,8 @@ const runPlaybookInChild = ({ playbookId, playbook, project, task = '' }) => new
         playbookId,
         project,
         task,
-        model: config.model || '',
+        digest,
+        model: model || config.model || '',
         timeoutMs: 240000
       });
       return;
@@ -2242,35 +2246,63 @@ const registerIpc = () => {
     const playbook = registry.listPlaybooks().flatMap((group) => group.items)
       .find((item) => item.diagramKind === kind);
     if (!playbook) throw new Error('没有对应的图谱 playbook。');
-    let result = await runPlaybookInChild({
+    // 图谱优先用 diagramModel（设置里可单独指定），失败后回退到主模型。
+    const models = [...new Set([config.diagramModel, config.model]
+      .map((value) => String(value ?? '').trim())
+      .filter(Boolean))];
+    const candidates = models.length ? models : [''];
+    // 大仓库（几十万文件）让模型自己 grep 会直接超时：先用本地扫描给一段有界摘录。
+    const diagramMod = await loadDiagrams();
+    const digest = diagramMod.buildProjectDigest(project.root, scope).text;
+    const runOnce = (hint, model) => runPlaybookInChild({
       playbookId: playbook.id,
       playbook: registry.getPlaybook(playbook.id),
       project,
-      task: `scope: ${scope}`
+      task: hint,
+      model,
+      digest
     });
-    // 模型偶尔只返回 summary；再试一次，仍失败则给出明确错误。
-    if (result.status === 'ok' && !result.diagram) {
-      result = await runPlaybookInChild({
-        playbookId: playbook.id,
-        playbook: registry.getPlaybook(playbook.id),
-        project,
-        task: `scope: ${scope}\n请务必返回 diagram 对象（包含 kind 与 nodes/states/participants）。`
-      });
+    let result = null;
+    let usedModel = '';
+    const attempts = [];
+    for (const model of candidates) {
+      usedModel = model;
+      try {
+        result = await runOnce(`scope: ${scope}`, model);
+        // 模型偶尔只返回 summary；同一模型再补一次更明确的指令。
+        if (result.status === 'ok' && !result.diagram) {
+          result = await runOnce(
+            `scope: ${scope}\n请务必返回 diagram 对象（包含 kind 与 nodes/states/participants）。`,
+            model
+          );
+        }
+      } catch (error) {
+        // 子进程异常退出等硬失败也要继续尝试下一个模型，而不是直接放弃。
+        result = { status: 'error', category: 'child-exit', summary: String(error?.message ?? error) };
+      }
+      if (result.status === 'ok' && result.diagram) break;
+      attempts.push(`${model || '默认模型'}：${result.category || result.summary || '未返回 diagram'}`);
     }
-    if (result.status !== 'ok') throw new Error(result.summary || '图谱生成失败。');
+    if (result?.status !== 'ok') {
+      const advice = result?.advice ? ` ${result.advice}` : '';
+      throw new Error([
+        `${result?.summary || '图谱生成失败。'}${advice}`,
+        attempts.length > 1 ? `已尝试：${attempts.join('；')}。` : '',
+        '可在设置中填写「图谱模型」换一个更快的模型。'
+      ].filter(Boolean).join(' '));
+    }
     if (!result.diagram) {
       const sample = String(result.text ?? result.summary ?? '').slice(0, 200);
       throw new Error(`模型没有返回 diagram 数据：${sample}`);
     }
-    const mod = await loadDiagrams();
-    const data = mod.normalizeDiagram(kind, result.diagram);
-    const mermaid = mod.toMermaid(kind, data);
+    const data = diagramMod.normalizeDiagram(kind, result.diagram);
+    const mermaid = diagramMod.toMermaid(kind, data);
     const head = await headForProject(project.root);
     const saved = await api(`/owner/v1/projects/${encodeURIComponent(project.id)}/diagrams/${kind}`, {
       method: 'PUT',
       body: {
         scope,
-        title: String(result.diagram.title ?? mod.DIAGRAM_LABELS[kind]).slice(0, 200),
+        title: String(result.diagram.title ?? diagramMod.DIAGRAM_LABELS[kind]).slice(0, 200),
         summary: data.summary,
         mermaid,
         data,
@@ -2282,7 +2314,7 @@ const registerIpc = () => {
       }
     });
     projectHeadCache.delete(project.root);
-    return { ...saved, stale: false };
+    return { ...saved, stale: false, usedModel };
   });
 
   ipcMain.handle('companion:decide', async (event, input) => {
@@ -2789,6 +2821,7 @@ const registerIpc = () => {
     }
     if (typeof input?.gatewayUrl === 'string') config.gatewayUrl = input.gatewayUrl.trim();
     if (typeof input?.model === 'string') config.model = input.model.trim();
+    if (typeof input?.diagramModel === 'string') config.diagramModel = input.diagramModel.trim();
     if (typeof input?.projectId === 'string') config.projectId = input.projectId;
     if (typeof input?.sandboxMode === 'string') {
       const mod = sandboxPlanModule ?? await importEsm('../src/sandbox-plan.mjs');
@@ -3020,6 +3053,12 @@ app.on('before-quit', () => {
   saveConfig();
 });
 app.on('will-quit', () => {
+  // 退出时先结束仍在跑的 playbook 子进程，避免留下孤儿 node 进程继续调用模型。
+  for (const child of playbookChildren.values()) {
+    try { child.__cancel?.(); } catch { /* best effort */ }
+    try { child.kill(); } catch { /* best effort */ }
+  }
+  playbookChildren.clear();
   try { tray?.destroy(); } catch { /* best effort */ }
   try { if (workbench) void workbench.close(); } catch { /* best effort */ }
   try { if (sidecar) void sidecar.close(); } catch { /* best effort */ }

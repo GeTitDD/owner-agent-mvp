@@ -3,6 +3,16 @@
 // 主进程通过 fork + IPC 发送一次 run 请求；结果/错误通过 IPC 返回。
 import { PlaybookRunner } from '../src/pstack/playbook-runner.mjs';
 
+// 等待 IPC 消息真正写出后再退出：结果里带 diagram/text 时体积较大，
+// 直接 process.exit 可能把还没 flush 的消息丢掉（父进程会看到“子进程退出（0）”）。
+const send = (payload) => new Promise((resolve) => {
+  try {
+    process.send(payload, () => resolve());
+  } catch {
+    resolve();
+  }
+});
+
 process.on('message', async (message) => {
   if (!message || message.type !== 'run') return;
   try {
@@ -15,13 +25,15 @@ process.on('message', async (message) => {
     const result = await runner.run({
       playbookId: message.playbookId,
       project: message.project,
-      task: message.task || ''
+      task: message.task || '',
+      digest: message.digest || ''
     });
-    process.send?.({ type: 'result', result });
+    await send({ type: 'result', result });
   } catch (error) {
-    process.send?.({ type: 'error', error: String(error?.stack ?? error?.message ?? error) });
+    await send({ type: 'error', error: String(error?.stack ?? error?.message ?? error) });
   } finally {
-    setTimeout(() => process.exit(0), 50);
+    // 给 IPC 一点时间把结果送出，再退出。
+    setTimeout(() => process.exit(0), 200);
   }
 });
 

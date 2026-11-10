@@ -20,7 +20,7 @@ const MAX_NEXT_STEPS = 4;
 const clean = (value, max = 2000) => String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, max);
 
 /** 组装只读分析提示词：项目边界 + playbook 目标 + 固定 JSON 输出契约。 */
-export function buildPlaybookPrompt({ playbook, project, task = '', python = false }) {
+export function buildPlaybookPrompt({ playbook, project, task = '', python = false, digest = '' }) {
   return [
     `只读分析项目 ${project.id}（根目录 ${project.root}；主领域 ${project.domain || '未知'}）。`,
     `本次执行 pstack playbook「${playbook.title}」（${playbook.id}）：${playbook.hint}`,
@@ -28,13 +28,15 @@ export function buildPlaybookPrompt({ playbook, project, task = '', python = fal
     task ? `本次关注：${clean(task, 300)}` : '',
     '',
     '要求：',
-    '1. 先用 read/grep/find/ls 实际查看关键文件再下结论；没有读到的内容标为未知。',
-    python
+    digest
+      ? '1. 本次不提供工具：不要调用 read/grep/find/ls，只依据下面的「本地预扫描摘要」作答；摘要之外的模块标为未知。'
+      : '1. 先用 read/grep/find/ls 实际查看关键文件再下结论；没有读到的内容标为未知。',
+    python && !digest
       ? '1b. 需要统计/计数/确定性计算时用 own_python；仓库以只读方式挂载在 /workspace，禁止写入、禁止第三方包。'
       : '',
     '2. 每条结论必须给证据：`相对路径` 或 `相对路径:行号`。',
     '3. 只输出 JSON，不要代码块、不要解释文字。',
-    `4. 控制成本：先看 README/入口/配置，最多读 ${playbook.maxFiles ?? 20} 个文件；需要更多就说明还缺什么。`,
+    digest ? '' : `4. 控制成本：先看 README/入口/配置，最多读 ${playbook.maxFiles ?? 20} 个文件；需要更多就说明还缺什么。`,
     playbook.budget ? `5. ${playbook.budget}` : '',
     '',
     '输出格式：',
@@ -65,7 +67,9 @@ export function buildPlaybookPrompt({ playbook, project, task = '', python = fal
       : '除证据确实不足外，findings 至少给 3 条，每条都要能落到具体文件。',
     playbook.diagramKind
       ? '如果证据不足，返回 summary 说明缺什么，diagram 可给最小可信子集。'
-      : '如果证据不足以支持任何结论，返回 summary 说明缺什么，findings 留空。'
+      : '如果证据不足以支持任何结论，返回 summary 说明缺什么，findings 留空。',
+    digest ? '本地预扫描摘要（只读；行号可直接用于 evidence）：' : '',
+    digest
   ].filter(Boolean).join('\n');
 }
 
@@ -212,7 +216,8 @@ export class PlaybookRunner {
       createReadonlySessionFactory({
         playbook,
         skillsDir: resolvedSkillsDir,
-        python: options.python ?? this.python
+        python: options.python ?? this.python,
+        noTools: Boolean(options.noTools)
       }));
   }
 
@@ -221,7 +226,7 @@ export class PlaybookRunner {
   }
 
   /** 执行一个 playbook。任何失败都返回结构化 error，不抛给 IPC 层裸奔。 */
-  async run({ playbookId, project, task = '', model = this.model, signal } = {}) {
+  async run({ playbookId, project, task = '', model = this.model, signal, digest = '' } = {}) {
     const playbook = getPlaybook(playbookId);
     if (!playbook) throw new Error(`Unknown playbook: ${playbookId}`);
     if (!project?.root) throw new Error('Project root is required');
@@ -230,8 +235,9 @@ export class PlaybookRunner {
     const runId = `pb_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
     const startedAt = new Date().toISOString();
     const python = this.python && await montyAvailable();
-    const prompt = buildPlaybookPrompt({ playbook, project, task, python });
-    const factory = this.sessionFactoryFor(playbook, skillsDir, { python });
+    const prompt = buildPlaybookPrompt({ playbook, project, task, python, digest });
+    // 有本地摘要时不再给工具：避免模型在超大仓库里 wander 到超时。
+    const factory = this.sessionFactoryFor(playbook, skillsDir, { python, noTools: Boolean(digest) });
     // 大仓库需要更长预算；单个 playbook 可以覆盖全局默认。
     const timeoutMs = Number(playbook.timeoutMs) > 0 ? Number(playbook.timeoutMs) : this.timeoutMs;
     let session = null;
@@ -298,6 +304,13 @@ export class PlaybookRunner {
         text
       };
     } catch (error) {
+      if (process.env.PLAYBOOK_DEBUG_RAW === '1') {
+        console.error('RAW_PLAYBOOK_ERROR', error?.name, String(error?.message ?? ''));
+        try {
+          const last = session?.lastMessage?.();
+          console.error('RAW_LAST_MESSAGE', JSON.stringify({ stopReason: last?.stopReason, errorMessage: String(last?.errorMessage ?? '').slice(0, 600) }));
+        } catch { /* ignore */ }
+      }
       const category = classifyError(error);
       const advice = [FAILURE_ADVICE[category] ?? FAILURE_ADVICE['session-error'], error?.detail]
         .filter(Boolean).join(' ');

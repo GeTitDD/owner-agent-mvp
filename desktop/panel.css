@@ -941,6 +941,9 @@ pre.diff, pre.logs {
   overflow: auto;
 }
 .diagram-view svg { max-width: 100%; height: auto; }
+/* 时序图参与者多，缩放会让文字太小：允许横向滚动并保持可读宽度。 */
+.diagram-view[data-view="sequence"] svg { max-width: none; min-width: 620px; }
+.diagram-view[data-view="sequence"] { justify-items: start; }
 .diagram-empty { display: grid; gap: 8px; justify-items: center; padding: 18px 8px; font-size: 10px; color: var(--muted); }
 .diagram-loading { padding: 24px 8px; font-size: 10px; color: var(--muted); }
 .diagram-meta { margin-top: 4px; font-size: 9px; line-height: 1.45; color: var(--muted); }
