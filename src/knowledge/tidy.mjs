@@ -37,7 +37,7 @@ export function knowledgeTidyFor({
   personalStore,
   projectId = '',
   threshold = 0.72,
-  limit = 2000
+  limit = 500
 } = {}) {
   if (!personalStore) throw new Error('知识库尚未初始化。');
   const units = personalStore.list({ projectId, limit });
