@@ -1334,3 +1334,16 @@ pre.diff, pre.logs {
   font-size: 9px;
   color: var(--muted);
 }
+
+/* 手机连接：只在设置页显示地址与配对码 */
+.mobile-info {
+  white-space: pre-line;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+}
+.mobile-actions { display: flex; gap: 6px; margin-top: 6px; }

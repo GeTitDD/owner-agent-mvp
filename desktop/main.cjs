@@ -51,6 +51,7 @@ let knowledgeTimer = null;
 let broker = null;
 let sidecar = null;
 let workbench = null;
+let mobileServer = null;
 let worker = null;
 let workerTimer = null;
 let baseUrl = '';
@@ -279,6 +280,30 @@ async function startServices() {
     version: COMPANION_VERSION
   });
   baseUrl = `http://127.0.0.1:${sidecar.port}`;
+
+  // 手机桥：局域网 + 设备令牌；只开放概览、聊天（只读）与想法管理。
+  try {
+    const { startMobileServer } = await importEsm('../src/mobile-server.mjs');
+    const preferredPort = Number(process.env.OWNER_MOBILE_PORT) || undefined;
+    let attemptPort = preferredPort ?? 47831;
+    for (let attempt = 0; attempt < 5 && !mobileServer; attempt += 1) {
+      try {
+        mobileServer = await startMobileServer({
+          store,
+          stateDir: app.getPath('userData'),
+          version: COMPANION_VERSION,
+          port: attemptPort,
+          getOverview: mobileOverviewFor,
+          submitChat: ({ projectId, text }) => submitCompanionTask({ text, projectId })
+        });
+      } catch (error) {
+        if (preferredPort || attempt === 4) throw error;
+        attemptPort += 1;
+      }
+    }
+  } catch (error) {
+    logError('mobile-server', error);
+  }
 
   // 常驻 Worker：批准后的步骤自动推进；没有批准对象时保持空闲。
   workerTimer = setInterval(() => {
@@ -1030,6 +1055,89 @@ const knowledgeDetail = ({ id } = {}) => {
     };
   };
 
+
+  // 手机端概览：只暴露「看清项目 + 想法 + 知识摘要」，不含审批与写入。
+  const mobileOverviewFor = async ({ projectId = '' } = {}) => {
+    const projects = store.listProjects().map((project) => ({
+      id: project.id,
+      name: project.name,
+      root: project.root
+    }));
+    const known = new Set(projects.map((project) => project.id));
+    const activeId = known.has(projectId)
+      ? projectId
+      : (known.has(config.projectId) ? config.projectId : (projects[0]?.id ?? ''));
+    const project = activeId ? store.getProject(activeId) : null;
+    const brief = project ? await projectBriefFor(project) : null;
+    const knowledge = activeId ? await knowledgeSnapshot(activeId) : null;
+    const ideas = activeId
+      ? store.listProjectQueue(activeId, 'idea').map((item) => ({
+        id: item.id,
+        title: item.title,
+        body: item.body,
+        status: item.status,
+        source: item.source,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt
+      }))
+      : [];
+    const tasksTodo = activeId
+      ? store.listProjectQueue(activeId, 'task').filter((item) => item.status === 'todo').length
+      : 0;
+    const { nextActionFor } = await loadNextAction();
+    const nextAction = activeId
+      ? nextActionFor({
+        pending: 0,
+        playbookRunning: false,
+        brief,
+        briefStale: brief?.stale === true,
+        queueTodo: tasksTodo,
+        knowledge: knowledge?.counts ?? {},
+        result: null,
+        state: 'idle',
+        cycleId: ''
+      })
+      : null;
+    const diagrams = activeId
+      ? store.listProjectDiagrams(activeId).map((diagram) => ({
+        kind: diagram.kind,
+        title: diagram.title,
+        version: diagram.version,
+        confidence: diagram.confidence,
+        source: diagram.source,
+        updatedAt: diagram.updatedAt
+      }))
+      : [];
+    return {
+      version: COMPANION_VERSION,
+      generatedAt: new Date().toISOString(),
+      projects,
+      activeProjectId: activeId,
+      project: project ? {
+        id: project.id,
+        name: project.name,
+        root: project.root,
+        domain: project.primary_domain ?? project.primaryDomain ?? ''
+      } : null,
+      brief: brief ? {
+        oneLiner: brief.oneLiner ?? '',
+        whatItIs: brief.whatItIs ?? '',
+        howToRun: brief.howToRun ?? [],
+        modules: brief.modules ?? [],
+        verify: brief.verify ?? { commands: [], criteria: [] },
+        risks: brief.risks ?? [],
+        evidence: brief.evidence ?? [],
+        version: brief.version,
+        generatedAt: brief.generatedAt,
+        basedOnCommit: brief.basedOnCommit ?? '',
+        stale: brief.stale === true
+      } : null,
+      nextAction: nextAction ?? null,
+      knowledge: knowledge?.counts ?? {},
+      ideas,
+      diagrams
+    };
+  };
 
   const gitAt = async (cwd, args, timeout = 15000) => {
     const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
@@ -2858,6 +2966,34 @@ const registerIpc = () => {
     return { ...suggestion, projectId: project.id };
   });
 
+  ipcMain.handle('companion:mobile-info', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!mobileServer) return { enabled: false, reason: '手机桥未启动' };
+    const pairing = mobileServer.pairingCode();
+    return {
+      enabled: true,
+      port: mobileServer.port,
+      urls: mobileServer.urls,
+      code: pairing.code,
+      expiresAt: new Date(pairing.expiresAt).toISOString(),
+      devices: mobileServer.devices()
+    };
+  });
+
+  ipcMain.handle('companion:mobile-refresh', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!mobileServer) throw new Error('手机桥未启动');
+    const pairing = mobileServer.refreshCode();
+    return {
+      enabled: true,
+      port: mobileServer.port,
+      urls: mobileServer.urls,
+      code: pairing.code,
+      expiresAt: new Date(pairing.expiresAt).toISOString(),
+      devices: mobileServer.devices()
+    };
+  });
+
   ipcMain.handle('companion:settings:get', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     // 设置页每次打开都重新探测，提供“重新检测”入口。
@@ -3108,6 +3244,7 @@ app.on('before-quit', () => {
   saveConfig();
 });
 app.on('will-quit', () => {
+  try { if (mobileServer) void mobileServer.close(); } catch { /* best effort */ }
   // 退出时先结束仍在跑的 playbook 子进程，避免留下孤儿 node 进程继续调用模型。
   for (const child of playbookChildren.values()) {
     try { child.__cancel?.(); } catch { /* best effort */ }

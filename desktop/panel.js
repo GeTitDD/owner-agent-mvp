@@ -2326,6 +2326,31 @@
   $('projectSelect').onchange = () => { void selectProject($('projectSelect').value); };
   $('projectSearch').oninput = () => { renderProjects(); };
 
+  const renderMobileInfo = async (refresh = false) => {
+    const box = $('mobileInfo');
+    if (!box) return;
+    try {
+      const info = refresh
+        ? await window.companion.mobile.refresh()
+        : await window.companion.mobile.info();
+      if (!info?.enabled) {
+        box.textContent = info?.reason || '手机桥未启动';
+        return;
+      }
+      const urls = (info.urls ?? []).map((item) => item.url);
+      const primary = urls[0] ?? `http://<电脑IP>:${info.port}`;
+      const spare = urls.slice(1);
+      const devices = info.devices?.length ?? 0;
+      box.textContent = [
+        `地址：${primary}${spare.length ? `（备用：${spare.join('、')}）` : ''}`,
+        `配对码：${info.code}（10 分钟内有效）`,
+        devices ? `已配对 ${devices} 台设备` : '还没有设备配对'
+      ].join('\n');
+    } catch (error) {
+      box.textContent = String(error?.message ?? error);
+    }
+  };
+
   const openSettings = async (focusSkin = false) => {
     try {
       const data = await window.companion.settings.get();
@@ -2337,6 +2362,7 @@
       $('includePaths').value = (data.includePaths ?? []).join(',');
       $('knowledgeAutoHarvest').checked = data.knowledgeAutoHarvest === true;
       renderServiceGrid($('serviceGrid'), data.services);
+      await renderMobileInfo();
       await renderMascotGrid();
       $('settings').hidden = false;
       if (focusSkin) {
@@ -2427,6 +2453,7 @@
   };
 
   $('openSettings').onclick = () => { void openSettings(); };
+  $('mobileRefreshCode').onclick = () => { void renderMobileInfo(true); };
   $('closeSettings').onclick = () => { $('settings').hidden = true; };
   $('hidePanel').onclick = () => window.companion.hidePanel();
   $('openFull').onclick = () => { void window.companion.openFull().catch((error) => toast(String(error.message ?? error))); };

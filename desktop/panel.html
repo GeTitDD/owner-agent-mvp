@@ -242,6 +242,13 @@
           <input id="diagramModel" placeholder="provider/model" />
         </label>
         <label class="field">
+          <span>手机连接（同一 Wi-Fi 下的 iPhone / Android）</span>
+          <div id="mobileInfo" class="mobile-info">正在读取手机桥…</div>
+          <div class="mobile-actions">
+            <button id="mobileRefreshCode" class="ghost small" type="button">换配对码</button>
+          </div>
+        </label>
+        <label class="field">
           <span>沙箱测试默认策略（按项目可覆盖）</span>
           <select id="sandboxMode" aria-label="沙箱测试默认策略">
             <option value="auto">自动：按项目生态选择 profile</option>

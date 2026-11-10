@@ -51,6 +51,10 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     set: (input) => invoke('companion:settings:set', input),
     addProject: () => invoke('companion:add-project')
   }),
+  mobile: Object.freeze({
+    info: () => invoke('companion:mobile-info'),
+    refresh: () => invoke('companion:mobile-refresh')
+  }),
   mascots: Object.freeze({
     list: () => invoke('companion:mascots:list'),
     set: (input) => invoke('companion:mascots:set', input),
