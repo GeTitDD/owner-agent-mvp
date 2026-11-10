@@ -9,6 +9,7 @@
   };
   let view = null;
   let refreshing = false;
+  let composerBusy = false;
   let toastTimer = null;
 
   const toast = (text, ms = 2600) => {
@@ -78,7 +79,7 @@
     const hasProjects = (view?.projects?.length ?? 0) > 0;
     $('setup').hidden = hasProjects;
     $('composeSection').hidden = !hasProjects;
-    $('submitTask').disabled = !hasProjects;
+    $('submitTask').disabled = composerBusy || !hasProjects;
     $('queueSection').hidden = !hasProjects;
     if (!hasProjects) renderServiceGrid($('setupServices'), view?.services);
     $('playbookSection').hidden = !hasProjects;
@@ -2202,6 +2203,7 @@
   };
 
   const setComposerBusy = (busy) => {
+    composerBusy = busy;
     const button = $('submitTask');
     const hint = $('composerHint');
     button.disabled = busy;

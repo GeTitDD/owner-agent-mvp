@@ -23,17 +23,25 @@ export function normalizeAllowedPaths(value, fallback = 'src/') {
  * @param {{id:string, root:string, domain?:string}} options.project
  * @param {{run: Function}} options.triageRunner 只读分诊执行器
  * @param {Function} options.createWriteRequest 创建 pending_approval 写请求
+ * @param {string} [options.digest] 首轮使用的本地预扫描摘要（大仓库用它替代工具探查）
+ * @param {string} [options.fallbackDigest] 首轮失败时改用摘要重试
  */
-export async function submitCompanionTask({ text, project, triageRunner, createWriteRequest }) {
+export async function submitCompanionTask({
+  text, project, triageRunner, createWriteRequest, digest = '', fallbackDigest = ''
+}) {
   const value = String(text ?? '').trim();
   if (!value) throw new Error('请先输入要交办的事情。');
   if (value.length > 1200) throw new Error('交办最多 1200 字。');
   if (!project?.root) throw new Error('项目目录不可用。');
 
-  const triage = await triageRunner.run({
-    task: value,
-    project: { id: project.id, root: project.root, domain: project.domain ?? '' }
-  });
+  const target = { id: project.id, root: project.root, domain: project.domain ?? '' };
+  let triage = await triageRunner.run({ task: value, project: target, digest });
+
+  // 大仓库里让模型自己 grep 容易超时：失败后用本地摘要再跑一次，至少给结论。
+  const transient = ['timeout', 'session-error', 'empty-response'].includes(triage?.category);
+  if (triage.status !== 'ok' && transient && fallbackDigest && fallbackDigest !== digest) {
+    triage = await triageRunner.run({ task: value, project: target, digest: fallbackDigest });
+  }
 
   if (triage.status !== 'ok') {
     return {

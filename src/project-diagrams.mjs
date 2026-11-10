@@ -3,6 +3,7 @@
 // 模型只产出结构化 nodes/edges/states/messages，这里统一生成 Mermaid，
 // 避免模型直接写 Mermaid 造成语法错误或注入。
 import fs from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
 export const DIAGRAM_KINDS = Object.freeze(['dependency', 'control', 'dataflow', 'state', 'sequence']);
@@ -225,24 +226,80 @@ const resolveModule = (root, fromFile, spec) => {
   return null;
 };
 
-/** 本地预扫描摘要：给图谱模型一段有界、带行号的代码摘录，避免它在超大仓库里 wander 到超时。 */
-export function buildProjectDigest(root, scope = 'project', {
-  maxFiles = 6, maxChars = 30000, maxLineChars = 200
+const walkAsync = async (root, limit, deadline) => {
+  const files = [];
+  const stack = [root];
+  while (stack.length && files.length < limit) {
+    if (Date.now() > deadline) break;
+    const dir = stack.pop();
+    let entries = [];
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) stack.push(full);
+      } else if (entry.isFile() && SOURCE_EXT.has(path.extname(entry.name).toLowerCase())) {
+        files.push(full);
+        if (files.length >= limit) break;
+      }
+    }
+  }
+  return files;
+};
+
+/** 只读文件开头一段，避免超大生成文件把摘要扫描拖死。 */
+const readCapped = async (file, maxBytes) => {
+  try {
+    const stat = await fsp.stat(file);
+    if (!stat.isFile() || stat.size === 0 || stat.size > 8 * 1024 * 1024) return '';
+    const handle = await fsp.open(file, 'r');
+    try {
+      const buffer = Buffer.alloc(Math.min(stat.size, maxBytes));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      return buffer.subarray(0, bytesRead).toString('utf8');
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return '';
+  }
+};
+
+/**
+ * 本地预扫描摘要：给模型一段有界、带行号的代码摘录，避免它在超大仓库里 wander 到超时。
+ * 全程异步且有 2.5 秒预算：扫描期间主进程不阻塞，窗口不会假死。
+ */
+export async function buildProjectDigest(root, scope = 'project', {
+  maxFiles = 6, maxChars = 30000, maxLineChars = 200, timeoutMs = 2500, maxScan = 400
 } = {}) {
+  const deadline = Date.now() + timeoutMs;
   let base = root;
   const trimmed = String(scope ?? '').trim();
   if (trimmed && trimmed !== 'project') {
     const candidate = path.resolve(root, trimmed);
     if ((candidate === root || candidate.startsWith(`${root}${path.sep}`))) {
-      try { if (fs.statSync(candidate).isDirectory()) base = candidate; } catch { /* 目录不存在则退回项目根 */ }
+      try { if ((await fsp.stat(candidate)).isDirectory()) base = candidate; } catch { /* 目录不存在则退回项目根 */ }
     }
   }
   const rel = (file) => path.relative(root, file).replace(/\\/gu, '/');
-  const scanned = walk(base, 600);
+  const scanned = await walkAsync(base, maxScan, deadline);
+
+  // README 不是源码扩展名，walk 不会收；但它对「项目在做什么」信息密度最高。
+  const readmeFiles = [];
+  for (const dir of [...new Set([base, root])]) {
+    for (const name of ['README.md', 'readme.md', 'README.MD', 'README.rst', 'README.txt', 'README']) {
+      const file = path.join(dir, name);
+      if (readmeFiles.includes(file)) continue;
+      try { if ((await fsp.stat(file)).isFile()) readmeFiles.push(file); } catch { /* 没有就跳过 */ }
+    }
+  }
+
+  const sourceFiles = [...new Set([...readmeFiles, ...scanned])];
   const scored = [];
-  for (const file of scanned) {
-    let content = '';
-    try { content = fs.readFileSync(file, 'utf8'); } catch { continue; }
+  for (const file of sourceFiles) {
+    if (Date.now() > deadline) break;
+    const content = await readCapped(file, 96 * 1024);
+    if (!content) continue;
     const relative = rel(file);
     const baseName = path.basename(file).replace(/\.[^.]+$/u, '');
     const depth = relative.split('/').length - 1;
@@ -253,6 +310,12 @@ export function buildProjectDigest(root, scope = 'project', {
     scored.push({ file, relative, content, score: entryBonus + Math.min(branches, 60) - depth * 3 });
   }
   scored.sort((a, b) => b.score - a.score);
+  // README 是「项目在做什么/怎么跑」的最高信息密度文件，永远排在第一位。
+  const readme = scored.find((item) => /^readme(?:\.[a-z]+)?$/iu.test(path.basename(item.file)));
+  if (readme) {
+    scored.splice(scored.indexOf(readme), 1);
+    scored.unshift(readme);
+  }
 
   const perFile = Math.max(1200, Math.floor(maxChars / Math.max(1, maxFiles)));
   const picked = [];
@@ -277,21 +340,23 @@ export function buildProjectDigest(root, scope = 'project', {
 
   const topLevel = [];
   try {
-    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    for (const entry of await fsp.readdir(root, { withFileTypes: true })) {
       if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
       topLevel.push(entry.isDirectory() ? `${entry.name}/` : entry.name);
     }
   } catch { /* 读不到目录就只给文件摘要 */ }
 
+  const truncated = Date.now() > deadline || scanned.length >= maxScan;
   const text = [
     `项目根：${root}`,
     `分析范围：${trimmed || 'project'}（实际读取：${rel(base) || '.'}）`,
     `扫描到的源文件：${scanned.length} 个；以下摘录 ${picked.length} 个最相关文件。`,
+    truncated ? '注意：扫描达到上限或时间预算，结果可能不完整。' : '',
     topLevel.length ? `顶层条目：${topLevel.slice(0, 24).join('、')}` : '',
     '说明：行号已对齐真实文件，可直接作为 evidence；摘录之外的代码视为未知。',
     ...picked.map((item) => item.block)
   ].filter(Boolean).join('\n\n');
-  return { text, files: picked.map((item) => item.relative) };
+  return { text, files: picked.map((item) => item.relative), scanned: scanned.length, truncated };
 }
 
 /**

@@ -22,15 +22,17 @@ const clean = (value, max = 2000) => String(value ?? '').replace(/\s+/gu, ' ').t
 const asArray = (value) => (Array.isArray(value) ? value : []);
 
 /** 组装只读分诊提示词：先分析，再判断“只回答”还是“需要写入”。 */
-export function buildTriagePrompt({ task, project, python = false }) {
+export function buildTriagePrompt({ task, project, python = false, digest = '' }) {
   return [
     `你是 Owner 的只读分析员。项目 ${project.id}（根目录 ${project.root}；主领域 ${project.domain || '未知'}）。`,
     `Owner 的交办：${clean(task, 1200)}`,
     '',
     '先只读分析这个项目，再判断这条交办是否需要修改项目文件。',
     '要求：',
-    '1. 先用 read/grep/find/ls 实际查看关键文件；没有读到的内容标为未知，不要猜。',
-    python
+    digest
+      ? '1. 本次不提供工具：不要调用 read/grep/find/ls，只依据下面的「本地预扫描摘要」作答；摘要之外的内容标为未知。'
+      : '1. 先用 read/grep/find/ls 实际查看关键文件；没有读到的内容标为未知，不要猜。',
+    python && !digest
       ? '1b. 需要统计/计数/确定性计算时用 own_python；仓库以只读方式挂载在 /workspace，禁止写入、禁止第三方包。'
       : '',
     '2. 每条结论必须给证据：`相对路径` 或 `相对路径:行号`。',
@@ -49,7 +51,9 @@ export function buildTriagePrompt({ task, project, python = false }) {
     '- 只是解释、查询、审查、给建议、评估风险 → needsWrite=false，writePlan 留空。',
     '- 信息不足以下结论 → needsWrite=false，并在 questions 里说明缺什么。',
     '- 即使需要写入，也不要现在动手；只提交计划，是否执行由 Owner 批准。',
-    `最多 ${MAX_FINDINGS} 条 findings、${MAX_QUESTIONS} 条 questions。`
+    `最多 ${MAX_FINDINGS} 条 findings、${MAX_QUESTIONS} 条 questions。`,
+    digest ? '本地预扫描摘要（只读；行号可直接用于 evidence）：' : '',
+    digest
   ].filter(Boolean).join('\n');
 }
 
@@ -131,7 +135,7 @@ export class TriageRunner {
     this.sessionFactoryFor = sessionFactoryFor;
   }
 
-  async run({ task, project, model = this.model, signal } = {}) {
+  async run({ task, project, model = this.model, signal, digest = '' } = {}) {
     const text = String(task ?? '').trim();
     if (!text) throw new Error('Task text is required');
     if (!project?.root) throw new Error('Project root is required');
@@ -139,10 +143,15 @@ export class TriageRunner {
     const startedAt = new Date().toISOString();
     const began = Date.now();
     const python = this.python && await montyAvailable();
-    const prompt = buildTriagePrompt({ task: text, project, python });
+    const prompt = buildTriagePrompt({ task: text, project, python, digest });
     const factory = this.sessionFactoryFor
       ? this.sessionFactoryFor({ project, python })
-      : createReadonlySessionFactory({ playbook: { id: 'triage', title: '只读分诊' }, skillsDir: null, python });
+      : createReadonlySessionFactory({
+        playbook: { id: 'triage', title: '只读分诊' },
+        skillsDir: null,
+        python,
+        noTools: Boolean(digest)
+      });
     let session = null;
     let timer = null;
     let cancelListener = null;

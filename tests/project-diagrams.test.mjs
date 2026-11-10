@@ -62,19 +62,23 @@ test('非法图数据被拒绝', () => {
   assert.throws(() => normalizeDiagram('dependency', { nodes: [] }), /nodes/u);
 });
 
-test('本地摘要带真实行号，并遵守 scope', () => {
+test('本地摘要带真实行号，并遵守 scope', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-'));
   try {
     fs.mkdirSync(path.join(root, 'src'), { recursive: true });
     fs.mkdirSync(path.join(root, 'docs'), { recursive: true });
     fs.writeFileSync(path.join(root, 'src', 'main.js'),
       "import x from './x.js';\n\nif (x) {\n  for (const item of x) { console.log(item); }\n}\nthrow new Error('done');\n");
+    fs.writeFileSync(path.join(root, 'README.md'), '# demo\n\nwhat it does\n');
     fs.writeFileSync(path.join(root, 'docs', 'notes.md'), '# notes\n');
-    const digest = buildProjectDigest(root, 'src');
+    const digest = await buildProjectDigest(root, 'src');
     assert.ok(digest.files.includes('src/main.js'));
     assert.match(digest.text, /### src\/main\.js/u);
     assert.match(digest.text, /\s1\| import x/u);
     assert.ok(!digest.text.includes('### docs/'));
+    const all = await buildProjectDigest(root, 'project');
+    assert.ok(all.text.indexOf('### README.md') >= 0);
+    assert.ok(all.text.indexOf('### README.md') < all.text.indexOf('### src/main.js'));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

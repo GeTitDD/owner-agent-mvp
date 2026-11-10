@@ -23,13 +23,23 @@ test('分诊提示词声明只读、JSON 契约与写前批准', () => {
   assert.doesNotMatch(prompt, /own_python/u);
 });
 
+test('带本地摘要的分诊不要求模型调用工具', () => {
+  const prompt = buildTriagePrompt({
+    task: '这个项目现在进度怎么样？',
+    project: { id: 'demo', root: 'D:\\demo', domain: 'software-engineering' },
+    digest: '### src/main.js（共 3 行）\n   1| if (x) {'
+  });
+  assert.match(prompt, /本次不提供工具/u);
+  assert.match(prompt, /### src\/main\.js/u);
+  assert.ok(!prompt.includes('先用 read/grep/find/ls'));
+});
+
 test('启用 Python 时提示词声明只读挂载', () => {
   const prompt = buildTriagePrompt({
     task: '统计文件数',
     project: { id: 'demo', root: 'D:\\demo' },
     python: true
-  });
-  assert.match(prompt, /own_python/u);
+  });  assert.match(prompt, /own_python/u);
   assert.match(prompt, /\/workspace/u);
   assert.match(prompt, /只读/u);
 });

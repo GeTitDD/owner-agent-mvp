@@ -887,6 +887,21 @@ const knowledgeDetail = ({ id } = {}) => {
   const loadKnowledgeTidy = async () => (knowledgeTidyModule ??= await importEsm('../src/knowledge/tidy.mjs'));
   const loadDiagrams = async () => (diagramModule ??= await importEsm('../src/project-diagrams.mjs'));
   const projectHeadCache = new Map();
+  const triageDigestCache = new Map();
+  /**
+   * 交办/讨论用的本地摘要：大仓库里让模型自己 grep 往往 2 分钟都跑不完。
+   * 60 秒内复用同一项目的扫描结果，避免每条消息都重新读几百个文件。
+   */
+  const digestForTriage = async (root) => {
+    if (!root) return { text: '', scanned: 0 };
+    const cached = triageDigestCache.get(root);
+    if (cached && Date.now() - cached.at < 60000) return cached.value;
+    const mod = await loadDiagrams();
+    const digest = await mod.buildProjectDigest(root, 'project');
+    const value = { text: digest.text, scanned: digest.scanned ?? 0 };
+    triageDigestCache.set(root, { at: Date.now(), value });
+    return value;
+  };
   const headForProject = async (root) => {
     if (!root) return '';
     const cached = projectHeadCache.get(root);
@@ -2117,11 +2132,21 @@ const captureIdeaFromMessage = async (text, projectId) => {
   }
 };
 
-const submitCompanionTask = async ({ text, projectId }) => {  const project = await resolveProject(projectId);
+const submitCompanionTask = async ({ text, projectId }) => {
+  const project = await resolveProject(projectId);
   const [{ submitCompanionTask: runSubmit }, triageRunner] = await Promise.all([
     loadCompanionSubmit(),
     getTriageRunner()
   ]);
+  // 大仓库先给本地摘要（模型不再自己 grep，几十秒内能答）；小仓库仍走工具探查，失败再退回摘要。
+  let digest = '';
+  let fallbackDigest = '';
+  try {
+    const info = await digestForTriage(projectRootOf(project));
+    // 只有中等以上仓库才值得再跑一次摘要兜底；小项目本身很快，失败多为模型问题。
+    fallbackDigest = info.scanned >= 20 ? info.text : '';
+    if (info.scanned > 60) digest = info.text;
+  } catch { /* 摘要不可用时退回工具模式 */ }
   const result = await runSubmit({
     text,
     project: {
@@ -2131,7 +2156,9 @@ const submitCompanionTask = async ({ text, projectId }) => {  const project = aw
       baseSha: project.baseSha ?? project.base_sha ?? ''
     },
     triageRunner,
-    createWriteRequest
+    createWriteRequest,
+    digest,
+    fallbackDigest
   });
   if (result.mode === 'write-request') {
     return { ...result, testConfig: await testConfigForProject(project) };
@@ -2281,7 +2308,7 @@ const registerIpc = () => {
     const candidates = models.length ? models : [''];
     // 大仓库（几十万文件）让模型自己 grep 会直接超时：先用本地扫描给一段有界摘录。
     const diagramMod = await loadDiagrams();
-    const digest = diagramMod.buildProjectDigest(project.root, scope).text;
+    const digest = (await diagramMod.buildProjectDigest(project.root, scope)).text;
     const runOnce = (hint, model) => runPlaybookInChild({
       playbookId: playbook.id,
       playbook: registry.getPlaybook(playbook.id),

@@ -10,6 +10,54 @@ const project = { id: 'demo', root: 'D:\\demo', domain: 'software-engineering' }
 
 const runnerReturning = (value) => ({ async run() { return value; } });
 
+test('分诊超时后改用本地摘要重试', async () => {
+  const calls = [];
+  const runner = {
+    async run(input) {
+      calls.push(input.digest ?? '');
+      if (calls.length === 1) {
+        return { status: 'error', category: 'timeout', summary: '执行失败：timeout', findings: [], questions: [] };
+      }
+      return {
+        status: 'ok', needsWrite: false, summary: '用摘要得到的结论',
+        findings: [], questions: [], model: 'fake/model', durationMs: 10, runId: 'tr_d'
+      };
+    }
+  };
+  const result = await submitCompanionTask({
+    text: '这个项目现在进度怎么样？',
+    project,
+    triageRunner: runner,
+    createWriteRequest: async () => { throw new Error('must not create'); },
+    fallbackDigest: '项目根：D:\\demo\n### README.md'
+  });
+  assert.equal(result.mode, 'answer');
+  assert.equal(result.summary, '用摘要得到的结论');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0], '');
+  assert.match(calls[1], /README\.md/u);
+});
+
+test('已有摘要时不再重复回退', async () => {
+  const calls = [];
+  const runner = {
+    async run(input) {
+      calls.push(input.digest ?? '');
+      return { status: 'error', category: 'timeout', summary: '执行失败：timeout', findings: [], questions: [] };
+    }
+  };
+  const result = await submitCompanionTask({
+    text: '继续说',
+    project,
+    triageRunner: runner,
+    createWriteRequest: async () => { throw new Error('must not create'); },
+    digest: '摘要 A',
+    fallbackDigest: '摘要 A'
+  });
+  assert.equal(result.mode, 'triage-error');
+  assert.equal(calls.length, 1);
+});
+
 test('只回答模式不创建写请求', async () => {
   let created = 0;
   const result = await submitCompanionTask({
