@@ -88,9 +88,9 @@ const run = async () => {
     };
 
     const buttons = await panel.locator('.playbook-btn').count();
-    check('renders 12 playbook buttons', buttons === 12, String(buttons));
+    check('renders 16 playbook buttons', buttons === 16, String(buttons));
     const groups = await panel.locator('.playbook-group-label').allInnerTexts();
-    check('renders 4 groups', groups.length === 4, groups.join('/'));
+    check('renders 5 groups', groups.length === 5, groups.join('/'));
     const presetCount = await panel.locator('#distillPresets .distill-chip').count();
     check('renders one-click distill presets', presetCount === 4, String(presetCount));
     await panel.locator('#playbookSection').scrollIntoViewIfNeeded();
@@ -138,6 +138,11 @@ const run = async () => {
     check('one-click understand saves the project brief',
       briefText.includes('项目画像') && !briefText.includes('还没有项目画像'),
       briefText.slice(0, 100));
+
+    // 模型图谱依赖外部模型；由单测覆盖 schema/Mermaid，e2e 只保证依赖图与 UI 可用。
+    await panel.waitForSelector('#diagramView svg', { timeout: 30000 });
+    const dependencySvg = await panel.locator('#diagramView svg').count();
+    check('local dependency diagram is rendered in the project view', dependencySvg > 0, String(dependencySvg));
 
     // 结论沉淀为项目知识候选：不生成补丁、不自动验证。
     await panel.getByRole('button', { name: '沉淀为项目知识' }).click();

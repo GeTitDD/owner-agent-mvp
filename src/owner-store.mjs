@@ -52,6 +52,13 @@ const queueRow=row=>row?{
   position:row.position,source:row.source,linkedJobId:row.linked_job_id,
   createdAt:row.created_at,updatedAt:row.updated_at,completedAt:row.completed_at
 }:null;
+const diagramRow=row=>row?{
+  projectId:row.project_id,kind:row.kind,scope:row.scope,version:row.version,
+  title:row.title,summary:row.summary,mermaid:row.mermaid,data:parse(row.data_json),
+  unknowns:parse(row.unknowns_json),confidence:row.confidence,source:row.source,
+  runId:row.run_id,basedOnCommit:row.based_on_commit,
+  createdAt:row.created_at,updatedAt:row.updated_at
+}:null;
 const repairCycleIdFromJob=row=>{try{const payload=parse(row?.payload??'{}');return typeof payload.repairCycleId==='string'?payload.repairCycleId:null;}catch{return null;}};
 // Flat primitive-only payload: no nested structures, no unbounded strings, control chars rejected.
 const cleanPayload=v=>{check(v!==null&&typeof v==='object'&&!Array.isArray(v),'Payload must be a flat JSON object');
@@ -141,6 +148,41 @@ export class OwnerStore {
       );
       CREATE INDEX IF NOT EXISTS owner_project_queue_project
         ON owner_project_queue(project_id,status,position,created_at);
+      CREATE TABLE IF NOT EXISTS owner_project_diagrams(
+        project_id TEXT NOT NULL REFERENCES owner_projects(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'project',
+        version INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        mermaid TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        unknowns_json TEXT NOT NULL DEFAULT '[]',
+        confidence TEXT NOT NULL DEFAULT 'medium',
+        source TEXT NOT NULL DEFAULT '',
+        run_id TEXT NOT NULL DEFAULT '',
+        based_on_commit TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(project_id,kind,scope)
+      );
+      CREATE TABLE IF NOT EXISTS owner_project_diagram_revisions(
+        project_id TEXT NOT NULL REFERENCES owner_projects(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'project',
+        version INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        mermaid TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        unknowns_json TEXT NOT NULL DEFAULT '[]',
+        confidence TEXT NOT NULL DEFAULT 'medium',
+        source TEXT NOT NULL DEFAULT '',
+        run_id TEXT NOT NULL DEFAULT '',
+        based_on_commit TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(project_id,kind,scope,version)
+      );
       CREATE TABLE IF NOT EXISTS owner_jobs(
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL REFERENCES owner_projects(id),
@@ -462,6 +504,51 @@ export class OwnerStore {
     ) VALUES(?,?,?,?, 'todo', ?, ?, NULL, ?, ?, NULL)`)
       .run(id,projectId,txt(title,'title',300),txt(body,'body',4000,false),next,txt(source,'source',40),now,now);
     return this.getProjectQueueItem(id);
+  }
+  getProjectDiagram(projectId,kind,scope='project'){
+    const row=this.db.prepare('SELECT * FROM owner_project_diagrams WHERE project_id=? AND kind=? AND scope=?')
+      .get(projectId,String(kind),String(scope));
+    return diagramRow(row);
+  }
+  listProjectDiagrams(projectId){
+    return this.db.prepare('SELECT * FROM owner_project_diagrams WHERE project_id=? ORDER BY kind,scope')
+      .all(projectId).map(diagramRow);
+  }
+  saveProjectDiagram({
+    projectId,kind,scope='project',title='',summary='',mermaid='',data={},
+    unknowns=[],confidence='medium',source='',runId='',basedOnCommit='',now=stamp()
+  }={}){
+    check(!!this.getProject(projectId),'Unknown project',404);
+    check(['dependency','control','dataflow','state','sequence'].includes(kind),'Invalid diagram kind');
+    check(typeof mermaid==='string'&&mermaid.length<=200000,'Invalid mermaid');
+    const current=this.db.prepare('SELECT version FROM owner_project_diagrams WHERE project_id=? AND kind=? AND scope=?')
+      .get(projectId,kind,scope);
+    const version=(current?.version??0)+1;
+    const body=json(data);
+    const unknownBody=json(unknowns);
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      this.db.prepare(`INSERT INTO owner_project_diagrams(
+        project_id,kind,scope,version,title,summary,mermaid,data_json,unknowns_json,
+        confidence,source,run_id,based_on_commit,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(project_id,kind,scope) DO UPDATE SET version=excluded.version,title=excluded.title,
+        summary=excluded.summary,mermaid=excluded.mermaid,data_json=excluded.data_json,
+        unknowns_json=excluded.unknowns_json,confidence=excluded.confidence,source=excluded.source,
+        run_id=excluded.run_id,based_on_commit=excluded.based_on_commit,updated_at=excluded.updated_at`)
+        .run(projectId,kind,scope,version,txt(title,'title',200),txt(summary,'summary',1000,false),
+          mermaid,body,unknownBody,txt(confidence,'confidence',20),txt(source,'source',80,false),
+          txt(runId,'run id',90,false),txt(basedOnCommit,'commit',64,false),now,now);
+      this.db.prepare(`INSERT INTO owner_project_diagram_revisions(
+        project_id,kind,scope,version,title,summary,mermaid,data_json,unknowns_json,
+        confidence,source,run_id,based_on_commit,created_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(projectId,kind,scope,version,txt(title,'title',200),txt(summary,'summary',1000,false),
+          mermaid,body,unknownBody,txt(confidence,'confidence',20),txt(source,'source',80,false),
+          txt(runId,'run id',90,false),txt(basedOnCommit,'commit',64,false),now);
+      this.db.exec('COMMIT');
+    }catch(error){try{this.db.exec('ROLLBACK');}catch{/* ignore */}throw error;}
+    return this.getProjectDiagram(projectId,kind,scope);
   }
   updateProjectQueueItem(id,{title,body,status,linkedJobId}={}){
     const item=this.getProjectQueueItem(id);

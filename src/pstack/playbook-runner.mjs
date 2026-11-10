@@ -38,13 +38,34 @@ export function buildPlaybookPrompt({ playbook, project, task = '', python = fal
     playbook.budget ? `5. ${playbook.budget}` : '',
     '',
     '输出格式：',
-    '{"summary":"不超过120字、与本项目直接相关的结论",',
-    ' "findings":[{"title":"结论标题","detail":"为什么成立/影响什么","evidence":["src/example.js:12"]}],',
-    ' "risks":["风险或未知项"],',
-    ' "nextSteps":["建议的下一步，可执行"]}',
-    `最多 ${MAX_FINDINGS} 条 findings、${MAX_RISKS} 条 risks、${MAX_NEXT_STEPS} 条 nextSteps。`,
-    '除证据确实不足外，findings 至少给 3 条，每条都要能落到具体文件。',
-    '如果证据不足以支持任何结论，返回 summary 说明缺什么，findings 留空。'
+    playbook.diagramKind
+      ? '顶层必须是 {"summary": "...", "diagram": {...}}；diagram 必须是对象，不要返回 Mermaid 字符串。'
+      : '',
+    playbook.diagramKind === 'state'
+      ? '{"summary":"不超过120字","diagram":{"kind":"state","title":"状态机名称","summary":"一句话","states":[{"id":"idle","label":"空闲","kind":"start|state|end","evidence":["src/x.js:12"]}],"transitions":[{"from":"idle","to":"running","trigger":"提交任务","evidence":["src/x.js:20"]}],"unknowns":["不确定项"],"confidence":"high|medium|low"}}'
+      : playbook.diagramKind === 'sequence'
+        ? '{"summary":"不超过120字","diagram":{"kind":"sequence","title":"请求链路","summary":"一句话","participants":[{"id":"ui","label":"界面","kind":"client|service|store","evidence":["src/x.js"]}],"messages":[{"from":"ui","to":"api","text":"提交任务","kind":"sync|async|return","evidence":["src/x.js:30"]}],"unknowns":["不确定项"],"confidence":"high|medium|low"}}'
+        : playbook.diagramKind
+          ? '{"summary":"不超过120字","diagram":{"kind":"' + playbook.diagramKind + '","title":"图名称","summary":"一句话","nodes":[{"id":"n1","label":"节点","type":"process|decision|store|external","evidence":["src/x.js:12"]}],"edges":[{"from":"n1","to":"n2","label":"关系","evidence":["src/x.js:20"]}],"unknowns":["不确定项"],"confidence":"high|medium|low"}}'
+          : '{"summary":"不超过120字、与本项目直接相关的结论",',
+    playbook.diagramKind
+      ? '图表最多 16 个节点，所有边必须能从代码中找到证据；无法证明的关系列进 unknowns。'
+      : ' "findings":[{"title":"结论标题","detail":"为什么成立/影响什么","evidence":["src/example.js:12"]}],',
+    playbook.diagramKind
+      ? ''
+      : ' "risks":["风险或未知项"],',
+    playbook.diagramKind
+      ? ''
+      : ' "nextSteps":["建议的下一步，可执行"]}',
+    playbook.diagramKind
+      ? ''
+      : `最多 ${MAX_FINDINGS} 条 findings、${MAX_RISKS} 条 risks、${MAX_NEXT_STEPS} 条 nextSteps。`,
+    playbook.diagramKind
+      ? '地图中的每个节点/状态/参与者都必须能对应到实际文件；不要画未读过的模块。'
+      : '除证据确实不足外，findings 至少给 3 条，每条都要能落到具体文件。',
+    playbook.diagramKind
+      ? '如果证据不足，返回 summary 说明缺什么，diagram 可给最小可信子集。'
+      : '如果证据不足以支持任何结论，返回 summary 说明缺什么，findings 留空。'
   ].filter(Boolean).join('\n');
 }
 
@@ -65,20 +86,29 @@ const normalizeFinding = (item) => {
 /** 解析模型输出：优先 JSON，退化为 Markdown 小节，再退化为纯文本摘要。 */
 export function parsePlaybookOutput(text) {
   const raw = String(text ?? '').trim();
-  if (!raw) return { format: 'empty', summary: '', findings: [], risks: [], nextSteps: [] };
+  if (!raw) return { format: 'empty', summary: '', findings: [], risks: [], nextSteps: [], diagram: null };
   const withoutFence = raw.replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '').trim();
   const start = withoutFence.indexOf('{');
   const end = withoutFence.lastIndexOf('}');
   if (start !== -1 && end > start) {
     try {
       const parsed = JSON.parse(withoutFence.slice(start, end + 1));
+      const diagram = (() => {
+        let value = parsed.diagram ?? parsed.graph ?? parsed.chart ?? null;
+        if (typeof value === 'string') {
+          try { value = JSON.parse(value); } catch { value = null; }
+        }
+        if (!value && (parsed.nodes || parsed.states || parsed.participants)) value = parsed;
+        return value && typeof value === 'object' ? value : null;
+      })();
       return {
         format: 'json',
         summary: clean(parsed.summary ?? parsed.overview, 800),
         findings: asArray(parsed.findings).slice(0, MAX_FINDINGS).map(normalizeFinding),
         risks: asArray(parsed.risks).slice(0, MAX_RISKS).map((item) => clean(item, 300)).filter(Boolean),
         nextSteps: asArray(parsed.nextSteps ?? parsed.next_steps)
-          .slice(0, MAX_NEXT_STEPS).map((item) => clean(item, 300)).filter(Boolean)
+          .slice(0, MAX_NEXT_STEPS).map((item) => clean(item, 300)).filter(Boolean),
+        diagram: parsed.diagram && typeof parsed.diagram === 'object' ? parsed.diagram : null
       };
     } catch { /* 落回 Markdown 解析 */ }
   }
@@ -259,6 +289,7 @@ export class PlaybookRunner {
         findings,
         risks: parsed.risks,
         nextSteps: parsed.nextSteps,
+        diagram: parsed.diagram ?? null,
         model: session.model ?? (model || 'unknown'),
         startedAt,
         durationMs: Date.now() - began,

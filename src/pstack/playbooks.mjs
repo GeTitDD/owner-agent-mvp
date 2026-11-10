@@ -9,7 +9,8 @@ export const PLAYBOOK_GROUPS = [
   { id: 'analyze', label: '分析', hint: '先看懂项目再动手' },
   { id: 'verify', label: '验证', hint: '用证据代替自我声明' },
   { id: 'fix', label: '修复', hint: '只读诊断，改动需你批准' },
-  { id: 'distill', label: '沉淀', hint: '把项目知识写清楚' }
+  { id: 'distill', label: '沉淀', hint: '把项目知识写清楚' },
+  { id: 'diagram', label: '图谱', hint: '把项目结构画出来' }
 ];
 
 export const PLAYBOOKS = Object.freeze([
@@ -114,6 +115,46 @@ export const PLAYBOOKS = Object.freeze([
     title: '现有文档该怎么改',
     hint: '按 Diátaxis 与开发者文风检查文档。',
     focus: '检查 README/文档的结构与可读性，指出缺失的教程、操作、参考或解释类型文档。'
+  },
+  {
+    id: 'diagram-control',
+    label: '控制流',
+    group: 'diagram',
+    diagramKind: 'control',
+    title: '这个流程是怎么走的',
+    hint: '把入口到结果的判断、循环与异常画成控制流图。',
+    focus: '选择一个代表性入口，画出判断、循环、返回与异常分支；最多 16 个节点，所有关系必须引用文件证据。',
+    timeoutMs: 180000
+  },
+  {
+    id: 'diagram-dataflow',
+    label: '数据流',
+    group: 'diagram',
+    diagramKind: 'dataflow',
+    title: '数据从哪里来、到哪里去',
+    hint: '画输入、处理、存储与外部系统之间的数据流。',
+    focus: '画出输入源、处理步骤、数据存储和外部系统；最多 16 个节点，标注每条边流动的数据。',
+    timeoutMs: 180000
+  },
+  {
+    id: 'diagram-state',
+    label: '状态图',
+    group: 'diagram',
+    diagramKind: 'state',
+    title: '它会经历哪些状态',
+    hint: '画任务、会话、连接或订单的状态与迁移条件。',
+    focus: '找出核心状态机，列出状态、迁移触发条件和终态；最多 14 个状态，必须引用代码证据。',
+    timeoutMs: 180000
+  },
+  {
+    id: 'diagram-sequence',
+    label: '时序图',
+    group: 'diagram',
+    diagramKind: 'sequence',
+    title: '一次请求是怎么走完的',
+    hint: '画参与者之间的一次代表性调用链。',
+    focus: '选一条代表性请求，列出参与者、同步/异步消息与返回；最多 8 个参与者、20 条消息。',
+    timeoutMs: 180000
   }
 ]);
 
@@ -129,7 +170,7 @@ export function listPlaybooks() {
   return PLAYBOOK_GROUPS.map((group) => ({
     ...group,
     items: PLAYBOOKS.filter((item) => item.group === group.id)
-      .map(({ id, label, title, hint, focus }) => ({ id, label, title, hint, focus }))
+      .map(({ id, label, title, hint, focus, diagramKind }) => ({ id, label, title, hint, focus, diagramKind }))
   }));
 }
 

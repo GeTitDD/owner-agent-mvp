@@ -187,6 +187,14 @@ const run = async () => {
     await sleep(600);
     const queueAfterDelete = await panel.evaluate(() => document.querySelectorAll('#queueList .queue-item').length);
     check('queue item can be removed', queueAfterDelete === 1, String(queueAfterDelete));
+    const diagramTabs = await panel.locator('#diagramTabs .diagram-tab').count();
+    check('diagram tabs cover five graph types', diagramTabs === 5, String(diagramTabs));
+    await panel.waitForSelector('#diagramView svg', { timeout: 30000 });
+    const dependencySvg = await panel.locator('#diagramView svg').count();
+    check('dependency diagram is scanned and rendered locally', dependencySvg > 0, String(dependencySvg));
+    await panel.locator('#diagramSection').scrollIntoViewIfNeeded();
+    await sleep(300);
+    await panel.screenshot({ path: path.join(evidence, 'panel-diagram.png') });
     await panel.locator('#tidyKnowledge').click();
     await panel.waitForSelector('#modal:not([hidden])', { timeout: 10000 });
     const tidyText = await panel.locator('#modalBody').innerText();

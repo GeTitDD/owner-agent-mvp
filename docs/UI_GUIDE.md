@@ -209,6 +209,28 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 
 ![项目待办队列](assets/companion/project-queue.png)
 
+### 3.12 项目图谱（依赖 / 控制流 / 数据流 / 状态 / 时序）
+
+在「当前项目」层新增项目图谱，支持五类：
+
+| 类型 | 生成方式 |
+| --- | --- |
+| 依赖图 | 本地扫描 import/require/using，秒出，不调用模型 |
+| 控制流图 | pstack `diagram-control`，只读分析入口/分支/循环/异常 |
+| 数据流图 | pstack `diagram-dataflow`，输入/处理/存储/外部系统 |
+| 状态图 | pstack `diagram-state`，状态/迁移条件/终态 |
+| 时序图 | pstack `diagram-sequence`，参与者/同步异步消息/返回 |
+
+- 模型只输出 `nodes/edges/states/transitions/participants/messages`，Mermaid 由代码生成，避免语法错误与注入；
+- 每张图保存版本、来源、commit 基线、置信度与 unknowns；代码变化后提示过期；
+- 依赖图自动生成；其余类型按需生成，可取消；
+- 支持复制 Mermaid、导出 SVG、范围输入（`project` 或目录）；
+- 生成失败显示错误与重试，不会白屏。
+
+![项目依赖图](assets/companion/project-dependency.png)
+
+![控制流图](assets/companion/control-flow.png)
+
 ## 4. 组件清单
 
 | 组件 | 用途 |
@@ -246,13 +268,13 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | 验收 | 结果 |
 | --- | --- |
 | `npm run check` | 0 |
-| `npm test` | 299 tests / 296 pass / 3 skip / 0 fail |
+| `npm test` | 302 tests / 299 pass / 3 skip / 0 fail |
 | `npm run e2e:desktop:composer` | PASS（Composer、只读分析、无写入开关、pending） |
 | `npm run e2e:desktop:shell` | PASS（桌宠定位、面板、重启、模型切换、添加项目） |
 | `npm run e2e:desktop:multiproject` | PASS（多项目 pending / stage） |
 | `npm run e2e:desktop:knowledge` | PASS（知识摘要、验证、复用、今日视图） |
 | `npm run e2e:desktop:sandbox-config` | PASS（缺少快照文件 → 失败弹窗 → 补齐后重试） |
 | `npm run e2e:desktop:mascots` | PASS（spritesheet 播放、一键换肤、静态回退、无底盘、有效帧） |
-| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、项目画像、下一步建议、项目待办队列、知识摘要与整理、GitHub 关联/Issues/PR、PR 预览保护、搜索、折叠、点击切换） |
+| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、项目画像、下一步建议、项目待办队列、项目图谱依赖图、知识摘要与整理、GitHub 关联/Issues/PR、PR 预览保护、搜索、折叠、点击切换） |
 | `npm run e2e:desktop:playbooks` | PASS（运行中状态、4 个一键沉淀预设、分析、取消、手动/一键沉淀、去重、提案 HITL） |
 | Workbench UI 冒烟 | 详情 5 个标签、修订对比、使用记录、维护降级提示 |

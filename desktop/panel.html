@@ -51,6 +51,23 @@
 
         <section id="nextActionCard" class="next-action" hidden></section>
 
+        <section id="diagramSection" class="diagram-section">
+          <div class="section-title">
+            <h3>项目图谱</h3>
+            <span id="diagramBadge" class="count">5</span>
+          </div>
+          <div id="diagramTabs" class="diagram-tabs"></div>
+          <div class="diagram-toolbar">
+            <input id="diagramScope" class="diagram-scope" type="text" maxlength="200"
+              placeholder="范围：project 或 src/foo" />
+            <button id="diagramGenerate" class="primary small" type="button">生成/重新生成</button>
+            <button id="diagramCopy" class="ghost small" type="button">复制 Mermaid</button>
+            <button id="diagramExport" class="ghost small" type="button">导出 SVG</button>
+          </div>
+          <div id="diagramView" class="diagram-view"></div>
+          <div id="diagramMeta" class="diagram-meta"></div>
+        </section>
+
         <section id="queueSection" class="queue-section">
           <div class="section-title">
             <h3>待办事项</h3>
@@ -281,6 +298,7 @@
 
   <div id="toast" class="toast" hidden></div>
   <script src="./composer-list.js"></script>
+  <script src="../node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="./panel.js"></script>
 </body>
 </html>

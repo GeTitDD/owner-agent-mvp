@@ -54,9 +54,9 @@ const fakeFactory = (output, hooks = {}) => ({
   }
 });
 
-test('Playbook 注册表：12 个、4 组、id 唯一且都能被 getPlaybook 找到', () => {
-  assert.equal(PLAYBOOKS.length, 12);
-  assert.equal(PLAYBOOK_GROUPS.length, 4);
+test('Playbook 注册表：16 个、5 组、id 唯一且都能被 getPlaybook 找到', () => {
+  assert.equal(PLAYBOOKS.length, 16);
+  assert.equal(PLAYBOOK_GROUPS.length, 5);
   const ids = PLAYBOOKS.map((item) => item.id);
   assert.equal(new Set(ids).size, ids.length);
   const listed = listPlaybooks().flatMap((group) => group.items.map((item) => item.id));

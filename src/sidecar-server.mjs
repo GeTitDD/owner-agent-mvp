@@ -426,6 +426,44 @@ export function createSidecarHandler({
       return;
     }
 
+    if (rest.length === 3 && head === 'projects' && rest[2] === 'diagrams') {
+      const projectId = rest[1];
+      requireMethod(method, 'GET');
+      send(res, 200, { items: store.listProjectDiagrams(projectId) });
+      return;
+    }
+
+    if (rest.length === 4 && head === 'projects' && rest[2] === 'diagrams') {
+      const projectId = rest[1];
+      const kind = rest[3];
+      if (method === 'GET') {
+        send(res, 200, store.getProjectDiagram(
+          projectId,
+          kind,
+          url.searchParams.get('scope') ?? 'project'
+        ) ?? null);
+        return;
+      }
+      requireMethod(method, 'PUT');
+      const body = await readJson(req);
+      const saved = store.saveProjectDiagram({
+        projectId,
+        kind,
+        scope: body.scope ?? 'project',
+        title: body.title ?? '',
+        summary: body.summary ?? '',
+        mermaid: body.mermaid ?? '',
+        data: body.data ?? {},
+        unknowns: body.unknowns ?? [],
+        confidence: body.confidence ?? 'medium',
+        source: body.source ?? '',
+        runId: body.runId ?? '',
+        basedOnCommit: body.basedOnCommit ?? ''
+      });
+      send(res, 200, saved);
+      return;
+    }
+
     if (rest.length === 1 && head === 'queue') {
       const projectId = url.searchParams.get('projectId') ?? '';
       if (method === 'GET') {

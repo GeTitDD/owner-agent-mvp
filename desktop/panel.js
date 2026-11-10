@@ -385,6 +385,183 @@
     );
   };
 
+  const DIAGRAM_LABELS = {
+    dependency: '依赖图', control: '控制流图', dataflow: '数据流图',
+    state: '状态图', sequence: '时序图'
+  };
+  const DIAGRAM_KINDS = ['dependency', 'control', 'dataflow', 'state', 'sequence'];
+  let activeDiagramKind = 'dependency';
+  let diagramRenderToken = 0;
+  let lastDiagramKey = '';
+  const autoDependencyProjects = new Set();
+  if (window.mermaid) {
+    window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
+  }
+
+  const currentDiagram = () => (view?.diagrams ?? []).find((item) => item.kind === activeDiagramKind) ?? null;
+
+  const renderDiagramTabs = () => {
+    const tabs = $('diagramTabs');
+    tabs.replaceChildren();
+    for (const kind of DIAGRAM_KINDS) {
+      const button = el('button', `diagram-tab${kind === activeDiagramKind ? ' active' : ''}`, DIAGRAM_LABELS[kind]);
+      button.type = 'button';
+      button.dataset.kind = kind;
+      button.onclick = () => {
+        activeDiagramKind = kind;
+        const diagram = currentDiagram();
+        $('diagramScope').value = diagram?.scope ?? 'project';
+        renderDiagrams();
+      };
+      tabs.append(button);
+    }
+  };
+
+  const renderDiagramMeta = (diagram) => {
+    const meta = $('diagramMeta');
+    meta.replaceChildren();
+    if (!diagram) return;
+    const parts = [
+      `v${diagram.version}`,
+      diagram.confidence === 'high' ? '高置信' : diagram.confidence === 'low' ? '低置信' : '中置信',
+      diagram.source || '未知来源',
+      `更新于 ${formatRelative(diagram.generatedAt ?? diagram.updatedAt) || '—'}`
+    ];
+    if (diagram.stale) parts.push('代码已更新，建议重新生成');
+    if (diagram.unknowns?.length) parts.push(`未知 ${diagram.unknowns.length} 项`);
+    meta.textContent = parts.join(' · ');
+    meta.title = (diagram.unknowns ?? []).join('\n');
+  };
+
+  const renderDiagramSvg = async (diagram) => {
+    const box = $('diagramView');
+    const token = ++diagramRenderToken;
+    const key = diagram
+      ? `${activeDiagramKind}:${diagram.version}:${diagram.mermaid.length}`
+      : `none:${activeDiagramKind}`;
+    if (key === lastDiagramKey && (box.querySelector('svg') || box.querySelector('.diagram-empty'))) return;
+    lastDiagramKey = key;
+    box.replaceChildren();
+    if (!diagram) {
+      const empty = el('div', 'diagram-empty');
+      empty.append(el('div', undefined, `还没有${DIAGRAM_LABELS[activeDiagramKind]}`));
+      const generate = el('button', 'primary small', activeDiagramKind === 'dependency' ? '扫描依赖' : `生成${DIAGRAM_LABELS[activeDiagramKind]}`);
+      generate.type = 'button';
+      generate.onclick = () => { void generateDiagram(activeDiagramKind); };
+      empty.append(generate);
+      box.append(empty);
+      return;
+    }
+    box.append(el('div', 'diagram-loading', '正在渲染…'));
+    if (!window.mermaid) {
+      box.replaceChildren(el('pre', 'diff', diagram.mermaid));
+      return;
+    }
+    try {
+      const { svg } = await window.mermaid.render(`diagram-svg-${Date.now()}`, diagram.mermaid);
+      if (token !== diagramRenderToken) return;
+      box.innerHTML = svg;
+    } catch (error) {
+      if (token !== diagramRenderToken) return;
+      box.replaceChildren(
+        el('div', 'diagram-empty', `渲染失败：${String(error?.message ?? error)}`),
+        el('pre', 'diff', diagram.mermaid)
+      );
+    }
+  };
+
+  const renderDiagrams = () => {
+    const section = $('diagramSection');
+    if (!section) return;
+    const projectId = view?.config?.projectId ?? '';
+    if (!projectId) { section.hidden = true; return; }
+    section.hidden = false;
+    const generated = (view?.diagrams ?? []).length;
+    $('diagramBadge').textContent = `${generated}/5`;
+    $('diagramBadge').title = `已生成 ${generated} / 5 类图谱`;
+    renderDiagramTabs();
+    const diagram = currentDiagram();
+    const scope = $('diagramScope');
+    if (document.activeElement !== scope && !scope.value) scope.value = diagram?.scope ?? 'project';
+    $('diagramGenerate').disabled = false;
+    $('diagramCopy').disabled = !diagram;
+    $('diagramExport').disabled = !diagram;
+    renderDiagramMeta(diagram);
+    void renderDiagramSvg(diagram);
+    if (activeDiagramKind === 'dependency' && !diagram && !autoDependencyProjects.has(projectId)) {
+      autoDependencyProjects.add(projectId);
+      void generateDiagram('dependency', { silent: true });
+    }
+  };
+
+  const copyText = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.append(area);
+      area.select();
+      const ok = document.execCommand('copy');
+      area.remove();
+      return ok;
+    }
+  };
+
+  const generateDiagram = async (kind, { silent = false } = {}) => {
+    const projectId = view?.config?.projectId ?? '';
+    if (!projectId) { toast('先选择一个项目。'); return; }
+    const scope = String($('diagramScope').value ?? '').trim() || 'project';
+    const box = $('diagramView');
+    box.replaceChildren(el('div', 'diagram-loading',
+      `正在生成${DIAGRAM_LABELS[kind]}…${kind === 'dependency' ? '' : '（只读分析，可在 Playbook 区取消）'}`));
+    $('diagramGenerate').disabled = true;
+    try {
+      const result = kind === 'dependency'
+        ? await window.companion.diagrams.dependency({ projectId })
+        : await window.companion.diagrams.generate({ projectId, kind, scope });
+      await refresh();
+      if (!silent) toast(`${DIAGRAM_LABELS[kind]}已生成`, 4200);
+      return result;
+    } catch (error) {
+      const message = String(error?.message ?? error);
+      box.replaceChildren();
+      const empty = el('div', 'diagram-empty');
+      empty.append(el('div', undefined, `生成失败：${message}`));
+      const retry = el('button', 'primary small', '重试');
+      retry.type = 'button';
+      retry.onclick = () => { void generateDiagram(kind); };
+      empty.append(retry);
+      box.append(empty);
+      toast(message, 7000);
+      return null;
+    } finally {
+      $('diagramGenerate').disabled = false;
+    }
+  };
+
+  $('diagramGenerate').onclick = () => { void generateDiagram(activeDiagramKind); };
+  $('diagramCopy').onclick = async () => {
+    const diagram = currentDiagram();
+    if (!diagram) return;
+    const ok = await copyText(diagram.mermaid);
+    toast(ok ? 'Mermaid 已复制' : '复制失败，请手动选择', 3000);
+  };
+  $('diagramExport').onclick = () => {
+    const svg = document.querySelector('#diagramView svg');
+    if (!svg) { toast('还没有可导出的图。'); return; }
+    const blob = new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `owner-diagram-${activeDiagramKind}.svg`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  };
+
   const knowledgeCache = new Map();
   const summaryLoading = new Set();
   const githubActivityCache = new Map();
@@ -1888,6 +2065,7 @@
       renderProjectGithub();
       renderNextAction();
       renderQueue();
+      renderDiagrams();
       renderPending();
       renderRunning();
       renderResult();

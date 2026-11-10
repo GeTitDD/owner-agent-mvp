@@ -81,6 +81,7 @@ let githubPrModule = null;
 let projectBriefModule = null;
 let nextActionModule = null;
 let knowledgeTidyModule = null;
+let diagramModule = null;
 const githubCache = new Map();
 const githubActivityCache = new Map();
 const briefCache = new Map();
@@ -876,6 +877,16 @@ const knowledgeDetail = ({ id } = {}) => {
   const loadProjectBrief = async () => (projectBriefModule ??= await importEsm('../src/project-brief.mjs'));
   const loadNextAction = async () => (nextActionModule ??= await importEsm('../src/next-action.mjs'));
   const loadKnowledgeTidy = async () => (knowledgeTidyModule ??= await importEsm('../src/knowledge/tidy.mjs'));
+  const loadDiagrams = async () => (diagramModule ??= await importEsm('../src/project-diagrams.mjs'));
+  const projectHeadCache = new Map();
+  const headForProject = async (root) => {
+    if (!root) return '';
+    const cached = projectHeadCache.get(root);
+    if (cached && Date.now() - cached.at < 20000) return cached.value;
+    const value = await gitAt(root, ['rev-parse', 'HEAD']).catch(() => '');
+    projectHeadCache.set(root, { at: Date.now(), value });
+    return value;
+  };
 
   /** 读取项目画像所需的仓库事实：HEAD、脏状态、npm scripts、测试命令、证据文件。 */
   const repoFactsFor = async (project, { includeDirty = false } = {}) => {
@@ -1395,6 +1406,13 @@ const buildView = async () => {
   const queueView = (await api(
     `/owner/v1/queue?projectId=${encodeURIComponent(activeProjectId)}`
   )).items ?? [];
+  const projectHead = await headForProject(activeProject?.root ?? '');
+  const diagramView = ((await api(
+    `/owner/v1/projects/${encodeURIComponent(activeProjectId)}/diagrams`
+  ).catch(() => ({ items: [] }))).items ?? []).map((diagram) => ({
+    ...diagram,
+    stale: Boolean(diagram.basedOnCommit && projectHead && diagram.basedOnCommit !== projectHead)
+  }));
   const briefView = await projectBriefFor(activeProject);
   const resultView = finalCycle
     ? {
@@ -1492,6 +1510,7 @@ const buildView = async () => {
     brief: briefView,
     nextAction,
     queue: queueView,
+    diagrams: diagramView,
     knowledge: knowledgeView,
     result: resultView
   };
@@ -2184,6 +2203,86 @@ const registerIpc = () => {
       body: { status, linkedJobId: result.jobId ?? '' }
     });
     return { ...result, item: updated };
+  });
+
+  ipcMain.handle('companion:diagram-dependency', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const project = await projectForPlaybook(String(input?.projectId ?? ''));
+    const mod = await loadDiagrams();
+    const diagram = mod.scanDependencyGraph(project.root);
+    const head = await headForProject(project.root);
+    const saved = await api(`/owner/v1/projects/${encodeURIComponent(project.id)}/diagrams/dependency`, {
+      method: 'PUT',
+      body: {
+        scope: 'project',
+        title: diagram.title,
+        summary: diagram.data.summary,
+        mermaid: diagram.mermaid,
+        data: diagram.data,
+        unknowns: diagram.data.unknowns,
+        confidence: diagram.data.confidence,
+        source: 'local-scan',
+        runId: '',
+        basedOnCommit: head
+      }
+    });
+    projectHeadCache.delete(project.root);
+    return { ...saved, stale: false };
+  });
+
+  ipcMain.handle('companion:diagram-generate', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const kind = String(input?.kind ?? '');
+    const scope = String(input?.scope ?? '').trim() || 'project';
+    if (!['control', 'dataflow', 'state', 'sequence'].includes(kind)) {
+      throw new Error('未知的图谱类型。');
+    }
+    const project = await projectForPlaybook(String(input?.projectId ?? ''));
+    const registry = await loadPlaybookRegistry();
+    const playbook = registry.listPlaybooks().flatMap((group) => group.items)
+      .find((item) => item.diagramKind === kind);
+    if (!playbook) throw new Error('没有对应的图谱 playbook。');
+    let result = await runPlaybookInChild({
+      playbookId: playbook.id,
+      playbook: registry.getPlaybook(playbook.id),
+      project,
+      task: `scope: ${scope}`
+    });
+    // 模型偶尔只返回 summary；再试一次，仍失败则给出明确错误。
+    if (result.status === 'ok' && !result.diagram) {
+      result = await runPlaybookInChild({
+        playbookId: playbook.id,
+        playbook: registry.getPlaybook(playbook.id),
+        project,
+        task: `scope: ${scope}\n请务必返回 diagram 对象（包含 kind 与 nodes/states/participants）。`
+      });
+    }
+    if (result.status !== 'ok') throw new Error(result.summary || '图谱生成失败。');
+    if (!result.diagram) {
+      const sample = String(result.text ?? result.summary ?? '').slice(0, 200);
+      throw new Error(`模型没有返回 diagram 数据：${sample}`);
+    }
+    const mod = await loadDiagrams();
+    const data = mod.normalizeDiagram(kind, result.diagram);
+    const mermaid = mod.toMermaid(kind, data);
+    const head = await headForProject(project.root);
+    const saved = await api(`/owner/v1/projects/${encodeURIComponent(project.id)}/diagrams/${kind}`, {
+      method: 'PUT',
+      body: {
+        scope,
+        title: String(result.diagram.title ?? mod.DIAGRAM_LABELS[kind]).slice(0, 200),
+        summary: data.summary,
+        mermaid,
+        data,
+        unknowns: data.unknowns,
+        confidence: data.confidence,
+        source: `pstack:${playbook.id}`,
+        runId: result.runId ?? '',
+        basedOnCommit: head
+      }
+    });
+    projectHeadCache.delete(project.root);
+    return { ...saved, stale: false };
   });
 
   ipcMain.handle('companion:decide', async (event, input) => {

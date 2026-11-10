@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     move: (input) => invoke('companion:queue-move', input),
     dispatch: (input) => invoke('companion:queue-dispatch', input)
   }),
+  diagrams: Object.freeze({
+    dependency: (input) => invoke('companion:diagram-dependency', input),
+    generate: (input) => invoke('companion:diagram-generate', input)
+  }),
   github: Object.freeze({
     activity: (input) => invoke('companion:github-activity', input),
     prPreview: (input) => invoke('companion:github-pr-preview', input),
