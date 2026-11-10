@@ -18,6 +18,7 @@ export function nextActionFor({
   playbookRunning = false,
   brief = null,
   briefStale = false,
+  queueTodo = 0,
   knowledge = {},
   result = null,
   state = 'idle',
@@ -38,6 +39,14 @@ export function nextActionFor({
     };
   }
   const tidyCount = (knowledge.pendingHarvest ?? 0) + (knowledge.candidates ?? 0);
+  if (queueTodo > 0) {
+    return {
+      command: 'queue',
+      label: `有 ${queueTodo} 条待办等你交办`,
+      detail: '从项目待办里选一条交给 Agent，或先补充队列。',
+      tone: 'active'
+    };
+  }
   if (tidyCount > 0) {
     return {
       command: 'tidy',

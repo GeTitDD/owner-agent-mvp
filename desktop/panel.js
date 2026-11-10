@@ -79,6 +79,7 @@
     $('setup').hidden = hasProjects;
     $('composeSection').hidden = !hasProjects;
     $('submitTask').disabled = !hasProjects;
+    $('queueSection').hidden = !hasProjects;
     if (!hasProjects) renderServiceGrid($('setupServices'), view?.services);
     $('playbookSection').hidden = !hasProjects;
     const testConfig = view?.testConfig;
@@ -265,6 +266,123 @@
     if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)} 小时前`;
     if (diff < 7 * 24 * 60 * 60 * 1000) return `${Math.floor(diff / 86400000)} 天前`;
     return new Date(at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+  };
+
+  const QUEUE_STATUS = {
+    todo: '待办', doing: '进行中', blocked: '等你批准', done: '完成', failed: '失败'
+  };
+
+  const queueAction = async (action, success) => {
+    try {
+      const result = await action();
+      await refresh();
+      // refresh 可能被轮询占用而提前返回；队列单独重载一次，确保操作立刻可见。
+      try {
+        const snapshot = await window.companion.snapshot();
+        view = { ...view, queue: snapshot.queue };
+        renderQueue();
+      } catch { /* 下一次轮询会补上 */ }
+      if (success) toast(success(result), 4200);
+      return result;
+    } catch (error) {
+      toast(String(error?.message ?? error), 6000);
+      return null;
+    }
+  };
+
+  const renderQueue = () => {
+    const list = $('queueList');
+    if (!list) return;
+    const items = view?.queue ?? [];
+    const active = items.filter((item) => ['todo', 'doing', 'blocked'].includes(item.status)).length;
+    $('queueBadge').textContent = String(active);
+    $('queueBadge').title = `共 ${items.length} 条`;
+    list.replaceChildren();
+    if (!items.length) {
+      list.append(el('div', 'queue-empty', '还没有待办。加一条消息或任务，之后可以逐条交办。'));
+      return;
+    }
+    for (const item of items) {
+      const row = el('div', 'queue-item');
+      row.dataset.id = item.id;
+      row.dataset.status = item.status;
+      const dot = el('span', 'queue-dot');
+      const main = el('div', 'queue-main');
+      const title = el('div', 'queue-title', item.title);
+      const meta = el('div', 'queue-meta');
+      meta.append(el('span', `queue-status ${item.status}`, QUEUE_STATUS[item.status] ?? item.status));
+      if (item.linkedJobId) meta.append(el('span', 'queue-job', `Job ${String(item.linkedJobId).slice(0, 8)}`));
+      if (item.createdAt) meta.append(el('span', 'queue-time', formatRelative(item.createdAt) || ''));
+      main.append(title, meta);
+      const actions = el('div', 'queue-actions');
+      const move = (direction) => queueAction(
+        () => window.companion.queue.move({ id: item.id, direction }),
+        null
+      );
+      const up = el('button', 'queue-action', '↑');
+      up.type = 'button'; up.title = '上移'; up.disabled = item.position === 1;
+      up.onclick = () => { void move('up'); };
+      const down = el('button', 'queue-action', '↓');
+      down.type = 'button'; down.title = '下移';
+      down.onclick = () => { void move('down'); };
+      actions.append(up, down);
+      if (['todo', 'failed'].includes(item.status)) {
+        const dispatch = el('button', 'queue-action primary', '交办');
+        dispatch.type = 'button';
+        dispatch.onclick = async () => {
+          dispatch.disabled = true;
+          dispatch.textContent = '…';
+          const result = await queueAction(
+            () => window.companion.queue.dispatch({ id: item.id }),
+            (value) => value?.mode === 'write-request'
+              ? '已创建写请求，等你批准'
+              : value?.mode === 'answer'
+                ? '已给出只读结论'
+                : value?.mode === 'triage-error'
+                  ? `交办失败：${value.summary ?? '请查看详情'}`
+                  : '已交办'
+          );
+          if (!result) { dispatch.disabled = false; dispatch.textContent = '交办'; }
+        };
+        actions.append(dispatch);
+      }
+      if (item.status !== 'done') {
+        const done = el('button', 'queue-action', '完成');
+        done.type = 'button';
+        done.onclick = () => {
+          void queueAction(() => window.companion.queue.update({ id: item.id, status: 'done' }), () => '已标记完成');
+        };
+        actions.append(done);
+      } else {
+        const reopen = el('button', 'queue-action', '重开');
+        reopen.type = 'button';
+        reopen.onclick = () => {
+          void queueAction(() => window.companion.queue.update({ id: item.id, status: 'todo' }), () => '已重新加入待办');
+        };
+        actions.append(reopen);
+      }
+      const remove = el('button', 'queue-action danger', '×');
+      remove.type = 'button'; remove.title = '删除';
+      remove.onclick = () => {
+        void queueAction(() => window.companion.queue.remove({ id: item.id }), () => '已删除待办');
+      };
+      actions.append(remove);
+      row.append(dot, main, actions);
+      list.append(row);
+    }
+  };
+
+  const addQueueItem = async () => {
+    const input = $('queueInput');
+    const title = String(input.value ?? '').trim();
+    if (!title) return;
+    const projectId = view?.config?.projectId ?? '';
+    if (!projectId) { toast('先选择一个项目。'); return; }
+    input.value = '';
+    await queueAction(
+      () => window.companion.queue.add({ projectId, title }),
+      () => '已加入待办'
+    );
   };
 
   const knowledgeCache = new Map();
@@ -532,7 +650,7 @@
     box.append(text);
     const labels = {
       understand: '开始理解', tidy: '去整理', decide: '去处理',
-      deliver: '创建 PR', inspect: '查看结果', compose: '去交办', wait: '进行中'
+      queue: '去交办', deliver: '创建 PR', inspect: '查看结果', compose: '去交办', wait: '进行中'
     };
     const button = el('button', 'primary small', labels[action.command] ?? '去做');
     button.type = 'button';
@@ -540,7 +658,10 @@
     button.onclick = () => {
       if (action.command === 'understand') void generateBrief(false);
       else if (action.command === 'tidy') void openKnowledgeTidy();
-      else if (action.command === 'decide') {
+      else if (action.command === 'queue') {
+        $('queueSection')?.scrollIntoView({ block: 'start' });
+        $('queueInput')?.focus();
+      } else if (action.command === 'decide') {
         const section = $('needsSection');
         if (section && !section.hidden) section.scrollIntoView({ block: 'start' });
       } else if (action.command === 'deliver') {
@@ -1766,6 +1887,7 @@
       renderProjectSummary();
       renderProjectGithub();
       renderNextAction();
+      renderQueue();
       renderPending();
       renderRunning();
       renderResult();
@@ -2221,6 +2343,12 @@
 
   $('harvestNow').onclick = () => { void harvestNow(); };
   $('tidyKnowledge').onclick = () => { void openKnowledgeTidy(); };
+  $('queueAdd').onclick = () => { void addQueueItem(); };
+  $('queueInput').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    void addQueueItem();
+  });
   $('reflectDistill').onclick = () => { reflectAndDistill('reflect'); };
 
   $('playbookCancel').onclick = async () => {

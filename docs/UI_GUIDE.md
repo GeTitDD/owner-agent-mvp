@@ -38,21 +38,20 @@
 
 ```text
 [状态 pill] 0 运行 · 1 待你
-项目（顶部，按来源主机分组 + 搜索）
-  组头：本机 · HOST / 远程 · HOST（可折叠）
-  行：项目名 + 最近进展 + 相对时间 + 待你/进行中徽章
+
+当前项目（上半部分：只围绕一个项目）
+  项目（按来源主机分组 + 搜索）
   项目画像：一句话 / 怎么跑 / 关键模块 / 怎么验收 / 风险 / 依据
-  知识摘要：经验/知识/已验证/待提炼计数 + 已验证优先条目 + 标签 + 提炼
-下一步建议：只显示当前最值得做的一件事
-需要你决定（仅有待办时出现）
-  卡片：标题 + 风险徽章 + 为什么 + 批准后会发生什么 + 详情/批准/拒绝
-最近任务 / 运行中
-  步骤账本：任务 → 补丁 → 测试 → 修复
-  每步：状态 glyph + 名称 + 详情 + 状态
-Composer
-  项目 / 沙箱 profile / 允许范围 / 模型 / 只读分诊提示
-知识（次级）
-会话 / Playbook / 最近结果
+  下一步建议：只显示当前最值得做的一件事
+  待办事项（项目消息队列）：待办 / 进行中 / 等你批准 / 完成 / 失败
+  知识：摘要 + 整理 + 复盘沉淀 + 完整知识库
+  项目 Playbook：预设 + 12 个只读分析
+
+通用管理（下半部分：跨项目）
+  需要你决定（仅有待办时出现）
+  运行中 / 最近任务 / 最近结果
+  只读分析 / 会话
+  Composer（全局）
 ```
 
 ![项目按来源主机分组](assets/companion/panel-projects.png)
@@ -187,6 +186,29 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 - 渲染进程 3 秒无响应会自动 reload；未捕获异常写入 `%APPDATA%\owner-agent-mvp\companion-errors.log`。
 - 设置页动画皮肤使用 `thumb.png` 首帧缩略图，避免一次解码 100 张大图。
 
+### 3.11 双层工作区与项目消息队列
+
+默认工作区按上下两层组织：
+
+- **当前项目（上）**：项目选择、项目画像、下一步建议、待办队列、知识、Playbook。
+- **通用管理（下）**：跨项目的「需要你决定」、运行中、最近结果、会话。
+
+![双层工作区](assets/companion/two-zones.png)
+
+**待办事项**是项目级消息/任务队列：
+
+| 字段/动作 | 说明 |
+| --- | --- |
+| 标题 | 一句话描述要做什么 |
+| 状态 | `待办 / 进行中 / 等你批准 / 完成 / 失败` |
+| 顺序 | ↑ / ↓ 调整位置 |
+| 交办 | 交给当前项目的只读分诊；需要写入时生成 HITL 写请求，队列变为「等你批准」 |
+| 完成 / 重开 | 手动结束或重新加入队列 |
+| Job | 已交办时显示关联 Job 短 ID |
+| 删除 | 从队列移除，不影响已创建的 Job |
+
+![项目待办队列](assets/companion/project-queue.png)
+
 ## 4. 组件清单
 
 | 组件 | 用途 |
@@ -224,13 +246,13 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | 验收 | 结果 |
 | --- | --- |
 | `npm run check` | 0 |
-| `npm test` | 298 tests / 295 pass / 3 skip / 0 fail |
+| `npm test` | 299 tests / 296 pass / 3 skip / 0 fail |
 | `npm run e2e:desktop:composer` | PASS（Composer、只读分析、无写入开关、pending） |
 | `npm run e2e:desktop:shell` | PASS（桌宠定位、面板、重启、模型切换、添加项目） |
 | `npm run e2e:desktop:multiproject` | PASS（多项目 pending / stage） |
 | `npm run e2e:desktop:knowledge` | PASS（知识摘要、验证、复用、今日视图） |
 | `npm run e2e:desktop:sandbox-config` | PASS（缺少快照文件 → 失败弹窗 → 补齐后重试） |
 | `npm run e2e:desktop:mascots` | PASS（spritesheet 播放、一键换肤、静态回退、无底盘、有效帧） |
-| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、项目画像、下一步建议、知识摘要与整理、GitHub 关联/Issues/PR、PR 预览保护、搜索、折叠、点击切换） |
+| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、项目画像、下一步建议、项目待办队列、知识摘要与整理、GitHub 关联/Issues/PR、PR 预览保护、搜索、折叠、点击切换） |
 | `npm run e2e:desktop:playbooks` | PASS（运行中状态、4 个一键沉淀预设、分析、取消、手动/一键沉淀、去重、提案 HITL） |
 | Workbench UI 冒烟 | 详情 5 个标签、修订对比、使用记录、维护降级提示 |

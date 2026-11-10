@@ -1392,6 +1392,9 @@ const buildView = async () => {
     activity.unshift({ kind: 'status', text: `pstack：${activePlaybook.title} · 分析中` });
   }
   const knowledgeView = await knowledgeSnapshot(activeProjectId);
+  const queueView = (await api(
+    `/owner/v1/queue?projectId=${encodeURIComponent(activeProjectId)}`
+  )).items ?? [];
   const briefView = await projectBriefFor(activeProject);
   const resultView = finalCycle
     ? {
@@ -1409,6 +1412,7 @@ const buildView = async () => {
     playbookRunning: Boolean(activePlaybook),
     brief: briefView,
     briefStale: briefView?.stale === true,
+    queueTodo: queueView.filter((item) => item.status === 'todo').length,
     knowledge: knowledgeView?.counts ?? {},
     result: resultView,
     state,
@@ -1487,6 +1491,7 @@ const buildView = async () => {
     mascot: await mascotView(),
     brief: briefView,
     nextAction,
+    queue: queueView,
     knowledge: knowledgeView,
     result: resultView
   };
@@ -2106,12 +2111,79 @@ const registerIpc = () => {
   });
 
   // 兼容旧渲染进程：同样走“只读分析 → HITL 写请求”，不再接受 mode 开关。
+  // 兼容旧入口：同样走只读分诊，只有需要写入时才创建 HITL 写请求。
   ipcMain.handle('companion:create-job', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return submitCompanionTask({
       text: String(input?.text ?? ''),
       projectId: String(input?.projectId ?? '')
     });
+  });
+
+  ipcMain.handle('companion:queue-add', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const project = await resolveProject(String(input?.projectId ?? ''));
+    return api('/owner/v1/queue', {
+      method: 'POST',
+      body: {
+        projectId: project.id,
+        title: String(input?.title ?? '').trim(),
+        body: String(input?.body ?? ''),
+        source: 'owner'
+      }
+    });
+  });
+
+  ipcMain.handle('companion:queue-update', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const id = String(input?.id ?? '');
+    if (!id) throw new Error('Missing queue id');
+    return api(`/owner/v1/queue/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: {
+        title: input?.title,
+        body: input?.body,
+        status: input?.status,
+        linkedJobId: input?.linkedJobId
+      }
+    });
+  });
+
+  ipcMain.handle('companion:queue-remove', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const id = String(input?.id ?? '');
+    if (!id) throw new Error('Missing queue id');
+    return api(`/owner/v1/queue/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  });
+
+  ipcMain.handle('companion:queue-move', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const id = String(input?.id ?? '');
+    const direction = String(input?.direction ?? '');
+    if (!id) throw new Error('Missing queue id');
+    return api(`/owner/v1/queue/${encodeURIComponent(id)}/move`, {
+      method: 'POST',
+      body: { direction }
+    });
+  });
+
+  // 把一条待办交给当前项目的只读分诊/写入流程；结果写回队列状态。
+  ipcMain.handle('companion:queue-dispatch', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const id = String(input?.id ?? '');
+    if (!id) throw new Error('Missing queue id');
+    const item = await api(`/owner/v1/queue/${encodeURIComponent(id)}`);
+    if (!item) throw new Error('待办不存在。');
+    const text = [item.title, item.body].filter(Boolean).join('\n\n');
+    const result = await submitCompanionTask({ text, projectId: item.projectId });
+    const status = result.mode === 'write-request' ? 'blocked'
+      : result.mode === 'answer' ? 'done'
+        : result.mode === 'triage-error' ? 'failed' : 'doing';
+    const updated = await api(`/owner/v1/queue/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: { status, linkedJobId: result.jobId ?? '' }
+    });
+    return { ...result, item: updated };
   });
 
   ipcMain.handle('companion:decide', async (event, input) => {

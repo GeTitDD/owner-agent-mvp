@@ -19,6 +19,12 @@ test('没有画像或画像过期时先理解项目', () => {
   assert.match(nextActionFor({ brief: null }).label, /理解/u);
 });
 
+test('有项目待办时优先提示交办', () => {
+  const action = nextActionFor({ brief, queueTodo: 2, knowledge: { pendingHarvest: 5 } });
+  assert.equal(action.command, 'queue');
+  assert.match(action.label, /2/u);
+});
+
 test('有待提炼或候选时建议整理知识', () => {
   const action = nextActionFor({ brief, knowledge: { pendingHarvest: 3, candidates: 1 } });
   assert.equal(action.command, 'tidy');

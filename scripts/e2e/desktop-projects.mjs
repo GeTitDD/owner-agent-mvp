@@ -128,6 +128,9 @@ const run = async () => {
     await panel.evaluate(() => window.companion.showPanel());
     await panel.waitForSelector('#projectList .project-row', { timeout: 20000 });
     await sleep(1200);
+    await panel.evaluate(() => { document.querySelector('.scroll').scrollTop = 0; });
+    await sleep(300);
+    await panel.screenshot({ path: path.join(evidence, 'panel-zones.png') });
 
     const groups = await panel.evaluate(() => [...document.querySelectorAll('#projectList .project-group')].map((group) => ({
       host: group.querySelector('.group-name')?.textContent,
@@ -161,6 +164,29 @@ const run = async () => {
     await panel.screenshot({ path: path.join(evidence, 'panel-brief.png') });
     const nextText = await panel.evaluate(() => document.getElementById('nextActionCard')?.innerText ?? '');
     check('next action suggests the most useful next step', nextText.length > 0, nextText);
+    await panel.fill('#queueInput', 'Queue item A');
+    await panel.locator('#queueAdd').click();
+    await sleep(500);
+    await panel.fill('#queueInput', 'Queue item B');
+    await panel.locator('#queueAdd').click();
+    await sleep(700);
+    const queue = await panel.evaluate(() => [...document.querySelectorAll('#queueList .queue-item')]
+      .map((row) => ({ title: row.querySelector('.queue-title')?.textContent, status: row.dataset.status })));
+    check('queue supports adding items', queue.length === 2 && queue[0].title === 'Queue item A', JSON.stringify(queue));
+    await panel.locator('#queueSection').scrollIntoViewIfNeeded();
+    await sleep(300);
+    await panel.screenshot({ path: path.join(evidence, 'panel-queue.png') });
+    await panel.locator('#queueList .queue-item').first().getByRole('button', { name: '完成' }).click();
+    await sleep(600);
+    const queueDone = await panel.evaluate(() => ({
+      count: document.querySelectorAll('#queueList .queue-item').length,
+      done: [...document.querySelectorAll('#queueList .queue-item')].filter((row) => row.dataset.status === 'done').length
+    }));
+    check('queue item can be completed', queueDone.count === 2 && queueDone.done === 1, JSON.stringify(queueDone));
+    await panel.locator('#queueList .queue-item[data-status="todo"]').last().getByRole('button', { name: '×' }).click();
+    await sleep(600);
+    const queueAfterDelete = await panel.evaluate(() => document.querySelectorAll('#queueList .queue-item').length);
+    check('queue item can be removed', queueAfterDelete === 1, String(queueAfterDelete));
     await panel.locator('#tidyKnowledge').click();
     await panel.waitForSelector('#modal:not([hidden])', { timeout: 10000 });
     const tidyText = await panel.locator('#modalBody').innerText();

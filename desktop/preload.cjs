@@ -13,6 +13,13 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   projectBrief: Object.freeze({
     local: (input) => invoke('companion:project-brief-local', input)
   }),
+  queue: Object.freeze({
+    add: (input) => invoke('companion:queue-add', input),
+    update: (input) => invoke('companion:queue-update', input),
+    remove: (input) => invoke('companion:queue-remove', input),
+    move: (input) => invoke('companion:queue-move', input),
+    dispatch: (input) => invoke('companion:queue-dispatch', input)
+  }),
   github: Object.freeze({
     activity: (input) => invoke('companion:github-activity', input),
     prPreview: (input) => invoke('companion:github-pr-preview', input),

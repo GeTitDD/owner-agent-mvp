@@ -426,6 +426,55 @@ export function createSidecarHandler({
       return;
     }
 
+    if (rest.length === 1 && head === 'queue') {
+      const projectId = url.searchParams.get('projectId') ?? '';
+      if (method === 'GET') {
+        send(res, 200, { items: store.listProjectQueue(projectId) });
+        return;
+      }
+      requireMethod(method, 'POST');
+      const body = await readJson(req);
+      const item = store.addProjectQueueItem({
+        projectId: str(body.projectId, 'projectId', 90),
+        title: str(body.title, 'title', 300),
+        body: typeof body.body === 'string' ? body.body : '',
+        source: typeof body.source === 'string' ? body.source : 'owner'
+      });
+      send(res, 201, item);
+      return;
+    }
+
+    if (rest.length === 2 && head === 'queue') {
+      const id = rest[1];
+      if (method === 'GET') {
+        const item = store.getProjectQueueItem(id);
+        if (!item) throw new OwnerInputError('Unknown queue item', 404);
+        send(res, 200, item);
+        return;
+      }
+      if (method === 'DELETE') {
+        send(res, 200, store.removeProjectQueueItem(id));
+        return;
+      }
+      requireMethod(method, 'PATCH');
+      const body = await readJson(req);
+      const item = store.updateProjectQueueItem(id, {
+        title: body.title,
+        body: body.body,
+        status: body.status,
+        linkedJobId: body.linkedJobId
+      });
+      send(res, 200, item);
+      return;
+    }
+
+    if (rest.length === 3 && head === 'queue' && rest[2] === 'move') {
+      requireMethod(method, 'POST');
+      const body = await readJson(req);
+      send(res, 200, store.moveProjectQueueItem(rest[1], { direction: body.direction }));
+      return;
+    }
+
     if (rest.length === 1 && head === 'tasks') {
       if (method === 'GET') {
         send(res, 200, { items: store.listTasks(url.searchParams.get('projectId') ?? '') });
