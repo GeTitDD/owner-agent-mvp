@@ -7,7 +7,7 @@ const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, dialog, No
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { execFile, execFileSync } = require('node:child_process');
+const { execFile, execFileSync, fork } = require('node:child_process');
 const { promisify } = require('node:util');
 const { pathToFileURL } = require('node:url');
 
@@ -72,6 +72,7 @@ let playbookRuns = new Map();
 const activePlaybookRuns = new Map();
 const lastPlaybookResults = new Map();
 const playbookAborts = new Map();
+const playbookChildren = new Map();
 let knowledgeSummaryModule = null;
 let harvestInFlight = false;
 let mascotModule = null;
@@ -1730,6 +1731,79 @@ const getPlaybookRunner = async () => {
   return playbookRunner;
 };
 
+/**
+ * 在独立 Node 子进程里跑 playbook，避免 Pi SDK / 模型调用阻塞 Electron 主进程。
+ * 取消时直接 kill 子进程，并返回一个受控的“取消”结果。
+ */
+const runPlaybookInChild = ({ playbookId, playbook, project, task = '' }) => new Promise((resolve, reject) => {
+  const startedAt = new Date().toISOString();
+  const began = Date.now();
+  const child = fork(path.join(__dirname, 'playbook-child.mjs'), [], {
+    cwd: path.join(__dirname, '..'),
+    execPath: process.execPath,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    windowsHide: true
+  });
+  playbookChildren.set(playbookId, child);
+  let settled = false;
+  let canceled = false;
+  let stderr = '';
+  const finish = (fn, value) => {
+    if (settled) return;
+    settled = true;
+    playbookChildren.delete(playbookId);
+    clearTimeout(timer);
+    try { child.kill(); } catch { /* already gone */ }
+    fn(value);
+  };
+  const timer = setTimeout(() => {
+    finish(reject, new Error('playbook 执行超时，请稍后重试'));
+  }, 360000);
+  child.stderr?.on('data', (chunk) => { stderr += String(chunk); });
+  child.on('message', (message) => {
+    if (message?.type === 'ready') {
+      child.send({
+        type: 'run',
+        playbookId,
+        project,
+        task,
+        model: config.model || '',
+        timeoutMs: 240000
+      });
+      return;
+    }
+    if (message?.type === 'result') finish(resolve, message.result);
+    else if (message?.type === 'error') finish(reject, new Error(message.error));
+  });
+  child.on('exit', (code) => {
+    if (settled) return;
+    if (canceled) {
+      finish(resolve, {
+        runId: `pb_${Date.now().toString(36)}`,
+        playbookId,
+        playbookLabel: playbook?.label ?? playbookId,
+        status: 'error',
+        category: 'canceled',
+        summary: '执行失败：canceled',
+        findings: [],
+        risks: [],
+        nextSteps: [],
+        durationMs: Date.now() - began,
+        startedAt,
+        model: config.model || '',
+        text: ''
+      });
+      return;
+    }
+    finish(reject, new Error(`playbook 子进程退出（${code}）${stderr.slice(0, 300)}`));
+  });
+  child.__cancel = () => {
+    canceled = true;
+    try { child.kill(); } catch { /* already gone */ }
+  };
+});
+
 /** 只读分诊执行器：判断一条交办是否需要写入，再决定是否发起 HITL 写请求。 */
 const getTriageRunner = async () => {
   if (triageRunner) return triageRunner;
@@ -2217,7 +2291,6 @@ const registerIpc = () => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const playbookId = String(input?.playbookId ?? '');
     const project = await projectForPlaybook(String(input?.projectId ?? ''));
-    const runner = await getPlaybookRunner();
     const registry = await loadPlaybookRegistry();
     const playbook = registry.getPlaybook(playbookId);
     const title = playbook?.title ?? playbookId;
@@ -2230,16 +2303,13 @@ const registerIpc = () => {
       projectName: project.name,
       startedAt: new Date().toISOString()
     });
-    // 同一时刻只允许一个同名 playbook；取消按钮通过这张表精确中止。
-    const controller = new AbortController();
-    playbookAborts.set(playbookId, controller);
     let result;
     try {
-      result = await runner.run({
+      result = await runPlaybookInChild({
         playbookId,
+        playbook,
         project,
-        task: String(input?.task ?? ''),
-        signal: controller.signal
+        task: String(input?.task ?? '')
       });
     } catch (error) {
       playbookRunnerError = String(error?.message ?? error);
@@ -2254,7 +2324,6 @@ const registerIpc = () => {
       throw error;
     } finally {
       activePlaybookRuns.delete(runKey);
-      playbookAborts.delete(playbookId);
     }
     persistPlaybookRun({
       ...result,
@@ -2340,6 +2409,11 @@ const registerIpc = () => {
   ipcMain.handle('companion:playbook-cancel', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const playbookId = String(input?.playbookId ?? '');
+    const child = playbookChildren.get(playbookId);
+    if (child?.__cancel) {
+      child.__cancel();
+      return { canceled: true };
+    }
     const controller = playbookAborts.get(playbookId);
     if (!controller) return { canceled: false };
     controller.abort();
