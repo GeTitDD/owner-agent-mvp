@@ -2246,8 +2246,8 @@ const registerIpc = () => {
     const playbook = registry.listPlaybooks().flatMap((group) => group.items)
       .find((item) => item.diagramKind === kind);
     if (!playbook) throw new Error('没有对应的图谱 playbook。');
-    // 图谱优先用 diagramModel（设置里可单独指定），失败后回退到主模型。
-    const models = [...new Set([config.diagramModel, config.model]
+    // 先用主模型；失败后回退到设置里的「图谱备用模型」。
+    const models = [...new Set([config.model, config.diagramModel]
       .map((value) => String(value ?? '').trim())
       .filter(Boolean))];
     const candidates = models.length ? models : [''];
@@ -2288,7 +2288,7 @@ const registerIpc = () => {
       throw new Error([
         `${result?.summary || '图谱生成失败。'}${advice}`,
         attempts.length > 1 ? `已尝试：${attempts.join('；')}。` : '',
-        '可在设置中填写「图谱模型」换一个更快的模型。'
+        '可在设置中填写「图谱备用模型」，主模型失败时会自动切换。'
       ].filter(Boolean).join(' '));
     }
     if (!result.diagram) {

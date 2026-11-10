@@ -118,9 +118,12 @@ export function createReadonlySessionFactory({ playbook, skillsDir, python = fal
           }
           const { session } = await sdk.createAgentSession({
             cwd,
-            tools: allowedTools,
+            // 多数 provider 对空 tools 数组处理不一致（会返回空内容），
+            // 无工具模式直接走 SDK 的 noTools。
+            ...(noTools
+              ? { noTools: true }
+              : { tools: allowedTools, excludeTools: [...FORBIDDEN_TOOLS] }),
             ...(customTools.length ? { customTools } : {}),
-            excludeTools: [...FORBIDDEN_TOOLS],
             sessionManager: sdk.SessionManager.inMemory(),
             resourceLoader: loader,
             ...(model ? { model: resolvePiModel(model) } : {})
@@ -129,12 +132,12 @@ export function createReadonlySessionFactory({ playbook, skillsDir, python = fal
           const active = typeof session.getActiveToolNames === 'function'
             ? [...session.getActiveToolNames()]
             : null;
-          if (active === null) {
+          if (active === null && !noTools) {
             session.dispose?.();
             await pyRunner?.close();
             throw new Error('readonly-tools-unverified');
           }
-          const unexpected = active.filter((name) => !allowedTools.includes(name));
+          const unexpected = (active ?? []).filter((name) => !allowedTools.includes(name));
           if (unexpected.length) {
             session.dispose?.();
             await pyRunner?.close();
@@ -158,7 +161,7 @@ export function createReadonlySessionFactory({ playbook, skillsDir, python = fal
             sessionId: () => String(session.sessionId ?? ''),
             prompt: (value) => session.prompt(value),
             abort: () => session.abort?.(),
-            activeTools: () => active,
+            activeTools: () => active ?? [],
             lastMessage,
             getLastText: () => String(session.getLastAssistantText?.() ?? ''),
             get model() { return session.model ? `${session.model.provider}/${session.model.id}` : 'unknown'; },
