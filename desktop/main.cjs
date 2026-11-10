@@ -888,6 +888,7 @@ const knowledgeDetail = ({ id } = {}) => {
     const scripts = [];
     const evidence = [];
     let testCommands = [];
+    let packageInfo = {};
     const dirtyLines = String(status).split('\n').filter(Boolean).filter((line) => {
       const file = line.slice(3).trim();
       return file !== '.owner-root-identity' && !file.startsWith('.fixture-workspaces/');
@@ -895,6 +896,10 @@ const knowledgeDetail = ({ id } = {}) => {
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(project.root, 'package.json'), 'utf8'));
       evidence.push('package.json');
+      packageInfo = {
+        name: String(pkg.name ?? ''),
+        description: String(pkg.description ?? '')
+      };
       for (const [name, command] of Object.entries(pkg.scripts ?? {})) {
         scripts.push(name === 'test' ? `npm test` : `npm run ${name}`);
         if (name === 'test') testCommands = ['npm test'];
@@ -902,7 +907,33 @@ const knowledgeDetail = ({ id } = {}) => {
         void command;
       }
     } catch { /* 非 Node 项目允许没有 package.json */ }
-    for (const name of ['README.md', 'README.zh-CN.md', 'pyproject.toml', 'go.mod', 'Cargo.toml']) {
+    let readme = '';
+    for (const name of ['README.md', 'README.zh-CN.md', 'README.txt']) {
+      const file = path.join(project.root, name);
+      if (!fs.existsSync(file)) continue;
+      evidence.push(name);
+      try { readme = fs.readFileSync(file, 'utf8').slice(0, 4000); } catch { /* 读取失败忽略 */ }
+      break;
+    }
+    const directories = [];
+    try {
+      for (const entry of fs.readdirSync(project.root, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        if (['node_modules', '.git', 'dist', 'build', '.venv', 'venv', 'coverage'].includes(entry.name)) continue;
+        if (entry.name.startsWith('.')) continue;
+        directories.push(entry.name);
+        if (directories.length >= 10) break;
+      }
+    } catch { /* 根目录不可读时只用已知信息 */ }
+    const markers = ['AGENTS.md', 'CONTRIBUTING.md', 'docs']
+      .filter((name) => fs.existsSync(path.join(project.root, name)));
+    const runHints = [];
+    if (fs.existsSync(path.join(project.root, 'play.ps1'))) runHints.push('powershell -File play.ps1');
+    if (fs.existsSync(path.join(project.root, 'manage.py'))) runHints.push('python manage.py runserver');
+    if (fs.existsSync(path.join(project.root, 'project.godot'))) runHints.push('用 Godot 打开项目');
+    if (fs.existsSync(path.join(project.root, 'package.json'))) runHints.push('npm install');
+    if (fs.existsSync(path.join(project.root, 'docker-compose.yml'))) runHints.push('docker compose up -d');
+    for (const name of ['pyproject.toml', 'go.mod', 'Cargo.toml']) {
       if (fs.existsSync(path.join(project.root, name))) evidence.push(name);
     }
     if (!testCommands.length) {
@@ -916,6 +947,11 @@ const knowledgeDetail = ({ id } = {}) => {
       testCommands,
       testCriteria: testCommands.length ? ['命令退出码为 0'] : [],
       evidence,
+      packageInfo,
+      readme,
+      directories,
+      markers,
+      runHints,
       unknowns: dirtyLines.length > 0 ? ['工作区有未提交改动，画像可能不完整'] : []
     };
   };
@@ -943,6 +979,21 @@ const knowledgeDetail = ({ id } = {}) => {
     };
     briefCache.set(project.id, { at: Date.now(), value });
     return value;
+  };
+
+  const saveProjectBrief = async (project, payload, { basedOnCommit = '', sourceRunId = '' } = {}) => {
+    const saved = await api(`/owner/v1/projects/${encodeURIComponent(project.id)}/brief`, {
+      method: 'PUT',
+      body: { payload, basedOnCommit, sourceRunId }
+    });
+    briefCache.delete(project.id);
+    return {
+      ...saved.payload,
+      version: saved.version,
+      generatedAt: saved.generatedAt,
+      basedOnCommit: saved.basedOnCommit,
+      sourceRunId: saved.sourceRunId
+    };
   };
 
 
@@ -2373,12 +2424,10 @@ const registerIpc = () => {
         const facts = await repoFactsFor(project, { includeDirty: true });
         const briefModule = await loadProjectBrief();
         const payload = briefModule.buildProjectBrief({ project, result, repoFacts: facts });
-        const saved = await api(`/owner/v1/projects/${encodeURIComponent(project.id)}/brief`, {
-          method: 'PUT',
-          body: { payload, basedOnCommit: facts.head, sourceRunId: result.runId }
+        brief = await saveProjectBrief(project, payload, {
+          basedOnCommit: facts.head,
+          sourceRunId: result.runId
         });
-        briefCache.delete(project.id);
-        brief = { ...saved.payload, version: saved.version, generatedAt: saved.generatedAt, basedOnCommit: saved.basedOnCommit };
       } catch (error) {
         brief = { error: String(error?.message ?? error) };
       }
@@ -2449,6 +2498,15 @@ const registerIpc = () => {
     const projects = (await api('/owner/v1/projects')).items ?? [];
     const project = projects.find((item) => item.id === created.projectId);
     return { ...created, testConfig: project ? await testConfigForProject(project) : null };
+  });
+
+  ipcMain.handle('companion:project-brief-local', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const project = await projectForPlaybook(String(input?.projectId ?? ''));
+    const facts = await repoFactsFor(project, { includeDirty: true });
+    const mod = await loadProjectBrief();
+    const payload = mod.buildLocalProjectBrief({ project, repoFacts: facts });
+    return saveProjectBrief(project, payload, { basedOnCommit: facts.head });
   });
 
   ipcMain.handle('companion:github-pr-preview', async (event, input) => {

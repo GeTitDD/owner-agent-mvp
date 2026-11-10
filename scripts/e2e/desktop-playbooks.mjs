@@ -100,7 +100,16 @@ const run = async () => {
 
     await panel.locator('#projectSection').scrollIntoViewIfNeeded();
     await sleep(300);
-    await panel.locator('#projectBrief button').click();
+    await panel.locator('#projectBrief button').first().click();
+    await sleep(1200);
+    const localBrief = await panel.evaluate(async () => {
+      const snap = await window.companion.snapshot();
+      return { from: snap.brief?.generatedFrom, one: snap.brief?.oneLiner };
+    });
+    check('fast brief is generated without a model',
+      localBrief.from === 'local-scan' && Boolean(localBrief.one),
+      JSON.stringify(localBrief));
+    await panel.getByRole('button', { name: '深度理解' }).click();
     // 运行中：桌宠/面板应感知 pstack，而不是显示空闲。
     const runningView = await panel.evaluate(async () => {
       const deadline = Date.now() + 20000;

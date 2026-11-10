@@ -54,6 +54,66 @@ export function buildProjectBrief({ project, result, repoFacts = {} }) {
 }
 
 /**
+ * 本地快速画像：不调用模型，只用 README / package.json / 目录结构生成一份可用画像。
+ * 模型超时或离线时也能给用户一个结果，后续可“深度理解”覆盖。
+ */
+export function buildLocalProjectBrief({ project, repoFacts = {} }) {
+  const pkg = repoFacts.packageInfo ?? {};
+  const readme = String(repoFacts.readme ?? '')
+    .replace(/<!--[\s\S]*?-->/gu, '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/gu, '')
+    .trim();
+  const firstLine = (() => {
+    let inCode = false;
+    for (const raw of readme.split(/\r?\n/u)) {
+      const line = raw.trim();
+      if (line.startsWith('```')) { inCode = !inCode; continue; }
+      if (inCode || !line) continue;
+      if (/^#{1,6}\s/u.test(line) || /^!|^---|^\||^>/u.test(line)) continue;
+      const clean = line.replace(/[#*_`>]/gu, '').replace(/\s+/gu, ' ').trim();
+      if (clean) return clean;
+    }
+    return '';
+  })();
+  const oneLiner = String(pkg.description || firstLine || project?.name || '项目')
+    .replace(/\s+/gu, ' ')
+    .slice(0, 120);
+  const cleanedReadme = readme
+    .replace(/```[\s\S]*?```/gu, '')
+    .replace(/^#{1,6}\s.*$/gmu, '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/gu, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/gu, '$1')
+    .replace(/[*_`>|]/gu, '')
+    .replace(/^---$/gmu, '')
+    .replace(/\n{2,}/gu, '\n')
+    .trim();
+  const directories = Array.isArray(repoFacts.directories) ? repoFacts.directories : [];
+  const modules = directories.slice(0, 8).map((name) => ({
+    name: String(name),
+    role: '顶层目录',
+    paths: [String(name)]
+  }));
+  const markers = Array.isArray(repoFacts.markers) ? repoFacts.markers : [];
+  return {
+    oneLiner,
+    whatItIs: cleanedReadme.slice(0, 1200) || `${project?.name ?? '项目'} 的本地快速画像。`,
+    howToRun: (repoFacts.scripts?.length ? repoFacts.scripts : (repoFacts.runHints ?? [])).slice(0, 8),
+    modules,
+    conventions: markers.map((marker) => `存在 ${marker}，遵循其中的项目约定`),
+    verify: {
+      commands: (repoFacts.testCommands ?? []).slice(0, 6),
+      criteria: (repoFacts.testCriteria ?? []).slice(0, 6)
+    },
+    risks: [],
+    unknowns: ['这是快速本地扫描，尚未做模型深度分析'],
+    evidence: (repoFacts.evidence ?? []).slice(0, 16),
+    sourceRuns: [],
+    confidence: '中',
+    generatedFrom: 'local-scan'
+  };
+}
+
+/**
  * 画像是否过期：生成时的 commit 与当前 HEAD 不一致，或工作区有未提交改动。
  */
 export function briefIsStale(brief, { head = '', dirty = false } = {}) {

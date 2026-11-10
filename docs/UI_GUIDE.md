@@ -164,6 +164,9 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 
 **项目画像**字段：`一句话 / 它是做什么的 / 怎么跑 / 关键模块 / 代码约定 / 怎么验收 / 风险 / 还不确定 / 依据 / 版本 / 是否过期`。画像按 commit 基线判断过期；代码变化后显示“已过期”。
 
+- **一键理解**：本地扫描 README / package.json / 目录结构 / 测试命令，**不调用模型**，立即出结果；
+- **深度理解**：调用 pstack `how` 做模型分析，耗时较长（可取消），成功后会覆盖快速画像；失败时保留快速画像。
+
 ![项目画像](assets/companion/project-brief.png)
 
 **下一步建议**只显示一个最值得做的动作，优先级为：
@@ -221,7 +224,7 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | 验收 | 结果 |
 | --- | --- |
 | `npm run check` | 0 |
-| `npm test` | 297 tests / 294 pass / 3 skip / 0 fail |
+| `npm test` | 298 tests / 295 pass / 3 skip / 0 fail |
 | `npm run e2e:desktop:composer` | PASS（Composer、只读分析、无写入开关、pending） |
 | `npm run e2e:desktop:shell` | PASS（桌宠定位、面板、重启、模型切换、添加项目） |
 | `npm run e2e:desktop:multiproject` | PASS（多项目 pending / stage） |

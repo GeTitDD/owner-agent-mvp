@@ -386,8 +386,14 @@
     }
     const action = el('button', 'ghost small', brief ? '重新理解' : '一键理解');
     action.type = 'button';
-    action.onclick = () => { generateBrief(); };
+    action.title = '快速扫描 README / package.json / 目录结构，不调用模型';
+    action.onclick = () => { void generateBrief(false); };
     head.append(action);
+    const deep = el('button', 'ghost small', '深度理解');
+    deep.type = 'button';
+    deep.title = '调用模型做完整结构走读；耗时较长，可取消';
+    deep.onclick = () => { void generateBrief(true); };
+    head.append(deep);
     box.append(head);
     if (!brief) {
       box.append(el('div', 'brief-empty',
@@ -434,15 +440,26 @@
     details.append(el('div', 'brief-evidence',
       `依据：${(brief.evidence ?? []).slice(0, 8).join(' · ') || '—'}`));
     details.append(el('div', 'brief-evidence',
-      `版本 r${brief.version ?? 1} · 基于 ${String(brief.basedOnCommit ?? '').slice(0, 8) || '—'}`));
+      `来源：${brief.generatedFrom === 'local-scan' ? '本地快速扫描' : '模型深度分析'} · 版本 r${brief.version ?? 1} · 基于 ${String(brief.basedOnCommit ?? '').slice(0, 8) || '—'}`));
     box.append(details);
   };
 
-  /** 一键理解：跑 how，并把结果保存为项目画像。 */
-  const generateBrief = () => {
-    if (!view?.config?.projectId) { toast('先选择一个项目。'); return; }
-    if (!playbookCatalog?.skillsAvailable) { toast('未找到 pstack skills 目录。'); return; }
-    void runPlaybook('how', { brief: true });
+  /** 一键理解：默认本地快速画像；deep=true 才跑模型结构走读。 */
+  const generateBrief = async (deep = false) => {
+    const projectId = view?.config?.projectId ?? '';
+    if (!projectId) { toast('先选择一个项目。'); return; }
+    if (deep) {
+      if (!playbookCatalog?.skillsAvailable) { toast('未找到 pstack skills 目录。'); return; }
+      void runPlaybook('how', { brief: true });
+      return;
+    }
+    try {
+      await window.companion.projectBrief.local({ projectId });
+      await refresh();
+      toast('已生成项目画像（快速扫描）', 4200);
+    } catch (error) {
+      toast(String(error?.message ?? error), 6000);
+    }
   };
 
   const openKnowledgeTidy = async () => {
@@ -521,7 +538,7 @@
     button.type = 'button';
     if (action.command === 'wait') button.disabled = true;
     button.onclick = () => {
-      if (action.command === 'understand') generateBrief();
+      if (action.command === 'understand') void generateBrief(false);
       else if (action.command === 'tidy') void openKnowledgeTidy();
       else if (action.command === 'decide') {
         const section = $('needsSection');
