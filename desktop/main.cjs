@@ -101,6 +101,16 @@ const defaults = () => ({
 });
 let config = defaults();
 
+const errorLogPath = () => path.join(app.getPath('userData'), 'companion-errors.log');
+const logError = (scope, error) => {
+  const message = error?.stack ?? error?.message ?? String(error ?? '');
+  try {
+    fs.appendFileSync(errorLogPath(), `${new Date().toISOString()} [${scope}] ${message}\n`);
+  } catch { /* 日志不可写时不影响主流程 */ }
+};
+process.on('uncaughtException', (error) => { logError('uncaught', error); console.error(error); });
+process.on('unhandledRejection', (reason) => { logError('unhandledRejection', reason); });
+
 const loadConfig = () => {
   try {
     const raw = JSON.parse(fs.readFileSync(configPath(), 'utf8'));
@@ -297,7 +307,8 @@ const api = async (route, { method = 'GET', body, decision = false } = {}) => {
   const response = await fetch(`${baseUrl}${route}`, {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body)
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(8000)
   });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
@@ -537,6 +548,9 @@ const mascotCatalog = async () => {
     skins: resolved.skins.map((item) => ({
       id: item.id, label: item.label, builtin: item.builtin, kind: item.kind ?? 'static',
       url: pathToFileURL(item.file).href,
+      thumb: item.dir && fs.existsSync(path.join(item.dir, 'thumb.png'))
+        ? pathToFileURL(path.join(item.dir, 'thumb.png')).href
+        : '',
       sprite: item.sprite ? { ...item.sprite, url: pathToFileURL(item.file).href } : null
     }))
   };
@@ -863,11 +877,13 @@ const knowledgeDetail = ({ id } = {}) => {
   const loadKnowledgeTidy = async () => (knowledgeTidyModule ??= await importEsm('../src/knowledge/tidy.mjs'));
 
   /** 读取项目画像所需的仓库事实：HEAD、脏状态、npm scripts、测试命令、证据文件。 */
-  const repoFactsFor = async (project) => {
+  const repoFactsFor = async (project, { includeDirty = false } = {}) => {
     const head = await gitAt(project.root, ['rev-parse', 'HEAD']).catch(() => '');
-    const status = await execFileAsync('git', ['-C', project.root, 'status', '--porcelain'], {
-      timeout: 10000, windowsHide: true
-    }).then((result) => result.stdout).catch(() => '');
+    const status = includeDirty
+      ? await execFileAsync('git', ['-C', project.root, 'status', '--porcelain'], {
+        timeout: 10000, windowsHide: true
+      }).then((result) => result.stdout).catch(() => '')
+      : '';
     const scripts = [];
     const evidence = [];
     let testCommands = [];
@@ -1429,8 +1445,9 @@ const serviceStatus = async () => {
   if (serviceCache.value && now - serviceCache.at < 10000) return serviceCache.value;
   let docker = false;
   try {
-    execFileSync('docker', ['version', '--format', '{{.Server.Version}}'], {
-      encoding: 'utf8', timeout: 2500
+    await execFileAsync('docker', ['version', '--format', '{{.Server.Version}}'], {
+      timeout: 2500,
+      windowsHide: true
     });
     docker = true;
   } catch { docker = false; }
@@ -1522,6 +1539,21 @@ const safeWindow = (window) => {
   window.webContents.on('will-attach-webview', (event) => event.preventDefault());
 };
 
+/** 渲染进程卡死时记录并尝试自动恢复，避免用户只能杀进程。 */
+const watchWindow = (window, label) => {
+  window.webContents.on('unresponsive', () => {
+    logError(`${label}.unresponsive`, new Error('renderer stopped responding'));
+    setTimeout(() => {
+      if (!window.isDestroyed()) {
+        try { window.webContents.reload(); } catch (error) { logError(`${label}.reload`, error); }
+      }
+    }, 3000);
+  });
+  window.webContents.on('render-process-gone', (_event, details) => {
+    logError(`${label}.gone`, new Error(JSON.stringify(details)));
+  });
+};
+
 const createPet = () => {
   pet = new BrowserWindow({
     width: PET_SIZE,
@@ -1544,6 +1576,7 @@ const createPet = () => {
     }
   });
   safeWindow(pet);
+  watchWindow(pet, 'pet');
   positionPet();
   if (e2eOffscreen) {
     pet.setOpacity(0);
@@ -1577,6 +1610,7 @@ const createPanel = () => {
     }
   });
   safeWindow(panel);
+  watchWindow(panel, 'panel');
   if (e2eOffscreen) {
     panel.setOpacity(0);
     panel.setIgnoreMouseEvents(true);
@@ -1631,6 +1665,7 @@ const openFull = async () => {
     }
   });
   fullWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  watchWindow(fullWindow, 'full');
   fullWindow.loadURL(target);
   fullWindow.on('closed', () => { fullWindow = null; });
 };
@@ -1651,6 +1686,7 @@ const openKnowledgeWorkbench = async () => {
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true }
   });
   fullWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  watchWindow(fullWindow, 'knowledge');
   fullWindow.loadURL(workbenchUrl);
   fullWindow.on('closed', () => { fullWindow = null; });
 };
@@ -2265,7 +2301,7 @@ const registerIpc = () => {
     let brief = null;
     if (input?.brief === true && result.status === 'ok') {
       try {
-        const facts = await repoFactsFor(project);
+        const facts = await repoFactsFor(project, { includeDirty: true });
         const briefModule = await loadProjectBrief();
         const payload = briefModule.buildProjectBrief({ project, result, repoFacts: facts });
         const saved = await api(`/owner/v1/projects/${encodeURIComponent(project.id)}/brief`, {

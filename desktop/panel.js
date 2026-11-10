@@ -1991,16 +1991,26 @@
         option.title = skin.builtin ? `${skin.label}（内置）` : `${skin.label}（自定义）`;
         if (skin.id === catalog.current) option.classList.add('selected');
         if (skin.kind === 'sprite' && skin.sprite) {
-          const thumb = el('span', 'mascot-thumb sprite');
-          thumb.style.backgroundImage = `url("${skin.url}")`;
-          thumb.style.backgroundSize = `${(skin.sprite.columns ?? 8) * 100}% ${(skin.sprite.rows ?? 9) * 100}%`;
-          thumb.style.backgroundPosition = '0 0';
-          option.append(thumb, el('span', undefined, skin.label));
+          if (skin.thumb) {
+            const image = el('img');
+            image.src = skin.thumb;
+            image.alt = skin.label;
+            image.draggable = false;
+            image.loading = 'lazy';
+            option.append(image, el('span', undefined, skin.label));
+          } else {
+            const thumb = el('span', 'mascot-thumb sprite');
+            thumb.style.backgroundImage = `url("${skin.url}")`;
+            thumb.style.backgroundSize = `${(skin.sprite.columns ?? 8) * 100}% ${(skin.sprite.rows ?? 9) * 100}%`;
+            thumb.style.backgroundPosition = '0 0';
+            option.append(thumb, el('span', undefined, skin.label));
+          }
         } else {
           const image = el('img');
           image.src = skin.url;
           image.alt = skin.label;
           image.draggable = false;
+          image.loading = 'lazy';
           option.append(image, el('span', undefined, skin.label));
         }
         option.onclick = async () => {
