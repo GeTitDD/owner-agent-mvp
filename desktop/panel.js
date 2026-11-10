@@ -268,10 +268,6 @@
     return new Date(at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
   };
 
-  const QUEUE_STATUS = {
-    todo: '待办', doing: '进行中', blocked: '等你批准', done: '完成', failed: '失败'
-  };
-
   const queueAction = async (action, success) => {
     try {
       const result = await action();
@@ -290,16 +286,22 @@
     }
   };
 
+  // 想法池状态：复用队列状态机，只是文案按「想法」解释。
+  const IDEA_STATUS = {
+    todo: '新想法', doing: '讨论中', blocked: '搁置', done: '已采纳', failed: '失败'
+  };
+  const IDEA_SOURCE = { conversation: '对话', owner: '手动' };
+
   const renderQueue = () => {
     const list = $('queueList');
     if (!list) return;
-    const items = view?.queue ?? [];
+    const items = (view?.queue ?? []).filter((item) => item.kind === 'idea');
     const active = items.filter((item) => ['todo', 'doing', 'blocked'].includes(item.status)).length;
     $('queueBadge').textContent = String(active);
-    $('queueBadge').title = `共 ${items.length} 条`;
+    $('queueBadge').title = `共 ${items.length} 条想法`;
     list.replaceChildren();
     if (!items.length) {
-      list.append(el('div', 'queue-empty', '还没有待办。加一条消息或任务，之后可以逐条交办。'));
+      list.append(el('div', 'queue-empty', '还没有想法。和 Agent 讨论时提到的改进会自动收在这里。'));
       return;
     }
     for (const item of items) {
@@ -310,61 +312,49 @@
       const main = el('div', 'queue-main');
       const title = el('div', 'queue-title', item.title);
       const meta = el('div', 'queue-meta');
-      meta.append(el('span', `queue-status ${item.status}`, QUEUE_STATUS[item.status] ?? item.status));
-      if (item.linkedJobId) meta.append(el('span', 'queue-job', `Job ${String(item.linkedJobId).slice(0, 8)}`));
+      meta.append(el('span', `queue-status ${item.status}`, IDEA_STATUS[item.status] ?? item.status));
+      meta.append(el('span', 'queue-source', IDEA_SOURCE[item.source] ?? item.source));
       if (item.createdAt) meta.append(el('span', 'queue-time', formatRelative(item.createdAt) || ''));
       main.append(title, meta);
       const actions = el('div', 'queue-actions');
-      const move = (direction) => queueAction(
-        () => window.companion.queue.move({ id: item.id, direction }),
-        null
-      );
-      const up = el('button', 'queue-action', '↑');
-      up.type = 'button'; up.title = '上移'; up.disabled = item.position === 1;
-      up.onclick = () => { void move('up'); };
-      const down = el('button', 'queue-action', '↓');
-      down.type = 'button'; down.title = '下移';
-      down.onclick = () => { void move('down'); };
-      actions.append(up, down);
-      if (['todo', 'failed'].includes(item.status)) {
-        const dispatch = el('button', 'queue-action primary', '交办');
-        dispatch.type = 'button';
-        dispatch.onclick = async () => {
-          dispatch.disabled = true;
-          dispatch.textContent = '…';
-          const result = await queueAction(
-            () => window.companion.queue.dispatch({ id: item.id }),
-            (value) => value?.mode === 'write-request'
-              ? '已创建写请求，等你批准'
-              : value?.mode === 'answer'
-                ? '已给出只读结论'
-                : value?.mode === 'triage-error'
-                  ? `交办失败：${value.summary ?? '请查看详情'}`
-                  : '已交办'
-          );
-          if (!result) { dispatch.disabled = false; dispatch.textContent = '交办'; }
+      if (item.status !== 'doing') {
+        const discuss = el('button', 'queue-action primary', '讨论');
+        discuss.type = 'button';
+        discuss.onclick = () => {
+          void window.companion.queue.update({ id: item.id, status: 'doing' }).then(() => refresh());
+          void sendMessage(`讨论这条改进想法（只讨论，不要改代码）：${item.title}`, { capture: false });
         };
-        actions.append(dispatch);
+        actions.append(discuss);
       }
       if (item.status !== 'done') {
-        const done = el('button', 'queue-action', '完成');
-        done.type = 'button';
-        done.onclick = () => {
-          void queueAction(() => window.companion.queue.update({ id: item.id, status: 'done' }), () => '已标记完成');
+        const adopt = el('button', 'queue-action', '采纳');
+        adopt.type = 'button';
+        adopt.title = '标记为已采纳，便于以后整理';
+        adopt.onclick = () => {
+          void queueAction(() => window.companion.queue.update({ id: item.id, status: 'done' }), () => '已标记采纳');
         };
-        actions.append(done);
-      } else {
+        actions.append(adopt);
+      }
+      if (item.status === 'todo' || item.status === 'doing') {
+        const park = el('button', 'queue-action', '搁置');
+        park.type = 'button';
+        park.onclick = () => {
+          void queueAction(() => window.companion.queue.update({ id: item.id, status: 'blocked' }), () => '已搁置');
+        };
+        actions.append(park);
+      }
+      if (item.status === 'blocked' || item.status === 'done') {
         const reopen = el('button', 'queue-action', '重开');
         reopen.type = 'button';
         reopen.onclick = () => {
-          void queueAction(() => window.companion.queue.update({ id: item.id, status: 'todo' }), () => '已重新加入待办');
+          void queueAction(() => window.companion.queue.update({ id: item.id, status: 'todo' }), () => '已重新打开');
         };
         actions.append(reopen);
       }
       const remove = el('button', 'queue-action danger', '×');
       remove.type = 'button'; remove.title = '删除';
       remove.onclick = () => {
-        void queueAction(() => window.companion.queue.remove({ id: item.id }), () => '已删除待办');
+        void queueAction(() => window.companion.queue.remove({ id: item.id }), () => '已删除想法');
       };
       actions.append(remove);
       row.append(dot, main, actions);
@@ -380,8 +370,8 @@
     if (!projectId) { toast('先选择一个项目。'); return; }
     input.value = '';
     await queueAction(
-      () => window.companion.queue.add({ projectId, title }),
-      () => '已加入待办'
+      () => window.companion.queue.add({ projectId, title, kind: 'idea' }),
+      () => '已记下想法'
     );
   };
 
@@ -1962,8 +1952,11 @@
       box.append(row);
     }
     const model = view?.config?.model || 'Pi 默认模型';
-    $('composerModel').textContent = model;
-    $('composerModel').title = `当前模型：${model}`;
+    const modelChip = $('composerModel');
+    if (modelChip) {
+      modelChip.textContent = model;
+      modelChip.title = `当前模型：${model}`;
+    }
   };
 
   const fmtTime = (value) => {
@@ -2208,49 +2201,68 @@
     } catch { /* 本地草稿不可用不影响发送 */ }
   };
 
-  $('submitTask').onclick = async () => {
-    const text = taskInput.value.trim();
-    if (!text) { toast('先写下要交办的事情。'); return; }
-    const projectId = $('projectSelect').value;
+  const setComposerBusy = (busy) => {
     const button = $('submitTask');
     const hint = $('composerHint');
-    button.disabled = true;
-    button.classList.add('sending');
+    button.disabled = busy;
+    button.classList.toggle('sending', busy);
+    if (!hint) return;
+    hint.hidden = !busy;
+    if (!busy) hint.textContent = '';
+  };
+
+  const sendMessage = async (rawText, { capture = true } = {}) => {
+    const text = String(rawText ?? '').trim();
+    if (!text) { toast('先写点什么。'); return null; }
+    const projectId = $('projectSelect').value;
+    setComposerBusy(true);
+    // 先清空输入框：模型分析可能要几十秒，不能让它一直占着草稿。
+    taskInput.value = '';
+    try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+    autoGrow();
     const startedAt = Date.now();
+    const hint = $('composerHint');
     const tick = () => {
-      hint.textContent = `只读分析中… ${Math.round((Date.now() - startedAt) / 1000)}s（不写文件）`;
+      if (hint) hint.textContent = `分析中… ${Math.round((Date.now() - startedAt) / 1000)}s`;
     };
     tick();
     const timer = window.setInterval(tick, 1000);
     try {
       // 先只读分析：需要写入时后台会生成 pending_approval 的写请求（HITL）。
-      const result = await window.companion.submit({ text, projectId });
-      taskInput.value = '';
-      try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
-      autoGrow();
+      const result = await window.companion.submit({ text, projectId, captureIdea: capture });
       lastAnswer = result ?? null;
       renderAnswer(lastAnswer);
+      const captured = Boolean(result?.capturedIdea);
+      const suffix = captured ? ' · 已记为想法' : '';
       if (result?.mode === 'write-request') {
         const missing = result?.testConfig?.missing ?? [];
         toast(missing.length
-          ? `只读分析完成；已发起写请求，批准后子 Agent 才会动手。测试配置还缺 ${missing.join(', ')}。`
-          : '只读分析完成；已发起写请求，批准后子 Agent 才会动手。', 7000);
+          ? `分析完成；已发起写请求，批准后才会动手。测试配置还缺 ${missing.join(', ')}。${suffix}`
+          : `分析完成；已发起写请求，批准后才会动手。${suffix}`, 7000);
       } else if (result?.mode === 'answer') {
-        toast('只读分析完成，没有改动任何文件。', 4000);
+        toast(`已回复${suffix}`, 4200);
       } else {
-        toast(result?.advice || result?.summary || '只读分析失败，请重试。', 7000);
+        toast(`${result?.advice || result?.summary || '分析失败，请重试。'}${suffix}`, 7000);
       }
       await refresh();
+      return result;
     } catch (error) {
+      // 失败时把刚才的内容放回去，避免用户重写。
+      if (!taskInput.value.trim()) {
+        taskInput.value = text;
+        try { localStorage.setItem(DRAFT_KEY, text); } catch { /* ignore */ }
+        autoGrow();
+      }
       toast(String(error?.message ?? error), 5000);
+      return null;
     } finally {
       window.clearInterval(timer);
-      hint.textContent = '先只读分析；需要写入时再请你批准';
-      button.disabled = false;
-      button.classList.remove('sending');
+      setComposerBusy(false);
       taskInput.focus();
     }
   };
+
+  $('submitTask').onclick = () => { void sendMessage(taskInput.value); };
 
   taskInput.addEventListener('input', () => {
     autoGrow();
@@ -2413,12 +2425,9 @@
   };
 
   $('openSettings').onclick = () => { void openSettings(); };
-  $('scopeProfile').onclick = () => { void openSettings(); };
-  $('scopePaths').onclick = () => { void openSettings(); };
   $('closeSettings').onclick = () => { $('settings').hidden = true; };
   $('hidePanel').onclick = () => window.companion.hidePanel();
   $('openFull').onclick = () => { void window.companion.openFull().catch((error) => toast(String(error.message ?? error))); };
-  $('openFullInline').onclick = $('openFull').onclick;
   $('quit').onclick = () => window.companion.quit();
 
   const openDiagnostics = async () => {

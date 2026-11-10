@@ -70,13 +70,13 @@
 
         <section id="queueSection" class="queue-section">
           <div class="section-title">
-            <h3>待办事项</h3>
+            <h3>想法</h3>
             <span id="queueBadge" class="count">0</span>
           </div>
-          <p class="section-sub">给这个项目排一个消息/任务队列；可以逐条交办。</p>
+          <p class="section-sub">和 Agent 聊到的改进意见收在这里；只收集，不直接改代码。</p>
           <div class="queue-add">
-            <input id="queueInput" class="queue-input" type="text" maxlength="1200" placeholder="加一条待办…" />
-            <button id="queueAdd" class="primary small" type="button">加入</button>
+            <input id="queueInput" class="queue-input" type="text" maxlength="1200" placeholder="记一条想法…（Enter 保存）" />
+            <button id="queueAdd" class="primary small" type="button">记下</button>
           </div>
           <div id="queueList" class="queue-list"></div>
         </section>
@@ -186,18 +186,11 @@
 
     <section class="composer-dock" id="composeSection">
       <div class="composer-card">
-        <div class="composer-head">
-          <select id="projectSelect" aria-label="项目"></select>
-          <span class="composer-scope-label">作用域</span>
-          <button id="scopeProfile" class="scope-chip" type="button" title="当前沙箱 profile">沙箱 · auto</button>
-          <button id="scopePaths" class="scope-chip" type="button" title="允许修改的路径">范围 · src/</button>
-          <button id="openFullInline" class="ghost small" title="完整工作台">工作台</button>
-        </div>
         <textarea id="taskInput" rows="1" maxlength="1200"
-          placeholder="交办一件事…（Enter 发送，Shift+Enter 换行）"></textarea>
+          placeholder="和 Agent 聊聊项目进展，或说说你的改进想法…"></textarea>
         <div class="composer-bar">
-          <span id="composerModel" class="composer-model" title="当前模型">—</span>
-          <span id="composerHint" class="composer-hint">先只读分析；需要写入时再请你批准</span>
+          <select id="projectSelect" aria-label="项目"></select>
+          <span id="composerHint" class="composer-hint" hidden></span>
           <button id="submitTask" class="send-btn" title="发送（Enter）" aria-label="发送">
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
               <path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2"

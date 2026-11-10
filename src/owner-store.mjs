@@ -49,7 +49,7 @@ const sandboxRow=row=>row?{...row,profile:parse(row.profile_json),includePaths:p
 const repairRow=row=>row?{...row,repairScope:parse(row.repair_scope)}:null;
 const queueRow=row=>row?{
   id:row.id,projectId:row.project_id,title:row.title,body:row.body,status:row.status,
-  position:row.position,source:row.source,linkedJobId:row.linked_job_id,
+  kind:row.kind??'task',position:row.position,source:row.source,linkedJobId:row.linked_job_id,
   createdAt:row.created_at,updatedAt:row.updated_at,completedAt:row.completed_at
 }:null;
 const diagramRow=row=>row?{
@@ -139,6 +139,7 @@ export class OwnerStore {
         title TEXT NOT NULL,
         body TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL CHECK(status IN ('todo','doing','blocked','done','failed')),
+        kind TEXT NOT NULL DEFAULT 'task',
         position INTEGER NOT NULL DEFAULT 0,
         source TEXT NOT NULL DEFAULT 'owner',
         linked_job_id TEXT,
@@ -406,6 +407,9 @@ export class OwnerStore {
     // v0.7: re-entrant column migration for Pi session metadata on attempts.
     const attemptColumns=this.db.prepare('PRAGMA table_info(owner_job_attempts)').all().map(c=>c.name);
     if(!attemptColumns.includes('session_id'))this.db.exec(`ALTER TABLE owner_job_attempts ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`);
+    // 项目队列分两类：task（可交办）与 idea（灵感/改进意见，只收集不执行）。
+    const queueColumns=this.db.prepare('PRAGMA table_info(owner_project_queue)').all().map(c=>c.name);
+    if(!queueColumns.includes('kind'))this.db.exec(`ALTER TABLE owner_project_queue ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'`);
     // v0.7: approval-time snapshot of the referenced owner task input (title/note), so later
     // task edits cannot change what an approved job will analyse.
     const jobColumns=this.db.prepare('PRAGMA table_info(owner_jobs)').all().map(c=>c.name);
@@ -488,21 +492,33 @@ export class OwnerStore {
     const row=this.db.prepare('SELECT * FROM owner_project_queue WHERE id=?').get(id);
     return queueRow(row);
   }
-  listProjectQueue(projectId){
-    return this.db.prepare(`SELECT * FROM owner_project_queue WHERE project_id=?
-      ORDER BY CASE status WHEN 'doing' THEN 0 WHEN 'blocked' THEN 1 WHEN 'todo' THEN 2
-        WHEN 'failed' THEN 3 ELSE 4 END, position ASC, created_at ASC`)
-      .all(projectId).map(queueRow);
+  listProjectQueue(projectId,kind=''){
+    const rows=kind
+      ? this.db.prepare(`SELECT * FROM owner_project_queue WHERE project_id=? AND kind=?
+          ORDER BY CASE status WHEN 'doing' THEN 0 WHEN 'blocked' THEN 1 WHEN 'todo' THEN 2
+            WHEN 'failed' THEN 3 ELSE 4 END, position ASC, created_at ASC`).all(projectId,kind)
+      : this.db.prepare(`SELECT * FROM owner_project_queue WHERE project_id=?
+          ORDER BY CASE status WHEN 'doing' THEN 0 WHEN 'blocked' THEN 1 WHEN 'todo' THEN 2
+            WHEN 'failed' THEN 3 ELSE 4 END, position ASC, created_at ASC`).all(projectId);
+    return rows.map(queueRow);
   }
-  addProjectQueueItem({projectId,title,body='',source='owner'}={}){
+  addProjectQueueItem({projectId,title,body='',source='owner',kind='task'}={}){
     check(!!this.getProject(projectId),'Unknown project',404);
+    check(kind==='task'||kind==='idea','Invalid queue kind');
+    const titleText=txt(title,'title',300);
+    // 灵感去重：同一项目下标题相同的想法只保留一条，避免对话里反复提到就刷屏。
+    if(kind==='idea'){
+      const existing=this.db.prepare('SELECT * FROM owner_project_queue WHERE project_id=? AND kind=? AND title=? LIMIT 1')
+        .get(projectId,kind,titleText);
+      if(existing)return queueRow(existing);
+    }
     const id=randomUUID();const now=stamp();
     const next=this.db.prepare('SELECT COALESCE(MAX(position),0)+1 AS pos FROM owner_project_queue WHERE project_id=?')
       .get(projectId)?.pos ?? 1;
     this.db.prepare(`INSERT INTO owner_project_queue(
-      id,project_id,title,body,status,position,source,linked_job_id,created_at,updated_at,completed_at
-    ) VALUES(?,?,?,?, 'todo', ?, ?, NULL, ?, ?, NULL)`)
-      .run(id,projectId,txt(title,'title',300),txt(body,'body',4000,false),next,txt(source,'source',40),now,now);
+      id,project_id,title,body,status,kind,position,source,linked_job_id,created_at,updated_at,completed_at
+    ) VALUES(?,?,?,?, 'todo', ?, ?, ?, NULL, ?, ?, NULL)`)
+      .run(id,projectId,titleText,txt(body,'body',4000,false),kind,next,txt(source,'source',40),now,now);
     return this.getProjectQueueItem(id);
   }
   getProjectDiagram(projectId,kind,scope='project'){

@@ -82,6 +82,7 @@ let projectBriefModule = null;
 let nextActionModule = null;
 let knowledgeTidyModule = null;
 let diagramModule = null;
+let ideaCaptureModule = null;
 const githubCache = new Map();
 const githubActivityCache = new Map();
 const briefCache = new Map();
@@ -1437,7 +1438,7 @@ const buildView = async () => {
     playbookRunning: Boolean(activePlaybook),
     brief: briefView,
     briefStale: briefView?.stale === true,
-    queueTodo: queueView.filter((item) => item.status === 'todo').length,
+    queueTodo: queueView.filter((item) => item.status === 'todo' && item.kind === 'task').length,
     knowledge: knowledgeView?.counts ?? {},
     result: resultView,
     state,
@@ -2095,8 +2096,28 @@ const createPatchJob = async ({ text, projectId, jobType = 'code-write', ...rest
  * - 只需要回答 → 直接返回结论，不创建 Job；
  * - 需要写入 → 创建 code-write 写请求（pending_approval，HITL），批准后才启动写入子 Agent。
  */
-const submitCompanionTask = async ({ text, projectId }) => {
-  const project = await resolveProject(projectId);
+/** 对话里的改进意见自动进「想法」池：只存文本，不触发任何执行。 */
+const captureIdeaFromMessage = async (text, projectId) => {
+  if (!projectId) return null;
+  try {
+    const mod = (ideaCaptureModule ??= await importEsm('../src/idea-capture.mjs'));
+    if (!mod.looksLikeIdea(text)) return null;
+    return await api('/owner/v1/queue', {
+      method: 'POST',
+      body: {
+        projectId,
+        title: mod.ideaTitle(text),
+        body: text,
+        kind: 'idea',
+        source: 'conversation'
+      }
+    });
+  } catch {
+    return null;
+  }
+};
+
+const submitCompanionTask = async ({ text, projectId }) => {  const project = await resolveProject(projectId);
   const [{ submitCompanionTask: runSubmit }, triageRunner] = await Promise.all([
     loadCompanionSubmit(),
     getTriageRunner()
@@ -2131,10 +2152,12 @@ const registerIpc = () => {
 
   ipcMain.handle('companion:submit', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    return submitCompanionTask({
-      text: String(input?.text ?? ''),
-      projectId: String(input?.projectId ?? '')
-    });
+    const text = String(input?.text ?? '');
+    const projectId = String(input?.projectId ?? '');
+    // 自动采集：讨论中提到的改进意见进「想法」池（只收集，不执行）。
+    const captured = input?.captureIdea === false ? null : await captureIdeaFromMessage(text, projectId);
+    const result = await submitCompanionTask({ text, projectId });
+    return captured ? { ...result, capturedIdea: captured } : result;
   });
 
   // 兼容旧渲染进程：同样走“只读分析 → HITL 写请求”，不再接受 mode 开关。
@@ -2156,7 +2179,8 @@ const registerIpc = () => {
         projectId: project.id,
         title: String(input?.title ?? '').trim(),
         body: String(input?.body ?? ''),
-        source: 'owner'
+        source: 'owner',
+        kind: input?.kind === 'idea' ? 'idea' : 'task'
       }
     });
   });

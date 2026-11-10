@@ -1311,3 +1311,26 @@ pre.diff, pre.logs {
   pointer-events: none;
 }
 .mascot-thumb.sprite { background-color: var(--accent-soft); }
+
+/* 输入框精简：项目选择放进发送栏，去掉沙箱/范围/模型等额外 chip */
+.composer-bar select {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--text);
+}
+.composer-bar select:focus { outline: none; border-color: var(--accent); }
+.composer-hint { flex: 0 1 auto; min-width: 0; }
+.composer-hint[hidden] { display: none; }
+.queue-source {
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 9px;
+  color: var(--muted);
+}

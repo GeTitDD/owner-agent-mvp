@@ -75,11 +75,15 @@ const run = async () => {
     const info = await panel.evaluate(() => ({
       activity: [...document.querySelectorAll('.activity-line')].length,
       messages: document.querySelectorAll('#timeline .msg').length,
-      model: document.getElementById('composerModel')?.textContent ?? ''
+      hasModelChip: Boolean(document.getElementById('composerModel')),
+      hasScopeChips: Boolean(document.getElementById('scopeProfile') || document.getElementById('scopePaths')),
+      hasProjectSelect: Boolean(document.getElementById('projectSelect'))
     }));
     check('activity stream shows lifecycle lines', info.activity >= 2, String(info.activity));
     check('timeline renders messages and tool cards', info.messages >= 3, String(info.messages));
-    check('composer shows the current model', info.model.includes('test/companion-model'), info.model);
+    check('composer keeps only the essentials',
+      !info.hasModelChip && !info.hasScopeChips && info.hasProjectSelect,
+      JSON.stringify(info));
 
     const input = panel.locator('#taskInput');
     await input.click();

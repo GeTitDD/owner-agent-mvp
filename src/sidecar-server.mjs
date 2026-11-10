@@ -466,8 +466,9 @@ export function createSidecarHandler({
 
     if (rest.length === 1 && head === 'queue') {
       const projectId = url.searchParams.get('projectId') ?? '';
+      const kindFilter = url.searchParams.get('kind') ?? '';
       if (method === 'GET') {
-        send(res, 200, { items: store.listProjectQueue(projectId) });
+        send(res, 200, { items: store.listProjectQueue(projectId, kindFilter) });
         return;
       }
       requireMethod(method, 'POST');
@@ -476,7 +477,8 @@ export function createSidecarHandler({
         projectId: str(body.projectId, 'projectId', 90),
         title: str(body.title, 'title', 300),
         body: typeof body.body === 'string' ? body.body : '',
-        source: typeof body.source === 'string' ? body.source : 'owner'
+        source: typeof body.source === 'string' ? body.source : 'owner',
+        kind: body.kind === 'idea' ? 'idea' : 'task'
       });
       send(res, 201, item);
       return;
