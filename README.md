@@ -12,7 +12,7 @@
 
 - 运行：`npm install && npm run desktop`
 - pstack Playbook：面板内 12 个按钮 + 4 个一键沉淀预设；只读分析，结论可沉淀为项目知识候选，改动一律走「提案 → 你批准 → 沙箱」。见 [docs/PSTACK_PLAYBOOKS_V1.md](docs/PSTACK_PLAYBOOKS_V1.md)
-- GitHub 关联：自动从 `git remote` 识别仓库，项目行 `GH` 徽章打开仓库；用本机 `gh` CLI 读取私有/公开、默认分支、星标、最近提交与打开的 Issues/PR（只读，需 `gh auth login`）
+- GitHub 关联：自动从 `git remote` 识别仓库，项目行 `GH` 徽章打开仓库；用本机 `gh` CLI 读取私有/公开、默认分支、星标、最近提交与打开的 Issues/PR；复测通过后可预览并二次确认创建 Draft PR（只推 owner/ 分支，不合并）
 - Windows 打包：`npm run desktop:pack`（CI `desktop-package` 上传私有 RC Artifact + SHA256）
 - 桌面 E2E：`npm run e2e:desktop`（真实 Docker + 真实 Pi）
 - 定向回归：`npm run e2e:desktop:sandbox-config`、`npm run e2e:desktop:multiproject`、`npm run e2e:desktop:knowledge`、`npm run e2e:desktop:playbooks`

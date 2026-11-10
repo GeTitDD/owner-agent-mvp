@@ -134,6 +134,21 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 
 ![GitHub Issues / PR 列表](assets/companion/github-activity.png)
 
+### 3.8 创建 GitHub PR（受控写远端）
+
+只有在 **修复周期 `tested_pass` + 补丁 `applied` + worktree 仍在** 时，结果卡片才出现「创建 PR」。
+
+- 先预览：仓库、`base ← head`、变更文件与 stat、commit message、PR 标题/正文。
+- 必须勾选「我确认推送到 GitHub 并创建 Draft PR」才可继续。
+- 预览返回 `previewHash`；创建时重算并比对，内容变化（文件、base、head、补丁 hash）会拒绝，必须重新预览。
+- 只 `git add` 补丁批准过的文件，不使用 `git add -A`；worktree 出现未批准文件直接拒绝。
+- 只推 `owner/` 分支，拒绝 `main` / `master`、路径穿越、远端已存在的同名分支；**绝不 force push**。
+- 默认创建 **Draft PR**，不合并；PR 正文写明周期、补丁、测试运行与「不会自动合并」。
+- 推送失败不创建 PR；推送成功但 `gh pr create` 失败时保留分支并提示错误。
+- 复用本机 `gh` 认证；HTTPS remote 的 `git push` 依赖本机 Git 凭据。
+
+![创建 PR 预览与二次确认](assets/companion/pr-preview.png)
+
 ## 4. 组件清单
 
 | 组件 | 用途 |
@@ -178,6 +193,6 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | `npm run e2e:desktop:knowledge` | PASS（知识摘要、验证、复用、今日视图） |
 | `npm run e2e:desktop:sandbox-config` | PASS（缺少快照文件 → 失败弹窗 → 补齐后重试） |
 | `npm run e2e:desktop:mascots` | PASS（spritesheet 播放、一键换肤、静态回退、无底盘、有效帧） |
-| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、知识摘要、GitHub 关联与 Issues/PR、搜索、折叠、点击切换） |
+| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、知识摘要、GitHub 关联与 Issues/PR、PR 预览保护、搜索、折叠、点击切换） |
 | `npm run e2e:desktop:playbooks` | PASS（运行中状态、4 个一键沉淀预设、分析、取消、手动/一键沉淀、去重、提案 HITL） |
 | Workbench UI 冒烟 | 详情 5 个标签、修订对比、使用记录、维护降级提示 |

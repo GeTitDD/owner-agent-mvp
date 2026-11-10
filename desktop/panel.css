@@ -221,6 +221,20 @@ textarea:focus { border-color: var(--accent); }
   font-size: 13px;
 }
 .result-card button { border: 1px solid var(--line); background: transparent; border-radius: 8px; padding: 5px 10px; cursor: pointer; }
+.result-card button + button { margin-left: 6px; }
+.pr-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.pr-confirm input { width: 14px; height: 14px; }
 
 .footer {
   display: flex; align-items: center; justify-content: space-between;

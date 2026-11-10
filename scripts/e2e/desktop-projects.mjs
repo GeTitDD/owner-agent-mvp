@@ -160,6 +160,18 @@ const run = async () => {
       && githubPanel.text.includes('example/alpha')
       && /仓库|无权|gh/iu.test(githubPanel.text),
       JSON.stringify(githubPanel.text));
+    const prButton = await panel.locator('#resultCard button', { hasText: '创建 PR' }).count();
+    check('tested-pass result offers a PR action', prButton === 1, String(prButton));
+    const prGuard = await panel.evaluate(async () => {
+      try {
+        await window.companion.github.prPreview({ cycleId: 'cycle-alpha' });
+        return '';
+      } catch (error) {
+        return String(error?.message ?? error);
+      }
+    });
+    check('PR preview is blocked when the GitHub repo is unreadable',
+      /GitHub 仓库不可用|没有关联/u.test(prGuard), prGuard);
     check('needs section is hidden when nothing is pending',
       await panel.evaluate(() => document.getElementById('needsSection').hidden) === true);
 

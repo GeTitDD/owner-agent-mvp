@@ -11,7 +11,9 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   result: (input) => invoke('companion:result', input),
   openExternal: (url) => invoke('companion:open-external', { url }),
   github: Object.freeze({
-    activity: (input) => invoke('companion:github-activity', input)
+    activity: (input) => invoke('companion:github-activity', input),
+    prPreview: (input) => invoke('companion:github-pr-preview', input),
+    prCreate: (input) => invoke('companion:github-pr-create', input)
   }),
   createSandbox: (input) => invoke('companion:create-sandbox', input),
   knowledge: Object.freeze({

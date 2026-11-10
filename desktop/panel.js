@@ -1473,6 +1473,65 @@
     }
   };
 
+  /** 创建 GitHub PR 的预览与二次确认；只有勾选后才允许推送。 */
+  const openPrPreview = async (cycleId) => {
+    try {
+      const preview = await window.companion.github.prPreview({ cycleId });
+      const nodes = [
+        el('p', 'result-summary',
+          '将推送一个新分支并创建 Draft PR；不会合并，也不会写入 main。'),
+        detailRows([
+          ['仓库', `${preview.repo}${preview.private ? '（私有）' : ''}`],
+          ['分支', `${preview.base} ← ${preview.head}`],
+          ['文件', (preview.files ?? []).join(', ') || '—'],
+          ['变更统计', preview.stat || '—'],
+          ['Commit', preview.draft.commitMessage],
+          ['PR 标题', preview.draft.title]
+        ]),
+        el('pre', 'diff', preview.draft.body)
+      ];
+      const confirmRow = el('label', 'pr-confirm');
+      const checkbox = el('input');
+      checkbox.type = 'checkbox';
+      confirmRow.append(checkbox, el('span', undefined, '我确认推送到 GitHub 并创建 Draft PR'));
+      nodes.push(confirmRow);
+      const cancel = el('button', 'ghost', '取消');
+      cancel.onclick = closeModal;
+      const create = el('button', 'primary', '创建 Draft PR');
+      create.disabled = true;
+      checkbox.onchange = () => { create.disabled = !checkbox.checked; };
+      create.onclick = async () => {
+        create.disabled = true;
+        create.textContent = '推送中…';
+        try {
+          const result = await window.companion.github.prCreate({
+            cycleId,
+            previewHash: preview.previewHash,
+            confirm: true
+          });
+          closeModal();
+          if (result.url) {
+            toast('Draft PR 已创建', 5000);
+            void window.companion.openExternal(result.url)
+              .catch((error) => toast(String(error?.message ?? error)));
+          } else if (result.error) {
+            toast(`分支已推送，但创建 PR 失败：${result.error}`, 8000);
+          } else {
+            toast('分支已推送', 5000);
+          }
+          await refresh();
+        } catch (error) {
+          create.disabled = false;
+          create.textContent = '创建 Draft PR';
+          toast(String(error?.message ?? error), 7000);
+        }
+      };
+      openModal('创建 GitHub PR（需要确认）', nodes, [cancel, create]);
+    } catch (error) {
+      toast(String(error?.message ?? error), 6000);
+    }
+  };
+
   const renderResult = () => {
     const section = $('resultSection');
     const card = $('resultCard');
@@ -1486,6 +1545,12 @@
     const button = el('button', undefined, '查看结果');
     button.onclick = () => { void openResult(view.result.cycleId); };
     card.append(button);
+    if (view.result.testStatus === 'pass') {
+      const pr = el('button', 'ghost small', '创建 PR');
+      pr.title = '复测通过后，把补丁分支推送到 GitHub 并创建 Draft PR';
+      pr.onclick = () => { void openPrPreview(view.result.cycleId); };
+      card.append(pr);
+    }
   };
 
   const refresh = async () => {

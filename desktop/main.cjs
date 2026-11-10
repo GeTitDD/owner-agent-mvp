@@ -76,6 +76,7 @@ let knowledgeSummaryModule = null;
 let harvestInFlight = false;
 let mascotModule = null;
 let githubModule = null;
+let githubPrModule = null;
 const githubCache = new Map();
 const githubActivityCache = new Map();
 
@@ -850,6 +851,167 @@ const knowledgeDetail = ({ id } = {}) => {
     }
     githubActivityCache.set(repo.nameWithOwner, { at: Date.now(), value });
     return value;
+  };
+
+  const loadGithubPr = async () => (githubPrModule ??= await importEsm('../src/github-pr.mjs'));
+
+  const gitAt = async (cwd, args, timeout = 15000) => {
+    const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
+      timeout,
+      windowsHide: true
+    });
+    return stdout.trim();
+  };
+
+  /**
+   * 准备 PR 预览：只认可“复测通过 + 已应用补丁 + 活跃 worktree + GitHub 仓库可用”。
+   * 返回内容会参与 previewHash；真正创建时必须重算并比对。
+   */
+  const preparePr = async (cycleId) => {
+    const id = String(cycleId ?? '');
+    if (!id) throw new Error('缺少修复周期。');
+    const cycle = await api(`/owner/v1/repair-cycles/${encodeURIComponent(id)}`);
+    if (!cycle) throw new Error('找不到修复周期。');
+    if (cycle.status !== 'tested_pass') throw new Error('只有复测通过的修复才能创建 PR。');
+    const proposal = cycle.proposal;
+    if (!proposal || proposal.status !== 'applied') {
+      throw new Error('修复补丁还没有应用，不能创建 PR。');
+    }
+    const project = ((await api('/owner/v1/projects')).items ?? [])
+      .find((item) => item.id === cycle.project_id);
+    if (!project) throw new Error('项目不存在。');
+    const github = await githubForProject(project.root);
+    if (!github) throw new Error('项目没有关联 GitHub 仓库。');
+    if (!github.available) throw new Error(`GitHub 仓库不可用：${github.error || 'gh 无法读取'}`);
+    const workspaces = (await api(
+      `/owner/v1/workspaces?projectId=${encodeURIComponent(project.id)}&limit=100`
+    )).items ?? [];
+    const workspace = workspaces.find((item) => item.id === proposal.workspace_id);
+    if (!workspace || workspace.status === 'cleaned') {
+      throw new Error('找不到补丁对应的 worktree。');
+    }
+    if (!workspace.path || !fs.existsSync(workspace.path)) throw new Error('worktree 目录不存在。');
+    const pr = await loadGithubPr();
+    if (!pr.isSafeHeadBranch(workspace.branch)) {
+      throw new Error(`分支 ${workspace.branch} 不在允许推送的 owner/ 范围内。`);
+    }
+    const base = String(github.defaultBranch || 'main');
+    if (!/^[A-Za-z0-9._/-]+$/u.test(base)) throw new Error('默认分支名不合法。');
+    const files = (proposal.files ?? []).map((file) => file.path).filter(Boolean);
+    if (!files.length) throw new Error('补丁没有变更文件。');
+    const status = await execFileAsync('git', ['-C', workspace.path, 'status', '--porcelain'], {
+      timeout: 15000, windowsHide: true
+    }).then((result) => result.stdout.replace(/\r/gu, '').replace(/\n+$/u, ''))
+      .catch(() => '');
+    const changed = status.split('\n').filter(Boolean).map((line) => {
+      const rest = line.slice(3).trim();
+      return rest.includes(' -> ') ? rest.split(' -> ').pop() : rest;
+    });
+    const outside = changed.filter((file) => !files.includes(file));
+    if (outside.length) {
+      throw new Error(`worktree 存在未批准的改动：${outside.slice(0, 3).join(', ')}`);
+    }
+    const ahead = Number(await gitAt(workspace.path, ['rev-list', '--count', `${proposal.base_sha}..HEAD`])
+      .catch(() => '0')) || 0;
+    if (!status && ahead === 0) throw new Error('没有可提交的改动。');
+    const stat = await gitAt(workspace.path, ['diff', '--stat', proposal.base_sha]).catch(() => '');
+    const tasks = (await api(`/owner/v1/tasks?projectId=${encodeURIComponent(project.id)}`)).items ?? [];
+    const task = tasks.find((item) => item.id === cycle.owner_task_id) ?? null;
+    const draft = pr.buildPrDraft({
+      taskTitle: task?.title || cycle.job?.title || project.name,
+      projectName: project.name,
+      cycleId: cycle.id,
+      proposalId: proposal.id,
+      runId: cycle.repair_sandbox_run_id ?? '',
+      files,
+      base,
+      head: workspace.branch
+    });
+    const previewHash = pr.prPreviewHash({
+      repo: github.nameWithOwner,
+      base,
+      head: workspace.branch,
+      files,
+      proposalHash: proposal.proposal_hash,
+      commitMessage: draft.commitMessage,
+      cycleId: cycle.id
+    });
+    return {
+      cycle,
+      project,
+      github,
+      workspace,
+      proposal,
+      files,
+      ahead,
+      preview: {
+        previewHash,
+        cycleId: cycle.id,
+        repo: github.nameWithOwner,
+        repoUrl: github.url,
+        private: github.private,
+        base,
+        head: workspace.branch,
+        files,
+        stat,
+        ahead,
+        draft
+      }
+    };
+  };
+
+  const prPreviewFor = async (cycleId) => (await preparePr(cycleId)).preview;
+
+  const prCreateFor = async ({ cycleId, previewHash, confirm }) => {
+    if (confirm !== true) throw new Error('需要显式确认才能推送分支并创建 PR。');
+    const prepared = await preparePr(cycleId);
+    if (String(previewHash ?? '') !== prepared.preview.previewHash) {
+      throw new Error('预览已过期或内容发生变化，请重新预览后再确认。');
+    }
+    const { workspace, files, preview, github } = prepared;
+    // 只暂存批准过的文件，绝不使用 git add -A。
+    await gitAt(workspace.path, ['add', '--', ...files]);
+    const staged = await gitAt(workspace.path, ['diff', '--cached', '--name-only']);
+    let commit = await gitAt(workspace.path, ['rev-parse', '--short', 'HEAD']).catch(() => '');
+    if (staged) {
+      await gitAt(workspace.path, [
+        '-c', 'user.name=Owner Companion',
+        '-c', 'user.email=owner-companion@users.noreply.github.com',
+        'commit', '-m', preview.draft.commitMessage
+      ]);
+      commit = await gitAt(workspace.path, ['rev-parse', '--short', 'HEAD']);
+    } else if (prepared.ahead === 0) {
+      throw new Error('没有可提交的改动。');
+    }
+    const exists = await gitAt(workspace.path, [
+      'ls-remote', '--heads', 'origin', `refs/heads/${preview.head}`
+    ]);
+    if (exists) throw new Error(`远端已存在分支 ${preview.head}，请先清理。`);
+    await gitAt(workspace.path, [
+      'push', 'origin', `HEAD:refs/heads/${preview.head}`
+    ], 60000);
+    try {
+      const { stdout } = await execFileAsync('gh', [
+        'pr', 'create',
+        '--repo', github.nameWithOwner,
+        '--base', preview.base,
+        '--head', preview.head,
+        '--title', preview.draft.title,
+        '--body', preview.draft.body,
+        '--draft'
+      ], { timeout: 60000, windowsHide: true });
+      const url = stdout.trim().split('\n').filter(Boolean).pop() ?? '';
+      return { pushed: true, url, branch: preview.head, base: preview.base, commit };
+    } catch (error) {
+      return {
+        pushed: true,
+        url: '',
+        branch: preview.head,
+        base: preview.base,
+        commit,
+        error: ghErrorText(error)
+      };
+    }
   };
 
 
@@ -2056,6 +2218,20 @@ const registerIpc = () => {
     const projects = (await api('/owner/v1/projects')).items ?? [];
     const project = projects.find((item) => item.id === created.projectId);
     return { ...created, testConfig: project ? await testConfigForProject(project) : null };
+  });
+
+  ipcMain.handle('companion:github-pr-preview', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return prPreviewFor(String(input?.cycleId ?? ''));
+  });
+
+  ipcMain.handle('companion:github-pr-create', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return prCreateFor({
+      cycleId: String(input?.cycleId ?? ''),
+      previewHash: String(input?.previewHash ?? ''),
+      confirm: input?.confirm === true
+    });
   });
 
   ipcMain.handle('companion:github-activity', async (event, input) => {
