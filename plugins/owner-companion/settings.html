@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Owner 设置</title>
+  <link rel="stylesheet" href="main-view.css" />
+</head>
+<body class="settings-body">
+  <main class="settings">
+    <h2>连接电脑</h2>
+    <p class="muted small">
+      在电脑端打开 Owner Companion → 设置 →「手机连接」，把地址和 6 位配对码填到这里。
+      插件只保存设备令牌，不保存配对码。
+    </p>
+
+    <label class="field">
+      <span>电脑地址</span>
+      <input id="baseUrl" type="text" value="http://127.0.0.1:47831" spellcheck="false" />
+    </label>
+
+    <label class="field">
+      <span>配对码</span>
+      <input id="pairCode" type="text" inputmode="numeric" maxlength="6" placeholder="6 位数字" />
+    </label>
+
+    <div class="settings-actions">
+      <button id="pairButton" type="button" class="primary">连接</button>
+      <span id="settingsStatus" class="muted small">读取状态…</span>
+    </div>
+
+    <div id="settingsError" class="error small" hidden></div>
+  </main>
+
+  <script src="bridge.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

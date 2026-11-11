@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Owner</title>
+  <link rel="stylesheet" href="main-view.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot" id="statusDot"></span>
+      <span>Owner</span>
+    </div>
+    <select id="projectSelect" aria-label="项目"></select>
+    <div class="topbar-actions">
+      <span id="statusText" class="status">连接中…</span>
+      <button id="refreshButton" type="button" class="ghost">刷新</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section id="connectHint" class="hint" hidden>
+      <h2>还没有连接电脑</h2>
+      <p>在插件设置里填写 <code>http://127.0.0.1:47831</code> 和 6 位配对码即可。</p>
+    </section>
+
+    <section id="nextActionCard" class="card action" hidden></section>
+
+    <section class="grid">
+      <article class="card">
+        <h3>项目画像</h3>
+        <div id="briefBody" class="body muted">正在读取…</div>
+      </article>
+
+      <article class="card">
+        <h3>想法</h3>
+        <div class="add-row">
+          <input id="ideaInput" type="text" maxlength="300" placeholder="记一条改进想法…" />
+          <button id="ideaAdd" type="button" class="primary">记下</button>
+        </div>
+        <div id="ideaList" class="list"></div>
+      </article>
+
+      <article class="card">
+        <h3>知识</h3>
+        <div id="knowledgeBody" class="body muted">正在读取…</div>
+        <div id="diagramList" class="chips"></div>
+      </article>
+
+      <article class="card chat">
+        <div class="chat-head">
+          <h3>和 Agent 讨论</h3>
+          <span class="muted small">只读讨论；写操作回电脑批准</span>
+        </div>
+        <div id="chatMessages" class="messages"></div>
+        <div class="chat-input">
+          <textarea id="chatInput" rows="2" maxlength="1200" placeholder="问进度，或说说改进想法…"></textarea>
+          <button id="chatSend" type="button" class="primary">发送</button>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="bridge.js"></script>
+  <script src="main-view.js"></script>
+</body>
+</html>

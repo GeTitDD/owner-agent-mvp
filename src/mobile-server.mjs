@@ -314,6 +314,8 @@ export async function startMobileServer({
     revoke: (token) => devices.revoke(token),
     close: () => new Promise((resolve) => {
       if (!server.listening) { resolve(); return; }
+      // 关闭时主动断开 keep-alive 连接，否则 close() 会一直等到超时。
+      try { server.closeAllConnections?.(); } catch { /* 老版本 Node 没有该方法 */ }
       server.close(() => resolve());
     })
   };

@@ -79,3 +79,15 @@ npx expo export --platform ios
 - 图谱 SVG 预览（当前只显示版本与类型）；
 - 知识审核（审核仍在桌面 Workbench）；
 - App Store 打包与签名（需要 Apple 开发者账号）。
+
+## Cindy 插件（同一套桥）
+
+`plugins/owner-companion/` 是按 Cindy `ghost.json`（schemaVersion 3）写的插件：
+
+- 安装包：`plugins/dist/owner-companion-0.1.0.cindy`（zip 根目录即 `ghost.json`）；
+- 主视图 / 面板：项目画像、想法池、知识计数、图谱版本、只读聊天；
+- 设置页：填 `http://127.0.0.1:47831` + 6 位配对码，插件只保存设备令牌；
+- 权限：只声明 Node worker，页面与 `main.js` 不直连网络；没有审批/写文件/执行 Job；
+- worker 契约测试：`tests/owner-companion-plugin.test.mjs`。
+
+插件源码结构见 `plugins/owner-companion/README.zh-CN.md`。
