@@ -23,6 +23,11 @@
     "position": "right"
   },
   "settingsHtml": "settings.html",
+  "mobile": {
+    "channels": ["owner-companion"],
+    "mainView": "main-view.html",
+    "settings": "settings.html"
+  },
   "readme": {
     "en": "README.md",
     "zh-CN": "README.zh-CN.md"
