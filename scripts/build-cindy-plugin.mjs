@@ -1,4 +1,7 @@
-// 打包 Cindy 插件：生成 plugins/dist/owner-companion-<version>.cindy。
+// 打包 Cindy 插件：生成 plugins/dist/<插件目录>-<version>.cindy。
+//
+// 用法：node scripts/build-cindy-plugin.mjs [插件目录名]
+// 缺省打包 owner-companion；插件目录必须在 plugins/ 下并带 ghost.json。
 //
 // 注意：zip 条目必须用正斜杠；Windows 的 Compress-Archive 会写成反斜杠，
 // Cindy 无法识别 node/worker.cjs 这类路径，会直接拒装。
@@ -7,10 +10,14 @@ import path from 'node:path';
 import JSZip from 'jszip';
 
 const root = path.resolve(import.meta.dirname, '..');
-const src = path.join(root, 'plugins', 'owner-companion');
+const name = process.argv[2] || 'owner-companion';
+const src = path.join(root, 'plugins', name);
+if (!fs.existsSync(path.join(src, 'ghost.json'))) {
+  throw new Error(`插件目录不存在或缺少 ghost.json：${src}`);
+}
 const manifest = JSON.parse(fs.readFileSync(path.join(src, 'ghost.json'), 'utf8'));
 const outDir = path.join(root, 'plugins', 'dist');
-const outFile = path.join(outDir, `owner-companion-${manifest.version}.cindy`);
+const outFile = path.join(outDir, `${manifest.id || name}-${manifest.version}.cindy`);
 
 const zip = new JSZip();
 const walk = (dir, prefix = '') => {
