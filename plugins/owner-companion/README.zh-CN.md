@@ -1,53 +1,56 @@
 # Owner Companion（Cindy 插件）
 
-把 Owner Companion 的项目视图带进 Cindy：项目画像、想法池、知识计数、图谱版本，
-以及和 Agent 的只读讨论。
-
-插件本身不存项目数据，只连本机 Owner Companion 桌面端的局域网桥
-（默认 `http://127.0.0.1:47831`）。
+一个自包含的 Cindy 插件：项目画像、想法池、知识笔记、依赖图。
+数据与计算全在插件自己的 Node worker 里，不需要桥、不需要第二个客户端、也不依赖我们的桌面端。
 
 ## 安装
 
-1. 在同一台电脑上安装并启动 Owner Companion；
-2. 桌面端打开 **设置 → 手机连接**，记下地址和 6 位配对码；
-3. 在 Cindy 里打开本插件的设置，填地址和配对码，点 **连接**。
-   插件只保存设备令牌，不保存配对码（`~/.owner-companion/plugin.json`，0600）；
-4. 从 Cindy 左侧导航打开 **Owner**（或插件卡片 → 管理 → 使用）。
+1. 打包：`npm run cindy:pack` → `plugins/dist/owner-companion-<version>.cindy`；
+2. 在 Cindy 打开 **插件 → 添加插件**，选择 `.cindy` 文件（或直接拖入）；
+3. 从左侧导航打开 **Owner**，点 **添加项目**，填一个本机目录。
 
-打包产物：`plugins/dist/owner-companion-0.1.1.cindy`（zip 根目录即 `ghost.json`），
-用 Cindy 插件页的「添加插件」导入。
+已在 **Cindy 0.1.124（Windows）** 实测：安装、启用、主视图、想法新增/采纳/删除、依赖扫描、Agent 工具。
 
-已在 **Cindy 0.1.124（Windows）** 实测：安装、启用、主视图、设置、想法新增/采纳/删除，
-以及一次真实的 27 秒聊天往返。
+## 数据与权限
 
-## 能做什么
+- 数据文件：`~/.owner-companion/owner.json`（原子写入，保留 `.bak`）；
+- 不写项目文件；除想法与知识笔记（只写插件自己的 JSON）外，所有工具只读；
+- 声明了 Node worker 和 `mainView` / `panel` / `settingsHtml` / 手机投影；
+  页面与 `main.js` 没有直连网络和文件系统，读取与扫描都在 worker 里完成。
 
-| 区域 | 行为 |
+## Agent 工具
+
+| 工具 | 用途 |
 | --- | --- |
-| 项目 | 切换已登记项目，各自加载自己的数据 |
-| 画像 | 一句话、怎么跑、风险、过期提示 |
-| 想法 | 新增 / 采纳 / 搁置 / 重开 / 删除，或带回聊天继续讨论 |
-| 知识 | 经验 / 知识 / 候选计数，图谱版本 |
-| 聊天 | 通过桌面端只读分析讨论进度与改进意见 |
+| `owner_projects` | 列出已登记项目 |
+| `owner_project_overview` | 画像、下一步、想法与图谱摘要 |
+| `owner_brief_refresh` | 重新扫描并生成画像 |
+| `owner_ideas` | 按状态列出想法 |
+| `owner_idea_add` | 记一条改进想法 |
+| `owner_idea_status` | todo / doing / blocked / done |
+| `owner_knowledge` | 列出知识笔记 |
+| `owner_knowledge_add` | 记一条知识笔记 |
+| `owner_diagram` | 扫描依赖并返回 Mermaid |
 
-## 权限与边界
-
-- 只声明 Node worker（`node/worker.cjs`）。页面和 `main.js` 没有直连网络，
-  由 worker 访问本机回环地址；
-- 不能写项目文件、不能审批、不能执行 Job。聊天里需要改代码时，
-  Owner Companion 会生成待审批请求，必须回电脑上批准；
-- 设备令牌保存在当前用户目录，删除 `~/.owner-companion/plugin.json` 即可解绑。
+聊天与改代码都交给 Cindy 自己的 Agent，本插件只提供项目上下文与采集入口。
 
 ## 开发
 
 ```text
 plugins/owner-companion/
-├── ghost.json          # schemaVersion 3 清单
-├── main.js             # 沙箱电子脑：页面 ↔ Node worker
-├── bridge.js           # 页面侧工具（BroadcastChannel + /wake）
+├── ghost.json          # schemaVersion 3 清单 + tools
+├── main.js             # 沙箱电子脑：页面 ↔ worker，工具调用
+├── bridge.js           # 页面侧 BroadcastChannel + /wake
 ├── main-view.html/css/js
 ├── settings.html/js
-└── node/worker.cjs     # JSON-RPC stdio → 本机 HTTP
+├── node/worker.cjs     # JSON-RPC stdio
+└── node/lib/
+    ├── store.mjs       # 项目 / 想法 / 画像 / 图谱 / 知识
+    ├── scan.mjs        # 有界项目扫描
+    ├── brief.mjs       # 本地快速画像
+    └── diagrams.mjs    # 依赖扫描 + Mermaid
 ```
 
-worker 的契约测试在 `tests/owner-companion-plugin.test.mjs`。
+测试：`tests/plugin-worker.test.mjs`、`tests/plugin-scan.test.mjs`、`tests/plugin-diagrams.test.mjs`。
+
+打包用 JSZip，确保 zip 条目是 `/` 分隔（Windows 的 `Compress-Archive` 会写成 `\`，Cindy 会拒装）。

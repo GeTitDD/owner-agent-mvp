@@ -6,19 +6,13 @@
   const state = {
     overview: null,
     projectId: '',
-    paired: false,
-    busy: false,
-    messages: [],
-    elapsed: 0,
-    timer: 0
+    mermaid: ''
   };
 
   const STATUS_LABEL = {
     todo: '新想法', doing: '讨论中', blocked: '搁置', done: '已采纳', failed: '失败'
   };
-  const DIAGRAM_LABEL = {
-    dependency: '依赖图', control: '控制流', dataflow: '数据流', state: '状态图', sequence: '时序图'
-  };
+  const DIAGRAM_LABEL = { dependency: '依赖图' };
 
   const esc = (value) => String(value ?? '')
     .replace(/&/gu, '&amp;')
@@ -52,16 +46,18 @@
       select.append(option);
     }
     select.hidden = projects.length === 0;
+    $('emptyHint').hidden = projects.length > 0;
+    $('nextActionCard').hidden = projects.length === 0;
   };
 
   const renderNextAction = () => {
     const card = $('nextActionCard');
     const action = state.overview?.nextAction;
-    if (!action) { card.hidden = true; return; }
+    if (!action || !state.overview?.project) { card.hidden = true; return; }
     card.hidden = false;
     card.innerHTML = `
       <div class="action-label">下一步</div>
-      <div class="action-title">${esc(action.title || action.label || '')}</div>
+      <div class="action-title">${esc(action.title || '')}</div>
       ${action.detail ? `<div class="action-detail">${esc(action.detail)}</div>` : ''}
     `;
   };
@@ -70,7 +66,7 @@
     const brief = state.overview?.brief;
     const box = $('briefBody');
     if (!brief) {
-      box.textContent = '电脑端还没有生成画像。在桌面点一次「理解项目」即可。';
+      box.textContent = '还没有画像。点「重新扫描」会本地读取 README、脚本与目录，不调用模型。';
       return;
     }
     const runs = (brief.howToRun ?? []).slice(0, 5)
@@ -85,23 +81,11 @@
     `;
   };
 
-  const renderKnowledge = () => {
-    const counts = state.overview?.knowledge ?? {};
-    $('knowledgeBody').innerHTML = `
-      <div class="line">经验 ${esc(counts.experiences ?? 0)} · 知识 ${esc(counts.knowledge ?? 0)}（已验证 ${esc(counts.verified ?? 0)}）</div>
-      <div class="line muted small">待提炼 ${esc(counts.pendingHarvest ?? 0)} · 候选 ${esc(counts.candidates ?? 0)} · 复用 ${esc(counts.usages ?? 0)}</div>
-    `;
-    const diagrams = state.overview?.diagrams ?? [];
-    $('diagramList').innerHTML = diagrams.map((diagram) => (
-      `<span class="chip">${esc(DIAGRAM_LABEL[diagram.kind] ?? diagram.kind)} · v${esc(diagram.version)}</span>`
-    )).join('');
-  };
-
   const renderIdeas = () => {
     const list = $('ideaList');
     const ideas = state.overview?.ideas ?? [];
     if (!ideas.length) {
-      list.innerHTML = '<div class="muted small">还没有想法。和 Agent 讨论时提到的改进会自动进这里。</div>';
+      list.innerHTML = '<div class="muted small">还没有想法。记下一条，或在 Cindy 聊天里让 Agent 用 owner_idea_add 记录。</div>';
       return;
     }
     list.innerHTML = ideas.map((idea) => `
@@ -110,9 +94,9 @@
           <div class="idea-title">${esc(idea.title)}</div>
           <div class="idea-status status-${esc(idea.status)}">${esc(STATUS_LABEL[idea.status] ?? idea.status)}</div>
         </div>
-        <div class="idea-meta">${esc(idea.source === 'conversation' ? '对话' : idea.source === 'mobile' ? '手机' : '手动')}</div>
+        <div class="idea-meta">${esc(idea.source === 'cindy' ? 'Cindy' : idea.source === 'manual' ? '手动' : idea.source)}</div>
         <div class="idea-actions">
-          <button type="button" class="primary-link" data-action="discuss">讨论</button>
+          <button type="button" class="primary-link" data-action="copy">复制去讨论</button>
           ${idea.status !== 'done' ? '<button type="button" data-action="done">采纳</button>' : ''}
           ${idea.status === 'todo' || idea.status === 'doing'
             ? '<button type="button" data-action="blocked">搁置</button>'
@@ -123,18 +107,39 @@
     `).join('');
   };
 
-  const renderMessages = () => {
-    const box = $('chatMessages');
-    if (!state.messages.length && !state.busy) {
-      box.innerHTML = '<div class="muted small">可以问进度，也可以说说改进想法；写操作需要回电脑批准。</div>';
+  const renderKnowledge = () => {
+    const counts = state.overview?.knowledge ?? {};
+    $('knowledgeCount').textContent = `${counts.knowledge ?? 0} 条 · 已验证 ${counts.verified ?? 0}`;
+    $('knowledgeBody').innerHTML = `
+      <div class="line">知识 ${esc(counts.knowledge ?? 0)} 条（已验证 ${esc(counts.verified ?? 0)}）</div>
+      <div class="line muted small">知识只保存在插件目录，不写项目文件。</div>
+    `;
+    const items = state.overview?.knowledgeItems ?? [];
+    $('knowledgeList').innerHTML = items.length
+      ? items.map((entry) => `
+        <div class="knowledge-item">
+          <div class="line">${esc(entry.title)}</div>
+          <div class="muted small">${esc(entry.status === 'verified' ? '已验证' : '未验证')}${entry.tags?.length ? ` · ${esc(entry.tags.join(' / '))}` : ''}</div>
+        </div>
+      `).join('')
+      : '<div class="muted small">还没有知识笔记。</div>';
+  };
+
+  const renderDiagrams = () => {
+    const diagrams = state.overview?.diagrams ?? [];
+    $('diagramBadge').textContent = diagrams.length ? `${diagrams.length} 张` : '';
+    $('diagramList').innerHTML = diagrams.map((diagram) => (
+      `<span class="chip">${esc(DIAGRAM_LABEL[diagram.kind] ?? diagram.kind)} · v${esc(diagram.version)}</span>`
+    )).join('');
+    if (!diagrams.length) {
+      $('diagramBody').textContent = '还没有生成依赖图。';
       return;
     }
-    box.innerHTML = state.messages.map((message) => (
-      `<div class="msg ${message.role}">${esc(message.text)}</div>`
-    )).join('') + (state.busy
-      ? `<div class="msg agent">分析中… ${esc(state.elapsed)}s</div>`
-      : '');
-    box.scrollTop = box.scrollHeight;
+    const latest = diagrams[0];
+    $('diagramBody').innerHTML = `
+      <div class="line">${esc(latest.title || '依赖图')}</div>
+      <div class="line muted small">${esc(latest.summary || '')}</div>
+    `;
   };
 
   const render = () => {
@@ -143,68 +148,81 @@
     renderBrief();
     renderIdeas();
     renderKnowledge();
-    renderMessages();
+    renderDiagrams();
   };
 
   const load = async () => {
     setStatus('同步中…');
     try {
-      const status = await call('owner/status', {}, 10000);
-      state.paired = Boolean(status?.paired);
-      $('connectHint').hidden = state.paired;
-      if (!state.paired) {
-        setStatus('未连接', 'bad');
-        return;
-      }
-      const overview = await call('owner/overview', { projectId: state.projectId }, 40000);
+      const overview = await call('owner/projects/overview', { projectId: state.projectId }, 20000);
       state.overview = overview;
-      state.projectId = overview?.activeProjectId || state.projectId;
+      state.projectId = overview?.activeProjectId || '';
       render();
       setStatus('已连接', 'ok');
     } catch (error) {
-      setStatus('连接失败', 'bad');
-      toast(`同步失败：${String(error?.message ?? error)}`);
+      setStatus('读取失败', 'bad');
+      toast(`读取失败：${String(error?.message ?? error)}`);
     }
   };
 
-  const sendChat = async (text) => {
-    const value = String(text ?? '').trim();
-    if (!value || state.busy) return;
-    state.messages.push({ role: 'user', text: value });
-    state.busy = true;
-    state.elapsed = 0;
-    renderMessages();
-    const startedAt = Date.now();
-    state.timer = setInterval(() => {
-      state.elapsed = Math.round((Date.now() - startedAt) / 1000);
-      renderMessages();
-    }, 1000);
+  const showAddProject = (show) => {
+    $('addProjectCard').hidden = !show;
+    $('addProjectError').hidden = true;
+    if (show) $('projectPath').focus();
+  };
+
+  const addProject = async () => {
+    const value = String($('projectPath').value ?? '').trim();
+    if (!value) return;
     try {
-      const result = await call('owner/chat', { projectId: state.projectId, text: value }, 210000);
-      const answer = result?.summary || result?.advice || '（没有返回内容）';
-      const extra = result?.mode === 'write-request'
-        ? '\n\n写请求已创建，需要回电脑上批准后才会执行。'
-        : result?.mode === 'triage-error'
-          ? '\n\n分析没有完成，可以重试。'
-          : '';
-      state.messages.push({ role: 'agent', text: `${answer}${extra}` });
+      const result = await call('owner/projects/add', { path: value }, 20000);
+      $('projectPath').value = '';
+      showAddProject(false);
+      state.projectId = result?.project?.id ?? state.projectId;
+      await load();
+      toast('项目已添加');
     } catch (error) {
-      state.messages.push({ role: 'agent', text: `失败：${String(error?.message ?? error)}` });
+      const node = $('addProjectError');
+      node.textContent = String(error?.message ?? error);
+      node.hidden = false;
+    }
+  };
+
+  const refreshBrief = async () => {
+    if (!state.projectId) return;
+    $('briefRefresh').disabled = true;
+    toast('正在扫描…');
+    try {
+      await call('owner/brief/refresh', { projectId: state.projectId }, 20000);
+      await load();
+      toast('画像已更新');
+    } catch (error) {
+      toast(`扫描失败：${String(error?.message ?? error)}`);
     } finally {
-      clearInterval(state.timer);
-      state.busy = false;
-      renderMessages();
-      void load();
+      $('briefRefresh').disabled = false;
     }
   };
 
   const addIdea = async () => {
     const input = $('ideaInput');
     const title = String(input.value ?? '').trim();
-    if (!title) return;
+    if (!title || !state.projectId) return;
     input.value = '';
     try {
       await call('owner/ideas/add', { projectId: state.projectId, title }, 20000);
+      await load();
+    } catch (error) {
+      toast(`保存失败：${String(error?.message ?? error)}`);
+    }
+  };
+
+  const addKnowledge = async () => {
+    const input = $('knowledgeInput');
+    const title = String(input.value ?? '').trim();
+    if (!title || !state.projectId) return;
+    input.value = '';
+    try {
+      await call('owner/knowledge/add', { projectId: state.projectId, title }, 20000);
       await load();
     } catch (error) {
       toast(`保存失败：${String(error?.message ?? error)}`);
@@ -221,6 +239,45 @@
     }
   };
 
+  const copyForChat = async (idea) => {
+    const text = `讨论这条改进想法（只讨论，不要改代码）：${idea.title}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('已复制，粘贴到 Cindy 聊天里继续');
+    } catch {
+      toast(text);
+    }
+  };
+
+  const scanDiagram = async () => {
+    if (!state.projectId) return;
+    $('diagramScan').disabled = true;
+    toast('正在扫描依赖…');
+    try {
+      const diagram = await call('owner/diagrams/dependency', { projectId: state.projectId }, 20000);
+      state.mermaid = String(diagram?.mermaid ?? '');
+      await load();
+      toast(`依赖图已生成：${diagram?.summary ?? ''}`);
+    } catch (error) {
+      toast(`扫描失败：${String(error?.message ?? error)}`);
+    } finally {
+      $('diagramScan').disabled = false;
+    }
+  };
+
+  const copyDiagram = async () => {
+    if (!state.mermaid) {
+      toast('先生成依赖图');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(state.mermaid);
+      toast('Mermaid 已复制');
+    } catch {
+      toast('复制失败，请手动选择');
+    }
+  };
+
   document.addEventListener('click', (event) => {
     const button = event.target.closest?.('#ideaList button[data-action]');
     if (!button) return;
@@ -228,38 +285,38 @@
     const idea = (state.overview?.ideas ?? []).find((item) => item.id === ideaId);
     if (!idea) return;
     const action = button.dataset.action;
-    if (action === 'discuss') {
-      $('chatInput').value = `讨论这条改进想法（只讨论，不要改代码）：${idea.title}`;
-      $('chatInput').focus();
-      return;
-    }
+    if (action === 'copy') { void copyForChat(idea); return; }
     void updateIdea(idea, action);
   });
 
   $('refreshButton').addEventListener('click', () => { void load(); });
+  $('addProjectButton').addEventListener('click', () => showAddProject($('addProjectCard').hidden));
+  $('projectCancel').addEventListener('click', () => showAddProject(false));
+  $('projectAdd').addEventListener('click', () => { void addProject(); });
+  $('projectPath').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    void addProject();
+  });
   $('projectSelect').addEventListener('change', (event) => {
     state.projectId = event.target.value;
-    state.messages = [];
     void load();
   });
+  $('briefRefresh').addEventListener('click', () => { void refreshBrief(); });
   $('ideaAdd').addEventListener('click', () => { void addIdea(); });
   $('ideaInput').addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
     void addIdea();
   });
-  $('chatSend').addEventListener('click', () => {
-    const value = $('chatInput').value;
-    $('chatInput').value = '';
-    void sendChat(value);
-  });
-  $('chatInput').addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+  $('knowledgeAdd').addEventListener('click', () => { void addKnowledge(); });
+  $('knowledgeInput').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
     event.preventDefault();
-    const value = $('chatInput').value;
-    $('chatInput').value = '';
-    void sendChat(value);
+    void addKnowledge();
   });
+  $('diagramScan').addEventListener('click', () => { void scanDiagram(); });
+  $('diagramCopy').addEventListener('click', () => { void copyDiagram(); });
 
   void load();
 })();

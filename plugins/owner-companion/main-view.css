@@ -225,3 +225,22 @@ button:disabled { opacity: 0.45; cursor: default; }
 }
 .settings-actions { display: flex; align-items: center; gap: 12px; }
 .error { color: var(--danger); }
+
+/* 新布局：卡片标题行、知识条目、设置页 */
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.knowledge-item { border-top: 1px solid var(--line); padding-top: 8px; }
+.knowledge-item:first-child { border-top: 0; padding-top: 0; }
+.settings-row { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.settings-row code { font-size: 11px; color: var(--text-2); word-break: break-all; text-align: right; }
+.settings-title { margin: 8px 0 0; font-size: 13px; color: var(--text-2); }
+.settings-project {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  font-size: 12px;
+}
+.settings-project:first-child { border-top: 0; padding-top: 0; }
+button.danger.small { border: 0; background: transparent; color: var(--danger); padding: 0; }

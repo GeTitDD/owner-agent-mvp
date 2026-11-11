@@ -8,28 +8,29 @@
 </head>
 <body class="settings-body">
   <main class="settings">
-    <h2>连接电脑</h2>
+    <h2>Owner 设置</h2>
     <p class="muted small">
-      在电脑端打开 Owner Companion → 设置 →「手机连接」，把地址和 6 位配对码填到这里。
-      插件只保存设备令牌，不保存配对码。
+      项目和知识都保存在本机插件目录，不依赖其他客户端，也不会写入你的项目文件。
     </p>
 
-    <label class="field">
-      <span>电脑地址</span>
-      <input id="baseUrl" type="text" value="http://127.0.0.1:47831" spellcheck="false" />
-    </label>
-
-    <label class="field">
-      <span>配对码</span>
-      <input id="pairCode" type="text" inputmode="numeric" maxlength="6" placeholder="6 位数字" />
-    </label>
-
-    <div class="settings-actions">
-      <button id="pairButton" type="button" class="primary">连接</button>
-      <span id="settingsStatus" class="muted small">读取状态…</span>
+    <div class="settings-row">
+      <span class="muted small">数据目录</span>
+      <code id="dataDir">读取中…</code>
+    </div>
+    <div class="settings-row">
+      <span class="muted small">插件版本</span>
+      <span id="pluginVersion">—</span>
     </div>
 
+    <h3 class="settings-title">添加项目</h3>
+    <div class="add-row">
+      <input id="projectPath" type="text" placeholder="D:\path\to\project" spellcheck="false" />
+      <button id="projectAdd" type="button" class="primary">添加</button>
+    </div>
     <div id="settingsError" class="error small" hidden></div>
+
+    <h3 class="settings-title">已登记项目</h3>
+    <div id="projectList" class="list"></div>
   </main>
 
   <script src="bridge.js"></script>

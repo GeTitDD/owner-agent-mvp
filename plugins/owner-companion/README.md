@@ -1,66 +1,64 @@
 # Owner Companion (Cindy plugin)
 
-Brings Owner Companion's project view into Cindy: project brief, the idea inbox,
-knowledge counters, diagram versions and a read-only discussion with the Agent.
-
-The plugin does not store project data itself. It talks to the Owner Companion
-desktop app's mobile bridge on your machine (`http://127.0.0.1:47831` by default).
+A self-contained Cindy plugin for project tracking: project brief, idea inbox,
+knowledge notes and a dependency diagram. Everything lives in the plugin's own
+Node worker — no bridge, no second client, no desktop app required.
 
 ## Install
 
-1. Install and start Owner Companion on the same computer.
-2. In Owner Companion open **Settings → 手机连接 (Phone connection)** and note the
-   address and the 6-digit pairing code.
-3. In Cindy open the plugin settings and fill in the address and code, then press
-   **连接**. The plugin stores only the device token, never the pairing code
-   (`~/.owner-companion/plugin.json`, mode 0600).
-4. Open the **Owner** entry from Cindy's left navigation (or the plugin card → 管理 → 使用).
+1. Build the package: `npm run cindy:pack` → `plugins/dist/owner-companion-<version>.cindy`.
+2. In Cindy open **插件 → 添加插件** and choose the `.cindy` file (or drag it in).
+3. Open **Owner** from the left navigation, then click **添加项目** and paste a
+   local project path.
 
-Packaged build: `plugins/dist/owner-companion-0.1.1.cindy` (zip root is
-`ghost.json`). Add it with Cindy's plugin page → 添加插件, or drop the file there.
+Verified against **Cindy 0.1.124 (Windows)**: install, enable, main view, idea
+create/adopt/delete, dependency scan and agent tools.
 
-Verified against **Cindy 0.1.124 (Windows)**: install, enable, main view, settings,
-idea create/adopt/delete and a real 27-second chat round trip.
+## Data and permissions
 
-## What you get
+- Data file: `~/.owner-companion/owner.json` (atomic writes, `.bak` backup).
+- No project files are written. All tools are read-only except ideas and
+  knowledge notes, which only touch the plugin's own JSON file.
+- The plugin declares a Node worker plus `mainView` / `panel` / `settingsHtml` /
+  mobile projection. Pages and `main.js` have no direct network or filesystem
+  access; the worker performs local reads and scans.
 
-| Area | Behaviour |
+## Agent tools
+
+| Tool | Purpose |
 | --- | --- |
-| Projects | Switch between registered projects; each project loads its own data |
-| Brief | One-liner, how to run, risks, stale marker |
-| Ideas | Add / adopt / park / reopen / delete, or send one back to the chat |
-| Knowledge | Experience / knowledge / candidate counters and diagram versions |
-| Chat | Read-only discussion through the desktop analysis pipeline |
+| `owner_projects` | List registered projects |
+| `owner_project_overview` | Brief, next action, ideas and diagram summary |
+| `owner_brief_refresh` | Re-scan the project and rebuild the brief |
+| `owner_ideas` | List ideas, optionally by status |
+| `owner_idea_add` | Record an improvement idea |
+| `owner_idea_status` | todo / doing / blocked / done |
+| `owner_knowledge` | List knowledge notes |
+| `owner_knowledge_add` | Record a knowledge note |
+| `owner_diagram` | Scan dependencies and return Mermaid |
 
-## Permissions and limits
-
-- The plugin declares only a Node worker (`node/worker.cjs`). Pages and `main.js`
-  have no direct network access; the worker performs loopback HTTP requests.
-- No write access to project files, no approvals, no job execution. If a chat
-  message needs a code change, Owner Companion creates a pending request that
-  must be approved on the desktop.
-- The bridge token is stored per user profile. Delete
-  `~/.owner-companion/plugin.json` to unlink.
+Chat and code changes are handled by Cindy's own Agent; this plugin supplies
+project context and capture points.
 
 ## Development
 
 ```text
 plugins/owner-companion/
-├── ghost.json          # schemaVersion 3 manifest
-├── main.js             # sandbox background: page <-> Node worker
+├── ghost.json          # schemaVersion 3 manifest + tools
+├── main.js             # sandbox brain: page <-> worker, tool calls
 ├── bridge.js           # page helper (BroadcastChannel + /wake)
 ├── main-view.html/css/js
 ├── settings.html/js
-└── node/worker.cjs     # JSON-RPC stdio -> HTTP bridge
+├── node/worker.cjs     # JSON-RPC stdio
+└── node/lib/
+    ├── store.mjs       # projects / ideas / briefs / diagrams / knowledge
+    ├── scan.mjs        # bounded project scan
+    ├── brief.mjs       # quick local brief
+    └── diagrams.mjs    # dependency scan + Mermaid
 ```
 
-Tests for the worker live in `tests/owner-companion-plugin.test.mjs`.
+Tests: `tests/plugin-worker.test.mjs`, `tests/plugin-scan.test.mjs`,
+`tests/plugin-diagrams.test.mjs`.
 
-Packaging:
-
-```powershell
-npm run cindy:pack   # -> plugins/dist/owner-companion-<version>.cindy
-```
-
-`cindy.node.request` caps a single RPC at 20 seconds, so chat is split into
-`owner/chat/start` + `owner/chat/poll`; `main.js` owns the polling loop.
+Packaging uses JSZip so zip entries use `/` separators (Windows
+`Compress-Archive` writes `\` and Cindy rejects the package).

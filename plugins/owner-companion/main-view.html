@@ -14,27 +14,43 @@
     </div>
     <select id="projectSelect" aria-label="项目"></select>
     <div class="topbar-actions">
-      <span id="statusText" class="status">连接中…</span>
+      <span id="statusText" class="status">同步中…</span>
+      <button id="addProjectButton" type="button" class="ghost">添加项目</button>
       <button id="refreshButton" type="button" class="ghost">刷新</button>
     </div>
   </header>
 
   <main class="layout">
-    <section id="connectHint" class="hint" hidden>
-      <h2>还没有连接电脑</h2>
-      <p>在插件设置里填写 <code>http://127.0.0.1:47831</code> 和 6 位配对码即可。</p>
+    <section id="emptyHint" class="hint" hidden>
+      <h2>还没有项目</h2>
+      <p>点右上角「添加项目」，填一个本机目录即可。所有数据保存在插件自己的目录里。</p>
+    </section>
+
+    <section id="addProjectCard" class="card" hidden>
+      <h3>添加项目</h3>
+      <div class="add-row">
+        <input id="projectPath" type="text" placeholder="D:\path\to\project" spellcheck="false" />
+        <button id="projectAdd" type="button" class="primary">添加</button>
+        <button id="projectCancel" type="button" class="ghost">取消</button>
+      </div>
+      <div id="addProjectError" class="error small" hidden></div>
     </section>
 
     <section id="nextActionCard" class="card action" hidden></section>
 
     <section class="grid">
       <article class="card">
-        <h3>项目画像</h3>
+        <div class="card-head">
+          <h3>项目画像</h3>
+          <button id="briefRefresh" type="button" class="ghost small">重新扫描</button>
+        </div>
         <div id="briefBody" class="body muted">正在读取…</div>
       </article>
 
       <article class="card">
-        <h3>想法</h3>
+        <div class="card-head">
+          <h3>想法</h3>
+        </div>
         <div class="add-row">
           <input id="ideaInput" type="text" maxlength="300" placeholder="记一条改进想法…" />
           <button id="ideaAdd" type="button" class="primary">记下</button>
@@ -43,20 +59,28 @@
       </article>
 
       <article class="card">
-        <h3>知识</h3>
+        <div class="card-head">
+          <h3>知识</h3>
+          <span id="knowledgeCount" class="muted small"></span>
+        </div>
         <div id="knowledgeBody" class="body muted">正在读取…</div>
-        <div id="diagramList" class="chips"></div>
+        <div class="add-row">
+          <input id="knowledgeInput" type="text" maxlength="200" placeholder="记一条项目知识…" />
+          <button id="knowledgeAdd" type="button" class="primary">记下</button>
+        </div>
+        <div id="knowledgeList" class="list"></div>
       </article>
 
-      <article class="card chat">
-        <div class="chat-head">
-          <h3>和 Agent 讨论</h3>
-          <span class="muted small">只读讨论；写操作回电脑批准</span>
+      <article class="card">
+        <div class="card-head">
+          <h3>依赖图</h3>
+          <span id="diagramBadge" class="muted small"></span>
         </div>
-        <div id="chatMessages" class="messages"></div>
-        <div class="chat-input">
-          <textarea id="chatInput" rows="2" maxlength="1200" placeholder="问进度，或说说改进想法…"></textarea>
-          <button id="chatSend" type="button" class="primary">发送</button>
+        <div id="diagramBody" class="body muted">还没有生成依赖图。</div>
+        <div id="diagramList" class="chips"></div>
+        <div class="add-row">
+          <button id="diagramScan" type="button" class="primary">扫描依赖</button>
+          <button id="diagramCopy" type="button" class="ghost">复制 Mermaid</button>
         </div>
       </article>
     </section>

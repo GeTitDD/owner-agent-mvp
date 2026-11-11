@@ -1,54 +1,87 @@
 /* global OwnerBridge */
 (() => {
   const $ = (id) => document.getElementById(id);
+  const call = (method, params, timeoutMs) => OwnerBridge.call(method, params, timeoutMs);
 
-  const setStatus = (text) => { $('settingsStatus').textContent = text; };
   const setError = (text) => {
     const node = $('settingsError');
     node.textContent = String(text ?? '');
     node.hidden = !text;
   };
 
-  const refresh = async () => {
+  const esc = (value) => String(value ?? '')
+    .replace(/&/gu, '&amp;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;')
+    .replace(/"/gu, '&quot;')
+    .replace(/'/gu, '&#39;');
+
+  const renderProjects = (projects) => {
+    const list = $('projectList');
+    if (!projects.length) {
+      list.innerHTML = '<div class="muted small">还没有项目。上面填一个目录即可。</div>';
+      return;
+    }
+    list.innerHTML = projects.map((project) => `
+      <div class="settings-project" data-id="${esc(project.id)}">
+        <div>
+          <div>${esc(project.name)}</div>
+          <div class="muted small">${esc(project.root)}</div>
+        </div>
+        <button type="button" class="danger small" data-remove="${esc(project.id)}">移除</button>
+      </div>
+    `).join('');
+  };
+
+  const load = async () => {
     setError('');
     try {
-      const status = await OwnerBridge.call('owner/status', {}, 10000);
-      $('baseUrl').value = status?.baseUrl || 'http://127.0.0.1:47831';
-      setStatus(status?.paired ? `已连接 · ${status.baseUrl}` : '还没有配对');
+      const [status, projects] = await Promise.all([
+        call('owner/status', {}, 10000),
+        call('owner/projects/list', {}, 10000)
+      ]);
+      $('dataDir').textContent = status?.dataDir ?? '';
+      $('pluginVersion').textContent = status?.version ?? '';
+      renderProjects(projects?.projects ?? []);
     } catch (error) {
-      setStatus('无法读取状态');
       setError(String(error?.message ?? error));
     }
   };
 
-  $('pairButton').addEventListener('click', async () => {
-    const baseUrl = String($('baseUrl').value ?? '').trim();
-    const code = String($('pairCode').value ?? '').trim();
-    if (!baseUrl || !code) {
-      setError('填好地址和配对码');
-      return;
-    }
-    $('pairButton').disabled = true;
-    setError('');
-    setStatus('配对中…');
+  $('projectAdd').addEventListener('click', async () => {
+    const value = String($('projectPath').value ?? '').trim();
+    if (!value) return;
+    $('projectAdd').disabled = true;
     try {
-      const result = await OwnerBridge.call('owner/pair', { baseUrl, code }, 20000);
-      $('pairCode').value = '';
-      setStatus(`已连接 · ${result?.baseUrl ?? baseUrl}`);
+      await call('owner/projects/add', { path: value }, 20000);
+      $('projectPath').value = '';
+      await load();
     } catch (error) {
-      setStatus('配对失败');
       setError(String(error?.message ?? error));
     } finally {
-      $('pairButton').disabled = false;
+      $('projectAdd').disabled = false;
     }
   });
 
-  $('pairCode').addEventListener('keydown', (event) => {
+  $('projectPath').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       event.preventDefault();
-      $('pairButton').click();
+      $('projectAdd').click();
     }
   });
 
-  void refresh();
+  $('projectList').addEventListener('click', async (event) => {
+    const button = event.target.closest?.('button[data-remove]');
+    if (!button) return;
+    const id = button.dataset.remove;
+    if (!id) return;
+    try {
+      await call('owner/projects/remove', { id }, 10000);
+      await load();
+    } catch (error) {
+      setError(String(error?.message ?? error));
+    }
+  });
+
+  void load();
 })();

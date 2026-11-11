@@ -2,11 +2,12 @@
   "schemaVersion": 3,
   "id": "owner-companion",
   "name": "Owner Companion",
-  "description": "项目画像、想法池、知识摘要与只读讨论。数据来自本机 Owner Companion 的局域网桥。",
-  "whenToUse": "需要查看项目进度、项目画像、收集改进想法、回顾项目知识，或和 Agent 只读讨论某个项目时找我",
-  "version": "0.1.1",
+  "description": "项目画像、想法池、知识笔记与依赖图。数据全部保存在本机插件目录，不依赖其他客户端。",
+  "whenToUse": "需要查看项目进度、项目画像、收集或整理改进想法、记录项目知识、生成依赖图，或了解某个项目现在该做什么时找我",
+  "version": "0.2.0",
   "minCindyVersion": "0.1.122",
   "entry": "main.js",
+  "command": "项目",
   "node": {
     "entry": "node/worker.cjs",
     "protocol": "json-rpc-stdio"
@@ -23,14 +24,126 @@
   },
   "settingsHtml": "settings.html",
   "mobile": {
-    "channels": [
-      "owner-companion"
-    ],
+    "channels": ["owner-companion"],
     "mainView": "main-view.html",
     "settings": "settings.html"
   },
   "readme": {
     "en": "README.md",
     "zh-CN": "README.zh-CN.md"
-  }
+  },
+  "tools": [
+    {
+      "name": "owner_projects",
+      "description": "列出 Owner 里登记的项目（id、名称、目录）。只读，不修改任何文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "owner_project_overview",
+      "description": "读取一个项目的画像、下一步建议、想法与知识计数、图谱版本。只读；不传 projectId 时使用当前项目。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": { "type": "string", "description": "项目 id；不传则用第一个项目" }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "owner_brief_refresh",
+      "description": "重新本地扫描项目并生成画像（README、脚本、目录、测试与 TODO），不调用模型、不修改项目文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": { "type": "string", "description": "项目 id" }
+        },
+        "required": ["projectId"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "owner_ideas",
+      "description": "列出项目的改进想法，可按状态过滤（todo/doing/blocked/done）。只读。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": { "type": "string", "description": "项目 id" },
+          "status": { "type": "string", "description": "todo / doing / blocked / done" }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "owner_idea_add",
+      "description": "把一条改进想法记进项目想法池。只写插件自己的数据，不修改项目文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": { "type": "string", "description": "项目 id" },
+          "title": { "type": "string", "description": "想法原文，尽量保留用户原话" }
+        },
+        "required": ["projectId", "title"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "owner_idea_status",
+      "description": "更新想法状态：todo / doing / blocked / done。只改插件数据。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "想法 id" },
+          "status": { "type": "string", "description": "todo / doing / blocked / done" }
+        },
+        "required": ["id", "status"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "owner_knowledge",
+      "description": "列出项目的知识笔记（标题、状态、标签）。只读。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": { "type": "string", "description": "项目 id" }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "owner_knowledge_add",
+      "description": "把一条项目知识记进知识库（默认未验证）。只写插件数据，不修改项目文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": { "type": "string", "description": "项目 id" },
+          "title": { "type": "string", "description": "一句话结论" },
+          "body": { "type": "string", "description": "细节、证据或适用条件" },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "最多 8 个标签"
+          }
+        },
+        "required": ["projectId", "title"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "owner_diagram",
+      "description": "扫描项目依赖并返回 Mermaid 依赖图（flowchart）。只读；不修改项目文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": { "type": "string", "description": "项目 id" }
+        },
+        "required": ["projectId"],
+        "additionalProperties": false
+      }
+    }
+  ]
 }

@@ -4,6 +4,11 @@
 
 **以 Owner 为中心的多项目管理 Agent + 个人领域知识资产工作台 + 可选桌面宠物。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
 
+## 形态说明（v0.2）
+
+- **新开发**：`plugins/owner-companion/`，以 Cindy 为宿主和客户端，自包含项目数据、画像、想法、知识与依赖图；手机端复用 Cindy 手机 App。
+- **旧客户端**：`desktop/`（Electron）与 `src/mobile-server.mjs` 保留为迁移与备份，不再新增功能；等插件稳定后归档。
+
 ## 桌面宠物 Owner Companion（v1.0）
 
 ![Owner Companion](docs/assets/companion/shell-panel.png)
@@ -19,8 +24,8 @@
 - 用户语义层：首页只暴露「理解项目 / 整理知识 / 复盘沉淀 / 验收 / 修复 / 交付」，并给出一个「下一步建议」；一键理解先本地快速扫描，深度理解可选，画像按 commit 判断过期
 - 双层工作区：上半部分围绕当前项目（画像、图谱、想法、知识、Playbook），下半部分跨项目管理（决定、运行、结果）；「想法」是改进意见收件箱，对话里提到的建议自动采集，只收集不执行
 - 输入框只保留项目选择 + 一句话 + 发送；分析与讨论都在同一处继续，不再显示沙箱/范围/模型等额外组件
-- 手机端（Expo）：设置里显示局域网地址与配对码，iPhone / Android 用 Expo Go 连接后可看项目画像、想法、知识摘要，并与 Agent 只读讨论；手机端没有审批与写权限。详见 [docs/MOBILE.md](docs/MOBILE.md)
-- Cindy 插件：`plugins/owner-companion/` 是对齐 Cindy `ghost.json`（schemaVersion 3）的插件，已在 Cindy 0.1.124 实测可用；安装后从 Cindy 左侧导航打开 Owner，读取同一套项目/想法/知识；打包产物 `plugins/dist/owner-companion-0.1.1.cindy`（`npm run cindy:pack` 可重建）
+- 手机端：直接用 Cindy 的手机 App，插件声明 mobile 投影即可（同一账号、同一台电脑）；不再维护独立 Expo 客户端。详见 [docs/MOBILE.md](docs/MOBILE.md)
+- Cindy 插件：`plugins/owner-companion/` 是自包含插件（项目、画像、想法、知识、依赖图都在插件自己的 Node worker 里），已在 Cindy 0.1.124 实测；安装后从左侧导航打开 Owner，手机端复用 Cindy 手机 App；打包产物 `plugins/dist/owner-companion-0.2.0.cindy`（`npm run cindy:pack`）
 - 项目图谱：依赖图本地扫描，控制流/数据流/状态/时序走 pstack 只读分析；模型只产出结构化图数据，Mermaid 由代码生成，可复制/导出 SVG；生成中显示已用时间，失败可重试，设置里可指定「图谱备用模型」自动回退
 - 知识闭环：`npm run knowledge:demo`；自动采集 `npm run knowledge:auto -- --once`；CLI `npm run knowledge -- --help`
 - A→B 实验：`npm run knowledge:eval:ab -- --root <dir> --allow-model`；Oracle Control 用 `knowledge:eval:hard`
