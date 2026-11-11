@@ -4,7 +4,7 @@
   "name": "Relay",
   "description": "把当前任务里新增的对话原样转交给另一个任务、伙伴或新任务（可选 Codex / Claude / Pi），不自动发送，由你确认。",
   "whenToUse": "需要把当前任务的上下文交给另一个 Agent 继续（比如让 Codex 复核 Claude 的方案），或查看有哪些内容还没转交时找我",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "minCindyVersion": "0.1.124",
   "kind": "chip",
   "entry": "main.js",

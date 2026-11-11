@@ -6,9 +6,29 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const MAX_IMAGES = 4;
 const MAX_TOTAL_BYTES = 12 * 1024 * 1024;
+const MAX_FILES = 10;
+const MAX_FILE_TEXT = 64 * 1024;
+const MAX_FILE_TEXT_TOTAL = 48000;
+const TEXT_EXT = new Set([
+  '.md', '.markdown', '.txt', '.json', '.jsonl', '.yaml', '.yml', '.toml', '.csv', '.tsv', '.log',
+  '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.ps1', '.sh', '.bat', '.cmd', '.css',
+  '.html', '.htm', '.xml', '.sql', '.ini', '.cfg', '.conf', '.env'
+]);
+
+const localPath = (value) => {
+  const raw = String(value ?? '');
+  if (/^[a-z]:[\\/]/iu.test(raw)) return raw;
+  if (raw.startsWith('file://')) {
+    try { return fileURLToPath(raw); } catch { return ''; }
+  }
+  return '';
+};
+
+const isTextFile = (file) => TEXT_EXT.has(path.extname(file).toLowerCase());
 
 let cachedProfile = null;
 
@@ -77,6 +97,8 @@ export const listAttachments = async ({ sessionId, since = '' }) => {
       'SELECT role, content, created_at FROM messages WHERE session_id = ? ORDER BY created_at ASC'
     ).all(String(sessionId));
     const items = [];
+    const files = [];
+    const seenFiles = new Set();
     for (const row of rows) {
       if (sinceMs && Number(row.created_at) + 1000 < sinceMs) continue;
       let content = null;
@@ -95,8 +117,23 @@ export const listAttachments = async ({ sessionId, since = '' }) => {
           role: row.role === 'assistant' ? 'assistant' : 'user'
         });
       }
+      const attached = Array.isArray(content?.files) ? content.files : [];
+      for (const entry of attached) {
+        const file = localPath(entry?.path) || localPath(entry?.url);
+        if (!file || seenFiles.has(file) || !fs.existsSync(file)) continue;
+        let stat = null;
+        try { stat = fs.statSync(file); } catch { continue; }
+        if (!stat.isFile()) continue;
+        seenFiles.add(file);
+        files.push({
+          name: String(entry?.name || entry?.originalName || path.basename(file)).slice(0, 80),
+          path: file,
+          bytes: stat.size,
+          text: isTextFile(file) && stat.size <= MAX_FILE_TEXT
+        });
+      }
     }
-    return { supported: true, items: items.slice(0, MAX_IMAGES) };
+    return { supported: true, items: items.slice(0, MAX_IMAGES), files: files.slice(0, MAX_FILES) };
   } catch {
     return { supported: false, items: [] };
   } finally {
@@ -120,5 +157,21 @@ export const readAttachments = async ({ sessionId, since = '' }) => {
       // 单张读失败不影响其它图片。
     }
   }
-  return { supported: listed.supported, attachments: picked, bytes: total };
+  let textTotal = 0;
+  const files = [];
+  for (const file of listed.files ?? []) {
+    const entry = { name: file.name, path: file.path, bytes: file.bytes, text: false, content: '' };
+    if (file.text && textTotal < MAX_FILE_TEXT_TOTAL) {
+      try {
+        const content = fs.readFileSync(file.path, 'utf8').slice(0, MAX_FILE_TEXT);
+        entry.content = content.slice(0, MAX_FILE_TEXT_TOTAL - textTotal);
+        entry.text = true;
+        textTotal += entry.content.length;
+      } catch {
+        // 读不了就当二进制文件，只给路径。
+      }
+    }
+    files.push(entry);
+  }
+  return { supported: listed.supported, attachments: picked, files, bytes: total };
 };

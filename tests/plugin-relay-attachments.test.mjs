@@ -31,6 +31,14 @@ test('relay 附件：从 Cindy 消息库和 blobs 读取图片', async () => {
       }),
       Date.now()
     );
+    const noteFile = path.join(root, 'note.md');
+    fs.writeFileSync(noteFile, '# 说明\n第二行');
+    db.prepare('INSERT INTO messages VALUES (?, ?, ?, ?)').run(
+      SESSION,
+      'user',
+      JSON.stringify({ text: '看文件', images: [], files: [{ name: 'note.md', path: noteFile }] }),
+      Date.now() + 1000
+    );
     db.close();
 
     process.env.LOCALAPPDATA = root;
@@ -40,9 +48,15 @@ test('relay 附件：从 Cindy 消息库和 blobs 读取图片', async () => {
     assert.equal(listed.items[0].name, 'shot.png');
     assert.equal(listed.items[0].bytes, bytes.length);
 
+    assert.equal(listed.files.length, 1);
+    assert.equal(listed.files[0].name, 'note.md');
+    assert.equal(listed.files[0].text, true);
+
     const read = await readAttachments({ sessionId: SESSION });
     assert.equal(read.attachments.length, 1);
     assert.equal(Buffer.from(read.attachments[0].base64, 'base64').toString(), 'fake-png-bytes');
+    assert.equal(read.files.length, 1);
+    assert.match(read.files[0].content, /# 说明/u);
 
     // 时间过滤：更晚的 since 不应返回旧图片。
     const later = await listAttachments({ sessionId: SESSION, since: new Date(Date.now() + 60_000).toISOString() });

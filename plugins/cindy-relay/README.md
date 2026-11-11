@@ -26,13 +26,21 @@ over the Claude / Codex / Cursor desktop apps.
 The message carries a `Source task: […] (cindy://session/<id>)` line so the
 receiving agent can jump back.
 
-### Images
+### Images and files
 
-Images in the task travel with the quote (up to 4, about 12 MB total, PNG / JPEG /
-WebP). The message hooks only expose text, so Relay reads the current task's image
+**Images** travel with the quote (up to 4, about 12 MB total, PNG / JPEG / WebP).
+The message hooks only expose text, so Relay reads the current task's image
 references from the local Cindy message store (`messages.content.images`) and the
 bytes from `cindy-media/blobs`, then hands them to the host attachment channel.
 If the store is missing or unreadable, Relay silently falls back to text only.
+
+**Files** (dropped or @-mentioned):
+
+- the quote gets a `[Files]` section with each absolute path, name and size;
+- text-like files (md / txt / json / yaml / code, ≤ 64 KB, ≤ 48 KB total) are also
+  inlined in `[File: …]` code blocks so the other agent does not need to open them;
+- binary or large files are path-only and left to the receiving agent;
+- nothing is copied or uploaded.
 
 ## Boundaries
 

@@ -76,20 +76,29 @@
 
   const renderAttachments = () => {
     const hint = $('attachHint');
-    const items = state.attachments.items;
-    if (!items.length) {
+    const images = state.attachments.items;
+    const files = state.attachments.files ?? [];
+    if (!images.length && !files.length) {
       hint.textContent = '';
       hint.hidden = true;
       return;
     }
     hint.hidden = false;
-    const size = items.reduce((sum, item) => sum + (item.bytes || 0), 0);
-    hint.textContent = `含 ${items.length} 张图片（约 ${Math.max(1, Math.round(size / 1024))} KB），会随引用一起转交`;
+    const parts = [];
+    if (images.length) {
+      const size = images.reduce((sum, item) => sum + (item.bytes || 0), 0);
+      parts.push(`${images.length} 张图片（约 ${Math.max(1, Math.round(size / 1024))} KB）`);
+    }
+    if (files.length) {
+      const textCount = files.filter((file) => file.text).length;
+      parts.push(`${files.length} 个文件（${textCount ? `${textCount} 个文本会附内容，` : ''}其余给路径）`);
+    }
+    hint.textContent = `含 ${parts.join('、')}，会随引用一起转交`;
   };
 
   const loadAttachments = async () => {
     if (!state.sessionId) {
-      state.attachments = { supported: false, items: [] };
+      state.attachments = { supported: false, items: [], files: [] };
       renderAttachments();
       return;
     }
@@ -100,10 +109,11 @@
       }, 12000);
       state.attachments = {
         supported: Boolean(result?.supported),
-        items: Array.isArray(result?.items) ? result.items : []
+        items: Array.isArray(result?.items) ? result.items : [],
+        files: Array.isArray(result?.files) ? result.files : []
       };
     } catch {
-      state.attachments = { supported: false, items: [] };
+      state.attachments = { supported: false, items: [], files: [] };
     }
     renderAttachments();
   };
@@ -374,14 +384,36 @@
       ? `\n\n来源任务：[${state.source?.label || '原任务'}](cindy://session/${state.sessionId})`
       : '';
     const text = `自「${state.source?.label || '当前任务'}」转交的上下文，见附带资料。${note ? `\n\n备注：${note}` : ''}${sourceLink}`;
+    const formatBytes = (value) => {
+      const size = Number(value) || 0;
+      if (size >= 1024 * 1024) return `${(size / 1048576).toFixed(1)} MB`;
+      if (size >= 1024) return `${Math.round(size / 1024)} KB`;
+      return `${size} B`;
+    };
     let attachmentPayload = [];
-    if (state.attachments.items.length && state.attachmentsSupported !== false) {
+    let fileBlock = '';
+    const fileCount = state.attachments.files?.length ?? 0;
+    if (state.attachments.items.length || fileCount) {
       const read = await call('relay/attachments/read', {
         sessionId: state.sessionId,
         since: attachmentSince()
       }, 30000).catch(() => null);
-      attachmentPayload = (read?.attachments ?? []).map(({ base64, name }) => ({ base64, name }));
+      if (state.attachments.items.length && state.attachmentsSupported !== false) {
+        attachmentPayload = (read?.attachments ?? []).map(({ base64, name }) => ({ base64, name }));
+      }
+      const files = read?.files ?? [];
+      if (files.length) {
+        const lines = files.map((file) => `- ${file.path}（${file.name}，${formatBytes(file.bytes)}）`);
+        fileBlock = `\n\n[引用文件]\n${lines.join('\n')}`;
+        const inlined = files.filter((file) => file.text && file.content);
+        if (inlined.length) {
+          fileBlock += '\n\n' + inlined
+            .map((file) => `[文件内容：${file.name}]\n\`\`\`\n${file.content.slice(0, 12000)}\n\`\`\``)
+            .join('\n\n');
+        }
+      }
     }
+    const contextText = (quote + fileBlock).slice(0, 32000);
     try {
       let result;
       if (isNew) {
@@ -410,7 +442,7 @@
           taskId,
           requestKey: `send-${requestKey}`,
           text,
-          context: quote,
+          context: contextText,
           ...(expectedRevision ? { expectedRevision } : {}),
           ...(attachmentPayload.length ? { attachments: attachmentPayload } : {})
         }, 120000);
@@ -436,7 +468,7 @@
           target: { kind: target.kind, id: target.id },
           requestKey,
           text,
-          context: quote,
+          context: contextText,
           ...(attachmentPayload.length ? { attachments: attachmentPayload } : {})
         };
         if (target.kind === 'project') {
@@ -458,7 +490,7 @@
           ? { kind: 'task', id: result.taskId, label: title }
           : { kind: target.kind, id: target.id, label: target.label },
         note,
-        chars: quote.length,
+        chars: contextText.length,
         taskId: result.taskId ?? '',
         requestKey
       }, 8000).catch(() => {});
