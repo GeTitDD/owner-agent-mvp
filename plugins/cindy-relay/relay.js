@@ -211,6 +211,9 @@
   };
 
   const renderRoute = () => {
+    for (const button of document.querySelectorAll('#targetTabs button')) {
+      button.classList.toggle('active', button.dataset.kind === state.targetKind);
+    }
     const needsRoute = state.targetKind === 'project' || state.targetKind === 'new';
     $('routeRow').hidden = !needsRoute;
     $('permissionField').hidden = !needsRoute;
@@ -305,6 +308,9 @@
       state.prefs = prefs.prefs ?? {};
       if (!state.route && state.prefs.route) state.route = state.prefs.route;
       if (state.prefs.permissionMode) state.permissionMode = state.prefs.permissionMode;
+      if (['project', 'new', 'task', 'bot'].includes(state.prefs.targetKind)) {
+        state.targetKind = state.prefs.targetKind;
+      }
       renderSource();
       void loadAttachments();
       renderRoute();
@@ -480,9 +486,6 @@
     state.targetKind = kind;
     state.selected = null;
     state.requestKey = '';
-    for (const button of document.querySelectorAll('#targetTabs button')) {
-      button.classList.toggle('active', button.dataset.kind === kind);
-    }
     renderRoute();
     if (kind === 'new') {
       const first = state.pending[0] ?? state.all[0];
