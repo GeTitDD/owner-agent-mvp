@@ -4,7 +4,7 @@
   "name": "Owner Companion",
   "description": "项目画像、想法池、知识笔记与依赖图。数据全部保存在本机插件目录，不依赖其他客户端。",
   "whenToUse": "需要查看项目进度、项目画像、收集或整理改进想法、记录项目知识、生成依赖图，或了解某个项目现在该做什么时找我",
-  "version": "0.3.9",
+  "version": "0.4.1",
   "minCindyVersion": "0.1.122",
   "entry": "main.js",
   "command": "项目",

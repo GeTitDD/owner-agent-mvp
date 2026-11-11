@@ -180,3 +180,36 @@ test('worker：不存在的目录会被拒绝', async () => {
     await env.cleanup();
   }
 });
+
+test('worker：任务页签的项目记忆（focus）与会话回退', async () => {
+  const env = await setup();
+  try {
+    await env.rpc('owner/projects/add', { path: env.projectRoot });
+    const extra = path.join(env.dir, 'second');
+    fs.mkdirSync(extra, { recursive: true });
+    await env.rpc('owner/projects/add', { path: extra });
+
+    const empty = await env.rpc('owner/projects/focus/get', { sessionId: 'session-a' });
+    assert.equal(empty.projectId, '');
+
+    const saved = await env.rpc('owner/projects/focus/set', { sessionId: 'session-a', projectId: 'demo' });
+    assert.equal(saved.ok, true);
+    const own = await env.rpc('owner/projects/focus/get', { sessionId: 'session-a' });
+    assert.equal(own.projectId, 'demo');
+
+    // 另一个任务没有记录时回落到默认项目（这里先把默认设成 second）。
+    await env.rpc('owner/projects/focus/set', { sessionId: '', projectId: 'second' });
+    const other = await env.rpc('owner/projects/focus/get', { sessionId: 'session-b' });
+    assert.equal(other.projectId, 'second');
+
+    const missing = await env.rpc('owner/projects/focus/set', { sessionId: 'session-a', projectId: 'nope' });
+    assert.equal(missing.ok, false);
+
+    // 删除项目后，指向它的记忆一并清掉。
+    await env.rpc('owner/projects/remove', { id: 'demo' });
+    const afterRemove = await env.rpc('owner/projects/focus/get', { sessionId: 'session-a' });
+    assert.equal(afterRemove.projectId, 'second');
+  } finally {
+    await env.cleanup();
+  }
+});

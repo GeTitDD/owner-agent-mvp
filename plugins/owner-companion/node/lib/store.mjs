@@ -23,7 +23,9 @@ const emptyState = () => ({
   experiences: [],
   patches: [],
   tests: [],
-  github: {}
+  github: {},
+  // 任务页签上次停留的项目：key 是 Cindy 任务 id，'' 为无任务时的默认值。
+  focus: {}
 });
 
 const slug = (value) => String(value || '')
@@ -51,6 +53,7 @@ export function openStore(dir = dataDir()) {
       state.github = raw.github && typeof raw.github === 'object' ? raw.github : {};
       state.briefs = raw.briefs && typeof raw.briefs === 'object' ? raw.briefs : {};
       state.diagrams = raw.diagrams && typeof raw.diagrams === 'object' ? raw.diagrams : {};
+      state.focus = raw.focus && typeof raw.focus === 'object' ? raw.focus : {};
     }
   } catch { /* 首次运行或文件损坏时从空状态开始 */ }
 
@@ -107,8 +110,36 @@ export function openStore(dir = dataDir()) {
       delete state.briefs[projectId];
       delete state.diagrams[projectId];
       delete state.github[projectId];
+      for (const [key, value] of Object.entries(state.focus)) {
+        if (value === projectId) delete state.focus[key];
+      }
       persist();
       return { removed: before !== state.projects.length };
+    },
+
+    /** 读取某个任务上次停留的项目；没有记录时回落到默认项目。 */
+    getFocusedProject(sessionId = '') {
+      const exists = (id) => state.projects.some((project) => project.id === id);
+      const own = state.focus[String(sessionId || '')];
+      if (own && exists(own)) return own;
+      const fallback = state.focus[''];
+      return fallback && exists(fallback) ? fallback : '';
+    },
+
+    /** 记住某个任务停留的项目；只保留最近 50 个任务，避免数据无限增长。 */
+    setFocusedProject(sessionId = '', projectId = '') {
+      const id = String(projectId || '');
+      if (!state.projects.some((project) => project.id === id)) return { ok: false, projectId: '' };
+      const key = String(sessionId || '');
+      // 先删后写，让这个 key 排在最后（对象保留插入顺序）。
+      delete state.focus[key];
+      state.focus[key] = id;
+      const keys = Object.keys(state.focus);
+      for (const stale of keys.slice(0, Math.max(0, keys.length - 50))) {
+        if (stale !== '') delete state.focus[stale];
+      }
+      persist();
+      return { ok: true, projectId: id };
     },
 
     listIdeas(projectId, status = '') {

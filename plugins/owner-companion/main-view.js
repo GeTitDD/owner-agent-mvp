@@ -2,6 +2,17 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const call = (method, params, timeoutMs) => OwnerBridge.call(method, params, timeoutMs);
+  const sessionId = new URLSearchParams(location.search).get('session') ?? '';
+
+  // 记住这个任务页签停留的项目，刷新或重开时直接回到它。
+  const rememberFocus = async (projectId) => {
+    if (!projectId) return;
+    try {
+      await call('owner/projects/focus/set', { sessionId, projectId }, 5000);
+    } catch {
+      // 旧宿主没有这个方法时忽略，不影响页面。
+    }
+  };
 
   const state = {
     overview: null,
@@ -303,6 +314,7 @@
       }
       render();
       setStatus('已连接', 'ok');
+      void rememberFocus(state.projectId);
     } catch (error) {
       setStatus('读取失败', 'bad');
       toast(`读取失败：${String(error?.message ?? error)}`);
@@ -572,6 +584,19 @@
   $('diagramScan').addEventListener('click', () => { void scanDiagram(); });
   $('diagramCopy').addEventListener('click', () => { void copyDiagram(); });
 
+  // 页面启动：优先恢复这个任务上次的项目，没有记录才用默认项目。
+  const init = async () => {
+    if (!state.projectId) {
+      try {
+        const focused = await call('owner/projects/focus/get', { sessionId }, 5000);
+        state.projectId = focused?.projectId ?? '';
+      } catch {
+        // 旧宿主忽略：按默认项目加载。
+      }
+    }
+    await load();
+  };
+
   // 卡片上点「打开 Owner 面板」时，main.js 会广播要聚焦的项目，页签直接切过去。
   try {
     const channel = new BroadcastChannel('owner-companion');
@@ -586,5 +611,5 @@
     // 旧宿主没有 BroadcastChannel 时按默认项目显示。
   }
 
-  void load();
+  void init();
 })();

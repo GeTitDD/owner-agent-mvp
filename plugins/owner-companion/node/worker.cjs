@@ -10,7 +10,7 @@ const { pathToFileURL } = require('node:url');
 const readline = require('node:readline');
 
 const execFileAsync = promisify(execFile);
-const PKG_VERSION = '0.3.9';
+const PKG_VERSION = '0.4.1';
 
 const libUrl = (name) => pathToFileURL(path.join(__dirname, 'lib', name)).href;
 let libsPromise = null;
@@ -115,6 +115,17 @@ const methods = {
     const data = await getStore();
     if (!data.getProject(String(params?.id || ''))) throw fail('项目不存在', 404);
     return data.removeProject(String(params.id));
+  },
+
+  /** 任务页签上次停留的项目；页面加载时先问它，避免刷新后跳回第一个项目。 */
+  async 'owner/projects/focus/get'(params) {
+    const data = await getStore();
+    return { projectId: data.getFocusedProject(String(params?.sessionId || '')) };
+  },
+
+  async 'owner/projects/focus/set'(params) {
+    const data = await getStore();
+    return data.setFocusedProject(String(params?.sessionId || ''), String(params?.projectId || ''));
   },
 
   async 'owner/projects/overview'(params) {

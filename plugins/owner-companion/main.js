@@ -204,6 +204,19 @@ const focusProject = (projectId) => {
   }
 };
 
+// 把项目记到任务页签的存储里，页面重开或刷新后仍然停在这个项目。
+const pinProject = async (sessionId, projectId) => {
+  if (!projectId) return;
+  try {
+    await forward('owner/projects/focus/set', {
+      sessionId: String(sessionId ?? ''),
+      projectId
+    });
+  } catch {
+    // 旧版 worker 没有这个方法时忽略。
+  }
+};
+
 // 同一张卡两版之间至少隔 1.1 秒，否则主机会静默丢弃。
 const sendCard = async (payload) => {
   const last = cardTimestamps.get(payload.callId) ?? 0;
@@ -516,6 +529,7 @@ const handleCardAction = async (message) => {
         height: 80
       });
       await forward('owner/brief/refresh', { projectId });
+      void pinProject(message.sessionId, projectId);
       focusProject(projectId);
       await overviewFor('已重新扫描，画像已更新。');
       return;
@@ -538,6 +552,7 @@ const handleCardAction = async (message) => {
         height: 80
       });
       const idea = await forward('owner/ideas/add', { projectId, title: text });
+      void pinProject(message.sessionId, projectId);
       focusProject(projectId);
       const card = renderOverviewCard(
         slimOverview(await forward('owner/projects/overview', { projectId })),
@@ -548,6 +563,8 @@ const handleCardAction = async (message) => {
     }
 
     if (verb === 'open' && sub === 'task') {
+      // 先落盘，再开页签：新页签初始化时会读到这个项目，不会先闪一下默认项目。
+      await pinProject(message.sessionId, projectId);
       let opened = { ok: false };
       try {
         opened = await cindy.taskView(message.sessionId ? { sessionId: message.sessionId } : {});
