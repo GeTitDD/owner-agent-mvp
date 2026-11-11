@@ -1,0 +1,10 @@
+﻿import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createPatchService } from './plugins/owner-companion/node/lib/patch.mjs';
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dbg-'));
+fs.writeFileSync(path.join(root, 'bad.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('bad', () => assert.equal(1, 2));\n");
+const svc = createPatchService();
+const res = await svc.runTests(root, { command: 'node --test bad.test.mjs' });
+console.log(JSON.stringify({ ok: res.ok, code: res.code, out: res.output.slice(-200) }));
+fs.rmSync(root, { recursive: true, force: true });

@@ -6,7 +6,15 @@
   const state = {
     overview: null,
     projectId: '',
-    mermaid: ''
+    mermaid: '',
+    knowledge: [],
+    experiences: [],
+    knowledgeTab: 'proposed',
+    tidy: null,
+    github: null,
+    patches: [],
+    tests: [],
+    testOutput: ''
   };
 
   const STATUS_LABEL = {
@@ -107,22 +115,82 @@
     `).join('');
   };
 
-  const renderKnowledge = () => {
+  const KNOWLEDGE_STATUS = {
+    proposed: '待审核', unverified: '未验证', verified: '已验证', rejected: '已拒绝'
+  };
+
+  const renderKnowledgeTabs = () => {
     const counts = state.overview?.knowledge ?? {};
-    $('knowledgeCount').textContent = `${counts.knowledge ?? 0} 条 · 已验证 ${counts.verified ?? 0}`;
+    $('proposedCount').textContent = counts.proposed ? `(${counts.proposed})` : '';
+    for (const button of document.querySelectorAll('[data-knowledge-tab]')) {
+      button.classList.toggle('active', button.dataset.knowledgeTab === state.knowledgeTab);
+    }
+  };
+
+  const renderKnowledge = () => {
+    renderKnowledgeTabs();
+    const counts = state.overview?.knowledge ?? {};
+    $('knowledgeCount').textContent =
+      `待审 ${counts.proposed ?? 0} · 未验证 ${counts.unverified ?? 0} · 已验证 ${counts.verified ?? 0}`;
     $('knowledgeBody').innerHTML = `
-      <div class="line">知识 ${esc(counts.knowledge ?? 0)} 条（已验证 ${esc(counts.verified ?? 0)}）</div>
-      <div class="line muted small">知识只保存在插件目录，不写项目文件。</div>
+      <div class="line">经验 ${esc(counts.experiences ?? 0)} 条 · 知识 ${esc(counts.knowledge ?? 0)} 条</div>
+      <div class="line muted small">候选需要你接受后才会进入知识；接受不等于已验证。</div>
     `;
-    const items = state.overview?.knowledgeItems ?? [];
-    $('knowledgeList').innerHTML = items.length
-      ? items.map((entry) => `
-        <div class="knowledge-item">
-          <div class="line">${esc(entry.title)}</div>
-          <div class="muted small">${esc(entry.status === 'verified' ? '已验证' : '未验证')}${entry.tags?.length ? ` · ${esc(entry.tags.join(' / '))}` : ''}</div>
-        </div>
-      `).join('')
-      : '<div class="muted small">还没有知识笔记。</div>';
+
+    const list = $('knowledgeList');
+    if (state.knowledgeTab === 'proposed') {
+      const items = state.knowledge.filter((entry) => entry.status === 'proposed');
+      list.innerHTML = items.length
+        ? items.map((entry) => `
+          <div class="knowledge-item" data-id="${esc(entry.id)}">
+            <div class="line">${esc(entry.title)}</div>
+            ${entry.body ? `<div class="muted small">${esc(String(entry.body).slice(0, 200))}</div>` : ''}
+            <div class="idea-actions">
+              <button type="button" class="primary-link" data-knowledge-action="accept">接受</button>
+              <button type="button" class="danger" data-knowledge-action="reject">拒绝</button>
+            </div>
+          </div>
+        `).join('')
+        : '<div class="muted small">没有待审核候选。让 Cindy 提炼一轮试试。</div>';
+    } else if (state.knowledgeTab === 'knowledge') {
+      const items = state.knowledge.filter((entry) => entry.status !== 'proposed');
+      list.innerHTML = items.length
+        ? items.map((entry) => `
+          <div class="knowledge-item" data-id="${esc(entry.id)}">
+            <div class="line">${esc(entry.title)}</div>
+            <div class="muted small">
+              ${esc(KNOWLEDGE_STATUS[entry.status] ?? entry.status)}
+              ${entry.tags?.length ? ` · ${esc(entry.tags.join(' / '))}` : ''}
+            </div>
+            ${entry.status === 'unverified'
+              ? '<div class="idea-actions"><button type="button" class="primary-link" data-knowledge-action="verify">标记已验证</button></div>'
+              : ''}
+          </div>
+        `).join('')
+        : '<div class="muted small">还没有知识。</div>';
+    } else {
+      list.innerHTML = state.experiences.length
+        ? state.experiences.map((entry) => `
+          <div class="knowledge-item">
+            <div class="line">${esc(String(entry.text).slice(0, 200))}</div>
+            <div class="muted small">${esc(entry.outcome)} · ${entry.distilled ? '已提炼' : '未提炼'}</div>
+          </div>
+        `).join('')
+        : '<div class="muted small">还没有经验。和 Cindy 讨论后让它用 owner_experience_add 记录。</div>';
+    }
+
+    const report = $('tidyReport');
+    if (state.tidy) {
+      const parts = [];
+      if (state.tidy.duplicates?.length) parts.push(`重复标题 ${state.tidy.duplicates.length} 组`);
+      if (state.tidy.short?.length) parts.push(`内容过短 ${state.tidy.short.length} 条`);
+      if (state.tidy.unverified?.length) parts.push(`未验证 ${state.tidy.unverified.length} 条`);
+      if (state.tidy.proposed?.length) parts.push(`待审核 ${state.tidy.proposed.length} 条`);
+      report.textContent = parts.length ? parts.join(' · ') : '没有发现需要整理的问题';
+      report.hidden = false;
+    } else {
+      report.hidden = true;
+    }
   };
 
   const renderDiagrams = () => {
@@ -142,6 +210,60 @@
     `;
   };
 
+  const renderGithub = () => {
+    const box = $('githubBody');
+    const lists = $('githubLists');
+    lists.replaceChildren();
+    const github = state.github;
+    if (!github) {
+      box.textContent = '正在读取…';
+      return;
+    }
+    if (!github.ok) {
+      box.textContent = `GitHub 不可用：${github.error}`;
+      return;
+    }
+    box.innerHTML = `
+      <div class="line">${esc(github.repo)}</div>
+      <div class="line muted small">分支 ${esc(github.preview?.branch ?? '')} · ${github.preview?.clean ? '工作区干净' : '有未提交改动'}</div>
+    `;
+    const rows = [
+      ...(github.issues ?? []).map((issue) => `#${issue.number} ${issue.title}`),
+      ...(github.prs ?? []).map((pr) => `PR #${pr.number}${pr.draft ? '（Draft）' : ''} ${pr.title}`)
+    ].slice(0, 8);
+    lists.innerHTML = rows.length
+      ? rows.map((row) => `<div class="muted small line">· ${esc(row)}</div>`).join('')
+      : '<div class="muted small">没有打开的 Issue 或 PR。</div>';
+  };
+
+  const renderPatches = () => {
+    const pending = state.patches.filter((entry) => entry.status === 'pending');
+    $('patchBody').textContent = pending.length
+      ? `${pending.length} 条待处理补丁；应用前请先确认。`
+      : '没有待处理补丁。';
+    $('patchList').innerHTML = pending.map((entry) => `
+      <div class="knowledge-item" data-patch-id="${esc(entry.id)}">
+        <div class="line">${esc(entry.title)}</div>
+        <pre class="patch-diff">${esc(String(entry.diff ?? '').slice(0, 1600))}</pre>
+        <div class="idea-actions">
+          <button type="button" class="primary-link" data-patch-action="apply">应用</button>
+          <button type="button" class="danger" data-patch-action="reject">拒绝</button>
+        </div>
+      </div>
+    `).join('');
+    const last = state.tests[0];
+    if (last) {
+      state.testOutput = `${last.ok ? '通过' : '失败'} · ${last.command} · ${Math.round(last.durationMs / 1000)}s\n${last.output}`;
+    }
+    const output = $('testOutput');
+    if (state.testOutput) {
+      output.textContent = state.testOutput;
+      output.hidden = false;
+    } else {
+      output.hidden = true;
+    }
+  };
+
   const render = () => {
     renderProjectSelect();
     renderNextAction();
@@ -149,6 +271,8 @@
     renderIdeas();
     renderKnowledge();
     renderDiagrams();
+    renderGithub();
+    renderPatches();
   };
 
   const load = async () => {
@@ -157,6 +281,26 @@
       const overview = await call('owner/projects/overview', { projectId: state.projectId }, 20000);
       state.overview = overview;
       state.projectId = overview?.activeProjectId || '';
+      if (state.projectId) {
+        const [knowledge, github, patches, tests] = await Promise.all([
+          call('owner/knowledge/list', { projectId: state.projectId }, 20000),
+          call('owner/github/status', { projectId: state.projectId }, 30000)
+            .catch((error) => ({ ok: false, error: String(error?.message ?? error) })),
+          call('owner/patches/list', { projectId: state.projectId }, 20000).catch(() => ({ items: [] })),
+          call('owner/tests/list', { projectId: state.projectId }, 20000).catch(() => ({ items: [] }))
+        ]);
+        state.knowledge = knowledge.items ?? [];
+        state.experiences = knowledge.experiences ?? [];
+        state.github = github;
+        state.patches = patches.items ?? [];
+        state.tests = tests.items ?? [];
+      } else {
+        state.knowledge = [];
+        state.experiences = [];
+        state.github = null;
+        state.patches = [];
+        state.tests = [];
+      }
       render();
       setStatus('已连接', 'ok');
     } catch (error) {
@@ -213,6 +357,93 @@
       await load();
     } catch (error) {
       toast(`保存失败：${String(error?.message ?? error)}`);
+    }
+  };
+
+  const knowledgeAction = async (id, action) => {
+    try {
+      if (action === 'verify') await call('owner/knowledge/verify', { id }, 20000);
+      else await call('owner/knowledge/review', { id, decision: action }, 20000);
+      await load();
+    } catch (error) {
+      toast(`操作失败：${String(error?.message ?? error)}`);
+    }
+  };
+
+  const tidyKnowledge = async () => {
+    if (!state.projectId) return;
+    try {
+      state.tidy = await call('owner/knowledge/tidy', { projectId: state.projectId }, 20000);
+      renderKnowledge();
+    } catch (error) {
+      toast(`整理失败：${String(error?.message ?? error)}`);
+    }
+  };
+
+  const distillPrompt = async () => {
+    const text = '请根据我们这轮讨论：先用 owner_experience_add 记录可复用经验，'
+      + '再用 owner_knowledge_propose 提炼 1-3 条候选（标题 + 细节 + 证据），不要直接写 owner_knowledge_add。';
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('提炼指令已复制，粘贴到 Cindy 聊天里发送');
+    } catch {
+      toast(text);
+    }
+  };
+
+  const patchAction = async (id, action) => {
+    if (action === 'apply' && !$('patchConfirm').checked) {
+      toast('先勾选「我确认应用补丁会写入项目文件」');
+      return;
+    }
+    try {
+      if (action === 'apply') await call('owner/patches/apply', { id }, 30000);
+      else await call('owner/patches/reject', { id }, 20000);
+      await load();
+      toast(action === 'apply' ? '补丁已应用' : '补丁已拒绝');
+    } catch (error) {
+      toast(`操作失败：${String(error?.message ?? error)}`);
+    }
+  };
+
+  const runTests = async () => {
+    if (!state.projectId) return;
+    const command = String($('testCommand').value ?? '').trim();
+    $('testsRun').disabled = true;
+    toast('正在运行测试…');
+    try {
+      const result = await call('owner/tests/run', { projectId: state.projectId, command }, 320000);
+      state.testOutput = `${result.ok ? '通过' : '失败'} · ${result.command} · ${Math.round(result.durationMs / 1000)}s\n${result.output}`;
+      $('testOutput').textContent = state.testOutput;
+      $('testOutput').hidden = false;
+      await load();
+    } catch (error) {
+      toast(`测试失败：${String(error?.message ?? error)}`);
+    } finally {
+      $('testsRun').disabled = false;
+    }
+  };
+
+  const createPr = async () => {
+    if (!$('prConfirm').checked) {
+      toast('先勾选「我确认只创建 Draft PR」');
+      return;
+    }
+    if (!state.projectId) return;
+    const title = String($('prTitle').value ?? '').trim();
+    const base = String($('prBase').value ?? '').trim() || 'main';
+    $('prCreate').disabled = true;
+    $('prResult').textContent = '创建中…';
+    try {
+      const result = await call('owner/github/pr/create', {
+        projectId: state.projectId, base, title, confirm: true
+      }, 120000);
+      $('prResult').textContent = `已创建：${result.url}`;
+      await load();
+    } catch (error) {
+      $('prResult').textContent = `失败：${String(error?.message ?? error)}`;
+    } finally {
+      $('prCreate').disabled = false;
     }
   };
 
@@ -279,6 +510,24 @@
   };
 
   document.addEventListener('click', (event) => {
+    const tab = event.target.closest?.('[data-knowledge-tab]');
+    if (tab) {
+      state.knowledgeTab = tab.dataset.knowledgeTab;
+      renderKnowledge();
+      return;
+    }
+    const knowledgeButton = event.target.closest?.('#knowledgeList [data-knowledge-action]');
+    if (knowledgeButton) {
+      const id = knowledgeButton.closest('.knowledge-item')?.dataset.id;
+      if (id) void knowledgeAction(id, knowledgeButton.dataset.knowledgeAction);
+      return;
+    }
+    const patchButton = event.target.closest?.('#patchList [data-patch-action]');
+    if (patchButton) {
+      const id = patchButton.closest('.knowledge-item')?.dataset.patchId;
+      if (id) void patchAction(id, patchButton.dataset.patchAction);
+      return;
+    }
     const button = event.target.closest?.('#ideaList button[data-action]');
     if (!button) return;
     const ideaId = button.closest('.idea')?.dataset.id;
@@ -315,6 +564,11 @@
     event.preventDefault();
     void addKnowledge();
   });
+  $('knowledgeTidy').addEventListener('click', () => { void tidyKnowledge(); });
+  $('knowledgeDistill').addEventListener('click', () => { void distillPrompt(); });
+  $('githubRefresh').addEventListener('click', () => { void load(); });
+  $('prCreate').addEventListener('click', () => { void createPr(); });
+  $('testsRun').addEventListener('click', () => { void runTests(); });
   $('diagramScan').addEventListener('click', () => { void scanDiagram(); });
   $('diagramCopy').addEventListener('click', () => { void copyDiagram(); });
 

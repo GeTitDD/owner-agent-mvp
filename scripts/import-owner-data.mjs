@@ -132,6 +132,90 @@ for (const row of diagrams) {
   addedDiagrams += 1;
 }
 
+// 旧知识库：personal_units（已接受）与 pending proposals（待审核）+ experiences。
+const knowledgeDbPath = path.resolve(arg('knowledge-db', path.join(os.homedir(), '.domain-context', 'index.sqlite')));
+if (fs.existsSync(knowledgeDbPath)) {
+  const kdb = new DatabaseSync(knowledgeDbPath);
+  const units = (() => { try { return kdb.prepare('SELECT * FROM personal_units').all(); } catch { return []; } })();
+  const proposals = (() => { try { return kdb.prepare('SELECT * FROM personal_proposals').all(); } catch { return []; } })();
+  const experiences = (() => { try { return kdb.prepare('SELECT * FROM knowledge_experiences').all(); } catch { return []; } })();
+  kdb.close();
+
+  const knownTitles = new Set(existing.knowledge.map((entry) => `${entry.projectId}|${entry.title}`));
+  const addKnowledge = (entry) => {
+    const key = `${entry.projectId}|${entry.title}`;
+    if (knownTitles.has(key)) return 0;
+    existing.knowledge.push(entry);
+    knownTitles.add(key);
+    return 1;
+  };
+
+  let addedUnits = 0;
+  for (const row of units) {
+    const payload = parse(row.payload, null);
+    const projectId = oldIdToNew.get(payload?.projectId) ?? (projectById.has(payload?.projectId) ? payload.projectId : null);
+    if (!payload || !projectId || !payload.title) continue;
+    addedUnits += addKnowledge({
+      id: row.id,
+      projectId,
+      title: String(payload.title).slice(0, 200),
+      body: String(payload.content || '').slice(0, 12000),
+      tags: [...(payload.tags ?? []), ...(payload.domains ?? [])].slice(0, 8),
+      evidence: (payload.evidenceRefs ?? []).slice(0, 8),
+      status: payload.verificationStatus === 'verified' ? 'verified' : 'unverified',
+      source: 'legacy',
+      createdAt: row.created_at || new Date().toISOString(),
+      updatedAt: row.updated_at || row.created_at || new Date().toISOString(),
+      revisions: []
+    });
+  }
+
+  let addedProposals = 0;
+  for (const row of proposals) {
+    if (row.status !== 'pending') continue;
+    const payload = parse(row.payload, null);
+    const projectId = oldIdToNew.get(payload?.projectId) ?? (projectById.has(payload?.projectId) ? payload.projectId : null);
+    if (!payload || !projectId || !payload.title) continue;
+    const meta = parse(row.meta_json, {});
+    addedProposals += addKnowledge({
+      id: row.id,
+      projectId,
+      title: String(payload.title).slice(0, 200),
+      body: String(payload.content || '').slice(0, 12000),
+      tags: [...(payload.tags ?? []), ...(payload.domains ?? [])].slice(0, 8),
+      evidence: (payload.evidenceRefs ?? []).slice(0, 8),
+      status: 'proposed',
+      source: 'legacy',
+      confidence: meta.confidence ?? null,
+      createdAt: row.created_at || new Date().toISOString(),
+      updatedAt: row.created_at || new Date().toISOString(),
+      revisions: []
+    });
+  }
+
+  let addedExperiences = 0;
+  for (const row of experiences) {
+    const projectId = oldIdToNew.get(row.project_id);
+    if (!projectId) continue;
+    const payload = parse(row.payload, {});
+    const text = [payload.actionSummary, ...(payload.facts ?? [])].filter(Boolean).join('\n');
+    if (!text.trim()) continue;
+    if (existing.experiences.some((entry) => entry.id === row.id)) continue;
+    existing.experiences.push({
+      id: row.id,
+      projectId,
+      text: text.slice(0, 8000),
+      outcome: ['success', 'failure', 'unknown'].includes(row.outcome) ? row.outcome : 'unknown',
+      source: 'legacy',
+      distilled: true,
+      createdAt: row.created_at || new Date().toISOString()
+    });
+    addedExperiences += 1;
+  }
+
+  console.log(JSON.stringify({ knowledgeUnits: addedUnits, proposals: addedProposals, experiences: addedExperiences }));
+}
+
 existing.projects = [...projectById.values()];
 existing.version = 1;
 fs.mkdirSync(outDir, { recursive: true });

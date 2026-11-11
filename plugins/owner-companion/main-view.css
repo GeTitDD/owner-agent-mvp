@@ -244,3 +244,44 @@ button:disabled { opacity: 0.45; cursor: default; }
 }
 .settings-project:first-child { border-top: 0; padding-top: 0; }
 button.danger.small { border: 0; background: transparent; color: var(--danger); padding: 0; }
+
+/* 知识标签页 */
+.knowledge-tabs { display: flex; gap: 6px; }
+.knowledge-tabs button {
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+}
+.knowledge-tabs button.active { border-color: var(--accent); color: var(--text); background: var(--accent-soft, rgba(127,127,127,0.08)); }
+
+/* 补丁与测试 */
+.patch-diff {
+  max-height: 180px;
+  overflow: auto;
+  margin: 6px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.test-output {
+  max-height: 240px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.confirm-row { display: flex; align-items: center; gap: 6px; }
+.inline-details summary { cursor: pointer; font-size: 12px; color: var(--muted); }

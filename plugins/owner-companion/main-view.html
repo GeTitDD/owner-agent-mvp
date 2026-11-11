@@ -63,12 +63,22 @@
           <h3>知识</h3>
           <span id="knowledgeCount" class="muted small"></span>
         </div>
+        <div class="knowledge-tabs">
+          <button type="button" data-knowledge-tab="proposed">待审核 <span id="proposedCount"></span></button>
+          <button type="button" data-knowledge-tab="knowledge">知识</button>
+          <button type="button" data-knowledge-tab="experiences">经验</button>
+        </div>
         <div id="knowledgeBody" class="body muted">正在读取…</div>
+        <div id="knowledgeList" class="list"></div>
         <div class="add-row">
           <input id="knowledgeInput" type="text" maxlength="200" placeholder="记一条项目知识…" />
           <button id="knowledgeAdd" type="button" class="primary">记下</button>
         </div>
-        <div id="knowledgeList" class="list"></div>
+        <div class="add-row">
+          <button id="knowledgeDistill" type="button" class="ghost">让 Cindy 提炼</button>
+          <button id="knowledgeTidy" type="button" class="ghost">整理</button>
+        </div>
+        <div id="tidyReport" class="body muted small" hidden></div>
       </article>
 
       <article class="card">
@@ -82,6 +92,44 @@
           <button id="diagramScan" type="button" class="primary">扫描依赖</button>
           <button id="diagramCopy" type="button" class="ghost">复制 Mermaid</button>
         </div>
+      </article>
+      <article class="card">
+        <div class="card-head">
+          <h3>GitHub</h3>
+          <button id="githubRefresh" type="button" class="ghost small">刷新</button>
+        </div>
+        <div id="githubBody" class="body muted">正在读取…</div>
+        <div id="githubLists" class="list"></div>
+        <details class="inline-details">
+          <summary>创建 Draft PR</summary>
+          <div class="add-row">
+            <input id="prTitle" type="text" maxlength="120" placeholder="PR 标题" />
+            <input id="prBase" type="text" maxlength="60" value="main" placeholder="base 分支" />
+          </div>
+          <label class="confirm-row small muted">
+            <input id="prConfirm" type="checkbox" /> 我确认只创建 Draft PR，不合并
+          </label>
+          <div class="add-row">
+            <button id="prCreate" type="button" class="primary">创建 Draft PR</button>
+          </div>
+          <div id="prResult" class="muted small"></div>
+        </details>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h3>补丁与测试</h3>
+          <button id="testsRun" type="button" class="ghost small">运行测试</button>
+        </div>
+        <div id="patchBody" class="body muted">没有待处理补丁。</div>
+        <div class="add-row">
+          <input id="testCommand" type="text" maxlength="120" placeholder="测试命令，默认 npm test" />
+        </div>
+        <label class="confirm-row small muted">
+          <input id="patchConfirm" type="checkbox" /> 我确认应用补丁会写入项目文件
+        </label>
+        <div id="patchList" class="list"></div>
+        <pre id="testOutput" class="test-output" hidden></pre>
       </article>
     </section>
   </main>

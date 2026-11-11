@@ -118,7 +118,8 @@ const tools = {
 
   async owner_knowledge(args) {
     const result = await forward('owner/knowledge/list', {
-      projectId: String(args?.projectId ?? '')
+      projectId: String(args?.projectId ?? ''),
+      status: String(args?.status ?? '')
     });
     return {
       items: result.items.slice(0, 15).map((entry) => ({
@@ -126,6 +127,60 @@ const tools = {
         title: entry.title,
         status: entry.status,
         tags: entry.tags
+      })),
+      experiences: result.experiences.slice(0, 10).map((entry) => ({
+        id: entry.id, text: String(entry.text).slice(0, 160), distilled: entry.distilled
+      }))
+    };
+  },
+
+  async owner_knowledge_propose(args) {
+    const entry = await forward('owner/knowledge/propose', {
+      projectId: String(args?.projectId ?? ''),
+      title: String(args?.title ?? ''),
+      body: String(args?.body ?? ''),
+      tags: args?.tags ?? [],
+      evidence: args?.evidence ?? []
+    });
+    return { id: entry.id, title: entry.title, status: entry.status };
+  },
+
+  async owner_knowledge_tidy(args) {
+    return forward('owner/knowledge/tidy', { projectId: String(args?.projectId ?? '') });
+  },
+
+  async owner_knowledge_search(args) {
+    const result = await forward('owner/knowledge/search', {
+      query: String(args?.query ?? ''),
+      projectId: String(args?.projectId ?? '')
+    });
+    return {
+      items: result.items.slice(0, 10).map((entry) => ({
+        id: entry.id, title: entry.title, status: entry.status
+      }))
+    };
+  },
+
+  async owner_experience_add(args) {
+    const entry = await forward('owner/experiences/add', {
+      projectId: String(args?.projectId ?? ''),
+      text: String(args?.text ?? ''),
+      outcome: String(args?.outcome ?? 'unknown')
+    });
+    return { id: entry.id, outcome: entry.outcome, distilled: entry.distilled };
+  },
+
+  async owner_experience_list(args) {
+    const result = await forward('owner/experiences/list', {
+      projectId: String(args?.projectId ?? ''),
+      distilled: args?.distilled
+    });
+    return {
+      items: result.items.slice(0, 15).map((entry) => ({
+        id: entry.id,
+        text: String(entry.text).slice(0, 200),
+        outcome: entry.outcome,
+        distilled: entry.distilled
       }))
     };
   },
@@ -151,6 +206,58 @@ const tools = {
       summary: diagram.summary,
       version: diagram.version,
       mermaid: String(diagram.mermaid ?? '').slice(0, 20000)
+    };
+  },
+
+  async owner_github_status(args) {
+    const projectId = String(args?.projectId ?? '');
+    const result = await forward('owner/github/status', { projectId });
+    if (!result.ok) throw new Error(result.error || 'GitHub 读取失败');
+    return {
+      repo: result.repo,
+      issues: result.issues.slice(0, 5).map((item) => ({
+        number: item.number, title: item.title, state: item.state
+      })),
+      prs: result.prs.slice(0, 5).map((item) => ({
+        number: item.number, title: item.title, draft: item.draft, state: item.state
+      })),
+      branch: result.preview.branch,
+      clean: result.preview.clean
+    };
+  },
+
+  async owner_patches(args) {
+    const result = await forward('owner/patches/list', {
+      projectId: String(args?.projectId ?? ''),
+      status: String(args?.status ?? 'pending')
+    });
+    return {
+      items: result.items.map((entry) => ({
+        id: entry.id, title: entry.title, status: entry.status, createdAt: entry.createdAt
+      }))
+    };
+  },
+
+  async owner_patch_propose(args) {
+    const entry = await forward('owner/patches/propose', {
+      projectId: String(args?.projectId ?? ''),
+      title: String(args?.title ?? '代码改动'),
+      diff: String(args?.diff ?? '')
+    });
+    return { id: entry.id, title: entry.title, status: entry.status, baseCommit: entry.baseCommit };
+  },
+
+  async owner_test_run(args) {
+    const result = await forward('owner/tests/run', {
+      projectId: String(args?.projectId ?? ''),
+      command: String(args?.command ?? ''),
+      timeoutMs: Number(args?.timeoutMs) || 120000
+    });
+    return {
+      ok: result.ok,
+      command: result.command,
+      durationMs: result.durationMs,
+      output: String(result.output ?? '').slice(-3000)
     };
   }
 };

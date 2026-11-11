@@ -110,6 +110,51 @@ test('worker：项目、画像、想法、知识、依赖图全部自包含', as
     const knowledgeList = await env.rpc('owner/knowledge/list', { projectId: 'demo' });
     assert.equal(knowledgeList.items.length, 1);
 
+    const proposed = await env.rpc('owner/knowledge/propose', {
+      projectId: 'demo',
+      title: '测试命令应该用 node --test',
+      body: 'package.json 的 scripts.test 是 node --test',
+      evidence: ['package.json:4']
+    });
+    assert.equal(proposed.status, 'proposed');
+    const pending = await env.rpc('owner/knowledge/list', { projectId: 'demo', status: 'proposed' });
+    assert.equal(pending.items.length, 1);
+
+    const accepted = await env.rpc('owner/knowledge/review', { id: proposed.id, decision: 'accept' });
+    assert.equal(accepted.status, 'unverified');
+    const verified = await env.rpc('owner/knowledge/verify', { id: proposed.id });
+    assert.equal(verified.status, 'verified');
+
+    const experience = await env.rpc('owner/experiences/add', {
+      projectId: 'demo', text: '先跑 node --test 再改代码', outcome: 'success'
+    });
+    assert.equal(experience.distilled, false);
+    const experiences = await env.rpc('owner/experiences/list', { projectId: 'demo' });
+    assert.equal(experiences.items.length, 1);
+
+    const tidy = await env.rpc('owner/knowledge/tidy', { projectId: 'demo' });
+    assert.deepEqual(tidy.duplicates, []);
+    assert.equal(tidy.proposed.length, 0);
+
+    const search = await env.rpc('owner/knowledge/search', { query: '零依赖', projectId: 'demo' });
+    assert.equal(search.items.length, 1);
+
+    const patch = await env.rpc('owner/patches/propose', {
+      projectId: 'demo',
+      title: '把 a.txt 改成 two',
+      diff: 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-one\n+two\n'
+    });
+    assert.equal(patch.status, 'pending');
+    const rejected = await env.rpc('owner/patches/reject', { id: patch.id });
+    assert.equal(rejected.status, 'rejected');
+
+    const testRun = await env.rpc('owner/tests/run', { projectId: 'demo', command: 'node --test' });
+    assert.equal(typeof testRun.ok, 'boolean');
+    assert.ok(testRun.command);
+
+    const github = await env.rpc('owner/github/status', { projectId: 'demo' });
+    assert.equal(github.ok, false);
+
     const diagram = await env.rpc('owner/diagrams/dependency', { projectId: 'demo' });
     assert.equal(diagram.kind, 'dependency');
     assert.match(diagram.mermaid, /flowchart LR/u);

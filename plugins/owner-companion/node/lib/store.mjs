@@ -19,7 +19,11 @@ const emptyState = () => ({
   ideas: [],
   briefs: {},
   diagrams: {},
-  knowledge: []
+  knowledge: [],
+  experiences: [],
+  patches: [],
+  tests: [],
+  github: {}
 });
 
 const slug = (value) => String(value || '')
@@ -41,6 +45,10 @@ export function openStore(dir = dataDir()) {
       state.projects = Array.isArray(raw.projects) ? raw.projects : [];
       state.ideas = Array.isArray(raw.ideas) ? raw.ideas : [];
       state.knowledge = Array.isArray(raw.knowledge) ? raw.knowledge : [];
+      state.experiences = Array.isArray(raw.experiences) ? raw.experiences : [];
+      state.patches = Array.isArray(raw.patches) ? raw.patches : [];
+      state.tests = Array.isArray(raw.tests) ? raw.tests : [];
+      state.github = raw.github && typeof raw.github === 'object' ? raw.github : {};
       state.briefs = raw.briefs && typeof raw.briefs === 'object' ? raw.briefs : {};
       state.diagrams = raw.diagrams && typeof raw.diagrams === 'object' ? raw.diagrams : {};
     }
@@ -93,8 +101,12 @@ export function openStore(dir = dataDir()) {
       state.projects = state.projects.filter((project) => project.id !== projectId);
       state.ideas = state.ideas.filter((idea) => idea.projectId !== projectId);
       state.knowledge = state.knowledge.filter((entry) => entry.projectId !== projectId);
+      state.experiences = state.experiences.filter((entry) => entry.projectId !== projectId);
+      state.patches = state.patches.filter((entry) => entry.projectId !== projectId);
+      state.tests = state.tests.filter((entry) => entry.projectId !== projectId);
       delete state.briefs[projectId];
       delete state.diagrams[projectId];
+      delete state.github[projectId];
       persist();
       return { removed: before !== state.projects.length };
     },
@@ -178,26 +190,223 @@ export function openStore(dir = dataDir()) {
       return { ...bucket[diagram.kind] };
     },
 
-    listKnowledge(projectId) {
+    listKnowledge(projectId, status = '') {
       return state.knowledge
-        .filter((entry) => !projectId || entry.projectId === projectId)
+        .filter((entry) => (!projectId || entry.projectId === projectId)
+          && (!status || entry.status === status))
         .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
         .map((entry) => ({ ...entry }));
     },
-    addKnowledge({ projectId, title, body = '', tags = [], status = 'unverified', source = 'manual' }) {
+    getKnowledge(id) {
+      const entry = state.knowledge.find((item) => item.id === id);
+      return entry ? { ...entry } : null;
+    },
+    addKnowledge({ projectId, title, body = '', tags = [], evidence = [], status = 'unverified', source = 'manual' }) {
       const entry = {
         id: crypto.randomUUID(),
         projectId,
         title: String(title).slice(0, 200),
-        body: String(body).slice(0, 8000),
+        body: String(body).slice(0, 12000),
         tags: Array.isArray(tags) ? tags.slice(0, 8).map((tag) => String(tag).slice(0, 30)) : [],
+        evidence: Array.isArray(evidence) ? evidence.slice(0, 8).map((ref) => String(ref).slice(0, 200)) : [],
         status: status === 'verified' ? 'verified' : 'unverified',
         source,
-        createdAt: now()
+        createdAt: now(),
+        updatedAt: now(),
+        revisions: []
       };
       state.knowledge.push(entry);
       persist();
       return { ...entry };
+    },
+    proposeKnowledge({ projectId, title, body = '', tags = [], evidence = [], source = 'cindy' }) {
+      const entry = {
+        id: crypto.randomUUID(),
+        projectId,
+        title: String(title).slice(0, 200),
+        body: String(body).slice(0, 12000),
+        tags: Array.isArray(tags) ? tags.slice(0, 8).map((tag) => String(tag).slice(0, 30)) : [],
+        evidence: Array.isArray(evidence) ? evidence.slice(0, 8).map((ref) => String(ref).slice(0, 200)) : [],
+        status: 'proposed',
+        source,
+        createdAt: now(),
+        updatedAt: now(),
+        revisions: []
+      };
+      state.knowledge.push(entry);
+      persist();
+      return { ...entry };
+    },
+    reviewKnowledge(id, decision, reviewer = 'local-user') {
+      const entry = state.knowledge.find((item) => item.id === id);
+      if (!entry) throw Object.assign(new Error('知识不存在'), { status: 404 });
+      if (entry.status !== 'proposed') throw Object.assign(new Error('这条候选已经审核过'), { status: 409 });
+      entry.status = decision === 'accept' ? 'unverified' : 'rejected';
+      entry.reviewedAt = now();
+      entry.reviewer = reviewer;
+      entry.updatedAt = now();
+      persist();
+      return { ...entry };
+    },
+    verifyKnowledge(id) {
+      const entry = state.knowledge.find((item) => item.id === id);
+      if (!entry) throw Object.assign(new Error('知识不存在'), { status: 404 });
+      entry.status = 'verified';
+      entry.verifiedAt = now();
+      entry.updatedAt = now();
+      persist();
+      return { ...entry };
+    },
+    updateKnowledge(id, { title, body, tags } = {}) {
+      const entry = state.knowledge.find((item) => item.id === id);
+      if (!entry) throw Object.assign(new Error('知识不存在'), { status: 404 });
+      entry.revisions.push({
+        at: entry.updatedAt || entry.createdAt,
+        title: entry.title,
+        body: entry.body,
+        tags: [...(entry.tags ?? [])]
+      });
+      if (title !== undefined) entry.title = String(title).slice(0, 200);
+      if (body !== undefined) entry.body = String(body).slice(0, 12000);
+      if (tags !== undefined) {
+        entry.tags = Array.isArray(tags) ? tags.slice(0, 8).map((tag) => String(tag).slice(0, 30)) : [];
+      }
+      entry.updatedAt = now();
+      // 修改后需要重新验证。
+      if (entry.status === 'verified') entry.status = 'unverified';
+      persist();
+      return { ...entry };
+    },
+    tidyKnowledge(projectId) {
+      const entries = state.knowledge.filter((entry) => !projectId || entry.projectId === projectId);
+      const byTitle = new Map();
+      for (const entry of entries) {
+        const key = entry.title.toLowerCase().replace(/\s+/gu, '');
+        byTitle.set(key, [...(byTitle.get(key) ?? []), entry.id]);
+      }
+      return {
+        duplicates: [...byTitle.entries()].filter(([, ids]) => ids.length > 1)
+          .map(([title, ids]) => ({ title, ids })),
+        short: entries.filter((entry) => String(entry.body ?? '').length < 40)
+          .map((entry) => ({ id: entry.id, title: entry.title })),
+        unverified: entries.filter((entry) => entry.status === 'unverified')
+          .map((entry) => ({ id: entry.id, title: entry.title })),
+        proposed: entries.filter((entry) => entry.status === 'proposed')
+          .map((entry) => ({ id: entry.id, title: entry.title }))
+      };
+    },
+    searchKnowledge(query, projectId = '') {
+      const needle = String(query ?? '').trim().toLowerCase();
+      if (!needle) return [];
+      return state.knowledge
+        .filter((entry) => (!projectId || entry.projectId === projectId)
+          && (`${entry.title} ${entry.body} ${(entry.tags ?? []).join(' ')}`.toLowerCase().includes(needle)))
+        .map((entry) => ({ ...entry }))
+        .slice(0, 20);
+    },
+
+    listExperiences(projectId, { distilled } = {}) {
+      return state.experiences
+        .filter((entry) => (!projectId || entry.projectId === projectId)
+          && (distilled === undefined || entry.distilled === distilled))
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .map((entry) => ({ ...entry }));
+    },
+    addExperience({ projectId, text, outcome = 'unknown', source = 'cindy' }) {
+      const entry = {
+        id: crypto.randomUUID(),
+        projectId,
+        text: String(text).slice(0, 8000),
+        outcome: ['success', 'failure', 'unknown'].includes(outcome) ? outcome : 'unknown',
+        source,
+        distilled: false,
+        createdAt: now()
+      };
+      state.experiences.push(entry);
+      persist();
+      return { ...entry };
+    },
+    markExperienceDistilled(id) {
+      const entry = state.experiences.find((item) => item.id === id);
+      if (!entry) throw Object.assign(new Error('经验不存在'), { status: 404 });
+      entry.distilled = true;
+      persist();
+      return { ...entry };
+    },
+
+    listPatches(projectId, status = '') {
+      return state.patches
+        .filter((entry) => (!projectId || entry.projectId === projectId)
+          && (!status || entry.status === status))
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .map((entry) => ({ ...entry }));
+    },
+    getPatch(id) {
+      const entry = state.patches.find((item) => item.id === id);
+      return entry ? { ...entry } : null;
+    },
+    addPatch({ projectId, title, diff, baseCommit = '', source = 'cindy' }) {
+      const entry = {
+        id: crypto.randomUUID(),
+        projectId,
+        title: String(title).slice(0, 200),
+        diff: String(diff),
+        baseCommit: String(baseCommit || ''),
+        status: 'pending',
+        source,
+        createdAt: now(),
+        updatedAt: now()
+      };
+      state.patches.push(entry);
+      persist();
+      return { ...entry };
+    },
+    updatePatch(id, { status, note = '' } = {}) {
+      const entry = state.patches.find((item) => item.id === id);
+      if (!entry) throw Object.assign(new Error('补丁提案不存在'), { status: 404 });
+      if (status !== undefined) {
+        if (!['pending', 'applied', 'rejected'].includes(status)) {
+          throw Object.assign(new Error('无效的补丁状态'), { status: 400 });
+        }
+        entry.status = status;
+      }
+      entry.note = String(note || entry.note || '').slice(0, 1000);
+      entry.updatedAt = now();
+      persist();
+      return { ...entry };
+    },
+
+    listTestRuns(projectId) {
+      return state.tests
+        .filter((entry) => entry.projectId === projectId)
+        .slice(-5)
+        .reverse()
+        .map((entry) => ({ ...entry }));
+    },
+    addTestRun({ projectId, command, ok, durationMs, output = '', code = 0 }) {
+      const entry = {
+        id: crypto.randomUUID(),
+        projectId,
+        command: String(command).slice(0, 200),
+        ok: ok === true,
+        code: Number(code) || 0,
+        durationMs: Number(durationMs) || 0,
+        output: String(output).slice(-8000),
+        createdAt: now()
+      };
+      state.tests.push(entry);
+      if (state.tests.length > 200) state.tests = state.tests.slice(-200);
+      persist();
+      return { ...entry };
+    },
+
+    getGithub(projectId) {
+      return state.github[projectId] ? { ...state.github[projectId] } : null;
+    },
+    setGithub(projectId, data) {
+      state.github[projectId] = { ...data, updatedAt: now() };
+      persist();
+      return { ...state.github[projectId] };
     }
   };
 }

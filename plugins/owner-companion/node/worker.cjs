@@ -18,13 +18,15 @@ let store = null;
 
 const loadLibs = async () => {
   libsPromise ??= (async () => {
-    const [storeModule, scanModule, briefModule, diagramModule] = await Promise.all([
+    const [storeModule, scanModule, briefModule, diagramModule, githubModule, patchModule] = await Promise.all([
       import(libUrl('store.mjs')),
       import(libUrl('scan.mjs')),
       import(libUrl('brief.mjs')),
-      import(libUrl('diagrams.mjs'))
+      import(libUrl('diagrams.mjs')),
+      import(libUrl('github.mjs')),
+      import(libUrl('patch.mjs'))
     ]);
-    return { storeModule, scanModule, briefModule, diagramModule };
+    return { storeModule, scanModule, briefModule, diagramModule, githubModule, patchModule };
   })();
   return libsPromise;
 };
@@ -64,6 +66,18 @@ const nextActionFor = ({ project, brief, briefStale, ideas }) => {
     return { title: `整理 ${todo} 条想法`, detail: '采纳、搁置，或复制到 Cindy 聊天里讨论', command: 'ideas' };
   }
   return { title: '在 Cindy 里继续讨论', detail: '让 Agent 用 owner_* 工具读取项目上下文', command: 'chat' };
+};
+
+let services = null;
+const getServices = async () => {
+  if (services) return services;
+  const libs = await loadLibs();
+  services = {
+    github: libs.githubModule.createGithub(),
+    patch: libs.patchModule.createPatchService(),
+    validateDiff: libs.patchModule.validateDiff
+  };
+  return services;
 };
 
 const methods = {
@@ -138,13 +152,12 @@ const methods = {
       nextAction: nextActionFor({ project, brief, briefStale, ideas }),
       ideas,
       knowledge: {
-        experiences: 0,
-        knowledge: knowledge.length,
+        knowledge: knowledge.filter((entry) => entry.status === 'unverified' || entry.status === 'verified').length,
         verified: knowledge.filter((entry) => entry.status === 'verified').length,
-        candidates: 0,
-        pendingHarvest: 0,
-        usages: 0,
-        sharedKnowledge: 0
+        unverified: knowledge.filter((entry) => entry.status === 'unverified').length,
+        proposed: knowledge.filter((entry) => entry.status === 'proposed').length,
+        experiences: data.listExperiences(project.id).length,
+        candidates: knowledge.filter((entry) => entry.status === 'proposed').length
       },
       knowledgeItems: knowledge.slice(0, 10),
       diagrams
@@ -188,7 +201,75 @@ const methods = {
 
   async 'owner/knowledge/list'(params) {
     const data = await getStore();
-    return { items: data.listKnowledge(String(params?.projectId || '')) };
+    const projectId = String(params?.projectId || '');
+    const status = String(params?.status || '');
+    return {
+      items: data.listKnowledge(projectId, status),
+      tidy: String(params?.tidy || '') === '1' ? data.tidyKnowledge(projectId) : null,
+      experiences: data.listExperiences(projectId).slice(0, 20)
+    };
+  },
+
+  async 'owner/knowledge/propose'(params) {
+    const data = await getStore();
+    const projectId = String(params?.projectId || '');
+    if (!data.getProject(projectId)) throw fail('项目不存在', 404);
+    const title = String(params?.title || '').trim();
+    if (!title) throw fail('知识标题不能为空', 400);
+    return data.proposeKnowledge({
+      projectId,
+      title,
+      body: String(params?.body || ''),
+      tags: params?.tags ?? [],
+      evidence: params?.evidence ?? []
+    });
+  },
+
+  async 'owner/knowledge/review'(params) {
+    const data = await getStore();
+    const decision = String(params?.decision || '');
+    if (!['accept', 'reject'].includes(decision)) throw fail('decision 必须是 accept 或 reject', 400);
+    return data.reviewKnowledge(String(params?.id || ''), decision, String(params?.reviewer || 'local-user'));
+  },
+
+  async 'owner/knowledge/verify'(params) {
+    const data = await getStore();
+    return data.verifyKnowledge(String(params?.id || ''));
+  },
+
+  async 'owner/knowledge/tidy'(params) {
+    const data = await getStore();
+    return data.tidyKnowledge(String(params?.projectId || ''));
+  },
+
+  async 'owner/knowledge/search'(params) {
+    const data = await getStore();
+    return { items: data.searchKnowledge(String(params?.query || ''), String(params?.projectId || '')) };
+  },
+
+  async 'owner/experiences/list'(params) {
+    const data = await getStore();
+    const distilled = params?.distilled === undefined ? undefined : params.distilled === true;
+    return { items: data.listExperiences(String(params?.projectId || ''), { distilled }) };
+  },
+
+  async 'owner/experiences/add'(params) {
+    const data = await getStore();
+    const projectId = String(params?.projectId || '');
+    if (!data.getProject(projectId)) throw fail('项目不存在', 404);
+    const text = String(params?.text || '').trim();
+    if (!text) throw fail('经验内容不能为空', 400);
+    return data.addExperience({
+      projectId,
+      text,
+      outcome: String(params?.outcome || 'unknown'),
+      source: 'cindy'
+    });
+  },
+
+  async 'owner/experiences/distilled'(params) {
+    const data = await getStore();
+    return data.markExperienceDistilled(String(params?.id || ''));
   },
 
   async 'owner/knowledge/add'(params) {
@@ -227,6 +308,105 @@ const methods = {
   async 'owner/diagrams/list'(params) {
     const data = await getStore();
     return { items: data.listDiagrams(String(params?.projectId || '')) };
+  },
+
+  async 'owner/github/status'(params) {
+    const data = await getStore();
+    const project = data.getProject(String(params?.projectId || ''));
+    if (!project) throw fail('项目不存在', 404);
+    const svc = await getServices();
+    try {
+      const [repo, issues, prs, preview] = await Promise.all([
+        svc.github.repoSlug(project.root),
+        svc.github.listIssues(project.root, { limit: 5 }),
+        svc.github.listPrs(project.root, { limit: 5 }),
+        svc.github.preview(project.root)
+      ]);
+      const value = { ok: true, repo, issues, prs, preview };
+      data.setGithub(project.id, value);
+      return value;
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  },
+
+  async 'owner/github/pr/create'(params) {
+    const data = await getStore();
+    const project = data.getProject(String(params?.projectId || ''));
+    if (!project) throw fail('项目不存在', 404);
+    const svc = await getServices();
+    return svc.github.createDraftPr(project.root, {
+      base: String(params?.base || 'main'),
+      title: String(params?.title || ''),
+      body: String(params?.body || ''),
+      confirm: params?.confirm === true
+    });
+  },
+
+  async 'owner/patches/list'(params) {
+    const data = await getStore();
+    return {
+      items: data.listPatches(String(params?.projectId || ''), String(params?.status || ''))
+    };
+  },
+
+  async 'owner/patches/propose'(params) {
+    const data = await getStore();
+    const project = data.getProject(String(params?.projectId || ''));
+    if (!project) throw fail('项目不存在', 404);
+    const svc = await getServices();
+    const diff = svc.validateDiff(params?.diff);
+    return data.addPatch({
+      projectId: project.id,
+      title: String(params?.title || '代码改动'),
+      diff,
+      baseCommit: String(params?.baseCommit || await gitHead(project.root)),
+      source: 'cindy'
+    });
+  },
+
+  async 'owner/patches/apply'(params) {
+    const data = await getStore();
+    const patch = data.getPatch(String(params?.id || ''));
+    if (!patch) throw fail('补丁提案不存在', 404);
+    if (patch.status !== 'pending') throw fail('这条提案已经处理过', 409);
+    const project = data.getProject(patch.projectId);
+    if (!project) throw fail('项目不存在', 404);
+    const svc = await getServices();
+    await svc.patch.apply(project.root, patch.diff, { baseCommit: patch.baseCommit });
+    return data.updatePatch(patch.id, { status: 'applied' });
+  },
+
+  async 'owner/patches/reject'(params) {
+    const data = await getStore();
+    const patch = data.getPatch(String(params?.id || ''));
+    if (!patch) throw fail('补丁提案不存在', 404);
+    return data.updatePatch(patch.id, { status: 'rejected', note: String(params?.note || '') });
+  },
+
+  async 'owner/tests/run'(params) {
+    const data = await getStore();
+    const project = data.getProject(String(params?.projectId || ''));
+    if (!project) throw fail('项目不存在', 404);
+    const svc = await getServices();
+    const result = await svc.patch.runTests(project.root, {
+      command: String(params?.command || ''),
+      timeoutMs: Number(params?.timeoutMs) || 120000
+    });
+    const saved = data.addTestRun({
+      projectId: project.id,
+      command: result.command,
+      ok: result.ok,
+      code: result.code ?? 0,
+      durationMs: result.durationMs,
+      output: result.output
+    });
+    return saved;
+  },
+
+  async 'owner/tests/list'(params) {
+    const data = await getStore();
+    return { items: data.listTestRuns(String(params?.projectId || '')) };
   }
 };
 

@@ -25,7 +25,9 @@
 - 双层工作区：上半部分围绕当前项目（画像、图谱、想法、知识、Playbook），下半部分跨项目管理（决定、运行、结果）；「想法」是改进意见收件箱，对话里提到的建议自动采集，只收集不执行
 - 输入框只保留项目选择 + 一句话 + 发送；分析与讨论都在同一处继续，不再显示沙箱/范围/模型等额外组件
 - 手机端：直接用 Cindy 的手机 App，插件声明 mobile 投影即可（同一账号、同一台电脑）；不再维护独立 Expo 客户端。详见 [docs/MOBILE.md](docs/MOBILE.md)
-- Cindy 插件：`plugins/owner-companion/` 是自包含插件（项目、画像、想法、知识、依赖图都在插件自己的 Node worker 里），已在 Cindy 0.1.124 实测；安装后从左侧导航打开 Owner，手机端复用 Cindy 手机 App；打包产物 `plugins/dist/owner-companion-0.2.0.cindy`（`npm run cindy:pack`）
+- Cindy 插件：`plugins/owner-companion/` 是自包含插件（项目、画像、想法、知识、依赖图都在插件自己的 Node worker 里），已在 Cindy 0.1.124 实测；安装后从左侧导航打开 Owner，手机端复用 Cindy 手机 App；打包产物 `plugins/dist/owner-companion-0.3.1.cindy`（`npm run cindy:pack`）
+- 知识流：经验 → 候选 → 人工接受 → 未验证 → 标记已验证；整理只报告重复/过短/未验证，不自动合并
+- GitHub / 补丁：只读仓库、Issues、PR；Draft PR 创建与补丁应用仅 UI 且需勾选确认；测试运行只允许 npm/node/pytest/dotnet/cargo/go 白名单命令
 - 项目图谱：依赖图本地扫描，控制流/数据流/状态/时序走 pstack 只读分析；模型只产出结构化图数据，Mermaid 由代码生成，可复制/导出 SVG；生成中显示已用时间，失败可重试，设置里可指定「图谱备用模型」自动回退
 - 知识闭环：`npm run knowledge:demo`；自动采集 `npm run knowledge:auto -- --once`；CLI `npm run knowledge -- --help`
 - A→B 实验：`npm run knowledge:eval:ab -- --root <dir> --allow-model`；Oracle Control 用 `knowledge:eval:hard`

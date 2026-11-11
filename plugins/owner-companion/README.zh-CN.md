@@ -25,14 +25,40 @@
 | `owner_projects` | 列出已登记项目 |
 | `owner_project_overview` | 画像、下一步、想法与图谱摘要 |
 | `owner_brief_refresh` | 重新扫描并生成画像 |
-| `owner_ideas` | 按状态列出想法 |
-| `owner_idea_add` | 记一条改进想法 |
-| `owner_idea_status` | todo / doing / blocked / done |
-| `owner_knowledge` | 列出知识笔记 |
-| `owner_knowledge_add` | 记一条知识笔记 |
+| `owner_ideas` / `owner_idea_add` / `owner_idea_status` | 想法池 |
+| `owner_knowledge` / `owner_knowledge_add` / `owner_knowledge_propose` | 知识列表 / 直接记录 / 提交候选 |
+| `owner_knowledge_tidy` / `owner_knowledge_search` | 整理报告 / 关键词搜索 |
+| `owner_experience_add` | 记录原始经验 |
+| `owner_github_status` | 仓库、Issues、PR 与分支状态 |
+| `owner_patch_propose` | 提交 git diff 候选 |
+| `owner_test_run` | 运行白名单测试命令 |
 | `owner_diagram` | 扫描依赖并返回 Mermaid |
 
-聊天与改代码都交给 Cindy 自己的 Agent，本插件只提供项目上下文与采集入口。
+应用补丁与创建 Draft PR 只开放给 UI，且都要勾选确认，Agent 不能直接调用。
+
+## 知识流
+
+```text
+对话
+  ├─ owner_experience_add      原始经验
+  └─ owner_knowledge_propose   候选（status: proposed）
+         │
+         ├─ 接受 → unverified ── 标记已验证 → verified
+         └─ 拒绝 → rejected（保留审计）
+```
+
+「整理」只报告重复、过短、未验证与待审核条目，不会自动合并或删除；接受候选不等于已验证。
+
+## GitHub / 补丁 / 测试
+
+- `owner_github_status` 走本机 `gh` CLI：仓库、最近 5 个 Issue、5 个 PR、当前分支与工作区状态；
+  当前 gh 账号看不到的仓库会返回可读错误。
+- 创建 Draft PR 仅 UI：需勾选确认；工作区不干净或分支等于 base 会拒绝；只推当前分支，不合并。
+- `owner_patch_propose` 接收 `git diff`（路径必须在项目内）；应用仅 UI：勾选确认 + 校验 base commit + `git apply`。
+- `owner_test_run` 只允许 `npm test`、`npm run <script>`、`node --test`、`pytest`、`python -m pytest`、
+  `dotnet test`、`cargo test`、`go test`。
+- 不做 Docker 沙箱与自动合并；更大的代码改动交给 Cindy 自己的 Agent 与权限模型。
+
 
 ## 开发
 
