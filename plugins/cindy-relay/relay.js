@@ -224,6 +224,8 @@
 
   const load = async () => {
     setStatus('同步中…');
+    // 任务页签只有一个来源，不需要选任务；主视图才显示任务下拉。
+    if (sessionFromUrl) $('sessionSelect').hidden = true;
     try {
       if (!state.sessionId) {
         const list = await call('relay/sessions/list', {}, 8000);
