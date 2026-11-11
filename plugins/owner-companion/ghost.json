@@ -4,7 +4,7 @@
   "name": "Owner Companion",
   "description": "项目画像、想法池、知识笔记与依赖图。数据全部保存在本机插件目录，不依赖其他客户端。",
   "whenToUse": "需要查看项目进度、项目画像、收集或整理改进想法、记录项目知识、生成依赖图，或了解某个项目现在该做什么时找我",
-  "version": "0.3.1",
+  "version": "0.3.9",
   "minCindyVersion": "0.1.122",
   "entry": "main.js",
   "command": "项目",
@@ -42,7 +42,8 @@
         "type": "object",
         "properties": {},
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_project_overview",
@@ -56,7 +57,8 @@
           }
         },
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_brief_refresh",
@@ -73,7 +75,8 @@
           "projectId"
         ],
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_ideas",
@@ -91,7 +94,8 @@
           }
         },
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_idea_add",
@@ -113,7 +117,8 @@
           "title"
         ],
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_idea_status",
@@ -135,7 +140,8 @@
           "status"
         ],
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_knowledge",
@@ -153,7 +159,8 @@
           }
         },
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_knowledge_add",
@@ -186,7 +193,8 @@
           "title"
         ],
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_knowledge_propose",
@@ -226,7 +234,8 @@
           "title"
         ],
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_knowledge_tidy",
@@ -240,7 +249,8 @@
           }
         },
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_knowledge_search",
@@ -261,7 +271,8 @@
           "query"
         ],
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_experience_add",
@@ -287,7 +298,8 @@
           "text"
         ],
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_github_status",
@@ -304,7 +316,8 @@
           "projectId"
         ],
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_patch_propose",
@@ -331,7 +344,8 @@
           "diff"
         ],
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_test_run",
@@ -352,7 +366,8 @@
           "projectId"
         ],
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     },
     {
       "name": "owner_diagram",
@@ -369,7 +384,22 @@
           "projectId"
         ],
         "additionalProperties": false
-      }
+      },
+      "approval": "auto"
     }
-  ]
+  ],
+  "taskView": {
+    "title": "Owner",
+    "html": "main-view.html"
+  },
+  "skill": {
+    "items": [
+      {
+        "dir": "skills/owner-companion",
+        "name": "owner-companion",
+        "description": "Use Owner Companion tools for project progress, project briefs, ideas, knowledge and dependency diagrams. Read-only by default; apply patches and create PRs only through the Owner plugin UI."
+      }
+    ]
+  },
+  "card": {}
 }

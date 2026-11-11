@@ -572,5 +572,19 @@
   $('diagramScan').addEventListener('click', () => { void scanDiagram(); });
   $('diagramCopy').addEventListener('click', () => { void copyDiagram(); });
 
+  // 卡片上点「打开 Owner 面板」时，main.js 会广播要聚焦的项目，页签直接切过去。
+  try {
+    const channel = new BroadcastChannel('owner-companion');
+    channel.onmessage = (event) => {
+      const message = event.data;
+      if (!message || message.type !== 'focus-project' || !message.projectId) return;
+      if (message.projectId === state.projectId) return;
+      state.projectId = message.projectId;
+      void load();
+    };
+  } catch {
+    // 旧宿主没有 BroadcastChannel 时按默认项目显示。
+  }
+
   void load();
 })();

@@ -9,7 +9,25 @@
 2. 在 Cindy 打开 **插件 → 添加插件**，选择 `.cindy` 文件（或直接拖入）；
 3. 从左侧导航打开 **Owner**，点 **添加项目**，填一个本机目录。
 
-已在 **Cindy 0.1.124（Windows）** 实测：安装、启用、主视图、想法新增/采纳/删除、依赖扫描、Agent 工具。
+已在 **Cindy 0.1.124（Windows）** 实测：安装、启用、主视图、想法新增/采纳/删除、依赖扫描、Agent 工具、聊天卡片与卡片按钮。
+
+升级用 `ghosts.update`：`expectedPackageSha256` + `expectedInstalledApproval`（`approved:<revision>`）
++ `expectedInstalledInstanceId`（实例 key）；权限没变时不会弹确认框，也不会丢已有数据。
+
+## 聊天卡片
+
+`owner_project_overview` 在聊天里直接渲染一张项目概览卡（不需要先打开插件）：
+
+- 项目名、目录、画像一句话、下一步、风险、最近想法、怎么跑；
+- 三个按钮：**重新扫描**（本地重扫画像）、**记想法**（主机弹输入框，回车提交）、
+  **打开 Owner 面板**（打开当前任务的右侧 Owner 页签并切到该项目，面板已打开则直接聚焦）；
+- 卡片动作都在 `main.js` 里处理，纯 HTML + `data-ghost-action`，卡片内没有脚本；
+- 刷新与记想法会原地更新卡片（记想法长在原卡下方），并通过 BroadcastChannel 让已打开的面板跟随项目。
+
+## 随包 Skill
+
+`skills/owner-companion/SKILL.md` 会投影给 Cindy Agent：用户问项目进度、想法、知识、
+依赖或 GitHub 时，先调 `owner_*` 工具再回答，不许编造项目事实。
 
 ## 数据与权限
 
