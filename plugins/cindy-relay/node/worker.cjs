@@ -6,11 +6,17 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { pathToFileURL } = require('node:url');
 
-const PKG_VERSION = '0.1.7';
+const PKG_VERSION = '0.1.8';
 
 const libUrl = (name) => pathToFileURL(path.join(__dirname, 'lib', name)).href;
 let store = null;
 let storeModule = null;
+let attachmentsModule = null;
+
+const getAttachments = async () => {
+  attachmentsModule ??= import(libUrl('attachments.mjs'));
+  return attachmentsModule;
+};
 
 const getStore = async () => {
   if (store) return store;
@@ -84,6 +90,24 @@ const methods = {
   async 'relay/prefs/set'(params) {
     const data = await getStore();
     return { prefs: data.setPrefs(params?.patch && typeof params.patch === 'object' ? params.patch : {}) };
+  },
+
+  /** 当前任务在 since 之后的图片附件（元数据）。 */
+  async 'relay/attachments/list'(params) {
+    const lib = await getAttachments();
+    return lib.listAttachments({
+      sessionId: String(params?.sessionId || ''),
+      since: String(params?.since || '')
+    });
+  },
+
+  /** 读取图片字节（base64），供页面交给 targets.send / tasks.send。 */
+  async 'relay/attachments/read'(params) {
+    const lib = await getAttachments();
+    return lib.readAttachments({
+      sessionId: String(params?.sessionId || ''),
+      since: String(params?.since || '')
+    });
   }
 };
 

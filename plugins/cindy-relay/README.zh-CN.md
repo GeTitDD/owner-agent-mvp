@@ -26,6 +26,16 @@ Claude / Codex / Cursor 桌面应用。
 
 发送后，Relay 把「自上次转交以来的消息」作为附带资料、备注作为正文，投递给目标。
 「新任务」和「项目」会新建一条任务，标题默认取备注或第一条用户消息。
+正文里会带一行 `来源任务：[…](cindy://session/<id>)`，方便对方跳回原任务。
+
+### 图片
+
+任务里的图片会随引用一起转交（最多 4 张、合计约 12 MB，PNG / JPEG / WebP）：
+
+- 钩子只给文本，图片由 Relay 从本机 Cindy 消息库只读查出（`messages.content.images`），
+  再从 `cindy-media/blobs` 读字节，交给 Host 的附件通道；
+- 只取当前任务、当前范围（自上次转交 / 全部）内的图片；
+- 找不到数据库、版本不支持或读取失败时安静跳过，不影响文字转交。
 
 ## 权限与边界
 
@@ -40,6 +50,9 @@ Claude / Codex / Cursor 桌面应用。
 
 `~/.cindy-relay/relay.json`（可用 `CINDY_RELAY_DIR` 覆盖），原子写入并保留 `.bak`。
 里面只有：任务 id、消息文本、转交记录。不上传、不联网。
+
+图片字节不落 Relay 的存储：每次发送时按需从 Cindy 的 `cindy-media/blobs` 读取，
+读出来直接交给 Host 的附件通道，不写回 `relay.json`。
 
 ## 开发
 

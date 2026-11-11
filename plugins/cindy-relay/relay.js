@@ -20,6 +20,8 @@
     requestKey: '',
     createdTaskId: '',
     createdRevision: 0,
+    attachments: { supported: false, items: [] },
+    attachmentsSupported: null,
     prefs: {}
   };
 
@@ -67,6 +69,53 @@
   };
 
   const selectedMessages = () => (state.scope === 'all' ? state.all : state.pending);
+
+  const attachmentSince = () => (state.scope === 'all'
+    ? ''
+    : (state.pending[0]?.at ?? state.source?.lastRelayAt ?? ''));
+
+  const renderAttachments = () => {
+    const hint = $('attachHint');
+    const items = state.attachments.items;
+    if (!items.length) {
+      hint.textContent = '';
+      hint.hidden = true;
+      return;
+    }
+    hint.hidden = false;
+    const size = items.reduce((sum, item) => sum + (item.bytes || 0), 0);
+    hint.textContent = `含 ${items.length} 张图片（约 ${Math.max(1, Math.round(size / 1024))} KB），会随引用一起转交`;
+  };
+
+  const loadAttachments = async () => {
+    if (!state.sessionId) {
+      state.attachments = { supported: false, items: [] };
+      renderAttachments();
+      return;
+    }
+    try {
+      const result = await call('relay/attachments/list', {
+        sessionId: state.sessionId,
+        since: attachmentSince()
+      }, 12000);
+      state.attachments = {
+        supported: Boolean(result?.supported),
+        items: Array.isArray(result?.items) ? result.items : []
+      };
+    } catch {
+      state.attachments = { supported: false, items: [] };
+    }
+    renderAttachments();
+  };
+
+  const loadCapabilities = async () => {
+    try {
+      const caps = await call('cindy/tasks/capabilities', {}, 8000);
+      state.attachmentsSupported = Boolean(caps?.messageAttachments?.kinds?.includes('image'));
+    } catch {
+      state.attachmentsSupported = false;
+    }
+  };
 
   const quoteForSend = (limit = 32000) => {
     const messages = selectedMessages();
@@ -257,9 +306,11 @@
       if (!state.route && state.prefs.route) state.route = state.prefs.route;
       if (state.prefs.permissionMode) state.permissionMode = state.prefs.permissionMode;
       renderSource();
+      void loadAttachments();
       renderRoute();
       setStatus('已连接', 'ok');
       await loadRoutes();
+      if (state.attachmentsSupported === null) await loadCapabilities();
       if (state.targetKind !== 'new') await loadTargets();
       else { renderTargets(); updateSendState(); }
       await loadHistory();
@@ -313,7 +364,18 @@
     const title = clip(titleBase.replace(/\s+/gu, ' '), 40);
     const requestKey = state.requestKey || (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
     state.requestKey = requestKey;
-    const text = `自「${state.source?.label || '当前任务'}」转交的上下文，见附带资料。${note ? `\n\n备注：${note}` : ''}`;
+    const sourceLink = state.sessionId
+      ? `\n\n来源任务：[${state.source?.label || '原任务'}](cindy://session/${state.sessionId})`
+      : '';
+    const text = `自「${state.source?.label || '当前任务'}」转交的上下文，见附带资料。${note ? `\n\n备注：${note}` : ''}${sourceLink}`;
+    let attachmentPayload = [];
+    if (state.attachments.items.length && state.attachmentsSupported !== false) {
+      const read = await call('relay/attachments/read', {
+        sessionId: state.sessionId,
+        since: attachmentSince()
+      }, 30000).catch(() => null);
+      attachmentPayload = (read?.attachments ?? []).map(({ base64, name }) => ({ base64, name }));
+    }
     try {
       let result;
       if (isNew) {
@@ -343,7 +405,8 @@
           requestKey: `send-${requestKey}`,
           text,
           context: quote,
-          ...(expectedRevision ? { expectedRevision } : {})
+          ...(expectedRevision ? { expectedRevision } : {}),
+          ...(attachmentPayload.length ? { attachments: attachmentPayload } : {})
         }, 120000);
         let sent;
         try {
@@ -367,7 +430,8 @@
           target: { kind: target.kind, id: target.id },
           requestKey,
           text,
-          context: quote
+          context: quote,
+          ...(attachmentPayload.length ? { attachments: attachmentPayload } : {})
         };
         if (target.kind === 'project') {
           payload.title = title;
@@ -473,6 +537,7 @@
     input.addEventListener('change', () => {
       state.scope = input.value;
       renderSource();
+      void loadAttachments();
     });
   }
   $('permissionMode').addEventListener('change', (event) => {

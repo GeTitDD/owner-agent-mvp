@@ -19,8 +19,20 @@ over the Claude / Codex / Cursor desktop apps.
 1. Chat normally in task A.
 2. Open the Relay tab (or ask Cindy to call `relay_open`).
 3. Choose the range: since the last handoff, or everything Relay recorded.
-4. Choose the target: project (plus agent/model), task, or bot.
+4. Choose the target: project (plus agent/model), a new standalone task, an
+   existing task, or a bot.
 5. Add an optional note, then press Send.
+
+The message carries a `Source task: […] (cindy://session/<id>)` line so the
+receiving agent can jump back.
+
+### Images
+
+Images in the task travel with the quote (up to 4, about 12 MB total, PNG / JPEG /
+WebP). The message hooks only expose text, so Relay reads the current task's image
+references from the local Cindy message store (`messages.content.images`) and the
+bytes from `cindy-media/blobs`, then hands them to the host attachment channel.
+If the store is missing or unreadable, Relay silently falls back to text only.
 
 ## Boundaries
 

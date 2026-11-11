@@ -30,12 +30,19 @@ const cindyMethods = {
       context: String(params?.context || ''),
       ...(params?.title ? { title: String(params.title) } : {}),
       ...(params?.route ? { route: params.route } : {}),
-      ...(params?.permissionMode ? { permissionMode: params.permissionMode } : {})
+      ...(params?.permissionMode ? { permissionMode: params.permissionMode } : {}),
+      ...(Array.isArray(params?.attachments) && params.attachments.length
+        ? { attachments: params.attachments }
+        : {})
     });
   },
   async 'cindy/tasks/models'() {
     if (!cindy.tasks?.models) return { models: [] };
     return cindy.tasks.models();
+  },
+  async 'cindy/tasks/capabilities'() {
+    if (!cindy.tasks?.capabilities) return {};
+    return cindy.tasks.capabilities();
   },
   async 'cindy/tasks/create'(params) {
     if (!cindy.tasks?.create) throw new Error('当前 Cindy 版本不支持创建任务');
@@ -53,7 +60,10 @@ const cindyMethods = {
       requestKey: String(params?.requestKey || ''),
       text: String(params?.text || ''),
       context: String(params?.context || ''),
-      ...(Number.isFinite(params?.expectedRevision) ? { expectedRevision: params.expectedRevision } : {})
+      ...(Number.isFinite(params?.expectedRevision) ? { expectedRevision: params.expectedRevision } : {}),
+      ...(Array.isArray(params?.attachments) && params.attachments.length
+        ? { attachments: params.attachments }
+        : {})
     });
   },
   async 'cindy/tasks/get'(params) {
