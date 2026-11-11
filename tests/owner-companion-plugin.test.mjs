@@ -94,9 +94,16 @@ test('插件 worker：未配对提示、配对、概览、聊天与想法', asyn
     assert.equal(overview.activeProjectId, 'demo');
     assert.equal(overview.projects.length, 1);
 
-    const chat = await env.rpc('owner/chat', { projectId: 'demo', text: '进度如何' });
-    assert.equal(chat.mode, 'answer');
-    assert.equal(chat.summary, '收到：进度如何');
+    const chatStarted = await env.rpc('owner/chat/start', { projectId: 'demo', text: '进度如何' });
+    assert.ok(chatStarted.jobId);
+    let chat = { status: 'pending' };
+    for (let i = 0; i < 50 && chat.status === 'pending'; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      chat = await env.rpc('owner/chat/poll', { jobId: chatStarted.jobId });
+    }
+    assert.equal(chat.status, 'done');
+    assert.equal(chat.result.mode, 'answer');
+    assert.equal(chat.result.summary, '收到：进度如何');
 
     const idea = await env.rpc('owner/ideas/add', { projectId: 'demo', title: '加一个导出按钮' });
     assert.equal(idea.kind, 'idea');

@@ -4,10 +4,9 @@
   "name": "Owner Companion",
   "description": "项目画像、想法池、知识摘要与只读讨论。数据来自本机 Owner Companion 的局域网桥。",
   "whenToUse": "需要查看项目进度、项目画像、收集改进想法、回顾项目知识，或和 Agent 只读讨论某个项目时找我",
-  "version": "0.1.0",
-  "minCindyVersion": "1.0.0",
+  "version": "0.1.1",
+  "minCindyVersion": "0.1.122",
   "entry": "main.js",
-  "command": "项目",
   "node": {
     "entry": "node/worker.cjs",
     "protocol": "json-rpc-stdio"
@@ -24,7 +23,9 @@
   },
   "settingsHtml": "settings.html",
   "mobile": {
-    "channels": ["owner-companion"],
+    "channels": [
+      "owner-companion"
+    ],
     "mainView": "main-view.html",
     "settings": "settings.html"
   },

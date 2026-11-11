@@ -46,7 +46,8 @@
     "e2e:desktop:composer": "node scripts/e2e/desktop-composer.mjs",
     "e2e:packaged:monty": "node scripts/e2e/monty-packaged-smoke.mjs",
     "e2e:desktop:mascots": "node scripts/e2e/desktop-mascots.mjs",
-    "e2e:desktop:projects": "node scripts/e2e/desktop-projects.mjs"
+    "e2e:desktop:projects": "node scripts/e2e/desktop-projects.mjs",
+    "cindy:pack": "node scripts/build-cindy-plugin.mjs"
   },
   "main": "desktop/main.cjs",
   "build": {
@@ -95,6 +96,7 @@
   },
   "devDependencies": {
     "electron": "^45.2.3",
-    "electron-builder": "^26.18.0"
+    "electron-builder": "^26.18.0",
+    "jszip": "^3.10.2"
   }
 }

@@ -72,6 +72,47 @@ const requireToken = (config) => {
   if (!config.token) throw new Error('还没有配对：请在插件设置里填写地址和 6 位配对码');
 };
 
+// 聊天是长任务：单次 Node RPC 最多 20 秒，所以拆成 start + poll。
+const chatJobs = new Map();
+const CHAT_JOB_TTL_MS = 15 * 60 * 1000;
+
+const pruneChatJobs = () => {
+  const now = Date.now();
+  for (const [id, job] of chatJobs) {
+    if (now - job.startedAt > CHAT_JOB_TTL_MS) chatJobs.delete(id);
+  }
+};
+
+const startChatJob = (config, projectId, text) => {
+  pruneChatJobs();
+  const jobId = `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const job = { status: 'pending', startedAt: Date.now(), result: null, error: '' };
+  chatJobs.set(jobId, job);
+  request(config, 'POST', '/m/chat', { projectId, text }, 200000)
+    .then((result) => {
+      job.status = 'done';
+      job.result = result;
+    })
+    .catch((error) => {
+      job.status = 'error';
+      job.error = String(error?.message ?? error);
+    });
+  return { jobId };
+};
+
+const pollChatJob = (jobId) => {
+  const job = chatJobs.get(jobId);
+  if (!job) throw new Error('找不到这次分析，请重试');
+  if (job.status === 'pending') return { status: 'pending' };
+  if (job.status === 'error') {
+    chatJobs.delete(jobId);
+    return { status: 'error', error: job.error };
+  }
+  const result = job.result;
+  chatJobs.delete(jobId);
+  return { status: 'done', result };
+};
+
 const methods = {
   async 'owner/status'(params) {
     const config = readConfig();
@@ -106,13 +147,17 @@ const methods = {
     return request(config, 'GET', `/m/overview${query}`);
   },
 
-  async 'owner/chat'(params) {
+  async 'owner/chat/start'(params) {
     const config = readConfig();
     requireToken(config);
     const projectId = String(params?.projectId || '');
     const text = String(params?.text || '').trim();
     if (!projectId || !text) throw new Error('缺少项目或内容');
-    return request(config, 'POST', '/m/chat', { projectId, text }, 200000);
+    return startChatJob(config, projectId, text);
+  },
+
+  async 'owner/chat/poll'(params) {
+    return pollChatJob(String(params?.jobId || ''));
   },
 
   async 'owner/ideas/add'(params) {

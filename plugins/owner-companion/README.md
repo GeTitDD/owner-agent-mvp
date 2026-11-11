@@ -14,7 +14,13 @@ desktop app's mobile bridge on your machine (`http://127.0.0.1:47831` by default
 3. In Cindy open the plugin settings and fill in the address and code, then press
    **连接**. The plugin stores only the device token, never the pairing code
    (`~/.owner-companion/plugin.json`, mode 0600).
-4. Open the **Owner** main view from Cindy's left navigation.
+4. Open the **Owner** entry from Cindy's left navigation (or the plugin card → 管理 → 使用).
+
+Packaged build: `plugins/dist/owner-companion-0.1.1.cindy` (zip root is
+`ghost.json`). Add it with Cindy's plugin page → 添加插件, or drop the file there.
+
+Verified against **Cindy 0.1.124 (Windows)**: install, enable, main view, settings,
+idea create/adopt/delete and a real 27-second chat round trip.
 
 ## What you get
 
@@ -49,3 +55,12 @@ plugins/owner-companion/
 ```
 
 Tests for the worker live in `tests/owner-companion-plugin.test.mjs`.
+
+Packaging:
+
+```powershell
+npm run cindy:pack   # -> plugins/dist/owner-companion-<version>.cindy
+```
+
+`cindy.node.request` caps a single RPC at 20 seconds, so chat is split into
+`owner/chat/start` + `owner/chat/poll`; `main.js` owns the polling loop.

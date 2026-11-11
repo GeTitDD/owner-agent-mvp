@@ -84,7 +84,7 @@ npx expo export --platform ios
 
 `plugins/owner-companion/` 是按 Cindy `ghost.json`（schemaVersion 3）写的插件：
 
-- 安装包：`plugins/dist/owner-companion-0.1.0.cindy`（zip 根目录即 `ghost.json`）；
+- 安装包：`plugins/dist/owner-companion-0.1.1.cindy`（zip 根目录即 `ghost.json`）；
 - 主视图 / 面板：项目画像、想法池、知识计数、图谱版本、只读聊天；
 - 设置页：填 `http://127.0.0.1:47831` + 6 位配对码，插件只保存设备令牌；
 - 权限：只声明 Node worker，页面与 `main.js` 不直连网络；没有审批/写文件/执行 Job；
