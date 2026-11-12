@@ -83,3 +83,23 @@ export const formatFileList = (files, max = 5) => {
   const shown = list.slice(0, max).join('、');
   return list.length > max ? `${shown} 等 ${list.length} 个文件` : shown;
 };
+
+/**
+ * 找出这一轮需要提醒的新知识候选。
+ *
+ * - `baseline` 为 true（首次运行、没有历史记录）时只建立基线，不提醒，
+ *   否则第一次启动会把所有历史候选一次性推给你；
+ * - 返回的 `nextSeen` 里只保留当前仍是候选的 id，已处理掉的会自动淘汰，
+ *   免得记录文件越来越大。
+ */
+export const selectNewCandidates = (proposed, seenIds = [], { baseline = false } = {}) => {
+  const items = Array.isArray(proposed) ? proposed.filter((item) => item && item.id) : [];
+  const seen = new Set(Array.isArray(seenIds) ? seenIds : []);
+  const nextSeen = items.map((item) => item.id);
+  if (baseline) return { items: [], nextSeen };
+  return {
+    items: items.filter((item) => !seen.has(item.id)),
+    nextSeen
+  };
+};
+

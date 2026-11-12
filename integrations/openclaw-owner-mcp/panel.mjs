@@ -22,6 +22,7 @@ import {
   nextIdeaStatus,
   paginate,
   parseCallback,
+  selectNewCandidates,
   summarizeDiff,
   formatFileList
 } from './panel-core.mjs';
@@ -34,6 +35,9 @@ const PENDING_TTL_MS = 2 * 60 * 1000;
 
 const panelDir = process.env.OWNER_COMPANION_DIR || path.join(os.homedir(), '.owner-companion');
 const stateFile = path.join(panelDir, 'telegram-panel.json');
+const notifyFile = path.join(panelDir, 'telegram-notify.json');
+const notifyLock = path.join(panelDir, 'telegram-notify.lock');
+const NOTIFY_INTERVAL_MS = 60000;
 
 // WSL 启动 Windows exe 时不会自动继承环境变量；优先读同目录下的 telegram.json。
 const fileConfig = (() => {
@@ -76,6 +80,31 @@ const writeState = (state) => {
     fs.renameSync(tmp, stateFile);
   } catch {
     // 面板状态写失败不影响消息本身。
+  }
+};
+
+// ---- 知识候选提醒的状态 ----
+
+const readNotify = () => {
+  try {
+    const raw = JSON.parse(fs.readFileSync(notifyFile, 'utf8'));
+    if (!raw || typeof raw !== 'object') return { enabled: true, seen: null };
+    // 保留 lastAlert / 计数等诊断字段，不要每次检查都清掉。
+    return { ...raw, enabled: raw.enabled !== false, seen: Array.isArray(raw.seen) ? raw.seen : null };
+  } catch {
+    // 第一次运行：没有历史记录，seen 为 null 表示「先建基线，不提醒」。
+    return { enabled: true, seen: null };
+  }
+};
+
+const writeNotify = (value) => {
+  try {
+    fs.mkdirSync(panelDir, { recursive: true });
+    const tmp = `${notifyFile}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { mode: 0o600 });
+    fs.renameSync(tmp, notifyFile);
+  } catch {
+    // 提醒配置写失败不影响面板。
   }
 };
 
@@ -322,6 +351,139 @@ export const createPanel = ({ callWorker }) => {
     return { started: true, command: label };
   };
 
+  // ---- 知识候选提醒：轮询本机数据，有新候选就主动推一条 ----
+
+  let notifyTimer = null;
+  let notifyBusy = false;
+
+  /** 抢锁：OpenClaw 理论上只起一个 MCP 进程，但重启窗口里可能短暂有两个。 */
+  const acquireNotifyLock = () => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(notifyLock, 'utf8'));
+      if (raw?.pid && raw.pid !== process.pid) {
+        try {
+          process.kill(raw.pid, 0);
+          return false; // 另一个进程还活着，让它负责提醒。
+        } catch {
+          // 旧进程已退出，接管。
+        }
+      }
+    } catch {
+      // 没有锁文件，正常。
+    }
+    try {
+      fs.writeFileSync(notifyLock, JSON.stringify({ pid: process.pid, at: nowIso() }));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const releaseNotifyLock = () => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(notifyLock, 'utf8'));
+      if (raw?.pid === process.pid) fs.rmSync(notifyLock, { force: true });
+    } catch {
+      // 没有就忽略。
+    }
+  };
+
+  const sendCandidateAlert = async (chatId, items) => {
+    const lines = [`🔔 新的知识候选（${items.length}）`, ''];
+    for (const item of items) {
+      const where = item.projectName ? `[${item.projectName}] ` : '';
+      lines.push(`• ${where}${clip(item.title, 60)}`);
+    }
+    const rows = items.slice(0, 4).map((item) => ([
+      { text: `✅ ${clip(item.title, 16)}`, callback_data: `owner:kaccept:${item.id}` },
+      { text: '❌', callback_data: `owner:kreject:${item.id}` }
+    ]));
+    rows.push([{ text: '打开知识面板', callback_data: `owner:knowledge:${items[0].projectId}` }]);
+    await sendPanel(chatId, lines.join('\n'), rows);
+  };
+
+  const runNotifyCheck = async () => {
+    if (notifyBusy) return;
+    notifyBusy = true;
+    try {
+      const cfg = readNotify();
+      if (cfg.enabled === false) return;
+      const chatId = DEFAULT_CHAT_ID;
+      if (!chatId || !BOT_TOKEN) return;
+
+      const projects = (await callWorker('owner/projects/list', {}, 15000)).projects || [];
+      const proposed = [];
+      for (const project of projects) {
+        try {
+          const list = await callWorker('owner/knowledge/list', { projectId: project.id }, 15000);
+          for (const item of list.items || []) {
+            if (item.status === 'proposed') {
+              proposed.push({ ...item, projectName: project.name || project.id });
+            }
+          }
+        } catch {
+          // 单个项目读失败不影响其它项目。
+        }
+      }
+
+      const baseline = !Array.isArray(cfg.seen);
+      const { items, nextSeen } = selectNewCandidates(proposed, cfg.seen || [], { baseline });
+      const base = {
+        ...cfg,
+        enabled: true,
+        seen: nextSeen,
+        checkedAt: nowIso(),
+        checks: Number(cfg.checks || 0) + 1,
+        pid: process.pid,
+        // 留个现场，排查「为什么没提醒」时不用猜。
+        lastCheck: { total: proposed.length, fresh: items.length, baseline }
+      };
+      if (!items.length) {
+        writeNotify(base);
+        return;
+      }
+      // 先写好状态再发消息：发失败也不会下次重启又推一遍。
+      try {
+        await sendCandidateAlert(chatId, items.slice(0, 5));
+        writeNotify({ ...base, lastAlert: { at: nowIso(), count: items.length, ok: true } });
+      } catch (error) {
+        writeNotify({
+          ...base,
+          lastAlert: { at: nowIso(), count: items.length, ok: false, error: clip(error?.message ?? error, 200) }
+        });
+      }
+    } finally {
+      notifyBusy = false;
+    }
+  };
+
+  /** 工具调用后立刻检查一次（最多 5 秒一次），保证「刚生成的候选」马上能推出去。 */
+  let lastNotifyAt = 0;
+  const notifyNow = async () => {
+    if (!BOT_TOKEN || !DEFAULT_CHAT_ID) return false;
+    const now = Date.now();
+    if (now - lastNotifyAt < 5000) return false;
+    lastNotifyAt = now;
+    await runNotifyCheck();
+    return true;
+  };
+
+  const startNotifier = () => {
+    if (notifyTimer) return false;
+    if (!acquireNotifyLock()) return false;
+    notifyNow().catch(() => {});
+    notifyTimer = setInterval(() => { runNotifyCheck().catch(() => {}); }, NOTIFY_INTERVAL_MS);
+    // 不要因为定时器让进程无法退出。
+    if (typeof notifyTimer.unref === 'function') notifyTimer.unref();
+    return true;
+  };
+
+  const stopNotifier = () => {
+    if (notifyTimer) clearInterval(notifyTimer);
+    notifyTimer = null;
+    releaseNotifyLock();
+  };
+
   const show = async (chatId, action, arg) => {
     const { state, entry } = chatState(chatId);
     // 只要这次是「点按钮」而不是在等输入，就认为上一条输入提示已经作废，
@@ -408,6 +570,7 @@ export const createPanel = ({ callWorker }) => {
       if (!projects.length) {
         await update('还没有登记项目。点下面添加一个项目目录。', [
           [{ text: '➕ 添加项目', callback_data: 'owner:projadd' }],
+          [{ text: `🔔 候选通知：${readNotify().enabled === false ? '关' : '开'}`, callback_data: 'owner:notifytoggle' }],
           [{ text: '🔄 刷新', callback_data: 'owner:menu' }]
         ]);
         return { ok: true, screen: 'menu' };
@@ -420,8 +583,15 @@ export const createPanel = ({ callWorker }) => {
         })));
       }
       rows.push([{ text: '➕ 添加项目', callback_data: 'owner:projadd' }, { text: '🔄 刷新', callback_data: 'owner:menu' }]);
+      rows.push([{ text: `🔔 候选通知：${readNotify().enabled === false ? '关' : '开'}`, callback_data: 'owner:notifytoggle' }]);
       await update(`Owner · 共 ${projects.length} 个项目\n选一个项目：`, rows);
       return { ok: true, screen: 'menu' };
+    }
+
+    if (action === 'notifytoggle') {
+      const cfg = readNotify();
+      writeNotify({ ...cfg, enabled: cfg.enabled === false, checkedAt: nowIso() });
+      return show(chatId, 'menu');
     }
 
     if (action === 'open') {
@@ -1042,5 +1212,5 @@ export const createPanel = ({ callWorker }) => {
     }
   };
 
-  return { handle };
+  return { handle, startNotifier, stopNotifier, notifyNow };
 };

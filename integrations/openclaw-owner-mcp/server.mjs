@@ -77,6 +77,9 @@ const callWorker = (method, params = {}, timeoutMs = 30000) => new Promise((reso
 });
 
 const panel = createPanel({ callWorker });
+// 知识候选提醒：进程活着就一直轮询，有新候选主动推 Telegram。
+panel.startNotifier?.();
+process.on('exit', () => panel.stopNotifier?.());
 
 // ---- 工具定义（描述面向聊天场景：让 Agent 简短总结，而不是贴 JSON） ----
 const ghost = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
@@ -428,6 +431,8 @@ const handleToolCall = async (id, params) => {
       content: [{ type: 'text', text: clip(text, 12000) }],
       isError: false
     });
+    // 写完数据顺手检查一次候选，别等下一轮轮询（可能等不到）。
+    panel.notifyNow?.().catch(() => {});
   } catch (error) {
     reply(id, {
       content: [{ type: 'text', text: `工具执行失败：${String(error?.message ?? error)}` }],

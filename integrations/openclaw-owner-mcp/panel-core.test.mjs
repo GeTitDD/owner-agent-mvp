@@ -10,6 +10,7 @@ import {
   nextIdeaStatus,
   paginate,
   parseCallback,
+  selectNewCandidates,
   summarizeDiff
 } from './panel-core.mjs';
 
@@ -100,4 +101,29 @@ test('formatFileList 文件名太多时省略', () => {
   assert.equal(formatFileList([]), '（无文件）');
   assert.equal(formatFileList(['a.js', 'b.js']), 'a.js、b.js');
   assert.equal(formatFileList(['a', 'b', 'c'], 2), 'a、b 等 3 个文件');
+});
+
+test('selectNewCandidates 首次运行只建基线', () => {
+  const proposed = [{ id: 'a' }, { id: 'b' }];
+  const result = selectNewCandidates(proposed, [], { baseline: true });
+  assert.deepEqual(result.items, []);
+  assert.deepEqual(result.nextSeen, ['a', 'b']);
+});
+
+test('selectNewCandidates 只挑没见过的候选', () => {
+  const proposed = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const result = selectNewCandidates(proposed, ['a', 'c']);
+  assert.deepEqual(result.items.map((item) => item.id), ['b']);
+});
+
+test('selectNewCandidates 已处理掉的候选会被淘汰', () => {
+  // a 已被接受、c 是新出现的；基线里还留着 a 和 b。
+  const result = selectNewCandidates([{ id: 'b' }, { id: 'c' }], ['a', 'b']);
+  assert.deepEqual(result.items.map((item) => item.id), ['c']);
+  assert.deepEqual(result.nextSeen, ['b', 'c']);
+});
+
+test('selectNewCandidates 容忍空数据', () => {
+  assert.deepEqual(selectNewCandidates(null, null), { items: [], nextSeen: [] });
+  assert.deepEqual(selectNewCandidates([{ title: '没有 id' }], []), { items: [], nextSeen: [] });
 });
