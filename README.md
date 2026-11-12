@@ -4,6 +4,12 @@
 
 **以 Owner 为中心的多项目管理 Agent + 个人领域知识资产工作台 + 可选桌面宠物。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
 
+> **Telegram 入口（推荐）**：日常使用已迁到 OpenClaw + Telegram，代码在
+> `integrations/openclaw-owner-mcp/`。项目、画像、想法、知识审核、图表、GitHub、
+> 测试、补丁应用与草稿 PR 都能在 Telegram 面板里完成；Cindy 面板标为已弃用，
+> 只保留数据与历史入口，不再新增功能。
+
+
 ## 形态说明（v0.2）
 
 - **新开发**：`plugins/owner-companion/`，以 Cindy 为宿主和客户端，自包含项目数据、画像、想法、知识与依赖图；手机端复用 Cindy 手机 App。

@@ -409,6 +409,34 @@ const methods = {
     });
   },
 
+  /**
+   * 把工作区当前改动（相对 HEAD）做成补丁提案。
+   * 只读工作区，不改文件；未跟踪的新文件不在 git diff 里，需要先 git add。
+   */
+  async 'owner/patches/propose-worktree'(params) {
+    const data = await getStore();
+    const project = data.getProject(String(params?.projectId || ''));
+    if (!project) throw fail('项目不存在', 404);
+    let diff = '';
+    try {
+      const { stdout } = await execFileAsync('git', ['-C', project.root, 'diff', 'HEAD'], {
+        timeout: 20000, windowsHide: true, maxBuffer: 8 * 1024 * 1024
+      });
+      diff = String(stdout || '');
+    } catch (error) {
+      throw fail(`读取 git diff 失败：${String(error?.message ?? error)}`, 500);
+    }
+    if (!diff.trim()) throw fail('工作区没有改动（未跟踪的新文件请先 git add）', 409);
+    const svc = await getServices();
+    return data.addPatch({
+      projectId: project.id,
+      title: String(params?.title || '').trim() || '工作区改动',
+      diff: svc.validateDiff(diff),
+      baseCommit: await gitHead(project.root),
+      source: 'telegram'
+    });
+  },
+
   async 'owner/patches/apply'(params) {
     const data = await getStore();
     const patch = data.getPatch(String(params?.id || ''));

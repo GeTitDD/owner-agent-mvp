@@ -106,7 +106,7 @@ const extraTools = [
   },
   {
     name: 'owner_patches',
-    description: '列出项目的补丁提案（默认待审核）。只读；应用补丁只能在 Owner 面板里做。',
+    description: '列出项目的补丁提案（默认待审核）。只读。',
     parameters: {
       type: 'object',
       properties: {
@@ -115,6 +115,125 @@ const extraTools = [
       }
     },
     method: 'owner/patches/list'
+  },
+  {
+    name: 'owner_idea_remove',
+    description: '删除一条想法。用户明确说要删时才调用。',
+    parameters: {
+      type: 'object',
+      properties: { id: { type: 'string', description: '想法 id' } },
+      required: ['id']
+    },
+    method: 'owner/ideas/remove'
+  },
+  {
+    name: 'owner_knowledge_review',
+    description: '审核知识候选：接受（转为未验证）或拒绝。用户要求时调用。',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '知识条目 id' },
+        decision: { type: 'string', description: 'accept / reject' }
+      },
+      required: ['id', 'decision']
+    },
+    method: 'owner/knowledge/review'
+  },
+  {
+    name: 'owner_knowledge_verify',
+    description: '把一条未验证知识标记为已验证。',
+    parameters: {
+      type: 'object',
+      properties: { id: { type: 'string', description: '知识条目 id' } },
+      required: ['id']
+    },
+    method: 'owner/knowledge/verify'
+  },
+  {
+    name: 'owner_patch_propose_worktree',
+    description: '把项目工作区当前改动（相对 HEAD 的 git diff）保存为待审核补丁提案。只读工作区，不改文件。',
+    parameters: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string', description: '项目 id' },
+        title: { type: 'string', description: '提案标题，可省略' }
+      }
+    },
+    method: 'owner/patches/propose-worktree'
+  },
+  {
+    name: 'owner_patch_apply',
+    description: '把一条待审核补丁应用到项目工作区。危险操作，必须先把补丁内容告诉用户并得到明确同意，且 confirm 传 true。',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '补丁 id' },
+        confirm: { type: 'boolean', description: '用户已明确同意时传 true' }
+      },
+      required: ['id', 'confirm']
+    },
+    method: 'owner/patches/apply'
+  },
+  {
+    name: 'owner_patch_reject',
+    description: '拒绝一条待审核补丁。',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '补丁 id' },
+        note: { type: 'string', description: '拒绝原因，可省略' }
+      },
+      required: ['id']
+    },
+    method: 'owner/patches/reject'
+  },
+  {
+    name: 'owner_github_pr',
+    description: '把当前分支推上去并创建草稿 PR。危险操作，必须先把分支和标题告诉用户并得到明确同意，且 confirm 传 true。',
+    parameters: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string', description: '项目 id' },
+        base: { type: 'string', description: '目标分支，默认 main' },
+        title: { type: 'string', description: 'PR 标题' },
+        body: { type: 'string', description: 'PR 说明' },
+        confirm: { type: 'boolean', description: '用户已明确同意时传 true' }
+      },
+      required: ['projectId', 'confirm']
+    },
+    method: 'owner/github/pr/create'
+  },
+  {
+    name: 'owner_project_add',
+    description: '登记一个本地项目目录。用户给出绝对路径时调用。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '项目根目录绝对路径' },
+        name: { type: 'string', description: '显示名，可省略' }
+      },
+      required: ['path']
+    },
+    method: 'owner/projects/add'
+  },
+  {
+    name: 'owner_project_remove',
+    description: '从 Owner 里移除一个项目（不删磁盘文件）。用户明确要求时调用。',
+    parameters: {
+      type: 'object',
+      properties: { id: { type: 'string', description: '项目 id' } },
+      required: ['id']
+    },
+    method: 'owner/projects/remove'
+  },
+  {
+    name: 'owner_tests',
+    description: '列出项目最近的测试运行记录。只读。',
+    parameters: {
+      type: 'object',
+      properties: { projectId: { type: 'string', description: '项目 id' } }
+    },
+    method: 'owner/tests/list'
   }
 ];
 
@@ -157,17 +276,15 @@ for (const [name, method] of Object.entries(methods)) {
 
 toolList.push({
   name: 'owner_panel',
-  description: '打开或刷新 Owner 的 Telegram 按钮面板。用户说「打开 Owner 面板 / 项目面板」时调用；收到以 callback_data: owner: 开头的消息时，把整串传给 callback 参数。',
+  description: '打开或刷新 Owner 的 Telegram 按钮面板。用户说「打开 Owner 面板 / 项目面板」时调用；收到以 callback_data: owner: 开头的消息时，把整串传给 callback 参数；面板提示「请直接发消息」时，把用户下一条文本传给 text 参数。',
   inputSchema: {
     type: 'object',
     properties: {
-      action: {
-        type: 'string',
-        description: 'menu / open / overview / ideas / knowledge / diagram / github / tests / patches / scan / kaccept / kreject'
-      },
+      action: { type: 'string', description: 'menu / open / overview / ideas / knowledge / diagrams / github / tests / patches / projects / scan 等' },
       projectId: { type: 'string', description: '项目 id' },
-      id: { type: 'string', description: '知识条目 id（接受/拒绝时用）' },
-      callback: { type: 'string', description: 'card-action 原文，例如 owner:overview:cultivation-agent' }
+      id: { type: 'string', description: '条目 id（想法 / 知识 / 补丁）' },
+      callback: { type: 'string', description: 'card-action 原文，例如 owner:overview:cultivation-agent' },
+      text: { type: 'string', description: '面板等待输入时，用户发来的文本' }
     }
   }
 });
@@ -250,6 +367,20 @@ const slim = (name, result) => {
       id: entry.id, title: entry.title, status: entry.status, createdAt: entry.createdAt
     })) };
   }
+  if (name === 'owner_tests') {
+    return { items: (result.items || []).slice(0, 5).map((entry) => ({
+      ok: entry.ok, command: entry.command, durationMs: entry.durationMs, at: entry.at
+    })) };
+  }
+  if (name === 'owner_patch_propose_worktree' || name === 'owner_patch_apply' || name === 'owner_patch_reject') {
+    return { id: result.id, title: result.title, status: result.status };
+  }
+  if (name === 'owner_knowledge_review' || name === 'owner_knowledge_verify') {
+    return { id: result.id, title: result.title, status: result.status };
+  }
+  if (name === 'owner_github_pr') {
+    return { ok: result.ok, repo: result.repo, branch: result.branch, url: result.url };
+  }
   return result;
 };
 
@@ -275,6 +406,14 @@ const handleToolCall = async (id, params) => {
   const method = methods[name];
   if (!method) {
     replyError(id, -32602, `未知工具：${name}`);
+    return;
+  }
+  // 危险工具必须有显式 confirm，避免 Agent 自己脑补「用户同意了」。
+  if ((name === 'owner_patch_apply' || name === 'owner_github_pr') && args.confirm !== true) {
+    reply(id, {
+      content: [{ type: 'text', text: '需要 confirm: true；先向用户说明将发生什么并得到明确同意。' }],
+      isError: true
+    });
     return;
   }
   const timeout = name === 'owner_test_run' ? 180000 : 30000;

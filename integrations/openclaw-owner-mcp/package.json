@@ -2,7 +2,12 @@
   "name": "@owner/openclaw-owner-mcp",
   "private": true,
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "description": "Owner Companion 的 OpenClaw MCP 服务与 Telegram 面板",
+  "scripts": {
+    "test": "node --test panel-core.test.mjs",
+    "check": "node --check server.mjs && node --check panel.mjs && node --check panel-core.mjs"
+  },
   "dependencies": {
     "@mermaid-js/mermaid-cli": "^12.2.0",
     "@resvg/resvg-js": "^2.6.2"
