@@ -241,10 +241,10 @@
 
   const DIAGRAM_DEFS = '<defs><marker id="owner-arrow" viewBox="0 0 10 10" refX="9" refY="5"'
     + ' markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
-    + '<path d="M0 0L10 5L0 10z" fill="var(--text-2, #525252)"/></marker></defs>';
+    + '<path d="M0 0L10 5L0 10z" fill="var(--oc-text-2, #525252)"/></marker></defs>';
 
   const svgText = (x, y, text, options = {}) => {
-    const { size = 12, fill = 'var(--text)', anchor = 'start', weight = 400 } = options;
+    const { size = 12, fill = 'var(--oc-text)', anchor = 'start', weight = 400 } = options;
     return `<text x="${x}" y="${y}" font-size="${size}" fill="${fill}" text-anchor="${anchor}"`
       + ` font-weight="${weight}">${esc(text)}</text>`;
   };
@@ -362,10 +362,10 @@
         labelX = (sx + tx) / 2;
         labelY = (sy + ty) / 2 - 5;
       }
-      parts.push(`<path d="${d}" fill="none" stroke="var(--text-2, #525252)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
+      parts.push(`<path d="${d}" fill="none" stroke="var(--oc-text-2, #525252)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
       if (edge.label) {
-        parts.push(`<text x="${labelX}" y="${labelY}" font-size="10" fill="var(--muted)" text-anchor="middle"`
-          + ` paint-order="stroke" stroke="var(--surface)" stroke-width="3">${esc(trim(edge.label, 20))}</text>`);
+        parts.push(`<text x="${labelX}" y="${labelY}" font-size="10" fill="var(--oc-muted)" text-anchor="middle"`
+          + ` paint-order="stroke" stroke="var(--oc-surface)" stroke-width="3">${esc(trim(edge.label, 20))}</text>`);
       }
     }
     for (const node of nodes) {
@@ -375,7 +375,7 @@
       parts.push('<g>');
       parts.push(`<title>${esc(labelOf(node))}</title>`);
       parts.push(`<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="9"`
-        + ` fill="var(--surface)" stroke="var(--line)"${dashed}/>`);
+        + ` fill="var(--oc-surface)" stroke="var(--oc-line)"${dashed}/>`);
       parts.push(svgText(box.x + box.w / 2, box.y + box.h / 2 + 4, trim(labelOf(node), 20), { anchor: 'middle' }));
       parts.push('</g>');
     }
@@ -406,8 +406,8 @@
     const parts = [];
     for (const column of columns) {
       const cx = column.x + column.w / 2;
-      parts.push(`<line x1="${cx}" y1="${top + headH}" x2="${cx}" y2="${H - 12}" stroke="var(--line)" stroke-dasharray="4 4"/>`);
-      parts.push(`<rect x="${column.x}" y="${top}" width="${column.w}" height="${headH}" rx="8" fill="var(--surface)" stroke="var(--line)"/>`);
+      parts.push(`<line x1="${cx}" y1="${top + headH}" x2="${cx}" y2="${H - 12}" stroke="var(--oc-line)" stroke-dasharray="4 4"/>`);
+      parts.push(`<rect x="${column.x}" y="${top}" width="${column.w}" height="${headH}" rx="8" fill="var(--oc-surface)" stroke="var(--oc-line)"/>`);
       parts.push(svgText(cx, top + headH / 2 + 4, trim(column.participant.label || column.participant.id, 18), { anchor: 'middle' }));
     }
     messages.forEach((message, index) => {
@@ -418,10 +418,10 @@
       const ax = a.x + a.w / 2;
       const bx = b.x + b.w / 2;
       if (message.from === message.to) {
-        parts.push(`<path d="M${ax} ${y} h18 v18 h-18" fill="none" stroke="var(--text-2)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
+        parts.push(`<path d="M${ax} ${y} h18 v18 h-18" fill="none" stroke="var(--oc-text-2)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
         parts.push(svgText(ax + 26, y + 6, trim(message.text, 26), { size: 10.5 }));
       } else {
-        parts.push(`<line x1="${ax}" y1="${y}" x2="${bx}" y2="${y}" stroke="var(--text-2)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
+        parts.push(`<line x1="${ax}" y1="${y}" x2="${bx}" y2="${y}" stroke="var(--oc-text-2)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
         parts.push(svgText((ax + bx) / 2, y - 6, trim(message.text, 30), { anchor: 'middle', size: 10.5 }));
       }
     });
@@ -459,15 +459,15 @@
       if (transition.from === transition.to) {
         const x = a.x + a.w / 2;
         const y = a.y;
-        parts.push(`<path d="M${x - 8} ${y} c-6 -26 22 -26 16 0" fill="none" stroke="var(--text-2)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
+        parts.push(`<path d="M${x - 8} ${y} c-6 -26 22 -26 16 0" fill="none" stroke="var(--oc-text-2)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
         continue;
       }
       const start = edgePoint(a, b);
       const end = edgePoint(b, a);
-      parts.push(`<line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" stroke="var(--text-2)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
+      parts.push(`<line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" stroke="var(--oc-text-2)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
       if (transition.trigger) {
         parts.push(`<text x="${(start.x + end.x) / 2}" y="${(start.y + end.y) / 2 - 5}" font-size="10"`
-          + ` fill="var(--muted)" text-anchor="middle" paint-order="stroke" stroke="var(--surface)" stroke-width="3">`
+          + ` fill="var(--oc-muted)" text-anchor="middle" paint-order="stroke" stroke="var(--oc-surface)" stroke-width="3">`
           + `${esc(trim(transition.trigger, 20))}</text>`);
       }
     }
@@ -478,7 +478,7 @@
       parts.push('<g>');
       parts.push(`<title>${esc(state.label || state.id)}</title>`);
       parts.push(`<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="${isStart || isEnd ? 19 : 9}"`
-        + ` fill="var(--surface)" stroke="${isEnd ? 'var(--danger, #c0392b)' : 'var(--line)'}"/>`);
+        + ` fill="var(--oc-surface)" stroke="${isEnd ? 'var(--oc-danger, #c0392b)' : 'var(--oc-line)'}"/>`);
       parts.push(svgText(box.x + box.w / 2, box.y + box.h / 2 + 4, trim(state.label || state.id, 16), { anchor: 'middle' }));
       parts.push('</g>');
     }

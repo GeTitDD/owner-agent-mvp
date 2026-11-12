@@ -10,7 +10,7 @@ const { pathToFileURL } = require('node:url');
 const readline = require('node:readline');
 
 const execFileAsync = promisify(execFile);
-const PKG_VERSION = '0.4.6';
+const PKG_VERSION = '0.4.9';
 
 const libUrl = (name) => pathToFileURL(path.join(__dirname, 'lib', name)).href;
 let libsPromise = null;

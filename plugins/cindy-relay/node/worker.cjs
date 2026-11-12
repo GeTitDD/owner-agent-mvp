@@ -7,7 +7,7 @@ const { spawn } = require('node:child_process');
 const readline = require('node:readline');
 const { pathToFileURL } = require('node:url');
 
-const PKG_VERSION = '0.2.3';
+const PKG_VERSION = '0.2.6';
 
 const libUrl = (name) => pathToFileURL(path.join(__dirname, 'lib', name)).href;
 let store = null;
