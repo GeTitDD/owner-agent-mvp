@@ -86,11 +86,14 @@
           <h3>依赖图</h3>
           <span id="diagramBadge" class="muted small"></span>
         </div>
-        <div id="diagramBody" class="body muted">还没有生成依赖图。</div>
+        <div id="diagramMeta" class="body muted small">还没有生成依赖图。</div>
+        <div id="diagramCanvas" class="diagram-canvas"></div>
+        <pre id="diagramSource" class="diagram-source" hidden></pre>
         <div id="diagramList" class="chips"></div>
         <div class="add-row">
           <button id="diagramScan" type="button" class="primary">扫描依赖</button>
           <button id="diagramCopy" type="button" class="ghost">复制 Mermaid</button>
+          <button id="diagramToggle" type="button" class="ghost">查看源码</button>
         </div>
       </article>
       <article class="card">

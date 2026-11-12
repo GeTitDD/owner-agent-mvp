@@ -3,10 +3,11 @@
 // 只处理本地消息流水与转交记录；发消息给其他任务由页面通过 cindy.targets 完成，
 // 这里不接触 Cindy 的会话或网络。
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const readline = require('node:readline');
 const { pathToFileURL } = require('node:url');
 
-const PKG_VERSION = '0.2.1';
+const PKG_VERSION = '0.2.3';
 
 const libUrl = (name) => pathToFileURL(path.join(__dirname, 'lib', name)).href;
 let store = null;
@@ -18,6 +19,23 @@ const getAttachments = async () => {
   return attachmentsModule;
 };
 
+/** 沙箱页面写不了系统剪贴板，用 PowerShell 兜底（本机、只写文本）。 */
+const writeClipboard = (text) => new Promise((resolve) => {
+  try {
+    const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$input | Set-Clipboard'], {
+      windowsHide: true,
+      stdio: ['pipe', 'ignore', 'ignore']
+    });
+    ps.on('error', () => resolve({ ok: false }));
+    ps.on('exit', (code) => resolve({ ok: code === 0 }));
+    ps.stdin.on('error', () => resolve({ ok: false }));
+    ps.stdin.write(String(text ?? ''), 'utf8');
+    ps.stdin.end();
+  } catch {
+    resolve({ ok: false });
+  }
+});
+
 const getStore = async () => {
   if (store) return store;
   storeModule ??= import(libUrl('store.mjs'));
@@ -27,6 +45,12 @@ const getStore = async () => {
 };
 
 const methods = {
+  async 'relay/clipboard'(params) {
+    const text = String(params?.text ?? '');
+    if (!text) return { ok: false };
+    return writeClipboard(text);
+  },
+
   async 'relay/status'() {
     const data = await getStore();
     return { ok: true, version: PKG_VERSION, ...data.stats() };

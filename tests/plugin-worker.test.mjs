@@ -160,6 +160,11 @@ test('worker：项目、画像、想法、知识、依赖图全部自包含', as
     assert.match(diagram.mermaid, /flowchart LR/u);
     assert.ok(diagram.version >= 1);
 
+    const fetched = await env.rpc('owner/diagrams/get', { projectId: 'demo', kind: 'dependency' });
+    assert.equal(fetched.kind, 'dependency');
+    assert.match(fetched.mermaid, /flowchart/u);
+    assert.ok(Array.isArray(fetched.data?.nodes) && fetched.data.nodes.length > 0);
+
     const removed = await env.rpc('owner/projects/remove', { id: 'demo' });
     assert.equal(removed.removed, true);
     const after = await env.rpc('owner/projects/list');

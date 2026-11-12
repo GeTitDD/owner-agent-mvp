@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color-scheme: light dark;
   --bg: var(--panel-bg, #f7f7f5);
   --surface: var(--surface, #ffffff);
@@ -199,7 +199,7 @@ button:disabled { opacity: 0.45; cursor: default; }
     font-size: 13px;
   }
   .topbar-actions { width: 100%; margin-left: 0; justify-content: space-between; gap: 8px; }
-  /* 手机上状态文字让位给按钮，同步状态仍可从圆点颜色看出。 */
+  /* 鎵嬫満涓婄姸鎬佹枃瀛楄浣嶇粰鎸夐挳锛屽悓姝ョ姸鎬佷粛鍙粠鍦嗙偣棰滆壊鐪嬪嚭銆?*/
   .status { display: none; }
   button.ghost,
   button.primary,
@@ -223,7 +223,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .status-done { color: var(--ok); }
 .status-failed { color: var(--danger); }
 
-/* 设置页 */
+/* 璁剧疆椤?*/
 .settings-body { padding: 18px; }
 .settings {
   max-width: 520px;
@@ -248,7 +248,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .settings-actions { display: flex; align-items: center; gap: 12px; }
 .error { color: var(--danger); }
 
-/* 新布局：卡片标题行、知识条目、设置页 */
+/* 鏂板竷灞€锛氬崱鐗囨爣棰樿銆佺煡璇嗘潯鐩€佽缃〉 */
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .knowledge-item { border-top: 1px solid var(--line); padding-top: 8px; }
 .knowledge-item:first-child { border-top: 0; padding-top: 0; }
@@ -267,7 +267,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .settings-project:first-child { border-top: 0; padding-top: 0; }
 button.danger.small { border: 0; background: transparent; color: var(--danger); padding: 0; }
 
-/* 知识标签页 */
+/* 鐭ヨ瘑鏍囩椤?*/
 .knowledge-tabs { display: flex; gap: 6px; }
 .knowledge-tabs button {
   padding: 3px 9px;
@@ -279,7 +279,7 @@ button.danger.small { border: 0; background: transparent; color: var(--danger); 
 }
 .knowledge-tabs button.active { border-color: var(--accent); color: var(--text); background: var(--accent-soft, rgba(127,127,127,0.08)); }
 
-/* 补丁与测试 */
+/* 琛ヤ竵涓庢祴璇?*/
 .patch-diff {
   max-height: 180px;
   overflow: auto;
@@ -307,3 +307,41 @@ button.danger.small { border: 0; background: transparent; color: var(--danger); 
 }
 .confirm-row { display: flex; align-items: center; gap: 6px; }
 .inline-details summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+
+/* 依赖图 / 控制流 / 时序 / 状态机预览 */
+.diagram-canvas {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  padding: 8px;
+  max-height: 520px;
+}
+.diagram-canvas svg { display: block; }
+.diagram-canvas:empty { display: none; }
+.diagram-source {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-2);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chips button.chip {
+  border: 1px solid transparent;
+  background: var(--chip);
+  color: var(--text-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.chips button.chip.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-soft, rgba(127, 127, 127, 0.08));
+}

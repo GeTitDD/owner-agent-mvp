@@ -22,6 +22,8 @@
     experiences: [],
     knowledgeTab: 'proposed',
     tidy: null,
+    diagramKind: '',
+    diagramCache: {},
     github: null,
     patches: [],
     tests: [],
@@ -39,6 +41,33 @@
     .replace(/>/gu, '&gt;')
     .replace(/"/gu, '&quot;')
     .replace(/'/gu, '&#39;');
+
+  const copyText = async (value) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      // 沙箱/无权限时退回选中 + execCommand。
+    }
+    try {
+      const area = document.createElement('textarea');
+      area.value = value;
+      area.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+      document.body.append(area);
+      area.select();
+      const ok = document.execCommand('copy');
+      area.remove();
+      if (ok) return true;
+    } catch {
+      // execCommand 也被拦时，交给 Node 侧写系统剪贴板。
+    }
+    try {
+      const result = await call('owner/clipboard', { text: value }, 8000);
+      return Boolean(result?.ok);
+    } catch {
+      return false;
+    }
+  };
 
   const toast = (text) => {
     const node = $('toast');
@@ -204,21 +233,325 @@
     }
   };
 
+  // ---- 图预览：用本地 SVG 画，不依赖外网 mermaid ----
+  const trim = (value, max) => {
+    const text = String(value ?? '').replace(/\s+/gu, ' ').trim();
+    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  };
+
+  const DIAGRAM_DEFS = '<defs><marker id="owner-arrow" viewBox="0 0 10 10" refX="9" refY="5"'
+    + ' markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+    + '<path d="M0 0L10 5L0 10z" fill="var(--text-2, #525252)"/></marker></defs>';
+
+  const svgText = (x, y, text, options = {}) => {
+    const { size = 12, fill = 'var(--text)', anchor = 'start', weight = 400 } = options;
+    return `<text x="${x}" y="${y}" font-size="${size}" fill="${fill}" text-anchor="${anchor}"`
+      + ` font-weight="${weight}">${esc(text)}</text>`;
+  };
+
+  /** 盒子的出边点：从中心连线与盒子边界的交点。 */
+  const edgePoint = (from, to) => {
+    const dx = (to.x + to.w / 2) - (from.x + from.w / 2);
+    const dy = (to.y + to.h / 2) - (from.y + from.h / 2);
+    const angle = Math.atan2(dy, dx);
+    const hw = from.w / 2;
+    const hh = from.h / 2;
+    const cos = Math.abs(Math.cos(angle)) || 1e-6;
+    const sin = Math.abs(Math.sin(angle)) || 1e-6;
+    const scale = Math.min(hw / cos, hh / sin);
+    return {
+      x: from.x + from.w / 2 + Math.cos(angle) * scale,
+      y: from.y + from.h / 2 + Math.sin(angle) * scale
+    };
+  };
+
+  /** 流程类图（依赖 / 控制流 / 数据流）：按依赖层级分列。 */
+﻿  /** 流程类图（依赖 / 控制流 / 数据流）：按依赖层级自上而下分行，适合窄面板。 */
+  const flowSvg = (data) => {
+    const nodes = (data?.nodes ?? []).filter((node) => node && node.id);
+    if (!nodes.length) return '';
+    const edges = (data?.edges ?? []).filter((edge) => edge && edge.from && edge.to);
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const out = new Map(nodes.map((node) => [node.id, []]));
+    const indeg = new Map(nodes.map((node) => [node.id, 0]));
+    for (const edge of edges) {
+      if (!byId.has(edge.from) || !byId.has(edge.to)) continue;
+      out.get(edge.from).push(edge.to);
+      indeg.set(edge.to, (indeg.get(edge.to) ?? 0) + 1);
+    }
+    // 从入度为 0 的节点开始做“最长路径”分层；有环时靠步数上限兜底。
+    const level = new Map();
+    const roots = nodes.filter((node) => (indeg.get(node.id) ?? 0) === 0).map((node) => node.id);
+    const queue = roots.length ? [...roots] : [nodes[0].id];
+    for (const id of queue) level.set(id, 0);
+    let guard = 0;
+    while (queue.length && guard < nodes.length * 10 + 50) {
+      const id = queue.shift();
+      guard += 1;
+      const base = level.get(id) ?? 0;
+      for (const next of out.get(id) ?? []) {
+        if ((level.get(next) ?? -1) < base + 1) {
+          level.set(next, base + 1);
+          queue.push(next);
+        }
+      }
+    }
+    for (const node of nodes) if (!level.has(node.id)) level.set(node.id, 0);
+
+    const columns = [];
+    for (const node of nodes) {
+      const index = level.get(node.id) ?? 0;
+      (columns[index] ??= []).push(node);
+    }
+    // 一层最多放 4 个，超出的拆到下一行，避免一条链拉得又宽又长。
+    const rows = [];
+    for (const column of columns.filter(Boolean)) {
+      for (let start = 0; start < column.length; start += 4) {
+        rows.push(column.slice(start, start + 4));
+      }
+    }
+
+    const labelOf = (node) => String(node.label || node.id);
+    const boxW = 150;
+    const boxH = 34;
+    const gapX = 16;
+    const gapY = 40;
+    const pad = 16;
+    const rowWidths = rows.map((row) => row.length * boxW + (row.length - 1) * gapX);
+    const W = Math.max(...rowWidths, 320) + pad * 2;
+    const pos = new Map();
+    let y = pad;
+    rows.forEach((row, rowIndex) => {
+      let x = (W - rowWidths[rowIndex]) / 2;
+      for (const node of row) {
+        pos.set(node.id, { x, y, w: boxW, h: boxH });
+        x += boxW + gapX;
+      }
+      y += boxH + gapY;
+    });
+    const H = y - gapY + pad;
+
+    const parts = [];
+    for (const edge of edges) {
+      const a = pos.get(edge.from);
+      const b = pos.get(edge.to);
+      if (!a || !b || edge.from === edge.to) continue;
+      let d;
+      let labelX;
+      let labelY;
+      if (Math.abs(a.y - b.y) < 1) {
+        // 同一行：从右侧绕到左侧上方。
+        const sx = a.x + a.w;
+        const sy = a.y + a.h / 2;
+        const tx = b.x;
+        const ty = b.y + b.h / 2;
+        const lift = 26;
+        d = `M${sx} ${sy} C${sx + 24} ${sy - lift} ${tx - 24} ${ty - lift} ${tx} ${ty}`;
+        labelX = (sx + tx) / 2;
+        labelY = sy - lift * 0.7;
+      } else {
+        const forward = b.y > a.y;
+        const sx = a.x + a.w / 2;
+        const sy = forward ? a.y + a.h : a.y;
+        const tx = b.x + b.w / 2;
+        const ty = forward ? b.y : b.y + b.h;
+        const bend = Math.max(18, Math.abs(ty - sy) / 2);
+        d = forward
+          ? `M${sx} ${sy} C${sx} ${sy + bend} ${tx} ${ty - bend} ${tx} ${ty}`
+          : `M${sx} ${sy} C${sx + 70} ${sy} ${tx + 70} ${ty} ${tx} ${ty}`;
+        labelX = (sx + tx) / 2;
+        labelY = (sy + ty) / 2 - 5;
+      }
+      parts.push(`<path d="${d}" fill="none" stroke="var(--text-2, #525252)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
+      if (edge.label) {
+        parts.push(`<text x="${labelX}" y="${labelY}" font-size="10" fill="var(--muted)" text-anchor="middle"`
+          + ` paint-order="stroke" stroke="var(--surface)" stroke-width="3">${esc(trim(edge.label, 20))}</text>`);
+      }
+    }
+    for (const node of nodes) {
+      const box = pos.get(node.id);
+      if (!box) continue;
+      const dashed = node.type === 'decision' ? ' stroke-dasharray="4 3"' : '';
+      parts.push('<g>');
+      parts.push(`<title>${esc(labelOf(node))}</title>`);
+      parts.push(`<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="9"`
+        + ` fill="var(--surface)" stroke="var(--line)"${dashed}/>`);
+      parts.push(svgText(box.x + box.w / 2, box.y + box.h / 2 + 4, trim(labelOf(node), 20), { anchor: 'middle' }));
+      parts.push('</g>');
+    }
+    return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img">${DIAGRAM_DEFS}${parts.join('')}</svg>`;
+  };
+
+
+  const sequenceSvg = (data) => {
+    const participants = (data?.participants ?? []).filter((item) => item && item.id);
+    const messages = (data?.messages ?? []).filter((item) => item && item.from && item.to);
+    if (!participants.length) return '';
+    const pad = 18;
+    const gap = 26;
+    const headH = 34;
+    const rowH = 32;
+    let cursor = pad;
+    const columns = [];
+    const pos = new Map();
+    for (const participant of participants) {
+      const width = Math.min(190, Math.max(110, String(participant.label || participant.id).length * 7 + 20));
+      columns.push({ participant, x: cursor, w: width });
+      pos.set(participant.id, { x: cursor, w: width });
+      cursor += width + gap;
+    }
+    const W = Math.max(340, cursor - gap + pad);
+    const top = 16;
+    const H = top + headH + 30 + messages.length * rowH + 16;
+    const parts = [];
+    for (const column of columns) {
+      const cx = column.x + column.w / 2;
+      parts.push(`<line x1="${cx}" y1="${top + headH}" x2="${cx}" y2="${H - 12}" stroke="var(--line)" stroke-dasharray="4 4"/>`);
+      parts.push(`<rect x="${column.x}" y="${top}" width="${column.w}" height="${headH}" rx="8" fill="var(--surface)" stroke="var(--line)"/>`);
+      parts.push(svgText(cx, top + headH / 2 + 4, trim(column.participant.label || column.participant.id, 18), { anchor: 'middle' }));
+    }
+    messages.forEach((message, index) => {
+      const a = pos.get(message.from);
+      const b = pos.get(message.to);
+      if (!a || !b) return;
+      const y = top + headH + 30 + index * rowH;
+      const ax = a.x + a.w / 2;
+      const bx = b.x + b.w / 2;
+      if (message.from === message.to) {
+        parts.push(`<path d="M${ax} ${y} h18 v18 h-18" fill="none" stroke="var(--text-2)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
+        parts.push(svgText(ax + 26, y + 6, trim(message.text, 26), { size: 10.5 }));
+      } else {
+        parts.push(`<line x1="${ax}" y1="${y}" x2="${bx}" y2="${y}" stroke="var(--text-2)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
+        parts.push(svgText((ax + bx) / 2, y - 6, trim(message.text, 30), { anchor: 'middle', size: 10.5 }));
+      }
+    });
+    return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img">${DIAGRAM_DEFS}${parts.join('')}</svg>`;
+  };
+
+  /** 状态机：状态排成一圈，转移画箭头。 */
+  const stateSvg = (data) => {
+    const states = (data?.states ?? []).filter((item) => item && item.id);
+    const transitions = (data?.transitions ?? []).filter((item) => item && item.from && item.to);
+    if (!states.length) return '';
+    const count = states.length;
+    const W = 760;
+    const radius = Math.max(150, Math.min(280, 50 + count * 24));
+    const cx = W / 2;
+    const cy = radius * 0.92 + 30;
+    const H = cy * 2 + 20;
+    const boxW = 128;
+    const boxH = 38;
+    const pos = new Map();
+    states.forEach((state, index) => {
+      const angle = (Math.PI * 2 * index) / count - Math.PI / 2;
+      pos.set(state.id, {
+        x: cx + Math.cos(angle) * radius - boxW / 2,
+        y: cy + Math.sin(angle) * radius * 0.82 - boxH / 2,
+        w: boxW,
+        h: boxH
+      });
+    });
+    const parts = [];
+    for (const transition of transitions) {
+      const a = pos.get(transition.from);
+      const b = pos.get(transition.to);
+      if (!a || !b) continue;
+      if (transition.from === transition.to) {
+        const x = a.x + a.w / 2;
+        const y = a.y;
+        parts.push(`<path d="M${x - 8} ${y} c-6 -26 22 -26 16 0" fill="none" stroke="var(--text-2)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
+        continue;
+      }
+      const start = edgePoint(a, b);
+      const end = edgePoint(b, a);
+      parts.push(`<line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" stroke="var(--text-2)" stroke-width="1.2" marker-end="url(#owner-arrow)"/>`);
+      if (transition.trigger) {
+        parts.push(`<text x="${(start.x + end.x) / 2}" y="${(start.y + end.y) / 2 - 5}" font-size="10"`
+          + ` fill="var(--muted)" text-anchor="middle" paint-order="stroke" stroke="var(--surface)" stroke-width="3">`
+          + `${esc(trim(transition.trigger, 20))}</text>`);
+      }
+    }
+    for (const state of states) {
+      const box = pos.get(state.id);
+      const isStart = state.kind === 'start';
+      const isEnd = state.kind === 'end';
+      parts.push('<g>');
+      parts.push(`<title>${esc(state.label || state.id)}</title>`);
+      parts.push(`<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="${isStart || isEnd ? 19 : 9}"`
+        + ` fill="var(--surface)" stroke="${isEnd ? 'var(--danger, #c0392b)' : 'var(--line)'}"/>`);
+      parts.push(svgText(box.x + box.w / 2, box.y + box.h / 2 + 4, trim(state.label || state.id, 16), { anchor: 'middle' }));
+      parts.push('</g>');
+    }
+    return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img">${DIAGRAM_DEFS}${parts.join('')}</svg>`;
+  };
+
+  const diagramSvg = (diagram) => {
+    if (!diagram?.data) return '';
+    if (diagram.kind === 'sequence') return sequenceSvg(diagram.data);
+    if (diagram.kind === 'state') return stateSvg(diagram.data);
+    return flowSvg(diagram.data);
+  };
+
+  const applyDiagram = (diagram) => {
+    state.mermaid = String(diagram?.mermaid ?? '');
+    const meta = (state.overview?.diagrams ?? []).find((item) => item.kind === diagram.kind);
+    $('diagramMeta').innerHTML = `<div class="line">${esc(meta?.title || diagram.title || '图')}</div>`
+      + `<div class="line muted small">${esc(meta?.summary || diagram.summary || '')}</div>`;
+    const svg = diagramSvg(diagram);
+    $('diagramCanvas').innerHTML = svg
+      || '<div class="muted small">这张图没有可预览的结构化数据，点「查看源码」或「复制 Mermaid」。</div>';
+    const source = $('diagramSource');
+    source.textContent = state.mermaid;
+    source.hidden = true;
+    $('diagramToggle').textContent = '查看源码';
+  };
+
+  const selectDiagram = async (kind) => {
+    const meta = (state.overview?.diagrams ?? []).find((item) => item.kind === kind);
+    if (!meta || !state.projectId) return;
+    state.diagramKind = kind;
+    for (const chip of document.querySelectorAll('#diagramList .chip')) {
+      chip.classList.toggle('active', chip.dataset.kind === kind);
+    }
+    const key = `${kind}:${meta.version}`;
+    let diagram = state.diagramCache[key];
+    if (!diagram) {
+      try {
+        diagram = await call('owner/diagrams/get', { projectId: state.projectId, kind }, 20000);
+        state.diagramCache[key] = diagram;
+      } catch (error) {
+        $('diagramCanvas').innerHTML = `<div class="muted small">读取失败：${esc(String(error?.message ?? error))}</div>`;
+        return;
+      }
+    }
+    applyDiagram(diagram);
+  };
+
   const renderDiagrams = () => {
     const diagrams = state.overview?.diagrams ?? [];
     $('diagramBadge').textContent = diagrams.length ? `${diagrams.length} 张` : '';
-    $('diagramList').innerHTML = diagrams.map((diagram) => (
-      `<span class="chip">${esc(DIAGRAM_LABEL[diagram.kind] ?? diagram.kind)} · v${esc(diagram.version)}</span>`
-    )).join('');
+    const list = $('diagramList');
+    list.replaceChildren();
+    for (const diagram of diagrams) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `chip${diagram.kind === state.diagramKind ? ' active' : ''}`;
+      button.dataset.kind = diagram.kind;
+      button.textContent = `${DIAGRAM_LABEL[diagram.kind] ?? diagram.kind} · v${diagram.version}`;
+      button.addEventListener('click', () => { void selectDiagram(diagram.kind); });
+      list.append(button);
+    }
     if (!diagrams.length) {
-      $('diagramBody').textContent = '还没有生成依赖图。';
+      $('diagramMeta').textContent = '还没有生成依赖图。';
+      $('diagramCanvas').innerHTML = '';
+      $('diagramSource').hidden = true;
+      state.diagramKind = '';
       return;
     }
-    const latest = diagrams[0];
-    $('diagramBody').innerHTML = `
-      <div class="line">${esc(latest.title || '依赖图')}</div>
-      <div class="line muted small">${esc(latest.summary || '')}</div>
-    `;
+    if (!state.diagramKind || !diagrams.some((item) => item.kind === state.diagramKind)) {
+      state.diagramKind = diagrams[0].kind;
+    }
+    void selectDiagram(state.diagramKind);
   };
 
   const renderGithub = () => {
@@ -395,12 +728,8 @@
   const distillPrompt = async () => {
     const text = '请根据我们这轮讨论：先用 owner_experience_add 记录可复用经验，'
       + '再用 owner_knowledge_propose 提炼 1-3 条候选（标题 + 细节 + 证据），不要直接写 owner_knowledge_add。';
-    try {
-      await navigator.clipboard.writeText(text);
-      toast('提炼指令已复制，粘贴到 Cindy 聊天里发送');
-    } catch {
-      toast(text);
-    }
+    if (await copyText(text)) toast('提炼指令已复制，粘贴到 Cindy 聊天里发送');
+    else toast('复制失败，请手动选中指令文本');
   };
 
   const patchAction = async (id, action) => {
@@ -484,12 +813,8 @@
 
   const copyForChat = async (idea) => {
     const text = `讨论这条改进想法（只讨论，不要改代码）：${idea.title}`;
-    try {
-      await navigator.clipboard.writeText(text);
-      toast('已复制，粘贴到 Cindy 聊天里继续');
-    } catch {
-      toast(text);
-    }
+    if (await copyText(text)) toast('已复制，粘贴到 Cindy 聊天里继续');
+    else toast('复制失败，请手动选中想法文本');
   };
 
   const scanDiagram = async () => {
@@ -498,6 +823,7 @@
     toast('正在扫描依赖…');
     try {
       const diagram = await call('owner/diagrams/dependency', { projectId: state.projectId }, 20000);
+      state.diagramCache = {};
       state.mermaid = String(diagram?.mermaid ?? '');
       await load();
       toast(`依赖图已生成：${diagram?.summary ?? ''}`);
@@ -513,12 +839,13 @@
       toast('先生成依赖图');
       return;
     }
-    try {
-      await navigator.clipboard.writeText(state.mermaid);
+    if (await copyText(state.mermaid)) {
       toast('Mermaid 已复制');
-    } catch {
-      toast('复制失败，请手动选择');
+      return;
     }
+    $('diagramSource').hidden = false;
+    $('diagramToggle').textContent = '收起源码';
+    toast('复制被宿主拦下了，已展开源码，请按 Ctrl+C');
   };
 
   document.addEventListener('click', (event) => {
@@ -583,6 +910,11 @@
   $('testsRun').addEventListener('click', () => { void runTests(); });
   $('diagramScan').addEventListener('click', () => { void scanDiagram(); });
   $('diagramCopy').addEventListener('click', () => { void copyDiagram(); });
+  $('diagramToggle').addEventListener('click', () => {
+    const source = $('diagramSource');
+    source.hidden = !source.hidden;
+    $('diagramToggle').textContent = source.hidden ? '查看源码' : '收起源码';
+  });
 
   // 页面启动：优先恢复这个任务上次的项目，没有记录才用默认项目。
   const init = async () => {

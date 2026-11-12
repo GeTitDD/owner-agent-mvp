@@ -37,6 +37,33 @@
     return text.length > max ? `${text.slice(0, max - 1)}…` : text;
   };
 
+  const copyText = async (value) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      // 沙箱/无权限时退回 execCommand。
+    }
+    try {
+      const area = document.createElement('textarea');
+      area.value = value;
+      area.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+      document.body.append(area);
+      area.select();
+      const ok = document.execCommand('copy');
+      area.remove();
+      if (ok) return true;
+    } catch {
+      // execCommand 也被拦时，交给 Node 侧写系统剪贴板。
+    }
+    try {
+      const result = await call('relay/clipboard', { text: value }, 8000);
+      return Boolean(result?.ok);
+    } catch {
+      return false;
+    }
+  };
+
   const toast = (text) => {
     const node = $('toast');
     node.textContent = String(text ?? '');
@@ -542,12 +569,8 @@
   });
   $('copyQuote').addEventListener('click', async () => {
     const quote = quoteForSend();
-    try {
-      await navigator.clipboard.writeText(quote);
-      toast('已复制引用');
-    } catch {
-      toast('复制失败，可手动选中文本');
-    }
+    if (await copyText(quote)) toast('已复制引用');
+    else toast('复制被宿主拦下了，可手动选中引用文本');
   });
   $('clearButton').addEventListener('click', async () => {
     if (!state.sessionId) return;

@@ -4,13 +4,13 @@
 // 不再依赖桌面端的 47831 桥。页面与 main.js 只通过 JSON-RPC 访问。
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
 const { pathToFileURL } = require('node:url');
 const readline = require('node:readline');
 
 const execFileAsync = promisify(execFile);
-const PKG_VERSION = '0.4.1';
+const PKG_VERSION = '0.4.6';
 
 const libUrl = (name) => pathToFileURL(path.join(__dirname, 'lib', name)).href;
 let libsPromise = null;
@@ -37,6 +37,23 @@ const getStore = async () => {
   store = libs.storeModule.openStore();
   return store;
 };
+
+/** 沙箱页面写不了系统剪贴板，用 PowerShell 兜底（本机、只写文本）。 */
+const writeClipboard = (text) => new Promise((resolve) => {
+  try {
+    const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$input | Set-Clipboard'], {
+      windowsHide: true,
+      stdio: ['pipe', 'ignore', 'ignore']
+    });
+    ps.on('error', () => resolve({ ok: false }));
+    ps.on('exit', (code) => resolve({ ok: code === 0 }));
+    ps.stdin.on('error', () => resolve({ ok: false }));
+    ps.stdin.write(String(text ?? ''), 'utf8');
+    ps.stdin.end();
+  } catch {
+    resolve({ ok: false });
+  }
+});
 
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 
@@ -81,6 +98,12 @@ const getServices = async () => {
 };
 
 const methods = {
+  async 'owner/clipboard'(params) {
+    const text = String(params?.text ?? '');
+    if (!text) return { ok: false };
+    return writeClipboard(text);
+  },
+
   async 'owner/status'() {
     const data = await getStore();
     return {
@@ -319,6 +342,16 @@ const methods = {
   async 'owner/diagrams/list'(params) {
     const data = await getStore();
     return { items: data.listDiagrams(String(params?.projectId || '')) };
+  },
+
+  /** 读取某一张图的完整内容（含 Mermaid 与结构化数据），供面板预览。 */
+  async 'owner/diagrams/get'(params) {
+    const data = await getStore();
+    const project = data.getProject(String(params?.projectId || ''));
+    if (!project) throw fail('项目不存在', 404);
+    const diagram = data.getDiagram(project.id, String(params?.kind || 'dependency'));
+    if (!diagram) throw fail('还没有这张图', 404);
+    return diagram;
   },
 
   async 'owner/github/status'(params) {
