@@ -109,6 +109,29 @@ test('health requires the read token', async () => {
   });
 });
 
+test('queue distinguishes ideas from tasks', async () => {
+  await withSidecar(async ({ handle }) => {
+    const idea = await call(handle, 'POST', '/owner/v1/queue', {
+      body: { projectId: 'p1', title: '可以加一个导出按钮', kind: 'idea', source: 'conversation' }
+    });
+    assert.equal(idea.status, 201);
+    assert.equal(idea.body.kind, 'idea');
+
+    const task = await call(handle, 'POST', '/owner/v1/queue', {
+      body: { projectId: 'p1', title: '跑一次测试' }
+    });
+    assert.equal(task.status, 201);
+    assert.equal(task.body.kind, 'task');
+
+    const ideas = await call(handle, 'GET', '/owner/v1/queue?projectId=p1&kind=idea');
+    assert.equal(ideas.status, 200);
+    assert.deepEqual(ideas.body.items.map((item) => item.title), ['可以加一个导出按钮']);
+
+    const everything = await call(handle, 'GET', '/owner/v1/queue?projectId=p1');
+    assert.equal(everything.body.items.length, 2);
+  });
+});
+
 test('read token cannot approve; approval token is required', async () => {
   await withSidecar(async ({ handle, task }) => {
     const created = await createJob(handle, task);
@@ -290,6 +313,22 @@ test('CORS allows loopback Control UI origins only', async () => {
       }
     });
     assert.equal(blocked.status, 403);
+  });
+});
+
+test('worker endpoints fail closed when no worker is configured', async () => {
+  await withSidecar(async ({ handle }) => {
+    const status = await call(handle, 'GET', '/owner/v1/worker/status');
+    assert.equal(status.status, 200);
+    assert.equal(status.body.configured, false);
+
+    const tick = await call(handle, 'POST', '/owner/v1/worker/tick', { body: {} });
+    assert.equal(tick.status, 503);
+
+    const repair = await call(handle, 'POST', '/owner/v1/repair-cycles', {
+      body: { sandboxRunId: 'missing', idempotencyKey: 'repair-missing' }
+    });
+    assert.equal(repair.status, 404);
   });
 });
 

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Owner</title>
+  <link rel="stylesheet" href="main-view.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot" id="statusDot"></span>
+      <span>Owner</span>
+    </div>
+    <select id="projectSelect" aria-label="项目"></select>
+    <div class="topbar-actions">
+      <span id="statusText" class="status">同步中…</span>
+      <button id="addProjectButton" type="button" class="ghost">添加项目</button>
+      <button id="refreshButton" type="button" class="ghost">刷新</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section id="emptyHint" class="hint" hidden>
+      <h2>还没有项目</h2>
+      <p>点右上角「添加项目」，填一个本机目录即可。所有数据保存在插件自己的目录里。</p>
+    </section>
+
+    <section id="addProjectCard" class="card" hidden>
+      <h3>添加项目</h3>
+      <div class="add-row">
+        <input id="projectPath" type="text" placeholder="D:\path\to\project" spellcheck="false" />
+        <button id="projectAdd" type="button" class="primary">添加</button>
+        <button id="projectCancel" type="button" class="ghost">取消</button>
+      </div>
+      <div id="addProjectError" class="error small" hidden></div>
+    </section>
+
+    <section id="nextActionCard" class="card action" hidden></section>
+
+    <section class="grid">
+      <article class="card">
+        <div class="card-head">
+          <h3>项目画像</h3>
+          <button id="briefRefresh" type="button" class="ghost small">重新扫描</button>
+        </div>
+        <div id="briefBody" class="body muted">正在读取…</div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h3>想法</h3>
+        </div>
+        <div class="add-row">
+          <input id="ideaInput" type="text" maxlength="300" placeholder="记一条改进想法…" />
+          <button id="ideaAdd" type="button" class="primary">记下</button>
+        </div>
+        <div id="ideaList" class="list"></div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h3>知识</h3>
+          <span id="knowledgeCount" class="muted small"></span>
+        </div>
+        <div class="knowledge-tabs">
+          <button type="button" data-knowledge-tab="proposed">待审核 <span id="proposedCount"></span></button>
+          <button type="button" data-knowledge-tab="knowledge">知识</button>
+          <button type="button" data-knowledge-tab="experiences">经验</button>
+        </div>
+        <div id="knowledgeBody" class="body muted">正在读取…</div>
+        <div id="knowledgeList" class="list"></div>
+        <div class="add-row">
+          <input id="knowledgeInput" type="text" maxlength="200" placeholder="记一条项目知识…" />
+          <button id="knowledgeAdd" type="button" class="primary">记下</button>
+        </div>
+        <div class="add-row">
+          <button id="knowledgeDistill" type="button" class="ghost">让 Cindy 提炼</button>
+          <button id="knowledgeTidy" type="button" class="ghost">整理</button>
+        </div>
+        <div id="tidyReport" class="body muted small" hidden></div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h3>依赖图</h3>
+          <span id="diagramBadge" class="muted small"></span>
+        </div>
+        <div id="diagramMeta" class="body muted small">还没有生成依赖图。</div>
+        <div id="diagramCanvas" class="diagram-canvas"></div>
+        <pre id="diagramSource" class="diagram-source" hidden></pre>
+        <div id="diagramList" class="chips"></div>
+        <div class="add-row">
+          <button id="diagramScan" type="button" class="primary">扫描依赖</button>
+          <button id="diagramCopy" type="button" class="ghost">复制 Mermaid</button>
+          <button id="diagramToggle" type="button" class="ghost">查看源码</button>
+        </div>
+      </article>
+      <article class="card">
+        <div class="card-head">
+          <h3>GitHub</h3>
+          <button id="githubRefresh" type="button" class="ghost small">刷新</button>
+        </div>
+        <div id="githubBody" class="body muted">正在读取…</div>
+        <div id="githubLists" class="list"></div>
+        <details class="inline-details">
+          <summary>创建 Draft PR</summary>
+          <div class="add-row">
+            <input id="prTitle" type="text" maxlength="120" placeholder="PR 标题" />
+            <input id="prBase" type="text" maxlength="60" value="main" placeholder="base 分支" />
+          </div>
+          <label class="confirm-row small muted">
+            <input id="prConfirm" type="checkbox" /> 我确认只创建 Draft PR，不合并
+          </label>
+          <div class="add-row">
+            <button id="prCreate" type="button" class="primary">创建 Draft PR</button>
+          </div>
+          <div id="prResult" class="muted small"></div>
+        </details>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h3>补丁与测试</h3>
+          <button id="testsRun" type="button" class="ghost small">运行测试</button>
+        </div>
+        <div id="patchBody" class="body muted">没有待处理补丁。</div>
+        <div class="add-row">
+          <input id="testCommand" type="text" maxlength="120" placeholder="测试命令，默认 npm test" />
+        </div>
+        <label class="confirm-row small muted">
+          <input id="patchConfirm" type="checkbox" /> 我确认应用补丁会写入项目文件
+        </label>
+        <div id="patchList" class="list"></div>
+        <pre id="testOutput" class="test-output" hidden></pre>
+      </article>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="bridge.js"></script>
+  <script src="main-view.js"></script>
+</body>
+</html>

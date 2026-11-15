@@ -1,0 +1,227 @@
+:root {
+  color-scheme: light dark;
+  --oc-bg: var(--panel-bg, light-dark(#f7f7f5, #151515));
+  --oc-surface: var(--surface, light-dark(#ffffff, #262626));
+  --oc-surface-2: var(--surface-2, light-dark(#fbfbf9, #1f1f1f));
+  --oc-text: var(--text-primary, light-dark(#1f1f1f, #ededed));
+  --oc-text-2: var(--text-secondary, light-dark(#525252, #b4b4b4));
+  --oc-muted: var(--text-tertiary, light-dark(#8a8a85, #8f8f8f));
+  --oc-line: var(--border-default, light-dark(#e5e5e0, #333333));
+  --oc-accent: var(--accent, light-dark(#1f1f1f, #ededed));
+  --oc-accent-fg: var(--accent-foreground, light-dark(#ffffff, #151515));
+  --oc-chip: light-dark(rgba(127, 127, 127, 0.10), rgba(255, 255, 255, 0.10));
+  --oc-ok: #2f8f5b;
+  --oc-warn: #b7791f;
+  --oc-danger: var(--danger, #c0392b);
+  --radius: 12px;
+}
+
+* { box-sizing: border-box; }
+
+/* 类选择器的 display 会盖掉 hidden 属性，这里统一兜底。 */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--oc-bg);
+  color: var(--oc-text);
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--oc-line);
+  background: var(--oc-surface);
+}
+
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--oc-muted); }
+.dot.ok { background: var(--oc-ok); }
+.dot.bad { background: var(--oc-danger); }
+
+.topbar select {
+  min-width: 0;
+  max-width: 320px;
+  padding: 6px 10px;
+  border: 1px solid var(--oc-line);
+  border-radius: 999px;
+  background: var(--oc-surface-2);
+  color: var(--oc-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.status { font-size: 12px; color: var(--oc-muted); }
+
+.layout {
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+  max-width: 1180px;
+  margin: 0 auto;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  align-items: start;
+}
+
+#historyCard { grid-column: 1 / -1; }
+
+.card {
+  background: var(--oc-surface);
+  border: 1px solid var(--oc-line);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.card h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--oc-text-2); letter-spacing: 0.02em; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+.muted { color: var(--oc-muted); }
+.small { font-size: 11.5px; }
+
+.hint {
+  border: 1px dashed var(--oc-line);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--oc-surface-2);
+  color: var(--oc-text-2);
+  font-size: 13px;
+}
+.hint p { margin: 0; }
+
+.scope-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12.5px; }
+.scope-row label { display: inline-flex; align-items: center; gap: 6px; }
+
+.messages {
+  display: grid;
+  gap: 8px;
+  max-height: 440px;
+  overflow: auto;
+  padding: 2px;
+}
+
+.msg {
+  border: 1px solid var(--oc-line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--oc-surface-2);
+}
+.msg.user { background: var(--oc-chip); }
+.msg-head { font-size: 10.5px; color: var(--oc-muted); margin-bottom: 3px; }
+.msg-body { font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tabs button {
+  padding: 5px 11px;
+  border: 1px solid var(--oc-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--oc-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tabs button.active { border-color: var(--oc-accent); color: var(--oc-text); background: var(--oc-chip); }
+
+.targets { display: grid; gap: 6px; }
+.target {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--oc-line);
+  border-radius: 10px;
+  background: var(--oc-surface-2);
+  cursor: pointer;
+}
+.target b { font-weight: 600; font-size: 13px; display: block; }
+.target .small { display: block; }
+
+.route-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+.field { display: grid; gap: 4px; font-size: 12px; color: var(--oc-muted); }
+.field textarea,
+.field select,
+.field input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--oc-line);
+  border-radius: 9px;
+  background: var(--oc-surface-2);
+  color: var(--oc-text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+button { font: inherit; cursor: pointer; }
+button.primary {
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--oc-accent);
+  color: var(--oc-accent-fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+button.ghost {
+  padding: 6px 11px;
+  border: 1px solid var(--oc-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+button.ghost.small { padding: 3px 9px; font-size: 11px; }
+button:disabled { opacity: 0.45; cursor: default; }
+
+.send-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.list { display: grid; gap: 8px; }
+.history-item { border-top: 1px solid var(--oc-line); padding-top: 8px; }
+.history-item:first-child { border-top: 0; padding-top: 0; }
+.history-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  max-width: min(380px, calc(100vw - 36px));
+  padding: 9px 13px;
+  border-radius: 10px;
+  background: var(--oc-accent);
+  color: var(--oc-accent-fg);
+  font-size: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  z-index: 5;
+}
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 720px) {
+  .layout { padding: 12px; }
+  .topbar { flex-wrap: wrap; padding: 10px 12px; gap: 8px; }
+  .topbar select { flex: 1 1 140px; min-height: 36px; font-size: 13px; }
+  .topbar-actions { width: 100%; margin-left: 0; justify-content: space-between; }
+  .status { display: none; }
+  button.ghost, button.primary, .tabs button { min-height: 36px; }
+  .msg-body { font-size: 13px; }
+  .scope-row { gap: 10px; }
+  .toast { right: 12px; bottom: 12px; }
+}
+
+@media (max-width: 360px) {
+  .topbar select { flex-basis: 100%; }
+}

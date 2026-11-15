@@ -131,4 +131,16 @@ export class KnowledgeLoopRuntime {
       model: this.model || 'default'
     };
   }
+
+  setAutoHarvest(enabled, { model = this.model } = {}) {
+    this.allowHarvest = Boolean(enabled);
+    if (model) this.model = model;
+    if (this.allowHarvest && !this.harvester) {
+      this.harvester = new KnowledgeHarvester({
+        ownerStore: this.owner, personalStore: this.personal,
+        model: this.model, allowModel: true
+      });
+    }
+    return this.status();
+  }
 }

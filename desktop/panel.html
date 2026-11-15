@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Owner Companion</title>
+  <link rel="stylesheet" href="./panel.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="brand">
+        <span class="state-dot" id="stateDot"></span>
+        <div class="brand-text">
+          <strong>Owner Companion</strong>
+          <small id="stateText">空闲</small>
+        </div>
+        <div class="state-counts">
+          <span id="runningChip" class="count-chip"><span class="chip-dot"></span><span id="runningCount">0</span> 运行</span>
+          <span id="needsChip" class="count-chip warn"><span class="chip-dot"></span><span id="needsCount">0</span> 待你</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="openFull" class="ghost" title="打开完整工作台">完整工作台</button>
+        <button id="openSettings" class="ghost" title="设置">设置</button>
+        <button id="hidePanel" class="ghost" title="收起">×</button>
+      </div>
+    </header>
+
+    <div class="scroll">
+      <section class="zone project-zone">
+        <div class="zone-head">
+          <strong>当前项目</strong>
+          <span>项目画像、待办、知识与操作</span>
+        </div>
+
+        <section id="projectSection" class="project-section">
+          <div class="section-title">
+            <h3>项目</h3>
+            <span class="section-actions">
+              <input id="projectSearch" class="project-search" type="search" placeholder="搜索" aria-label="搜索项目" />
+              <span id="projectBadge" class="count">0</span>
+              <button id="addProjectTop" class="ghost small" type="button">添加</button>
+            </span>
+          </div>
+          <div id="projectList" class="project-list"></div>
+          <div id="projectBrief" class="project-brief" hidden></div>
+          <div id="projectSummary" class="project-summary" hidden></div>
+          <div id="githubPanel" class="github-panel" hidden></div>
+        </section>
+
+        <section id="nextActionCard" class="next-action" hidden></section>
+
+        <section id="diagramSection" class="diagram-section">
+          <div class="section-title">
+            <h3>项目图谱</h3>
+            <span id="diagramBadge" class="count">5</span>
+          </div>
+          <div id="diagramTabs" class="diagram-tabs"></div>
+          <div class="diagram-toolbar">
+            <input id="diagramScope" class="diagram-scope" type="text" maxlength="200"
+              placeholder="范围：project 或 src/foo" />
+            <button id="diagramGenerate" class="primary small" type="button">生成/重新生成</button>
+            <button id="diagramCopy" class="ghost small" type="button">复制 Mermaid</button>
+            <button id="diagramExport" class="ghost small" type="button">导出 SVG</button>
+          </div>
+          <div id="diagramView" class="diagram-view"></div>
+          <div id="diagramMeta" class="diagram-meta"></div>
+        </section>
+
+        <section id="queueSection" class="queue-section">
+          <div class="section-title">
+            <h3>想法</h3>
+            <span id="queueBadge" class="count">0</span>
+          </div>
+          <p class="section-sub">和 Agent 聊到的改进意见收在这里；只收集，不直接改代码。</p>
+          <div class="queue-add">
+            <input id="queueInput" class="queue-input" type="text" maxlength="1200" placeholder="记一条想法…（Enter 保存）" />
+            <button id="queueAdd" class="primary small" type="button">记下</button>
+          </div>
+          <div id="queueList" class="queue-list"></div>
+        </section>
+
+        <section class="knowledge-section compact" id="knowledgeSection">
+          <div class="section-title">
+            <h3>知识</h3>
+            <span id="knowledgeBadge" class="count">0</span>
+          </div>
+          <div class="knowledge-quick">
+            <button type="button" data-knowledge="today">今天学到什么</button>
+            <button type="button" data-knowledge="project">本项目经验</button>
+            <button type="button" data-knowledge="similar">类似问题</button>
+            <button type="button" data-knowledge="verified">验证与复用</button>
+          </div>
+          <div id="knowledgeSummaryText" class="knowledge-summary">正在读取知识库…</div>
+          <div class="knowledge-actions">
+            <button id="reflectDistill" class="primary small" title="跑一次 pstack 复盘，并自动沉淀为项目知识候选">复盘并沉淀</button>
+            <button id="tidyKnowledge" class="ghost small" title="扫描重复、需复核、冲突和未验证知识">整理知识</button>
+            <button id="harvestNow" class="primary small" title="把当前项目的待提炼经验提炼成待审核候选">立即提炼</button>
+            <button id="openKnowledge" class="ghost small">完整知识库</button>
+          </div>
+        </section>
+
+        <section id="playbookSection" class="playbook-section" hidden>
+          <div class="section-title">
+            <h3>项目 Playbook</h3>
+            <span id="playbookBadge" class="count">pstack</span>
+          </div>
+          <div id="playbookHintRow" class="playbook-hint-row">
+            <span id="playbookHint" class="playbook-hint">一键只读分析当前项目；结论可沉淀为项目知识，改动会先生成提案等你批准。</span>
+            <div id="distillPresets" class="distill-presets" role="group" aria-label="一键沉淀预设"></div>
+            <button id="playbookCancel" class="ghost small" hidden>取消</button>
+          </div>
+          <div id="playbookGroups" class="playbook-groups"></div>
+          <div id="playbookResult" class="playbook-result" hidden></div>
+        </section>
+      </section>
+
+      <section class="zone general-zone">
+        <div class="zone-head">
+          <strong>通用管理</strong>
+          <span>跨项目的决定、运行与最近结果</span>
+        </div>
+
+        <section id="needsSection" class="needs-section">
+          <div class="section-title">
+            <h3>需要你决定</h3>
+            <span id="pendingBadge" class="count">0</span>
+          </div>
+          <p id="needsHint" class="section-sub">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
+          <div id="pendingList" class="pending-list"></div>
+        </section>
+
+        <section id="runningSection" class="running-section">
+          <div class="section-title">
+            <h3 id="runningTitle">运行中</h3>
+            <span id="runningBadge" class="count">0</span>
+          </div>
+          <div class="activity-card" id="activityCard">
+            <div class="activity-head">
+              <span id="activityPhase" class="state-dot"></span>
+              <span id="activityLabel" class="activity-state">空闲</span>
+              <span class="activity-meta">
+                <span id="workerLabel">Worker 空闲</span>
+                <span id="pendingCount">0 项待决定</span>
+              </span>
+            </div>
+            <div class="activity-stage" id="stage">正在读取状态…</div>
+            <div id="runningList" class="ledger"></div>
+            <details class="activity-more">
+              <summary>最近活动</summary>
+              <div id="activityLines" class="activity-lines"></div>
+            </details>
+          </div>
+        </section>
+
+        <section id="setup" class="setup" hidden>
+          <h3>先添加一个项目</h3>
+          <p>选择本地 Git 仓库目录。桌宠会从这里读取项目并创建任务；L1 不依赖 OpenClaw，完整工作台才需要它。</p>
+          <div id="setupServices" class="service-grid"></div>
+          <button id="addProject" class="primary">选择项目目录</button>
+        </section>
+
+        <section id="answerSection" hidden>
+          <div class="section-title">
+            <h3>只读分析</h3>
+            <span id="answerBadge" class="count">分析</span>
+          </div>
+          <div id="answerCard" class="answer-card"></div>
+        </section>
+
+        <section id="timelineSection" class="timeline-section" hidden>
+          <div class="section-title">
+            <h3>会话</h3>
+            <span id="timelineCount" class="count">0</span>
+          </div>
+          <div id="timeline" class="timeline-list"></div>
+        </section>
+
+        <section id="resultSection" hidden>
+          <div class="section-title"><h3>最近结果</h3></div>
+          <div id="resultCard" class="result-card"></div>
+        </section>
+      </section>
+    </div>
+
+    <section class="composer-dock" id="composeSection">
+      <div class="composer-card">
+        <textarea id="taskInput" rows="1" maxlength="1200"
+          placeholder="和 Agent 聊聊项目进展，或说说你的改进想法…"></textarea>
+        <div class="composer-bar">
+          <select id="projectSelect" aria-label="项目"></select>
+          <span id="composerHint" class="composer-hint" hidden></span>
+          <button id="submitTask" class="send-btn" title="发送（Enter）" aria-label="发送">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+        <div id="testWarning" class="test-warning" hidden>
+          <span id="testWarningText"></span>
+          <select id="sandboxModeSelect" class="mode-select" aria-label="本项目的沙箱测试">
+            <option value="auto">自动</option>
+            <option value="off">关闭</option>
+            <option value="node-smoke">Node</option>
+            <option value="godot-headless">Godot</option>
+            <option value="python-pytest">Python</option>
+          </select>
+          <button id="sandboxDetect" class="ghost small" title="只读分析仓库，建议 projectDir 与 profile">让 Agent 识别</button>
+          <button id="fixTestConfig" class="ghost small">配置</button>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span id="footerStatus">本地服务已启动</span>
+      <span class="footer-actions">
+        <button id="diagnostics" class="link">诊断</button>
+        <button id="quit" class="link">退出</button>
+      </span>
+    </footer>
+  </div>
+
+  <div id="settings" class="overlay" hidden>
+    <div class="sheet">
+      <div class="sheet-head">
+        <h2>设置</h2>
+        <button id="closeSettings" class="ghost">×</button>
+      </div>
+      <div class="sheet-body">
+        <label class="field">
+          <span>OpenClaw Gateway 地址</span>
+          <input id="gatewayUrl" placeholder="http://127.0.0.1:18789" />
+        </label>
+        <label class="field">
+          <span>模型（留空使用 Pi 默认）</span>
+          <input id="model" placeholder="provider/model" />
+        </label>
+        <label class="field">
+          <span>图谱备用模型（可选：主模型失败时使用）</span>
+          <input id="diagramModel" placeholder="provider/model" />
+        </label>
+        <label class="field">
+          <span>手机连接（同一 Wi-Fi 下的 iPhone / Android）</span>
+          <div id="mobileInfo" class="mobile-info">正在读取手机桥…</div>
+          <div class="mobile-actions">
+            <button id="mobileRefreshCode" class="ghost small" type="button">换配对码</button>
+          </div>
+        </label>
+        <label class="field">
+          <span>沙箱测试默认策略（按项目可覆盖）</span>
+          <select id="sandboxMode" aria-label="沙箱测试默认策略">
+            <option value="auto">自动：按项目生态选择 profile</option>
+            <option value="off">关闭：一律跳过，只做人工验证</option>
+            <option value="node-smoke">强制 Node（node-smoke）</option>
+            <option value="godot-headless">强制 Godot（godot-headless）</option>
+            <option value="python-pytest">强制 Python（python-pytest）</option>
+          </select>
+        </label>
+        <div class="field">
+          <span>桌宠皮肤（静态 PNG/SVG/GIF，或 Codex Pet 动画包；点击即可切换）</span>
+          <div id="mascotGrid" class="mascot-grid"></div>
+          <div class="mascot-actions">
+            <span id="mascotCount" class="mascot-count"></span>
+            <button id="refreshMascots" class="ghost small" type="button" title="重新扫描皮肤目录">刷新</button>
+            <button id="importMascot" class="ghost small" type="button">导入 Codex 宠物…</button>
+          </div>
+        </div>
+        <label class="checkbox-row">
+          <input id="knowledgeAutoHarvest" type="checkbox" />
+          <span>自动提炼知识（会调用模型；关闭时只自动采集经验并进入待提炼队列）</span>
+        </label>
+        <label class="field">
+          <span>允许修改的路径</span>
+          <input id="allowedPaths" placeholder="src/" />
+        </label>
+        <label class="field">
+          <span>沙箱快照额外包含的文件（逗号分隔；node-smoke 会自动包含 tests/sandbox-smoke.test.mjs）</span>
+          <input id="includePaths" placeholder="package.json" />
+        </label>
+        <div class="service-grid" id="serviceGrid"></div>
+        <div class="sheet-actions">
+          <button id="saveSettings" class="primary">保存</button>
+          <button id="retryServices" class="ghost">重新检测</button>
+          <button id="addProjectSettings" class="ghost">添加项目</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal" class="overlay" hidden>
+    <div class="sheet modal-sheet">
+      <div class="sheet-head">
+        <h2 id="modalTitle">详情</h2>
+        <button id="closeModal" class="ghost">×</button>
+      </div>
+      <div class="sheet-body" id="modalBody"></div>
+      <div class="sheet-foot" id="modalFoot"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="./composer-list.js"></script>
+  <script src="../node_modules/mermaid/dist/mermaid.min.js"></script>
+  <script src="./panel.js"></script>
+</body>
+</html>

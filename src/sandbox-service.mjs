@@ -28,6 +28,7 @@ export async function submitSandboxRun(store, broker, {
   profileId = 'node-smoke',
   includePaths = [],
   imageDigest = '',
+  projectDir = '',
   repairCycleId = '',
   sandboxRoot = ''
 } = {}) {
@@ -48,7 +49,7 @@ export async function submitSandboxRun(store, broker, {
     );
   }
 
-  const profile = resolveTestProfile(profileId, { imageDigest: imageDigest || undefined });
+  const profile = resolveTestProfile(profileId, { imageDigest: imageDigest || undefined, projectDir });
   const normalizedIncludes = normalizeIncludePaths(includePaths);
   const cycleId = proposal.repair_cycle_id || repairCycleId || null;
   if (cycleId) {

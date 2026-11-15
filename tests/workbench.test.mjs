@@ -134,6 +134,35 @@ test('HTTP workbench enforces same-origin mutations; editable copy is separate f
   } finally {await workbench.close();}
 }));
 
+test('workbench review center reads proposals from the personal knowledge DB, not the owner DB', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'domain-workbench-split-'));
+  const personalDbPath = path.join(dir, 'knowledge.sqlite');
+  const ownerDbPath = path.join(dir, 'owner.sqlite');
+  const store = new PersonalKnowledgeStore(personalDbPath);
+  try {
+    store.submitProposal({
+      payload: item({ title: '待审候选', scope: 'project', projectId: 'demo', layer: 'project' }),
+      actor: 'agent',
+      meta: { contract: 'knowledge-candidate/v1' }
+    });
+  } finally {
+    store.close();
+  }
+  const wb = await createWorkbenchServer({ port: 0, personalDbPath, ownerDbPath });
+  const addr = await wb.listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${addr.port}/api/proposals`);
+    assert.equal(res.status, 200);
+    const items = await res.json();
+    assert.equal(items.length, 1);
+    assert.equal(items[0].payload.title, '待审候选');
+    assert.equal(items[0].status, 'pending');
+  } finally {
+    await wb.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('proposal is pinned to submission revision: reviewer cannot approve stale data by passing current revision',()=>temp(async dbPath=>{
   const store=new PersonalKnowledgeStore(dbPath);
   try {

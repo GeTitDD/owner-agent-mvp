@@ -56,7 +56,7 @@
 ## 4. 自动化验证
 
 - `npm run check`：通过。
-- `npm test`：206 tests / 203 pass / 3 skip / 0 fail（含自动采集终态过滤、L2 双项目通过门槛、EvalRun 持久化与旧库迁移）。
+- `npm test`：209 tests / 206 pass / 3 skip / 0 fail（含自动采集终态过滤、L2 双项目通过门槛、EvalRun 持久化与旧库迁移）。
 - `npm run knowledge:demo`：确定性三项目闭环通过。
   - 4 条 Experience（修复、失败、两个通过）
   - L3 候选 → 审核/验证
@@ -231,3 +231,17 @@ node scripts/knowledge-loop/eval-ab-learning.mjs --root <dir> --allow-model
 - 自动采集：Companion 的产品 timer 调用 `KnowledgeLoopRuntime.tick()`；benefit 未证实前显示 unknown。
 - Electron E2E：`npm run e2e:desktop:knowledge`。
 - 截图：`docs/assets/companion/knowledge-list.png`、`knowledge-detail.png`。
+
+## 9. 客户端手动提炼（增量）
+
+面板「知识」新增「立即提炼」，把“待提炼队列”变成可执行动作：
+
+- **按项目隔离**：摘要与待提炼队列只统计当前项目；共享知识（applied/domain）单独显示。
+- **显式确认**：点击后先弹确认框，说明“只生成待审核候选，不会自动验证”。
+- **只写候选**：一次 `KnowledgeHarvester.harvest()`，写入 `knowledge_harvest_runs` 与 `personal_proposals(pending)`；
+  不写 `personal_units`、不改 verification、不自动 approve。
+- **结果可审**：完成后列出候选（标题/层级/置信度），可直接跳转「完整知识库」逐条审核。
+- **失败可见**：模型额度/鉴权/超时错误直接返回给面板，不再吞成“没有结论”。
+
+验收：`npm run e2e:desktop:harvest`（临时 userData + 两条终态 fixture 经验 + 真实模型）。
+覆盖：项目隔离计数 → 按钮可用 → 确认 → 提炼 → 候选展示 → 关库后确认零知识单元、候选为 pending。

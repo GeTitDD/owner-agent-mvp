@@ -26,17 +26,43 @@ const repairSummary = Type.Object({
   id: Type.String(),
   projectId: Type.String(),
   status: Type.String(),
-  approvalHash: Type.String()
+  approvalHash: Type.String(),
+  sourceSandboxRunId: Type.String()
 });
 
 const sandboxSummary = Type.Object({
   id: Type.String(),
   projectId: Type.String(),
   proposalId: Type.String(),
+  repairCycleId: Type.String(),
   status: Type.String(),
   executionStatus: Type.String(),
   testStatus: Type.String(),
   approvalHash: Type.String()
+});
+
+const projectSummary = Type.Object({
+  id: Type.String(),
+  name: Type.String(),
+  baseSha: Type.String()
+});
+
+const taskSummary = Type.Object({
+  id: Type.String(),
+  projectId: Type.String(),
+  title: Type.String(),
+  status: Type.String()
+});
+
+const workerStatus = Type.Object({
+  configured: Type.Boolean(),
+  running: Type.Boolean(),
+  currentKind: Type.String(),
+  currentStartedAt: Type.String(),
+  lastKind: Type.String(),
+  lastOutcome: Type.String(),
+  lastError: Type.String(),
+  lastAt: Type.String()
 });
 
 const statusSummary = Type.Object({
@@ -67,6 +93,29 @@ export const contract = defineFeatureContract({
       input: Type.Object({}, { additionalProperties: false }),
       output: statusSummary,
       tool: { name: "owner_status", label: "Owner status" }
+    },
+    "projects.list": {
+      kind: "query",
+      description: "List Owner projects with their current git base SHA. Read-only.",
+      input: Type.Object({}, { additionalProperties: false }),
+      output: Type.Object({ items: Type.Array(projectSummary) }),
+      tool: { name: "owner_projects", label: "List Owner projects" }
+    },
+    "tasks.list": {
+      kind: "query",
+      description: "List Owner tasks for a project. Read-only.",
+      input: Type.Object({ projectId: Type.String({ maxLength: 90 }) }, { additionalProperties: false }),
+      output: Type.Object({ items: Type.Array(taskSummary) }),
+      tool: { name: "owner_tasks", label: "List Owner tasks" }
+    },
+    "task.create": {
+      kind: "action",
+      description: "Create an Owner task before submitting a coding job. UI only.",
+      input: Type.Object({
+        projectId: Type.String({ maxLength: 90 }),
+        title: Type.String({ maxLength: 200 })
+      }, { additionalProperties: false }),
+      output: taskSummary
     },
     "jobs.list": {
       kind: "query",
@@ -131,6 +180,8 @@ export const contract = defineFeatureContract({
         approvalHash: Type.String(),
         repairScope: Type.Array(Type.String()),
         sourceSandboxRunId: Type.String(),
+        repairRunId: Type.String(),
+        jobId: Type.String(),
         sourceBaseSha: Type.String(),
         contextHash: Type.String(),
         iteration: Type.Number(),
@@ -172,6 +223,42 @@ export const contract = defineFeatureContract({
         includePaths: Type.Optional(Type.Array(Type.String({ maxLength: 300 }), { maxItems: 50 }))
       }, { additionalProperties: false }),
       output: Type.Object({ id: Type.String(), status: Type.String(), approvalHash: Type.String() })
+    },
+    "worker.status": {
+      kind: "query",
+      description: "Read the Owner worker state. UI only.",
+      input: Type.Object({}, { additionalProperties: false }),
+      output: workerStatus
+    },
+    "worker.tick": {
+      kind: "action",
+      description: "Advance the Owner worker by one approved step. UI only.",
+      input: Type.Object({
+        projectId: Type.Optional(Type.String({ maxLength: 90 }))
+      }, { additionalProperties: false }),
+      output: Type.Object({ started: Type.Boolean(), reason: Type.String() })
+    },
+    "repair.submit": {
+      kind: "action",
+      description: "Create a repair cycle from a failed sandbox run. UI only.",
+      input: Type.Object({
+        sandboxRunId: Type.String({ maxLength: 90 })
+      }, { additionalProperties: false }),
+      output: Type.Object({
+        id: Type.String(),
+        status: Type.String(),
+        approvalHash: Type.String()
+      })
+    },
+    "sandbox.logs": {
+      kind: "query",
+      description: "Read bounded sandbox test output. UI only.",
+      input: Type.Object({ runId: Type.String({ maxLength: 90 }) }, { additionalProperties: false }),
+      output: Type.Object({
+        stdout: Type.String(),
+        stderr: Type.String(),
+        result: Type.String()
+      })
     },
     "sidecar.info": {
       kind: "query",

@@ -5,6 +5,9 @@
 // evidence is explicitly delimited as untrusted data; it is never authorization.
 import { canonical, sha256 } from './utils.mjs';
 import { matchAllowed, normalizeAllowedEntries } from './patch-protocol.mjs';
+import { SANDBOX_PROFILES } from './sandbox-protocol.mjs';
+
+const DEFAULT_PROFILE_SCOPE = Object.keys(SANDBOX_PROFILES);
 
 export const REPAIR_LIMITS = {
   maxIterations: 1,
@@ -93,7 +96,7 @@ export function repairApprovalHash({ sourceChain, scope, contextHash, profileSco
     scope,
     contextHash,
     maxIterations: REPAIR_LIMITS.maxIterations,
-    profileScope: profileScope ?? ['node-smoke', 'node-fail', 'node-probe']
+    profileScope: profileScope ?? DEFAULT_PROFILE_SCOPE
   }));
 }
 

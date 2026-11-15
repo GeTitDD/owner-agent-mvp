@@ -1,0 +1,233 @@
+/* Owner Companion 桌宠样式。
+   调色与圆角取自 Cindy（makecindy/cindy，Apache-2.0）的设计令牌：
+   surface #ffffff/#2c2c2a，text #262626/#d4d4d4，warning #EA6B17，error #ef4444。 */
+:root {
+  color-scheme: light dark;
+  --plate-bg: #ffffff;
+  --plate-border: rgba(38, 38, 38, 0.10);
+  --ink: #262626;
+  --muted: #737373;
+  --hint-bg: rgba(38, 38, 38, 0.88);
+  --phase-idle: #a3a3a3;
+  --phase-running: #262626;
+  --phase-waiting: #EA6B17;
+  --phase-done: #22c55e;
+  --phase-error: #ef4444;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --plate-bg: #2c2c2a;
+    --plate-border: rgba(255, 255, 255, 0.12);
+    --ink: #d4d4d4;
+    --muted: #a3a3a3;
+    --hint-bg: rgba(212, 212, 212, 0.92);
+    --phase-running: #ffffff;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: 'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+}
+
+.pet {
+  position: relative;
+  width: 116px;
+  height: 116px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  cursor: grab;
+  outline: none;
+  transition: transform 120ms ease;
+}
+
+.pet:active { cursor: grabbing; transform: scale(0.97); }
+
+/* 不再画白色圆盘：宠物直接浮在桌面上，只保留贴地阴影（见 .mascot / .sprite）。 */
+
+.mascot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 112px;
+  height: 112px;
+  transform: translate(-50%, -50%);
+  object-fit: contain;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  filter: drop-shadow(0 8px 8px rgba(0, 0, 0, 0.18));
+}
+
+/* ---- 阶段 ---- */
+
+.phase-dot {
+  position: absolute;
+  right: 22px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--phase-idle);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.75), 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: opacity 160ms ease;
+  opacity: 0;
+}
+
+.pet[data-phase='idle'] .phase-dot { opacity: 0; }
+.pet[data-phase='running'] .phase-dot,
+.pet[data-phase='needs-interaction'] .phase-dot,
+.pet[data-phase='completed'] .phase-dot,
+.pet[data-phase='error'] .phase-dot { opacity: 1; }
+
+.phase-dot[data-phase='running'] { background: var(--phase-running); }
+.phase-dot[data-phase='needs-interaction'] { background: var(--phase-waiting); }
+.phase-dot[data-phase='completed'] { background: var(--phase-done); }
+.phase-dot[data-phase='error'] { background: var(--phase-error); }
+
+.badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: var(--phase-waiting);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 22px;
+  text-align: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  animation: pop 240ms ease;
+}
+
+@keyframes pop {
+  from { transform: scale(0.4); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.hint {
+  position: absolute;
+  left: 50%;
+  bottom: 1px;
+  transform: translateX(-50%);
+  max-width: 128px;
+  padding: 2px 7px;
+  border-radius: 8px;
+  background: var(--hint-bg);
+  color: #f8fafc;
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.92;
+  pointer-events: none;
+  z-index: 3;
+}
+
+@media (prefers-color-scheme: dark) {
+  .hint { color: #1a1a1a; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .badge { animation: none !important; }
+  .pet { transition: none; }
+}
+
+/* ---- 动态精灵与一键换肤 ---- */
+
+.sprite {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+  pointer-events: none;
+  filter: drop-shadow(0 7px 7px rgba(0, 0, 0, 0.18));
+  z-index: 2;
+}
+
+.pet-tools {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  display: flex;
+  gap: 3px;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 140ms ease, transform 140ms ease;
+  z-index: 5;
+}
+.stage:hover .pet-tools,
+.stage:focus-within .pet-tools { opacity: 1; transform: translateY(0); }
+
+.pet-tool {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--plate-border);
+  background: var(--plate-bg);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  padding: 0;
+}
+.pet-tool:hover { border-color: var(--phase-waiting); color: var(--phase-waiting); }
+.pet-tool:active { transform: scale(0.94); }
+
+.mascot[data-static='true'] { animation: mascot-float 4s ease-in-out infinite; }
+.pet[data-phase='running'] .mascot { animation: mascot-hop 0.9s ease-in-out infinite; }
+.pet[data-phase='needs-interaction'] .mascot { animation: mascot-wiggle 1.4s ease-in-out infinite; }
+.pet[data-phase='completed'] .mascot { animation: mascot-hop 0.8s ease 2; }
+.pet[data-phase='error'] .mascot { animation: mascot-shake 0.9s ease-in-out infinite; }
+
+@keyframes mascot-float {
+  0%, 100% { transform: translate(-50%, -50%) translateY(0) scale(1); }
+  50% { transform: translate(-50%, -50%) translateY(-2px) scale(1.01); }
+}
+@keyframes mascot-hop {
+  0%, 100% { transform: translate(-50%, -50%) translateY(0); }
+  50% { transform: translate(-50%, -50%) translateY(-4px); }
+}
+@keyframes mascot-wiggle {
+  0%, 100% { transform: translate(-50%, -50%) rotate(0deg); }
+  25% { transform: translate(-50%, -50%) rotate(-3deg); }
+  75% { transform: translate(-50%, -50%) rotate(3deg); }
+}
+@keyframes mascot-shake {
+  0%, 100% { transform: translate(-50%, -50%) translateX(0); }
+  25% { transform: translate(-50%, -50%) translateX(-2px); }
+  75% { transform: translate(-50%, -50%) translateX(2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot, .sprite, .pet-tools { animation: none !important; transition: none; }
+}

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Owner 设置</title>
+  <link rel="stylesheet" href="main-view.css" />
+</head>
+<body class="settings-body">
+  <main class="settings">
+    <h2>Owner 设置</h2>
+    <p class="muted small">
+      项目和知识都保存在本机插件目录，不依赖其他客户端，也不会写入你的项目文件。
+    </p>
+
+    <div class="settings-row">
+      <span class="muted small">数据目录</span>
+      <code id="dataDir">读取中…</code>
+    </div>
+    <div class="settings-row">
+      <span class="muted small">插件版本</span>
+      <span id="pluginVersion">—</span>
+    </div>
+
+    <h3 class="settings-title">添加项目</h3>
+    <div class="add-row">
+      <input id="projectPath" type="text" placeholder="D:\path\to\project" spellcheck="false" />
+      <button id="projectAdd" type="button" class="primary">添加</button>
+    </div>
+    <div id="settingsError" class="error small" hidden></div>
+
+    <h3 class="settings-title">已登记项目</h3>
+    <div id="projectList" class="list"></div>
+  </main>
+
+  <script src="bridge.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

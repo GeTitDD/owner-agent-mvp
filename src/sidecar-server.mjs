@@ -12,9 +12,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { OwnerInputError } from './owner-store.mjs';
 import { applyApprovedPatch } from './patch-service.mjs';
-import { approveRepairCycle } from './repair-service.mjs';
+import { approveRepairCycle, submitRepairCycle } from './repair-service.mjs';
 import { approveSandboxRun, submitSandboxRun } from './sandbox-service.mjs';
 
 export const SIDECAR_DEFAULT_PORT = 47830;
@@ -251,6 +252,20 @@ const limitOf = (url, fallback = 100) => {
   return value;
 };
 
+/** 读取项目当前 HEAD，供对话创建 code-patch Job 使用。 */
+const baseShaOf = (root) => {
+  try {
+    const sha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+    return /^[0-9a-f]{40}$/u.test(sha) ? sha : '';
+  } catch {
+    return '';
+  }
+};
+
 /** 这些路径是“决策”，必须使用审批令牌，读取令牌无效。 */
 const isDecisionRoute = (rest, method) => {
   if (method !== 'POST' || rest.length !== 3) return false;
@@ -274,6 +289,7 @@ export function createSidecarHandler({
   brokerFactory,
   token,
   approvalToken = null,
+  worker = null,
   version = '1.0.0',
   imageDigest = '',
   sandboxRoot = '',
@@ -383,13 +399,135 @@ export function createSidecarHandler({
 
     if (rest.length === 1 && head === 'projects') {
       requireMethod(method, 'GET');
-      send(res, 200, { items: store.listProjects() });
+      send(res, 200, {
+        items: store.listProjects().map((project) => ({
+          ...project,
+          baseSha: baseShaOf(project.root)
+        }))
+      });
+      return;
+    }
+
+    if (rest.length === 3 && head === 'projects' && rest[2] === 'brief') {
+      const projectId = rest[1];
+      if (method === 'GET') {
+        send(res, 200, store.getProjectBrief(projectId) ?? null);
+        return;
+      }
+      requireMethod(method, 'PUT');
+      const body = await readJson(req);
+      const saved = store.saveProjectBrief({
+        projectId,
+        payload: body.payload,
+        basedOnCommit: body.basedOnCommit ?? '',
+        sourceRunId: body.sourceRunId ?? ''
+      });
+      send(res, 200, saved);
+      return;
+    }
+
+    if (rest.length === 3 && head === 'projects' && rest[2] === 'diagrams') {
+      const projectId = rest[1];
+      requireMethod(method, 'GET');
+      send(res, 200, { items: store.listProjectDiagrams(projectId) });
+      return;
+    }
+
+    if (rest.length === 4 && head === 'projects' && rest[2] === 'diagrams') {
+      const projectId = rest[1];
+      const kind = rest[3];
+      if (method === 'GET') {
+        send(res, 200, store.getProjectDiagram(
+          projectId,
+          kind,
+          url.searchParams.get('scope') ?? 'project'
+        ) ?? null);
+        return;
+      }
+      requireMethod(method, 'PUT');
+      const body = await readJson(req);
+      const saved = store.saveProjectDiagram({
+        projectId,
+        kind,
+        scope: body.scope ?? 'project',
+        title: body.title ?? '',
+        summary: body.summary ?? '',
+        mermaid: body.mermaid ?? '',
+        data: body.data ?? {},
+        unknowns: body.unknowns ?? [],
+        confidence: body.confidence ?? 'medium',
+        source: body.source ?? '',
+        runId: body.runId ?? '',
+        basedOnCommit: body.basedOnCommit ?? ''
+      });
+      send(res, 200, saved);
+      return;
+    }
+
+    if (rest.length === 1 && head === 'queue') {
+      const projectId = url.searchParams.get('projectId') ?? '';
+      const kindFilter = url.searchParams.get('kind') ?? '';
+      if (method === 'GET') {
+        send(res, 200, { items: store.listProjectQueue(projectId, kindFilter) });
+        return;
+      }
+      requireMethod(method, 'POST');
+      const body = await readJson(req);
+      const item = store.addProjectQueueItem({
+        projectId: str(body.projectId, 'projectId', 90),
+        title: str(body.title, 'title', 300),
+        body: typeof body.body === 'string' ? body.body : '',
+        source: typeof body.source === 'string' ? body.source : 'owner',
+        kind: body.kind === 'idea' ? 'idea' : 'task'
+      });
+      send(res, 201, item);
+      return;
+    }
+
+    if (rest.length === 2 && head === 'queue') {
+      const id = rest[1];
+      if (method === 'GET') {
+        const item = store.getProjectQueueItem(id);
+        if (!item) throw new OwnerInputError('Unknown queue item', 404);
+        send(res, 200, item);
+        return;
+      }
+      if (method === 'DELETE') {
+        send(res, 200, store.removeProjectQueueItem(id));
+        return;
+      }
+      requireMethod(method, 'PATCH');
+      const body = await readJson(req);
+      const item = store.updateProjectQueueItem(id, {
+        title: body.title,
+        body: body.body,
+        status: body.status,
+        linkedJobId: body.linkedJobId
+      });
+      send(res, 200, item);
+      return;
+    }
+
+    if (rest.length === 3 && head === 'queue' && rest[2] === 'move') {
+      requireMethod(method, 'POST');
+      const body = await readJson(req);
+      send(res, 200, store.moveProjectQueueItem(rest[1], { direction: body.direction }));
       return;
     }
 
     if (rest.length === 1 && head === 'tasks') {
-      requireMethod(method, 'GET');
-      send(res, 200, { items: store.listTasks(url.searchParams.get('projectId') ?? '') });
+      if (method === 'GET') {
+        send(res, 200, { items: store.listTasks(url.searchParams.get('projectId') ?? '') });
+        return;
+      }
+      requireMethod(method, 'POST');
+      const body = await readJson(req);
+      const task = store.createTask({
+        projectId: str(body.projectId, 'projectId', 90),
+        title: str(body.title, 'title', 200)
+      });
+      noteCall(task.project_id, 'task.create');
+      send(res, 201, task);
       return;
     }
 
@@ -552,14 +690,60 @@ export function createSidecarHandler({
     }
 
     if (rest.length === 1 && head === 'repair-cycles') {
-      requireMethod(method, 'GET');
-      send(res, 200, {
-        items: store.listRepairCycles({
-          projectId: url.searchParams.get('projectId') ?? '',
-          status: url.searchParams.get('status') ?? '',
-          limit: limitOf(url)
-        })
+      if (method === 'GET') {
+        send(res, 200, {
+          items: store.listRepairCycles({
+            projectId: url.searchParams.get('projectId') ?? '',
+            status: url.searchParams.get('status') ?? '',
+            limit: limitOf(url)
+          })
+        });
+        return;
+      }
+      requireMethod(method, 'POST');
+      const body = await readJson(req);
+      const runId = str(body.sandboxRunId, 'sandboxRunId', 90);
+      const run = store.getSandboxRun(runId);
+      if (!run) throw new OwnerInputError('Unknown sandbox run', 404);
+      const proposal = store.getPatchProposal(run.proposal_id);
+      if (!proposal) throw new OwnerInputError('Source proposal is missing', 404);
+      // getPatchProposal 返回解析后的 allowedPaths（数组）；不要再用原始 JSON 字符串。
+      const allowed = Array.isArray(proposal.allowedPaths)
+        ? proposal.allowedPaths
+        : String(proposal.allowedPaths ?? proposal.allowed_paths ?? '')
+          .split(',')
+          .map((part) => part.trim())
+          .filter(Boolean);
+      const scope = Array.isArray(body.scope) ? strList(body.scope, 'scope', 5) : allowed;
+      if (scope.length === 0) throw new OwnerInputError('Repair scope is required', 400);
+      const cycle = submitRepairCycle(store, {
+        sandboxRunId: runId,
+        scope,
+        idempotencyKey: str(body.idempotencyKey, 'idempotencyKey', 89)
       });
+      noteCall(run.project_id, 'repair.submit');
+      send(res, cycle.duplicate ? 200 : 201, cycle);
+      return;
+    }
+
+    if (rest.length === 2 && head === 'worker' && id === 'status') {
+      requireMethod(method, 'GET');
+      send(res, 200, worker
+        ? { configured: true, ...worker.status() }
+        : { configured: false, running: false, current: null, last: null });
+      return;
+    }
+
+    if (rest.length === 2 && head === 'worker' && id === 'tick') {
+      requireMethod(method, 'POST');
+      const body = await readJson(req);
+      if (!worker) throw new OwnerInputError('Worker is not configured on this sidecar', 503);
+      const result = worker.start({
+        projectId: str(body.projectId, 'projectId', 90, false),
+        wait: false
+      });
+      noteCall('', 'worker.tick');
+      send(res, 202, { ...result, status: worker.status() });
       return;
     }
 
@@ -604,6 +788,7 @@ export function createSidecarHandler({
         profileId: str(body.profile, 'profile', 40, false) || 'node-smoke',
         includePaths: strList(body.includePaths, 'includePaths'),
         imageDigest: str(body.imageDigest, 'imageDigest', 80, false) || imageDigest,
+        projectDir: str(body.projectDir, 'projectDir', 120, false) || '',
         repairCycleId: str(body.repairCycleId, 'repairCycleId', 90, false),
         sandboxRoot
       });
@@ -621,7 +806,8 @@ export function createSidecarHandler({
         ? {
           ...run,
           stdout: store.getSandboxEvidence(id, 'stdout')?.content ?? '',
-          stderr: store.getSandboxEvidence(id, 'stderr')?.content ?? ''
+          stderr: store.getSandboxEvidence(id, 'stderr')?.content ?? '',
+          result: store.getSandboxEvidence(id, 'result')?.content ?? ''
         }
         : run);
       return;
@@ -665,6 +851,7 @@ export async function startSidecar({
   brokerFactory,
   token,
   approvalToken = null,
+  worker = null,
   host = '127.0.0.1',
   port = SIDECAR_DEFAULT_PORT,
   version = '1.0.0',
@@ -678,6 +865,7 @@ export async function startSidecar({
     brokerFactory,
     token,
     approvalToken,
+    worker,
     version,
     imageDigest,
     sandboxRoot,

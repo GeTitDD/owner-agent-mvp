@@ -56,7 +56,8 @@ node bin/ownerctl.mjs serve --port 47830
 | --- | --- | --- |
 | GET | `/owner/v1/health` | 存活、版本、`approvalMode` |
 | GET | `/owner/v1/summary` | Owner 汇总计数 |
-| GET | `/owner/v1/projects` | 项目列表 |
+| GET | `/owner/v1/projects` | 项目列表，含 `baseSha`（当前 git HEAD） |
+| GET | `/owner/v1/worker/status` | Worker 运行状态与最近一次结果 |
 | GET | `/owner/v1/tasks?projectId=` | 任务列表 |
 | GET | `/owner/v1/events?projectId=&limit=` | 事件 |
 | GET | `/owner/v1/decisions?subjectType=&subjectId=&limit=` | 决策审计 |
@@ -75,7 +76,10 @@ node bin/ownerctl.mjs serve --port 47830
 | 方法 | 路径 | Body |
 | --- | --- | --- |
 | POST | `/owner/v1/jobs` | `{projectId, jobType, title, payload, idempotencyKey, ownerTaskId}` |
+| POST | `/owner/v1/tasks` | `{projectId, title}` |
 | POST | `/owner/v1/sandbox-runs` | `{proposalId, profile?, includePaths?, imageDigest?, repairCycleId?}` |
+| POST | `/owner/v1/repair-cycles` | `{sandboxRunId, idempotencyKey, scope?}`；scope 省略时取源提案的 allowedPaths |
+| POST | `/owner/v1/worker/tick` | `{projectId?}`；只推进已批准对象，立即返回 |
 
 ### 决策（审批令牌）
 
@@ -90,6 +94,15 @@ node bin/ownerctl.mjs serve --port 47830
 | POST | `/owner/v1/sandbox-runs/:id/approve` | `{hash}` | 批准沙箱运行 |
 
 `approve` 与 `apply` 分开：第一次点击只冻结批准，操作员看完 Diff 后再次明确点击才写文件。
+
+## 4.1 Worker（P3.1）
+
+- `ownerctl serve --worker`：每 2s 调用一次 tick；不带 `--worker` 时由 UI 的 **Advance** 触发。
+- tick 顺序：先 code-patch Job（普通/repair），后 Sandbox Run；**一次只处理一个**。
+- 只领取 `queued` 对象；`pending_approval` 不会被执行。
+- `GET /worker/status` 返回 `{configured, running, current, last}`；`POST /worker/tick` 立即返回
+  `{started, reason}`，UI 通过 2s 轮询观察结果。
+- E2E 注入：`--fake-patch-file`（静态提案）与 `--fake-source-file`（源补丁确定性、repair 仍走真实 Pi）。
 
 ## 5. 状态码
 

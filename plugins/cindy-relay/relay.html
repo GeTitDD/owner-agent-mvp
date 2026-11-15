@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Relay</title>
+  <link rel="stylesheet" href="relay.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot" id="statusDot"></span>
+      <span>Relay</span>
+    </div>
+    <select id="sessionSelect" aria-label="任务"></select>
+    <div class="topbar-actions">
+      <span id="statusText" class="status">同步中…</span>
+      <button id="refreshButton" type="button" class="ghost">刷新</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card" id="sourceCard">
+      <div class="card-head">
+        <h3>待转交内容</h3>
+        <span id="sourceMeta" class="muted small"></span>
+      </div>
+      <div id="sourceEmpty" class="hint" hidden>
+        <p>这个任务还没有可转交的内容。Relay 只记录插件启用之后的对话。</p>
+      </div>
+      <div class="scope-row">
+        <label><input type="radio" name="scope" value="new" checked /> 自上次转交</label>
+        <label><input type="radio" name="scope" value="all" /> 全部记录</label>
+        <button id="copyQuote" type="button" class="ghost small">复制引用</button>
+        <span id="quoteMeta" class="muted small"></span>
+      </div>
+      <div id="attachHint" class="muted small"></div>
+      <div id="quoteList" class="messages"></div>
+    </section>
+
+    <section class="card" id="targetCard">
+      <h3>转交给</h3>
+      <div class="tabs" id="targetTabs">
+        <button type="button" data-kind="project" class="active">项目</button>
+        <button type="button" data-kind="new">新任务</button>
+        <button type="button" data-kind="task">任务</button>
+        <button type="button" data-kind="bot">伙伴</button>
+      </div>
+      <div id="targetList" class="targets"></div>
+      <label class="field" id="titleField" hidden>
+        <span>新任务标题</span>
+        <input id="titleInput" type="text" maxlength="60" placeholder="例如：复核缓存设计" />
+      </label>
+      <label class="field" id="routeRow">
+        <span>Agent / 模型（新任务用）</span>
+        <select id="routeSelect"></select>
+      </label>
+      <label class="field" id="permissionField">
+        <span>新任务权限</span>
+        <select id="permissionMode">
+          <option value="ask">默认权限（会询问）</option>
+          <option value="auto">自动审批</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>备注（可选）</span>
+        <textarea id="noteInput" rows="3" placeholder="补一句对方需要知道的，比如：重点看第 4 步的缓存锁。"></textarea>
+      </label>
+      <div class="send-row">
+        <button id="sendButton" type="button" class="primary" disabled>发送</button>
+        <span id="sendHint" class="muted small"></span>
+      </div>
+    </section>
+
+    <section class="card" id="historyCard">
+      <div class="card-head">
+        <h3>最近转交</h3>
+        <button id="clearButton" type="button" class="ghost">清空本任务记录</button>
+      </div>
+      <div id="historyList" class="list"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="bridge.js"></script>
+  <script src="relay.js"></script>
+</body>
+</html>

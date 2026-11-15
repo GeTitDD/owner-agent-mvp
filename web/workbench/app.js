@@ -1,6 +1,8 @@
 const $=selector=>document.querySelector(selector);
 const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-const state={tab:'owner',selected:null,domain:'',items:[],domains:[],projects:[],project:null,mode:'view',proposals:[],isNew:false};
+import { renderMarkdown } from './markdown.js';
+
+const state={tab:'owner',selected:null,domain:'',items:[],domains:[],projects:[],project:null,mode:'view',proposals:[],isNew:false,detailTab:'content',revisions:[]};
 async function api(route,method='GET',body) {
   const res=await fetch(route,{method,headers:{...(method==='GET'?{}:{'content-type':'application/json','x-workbench-request':'1'})},body:body===undefined?undefined:JSON.stringify(body)});
   const payload=await res.json();if(!res.ok)throw Error(payload.error||`HTTP ${res.status}`);return payload;
@@ -13,10 +15,10 @@ function nameScope(scope){return ({personal:'个人',domain:'工作区领域',pr
 function nameLayer(layer){return ({domain:'L1 原理',applied:'L2 实践',project:'L3 项目'})[layer]||layer;}
 function nameStatus(status){return ({verified:'已验证',unverified:'未验证',needs_reverification:'待重新验证',disputed:'有争议'})[status]||status;}
 function setView(tab){state.tab=tab;for(const button of document.querySelectorAll('[data-tab]'))button.classList.toggle('active',button.dataset.tab===tab);
-  for(const name of ['owner','knowledge','review','projects'])$(`#${name}View`).hidden=tab!==name;
-  $('#pageTitle').textContent=({owner:'Owner Agent · 项目总览',knowledge:'我的领域知识',review:'知识审核中心',projects:'知识组合实验室'})[tab];
+  for(const name of ['owner','knowledge','review','maintenance','projects'])$(`#${name}View`).hidden=tab!==name;
+  $('#pageTitle').textContent=({owner:'Owner Agent · 项目总览',knowledge:'我的领域知识',review:'知识审核中心',maintenance:'知识维护 · 来源与同步',projects:'知识组合实验室'})[tab];
   $('#newBtn').hidden=tab!=='knowledge';$('#exportBtn').hidden=tab!=='knowledge';
-  if(tab==='review')void loadProposals();if(tab==='projects')renderProjects();if(tab==='owner')void loadOwner();
+  if(tab==='review')void loadProposals();if(tab==='projects')renderProjects();if(tab==='owner')void loadOwner();if(tab==='maintenance')void loadMaintenance();
 }
 async function loadSummary(){const [stats,domains,projects]=await Promise.all([api('/api/stats'),api('/api/domains'),api('/api/projects')]);
   state.domains=domains;state.projects=projects;
@@ -35,7 +37,7 @@ async function refresh(){await loadSummary();const query=new URLSearchParams({q:
 }
 function renderList(){const list=$('#knowledgeList');$('#resultCount').textContent=`${state.items.length} 条知识`;
   list.innerHTML=state.items.length?state.items.map(item=>`<button class="knowledge-item ${item.id===state.selected?.id?'active':''}" data-id="${esc(item.id)}"><div class="item-top"><h3>${esc(item.title)}</h3><small>${item.readOnly?'只读':`r${item.revision}`}</small></div><p>${esc(item.excerpt)}</p><div class="tags">${tag(nameLayer(item.layer))}${tag(nameScope(item.scope),'dim')}${item.verificationStatus==='needs_reverification'?tag('需重新验证','warn'):''}${item.domains.slice(0,2).map(x=>tag(x,'dim')).join('')}</div></button>`).join(''):
-    '<div class="empty-state" style="margin:40px auto"><p>没有匹配的知识。尝试改变筛选条件，或者新建一条。</p></div>';
+    '<div class="empty-state empty-state-spaced"><p>没有匹配的知识。尝试改变筛选条件，或者新建一条。</p></div>';
   list.querySelectorAll('button[data-id]').forEach(btn=>btn.addEventListener('click',()=>void selectKnowledge(btn.dataset.id)));
 }
 const defaultKnowledge=()=>({title:'',content:'',kind:'note',layer:'applied',scope:'personal',projectId:null,domains:state.domain?[state.domain]:[],tags:[],evidenceRefs:[],verificationStatus:'unverified',relations:{},sourceRef:null});
@@ -47,12 +49,7 @@ function field(label,id,value,{multiline=false,rows=4,readonly=false,help='',pla
   `<input id="${id}" value="${esc(value)}" ${readonly?'disabled':''} placeholder="${esc(placeholder)}"/>`}${help?`<small class="help">${esc(help)}</small>`:''}</div>`;
 }
 function selectField(label,id,value,options,readonly=false){return `<div class="field"><label for="${id}">${esc(label)}</label><select id="${id}" ${readonly?'disabled':''}>${optionList(options,value)}</select></div>`;}
-function renderEditor(){const item=state.selected;if(!item)return;
-  const readOnly=!!item.readOnly;
-  $('#detailPanel').innerHTML=`
-    <div class="detail-heading"><div><div class="eyebrow">${state.isNew?'CREATE KNOWLEDGE':readOnly?'IMMUTABLE PACKAGE':'PERSONAL KNOWLEDGE'} ${item.revision?` · REV ${esc(item.revision)}`:''}</div>
-    <h2>${state.isNew?'新建知识条目':esc(item.title)}</h2></div>${readOnly?tag('版本锁定'):tag(item.verificationStatus?'● '+nameStatus(item.verificationStatus):'草稿','dim')}</div>
-    ${readOnly?'<div class="notice">已发布的领域包和示例项目文件只读。你可以派生一份个人知识进行编辑，不会破坏源版本。</div>':''}
+function contentPanel(item,readOnly){return `
     <form id="knowledgeForm" class="detail-form">
     ${field('知识标题','editTitle',item.title,{readonly:readOnly})}
     ${field('知识正文 / 研究结论','editContent',item.content,{multiline:true,rows:8,readonly:readOnly})}
@@ -72,16 +69,47 @@ function renderEditor(){const item=state.selected;if(!item)return;
     ${item.sourceRef?`<p class="detail-summary">来源：${esc(item.sourceRef)}</p>`:''}
     <div class="detail-actions">
       ${readOnly?'<button type="button" id="forkBtn" class="button primary">派生为个人知识</button>':`<button type="submit" class="button primary">${state.isNew?'创建知识':'保存新修订'}</button><button type="button" id="proposalBtn" class="button ghost">作为提案提交</button>`}
-    </div></form>
-    ${!readOnly&&!state.isNew?'<div class="divider"></div><h3 style="font-size:14px">修订历史</h3><div id="revisionHistory" class="history"></div>':''}`;
-  if(readOnly){$('#forkBtn').addEventListener('click',async()=>{try{const fork=await api(`/api/knowledge/${encodeURIComponent(item.id)}/fork`,'POST',{scope:'personal'});toast('已派生个人知识');await refresh();await selectKnowledge(fork.id);}catch(e){hintError(e);}});return;}
-  $('#knowledgeForm').addEventListener('submit',event=>{event.preventDefault();void saveKnowledge();});
-  $('#proposalBtn').addEventListener('click',()=>void submitProposal());
-  $('#editScope').addEventListener('change',()=>{
-    if($('#editScope').value==='project'){$('#editLayer').value='project';}
-    else if($('#editLayer').value==='project'){$('#editLayer').value='applied';}
-  });
-  if(!state.isNew)void loadHistory(item.id);
+    </div></form>`;}
+function renderEditor(){const item=state.selected;if(!item)return;
+  const readOnly=!!item.readOnly;
+  if(state.isNew)state.detailTab='content';
+  const tabs=state.isNew?[['content','内容']]:[['content','内容'],['revisions','修订'],['sources','来源'],['usage','使用'],['conflicts','冲突']];
+  const tabButtons=tabs.map(([id,label])=>`<button type="button" class="detail-tab ${state.detailTab===id?'active':''}" data-detail-tab="${id}">${label}</button>`).join('');
+  const panel=(id,content)=>`<div class="detail-tab-panel" data-panel="${id}" ${state.detailTab===id?'':'hidden'}>${content}</div>`;
+  $('#detailPanel').innerHTML=`
+    <div class="detail-heading"><div><div class="eyebrow">${state.isNew?'CREATE KNOWLEDGE':readOnly?'IMMUTABLE PACKAGE':'PERSONAL KNOWLEDGE'} ${item.revision?` · REV ${esc(item.revision)}`:''}</div>
+    <h2>${state.isNew?'新建知识条目':esc(item.title)}</h2></div>${readOnly?tag('版本锁定'):tag(item.verificationStatus?'● '+nameStatus(item.verificationStatus):'草稿','dim')}</div>
+    ${readOnly?'<div class="notice">已发布的领域包和示例项目文件只读。你可以派生一份个人知识进行编辑，不会破坏源版本。</div>':''}
+    <div class="detail-tabs" role="tablist">${tabButtons}</div>
+    ${panel('content',contentPanel(item,readOnly))}
+    ${state.isNew?'':panel('revisions','<div id="revisionHistory" class="history">正在读取修订…</div><div id="revisionDiff" class="revision-diff" hidden></div>')}
+    ${state.isNew?'':panel('sources','<div id="provenancePanel" class="provenance-panel">正在读取来源…</div>')}
+    ${state.isNew?'':panel('usage','<div id="usagePanel" class="usage-panel">正在读取使用记录…</div>')}
+    ${state.isNew?'':panel('conflicts','<div id="conflictPanel" class="conflict-panel">正在读取冲突…</div>')}`;
+  $('#detailPanel').querySelectorAll('[data-detail-tab]').forEach(button=>button.addEventListener('click',()=>{
+    state.detailTab=button.dataset.detailTab;
+    for(const tab of $('#detailPanel').querySelectorAll('[data-detail-tab]'))tab.classList.toggle('active',tab.dataset.detailTab===state.detailTab);
+    for(const section of $('#detailPanel').querySelectorAll('[data-panel]'))section.hidden=section.dataset.panel!==state.detailTab;
+    if(state.detailTab==='revisions')void loadHistory(item.id);
+    if(state.detailTab==='sources')void loadProvenance(item.id);
+    if(state.detailTab==='usage')void loadUsage(item.id);
+    if(state.detailTab==='conflicts')void loadConflicts(item.id);
+  }));
+  if(readOnly){$('#forkBtn').addEventListener('click',async()=>{try{const fork=await api(`/api/knowledge/${encodeURIComponent(item.id)}/fork`,'POST',{scope:'personal'});toast('已派生个人知识');await refresh();await selectKnowledge(fork.id);}catch(e){hintError(e);}});}
+  else {
+    $('#knowledgeForm').addEventListener('submit',event=>{event.preventDefault();void saveKnowledge();});
+    $('#proposalBtn').addEventListener('click',()=>void submitProposal());
+    $('#editScope').addEventListener('change',()=>{
+      if($('#editScope').value==='project'){$('#editLayer').value='project';}
+      else if($('#editLayer').value==='project'){$('#editLayer').value='applied';}
+    });
+  }
+  if(!state.isNew){
+    if(state.detailTab==='revisions')void loadHistory(item.id);
+    if(state.detailTab==='sources')void loadProvenance(item.id);
+    if(state.detailTab==='usage')void loadUsage(item.id);
+    if(state.detailTab==='conflicts')void loadConflicts(item.id);
+  }
 }
 function editorPayload(){let relations;
   try{relations=JSON.parse($('#editRelations').value||'{}');}catch{throw Error('知识关系必须是有效 JSON');}
@@ -97,20 +125,86 @@ async function saveKnowledge(){try{
   toast(state.isNew?'知识已创建':'已保存新修订');await refresh();await selectKnowledge(result.id);
 }catch(e){hintError(e);}}
 async function submitProposal(){try{const payload=editorPayload();await api('/api/proposals','POST',{targetId:state.isNew?null:state.selected.id,payload,actor:'user',note:'Workbench 提交的待审修改'});toast('提案已提交，尚未修改知识');await loadSummary();}catch(e){hintError(e);}}
+function showRevisionDiff(revision){
+  const box=$('#revisionDiff'); if(!box)return;
+  const revisions=state.revisions??[];
+  const current=revisions.find(row=>row.revision===revision);
+  const previous=revisions.find(row=>row.revision===revision-1);
+  if(!current){box.hidden=true;return;}
+  box.hidden=false;
+  box.innerHTML=`<div class="diff-head"><strong>r${previous?.revision??'—'} → r${revision}</strong><span>${esc(current.note??'')}</span></div>
+    <div class="diff-grid"><div><h4>旧版本</h4><pre>${esc(previous?.payload?.content??'（无上一版）')}</pre></div>
+    <div><h4>新版本</h4><pre>${esc(current.payload?.content??'')}</pre></div></div>`;
+}
 async function loadHistory(id){try{const revisions=await api(`/api/knowledge/${encodeURIComponent(id)}/revisions`);
+  state.revisions=revisions;
   const box=$('#revisionHistory');if(!box)return;
-  box.innerHTML=revisions.map(rev=>`<div class="history-item"><div><strong>修订 r${rev.revision}</strong><small>${esc(rev.note)} · ${esc(rev.timestamp.slice(0,16))}</small></div>${rev.revision===state.selected.revision?'':`<button class="button small ghost" data-revert="${rev.revision}">恢复</button>`}</div>`).join('');
+  box.innerHTML=revisions.length?revisions.map(rev=>`<div class="history-item">
+      <div><strong>修订 r${rev.revision}</strong><small>${esc(rev.actor??'')} · ${esc(rev.note)} · ${esc(String(rev.timestamp??'').slice(0,16))}</small></div>
+      <div class="history-actions"><button class="button small ghost" data-diff="${rev.revision}">对比</button>${rev.revision===state.selected.revision?'':`<button class="button small ghost" data-revert="${rev.revision}">恢复</button>`}</div>
+    </div>`).join(''):'<p class="empty-line">暂无修订。</p>';
+  box.querySelectorAll('[data-diff]').forEach(btn=>btn.addEventListener('click',()=>showRevisionDiff(Number(btn.dataset.diff))));
   box.querySelectorAll('[data-revert]').forEach(btn=>btn.addEventListener('click',async()=>{
     if(!confirm(`恢复到 r${btn.dataset.revert} 的内容？这会创建一个新修订。`))return;
     try{await api(`/api/knowledge/${encodeURIComponent(id)}/revert`,'POST',{revision:Number(btn.dataset.revert),expectedRevision:state.selected.revision});toast('已恢复历史内容');await refresh();await selectKnowledge(id);}catch(e){hintError(e);}
   }));
-}catch(e){hintError(e);}}
+  if(revisions.length>1)showRevisionDiff(revisions[0].revision);
+}catch(e){const box=$('#revisionHistory');if(box)box.innerHTML=`<p class="empty-line">修订读取失败：${esc(e.message)}</p>`;}}
+async function loadProvenance(id){
+  const panel=$('#provenancePanel');if(!panel)return;
+  try{
+    const p=await api(`/api/knowledge/${encodeURIComponent(id)}/provenance`);
+    if(p.readOnly||!p.revisions?.length){
+      panel.innerHTML=`<div class="notice">该条目是只读版本包/示例，来源协议只作用于本地个人知识。${p.sourceRef?`<br/>来源引用：${esc(p.sourceRef)}`:''}</div>`;
+      return;
+    }
+    const revisionLinks=(p.revisions??[]).slice().reverse().map(rev=>`<div class="source-revision"><div class="source-revision-head"><strong>r${rev.revision}</strong>${rev.revisionId?`<code>${esc(rev.revisionId)}</code>`:''}</div>
+      ${(rev.links??[]).length?rev.links.map(link=>`<div class="source-link"><span class="source-chip">${esc(link.sourceType)}</span><span>${esc(link.sourceVersion||'version unknown')}</span><small>${esc(link.availability??'unknown')} · ${esc(link.locator??'')}</small></div>`).join(''):'<p class="empty-line">没有结构化来源；旧 evidenceRefs 仍保留。</p>'}</div>`).join('');
+    panel.innerHTML=`
+      <div class="provenance-head"><span class="source-chip">${esc(p.knowledgeId??id)}</span>
+        ${p.adoptedRevision?`<span class="source-chip ok">已采纳 r${p.adoptedRevision}</span>`:''}
+        ${p.headRevision?`<span class="source-chip">Head r${p.headRevision}</span>`:''}
+        ${p.adoptionDrift?'<span class="source-chip warn">采纳与 Head 漂移</span>':''}</div>
+      <h4>修订与来源</h4>${revisionLinks||'<p class="empty-line">暂无来源记录。</p>'}
+      <h4>待重新验证</h4>${(p.pendingRevalidations??[]).length?p.pendingRevalidations.map(item=>`<div class="maintenance-item"><strong>r${item.revision} · ${esc(item.reason)}</strong><small>${esc(item.sourceId)}</small></div>`).join(''):'<p class="empty-line">没有待重验证项。</p>'}
+      <h4>冲突</h4>${(p.conflicts??[]).length?p.conflicts.map(item=>`<div class="maintenance-item"><strong>${esc(item.field)}</strong><small>本地 r${item.localRevision} vs 远端 r${item.incomingRevision}</small></div>`).join(''):'<p class="empty-line">没有未解决冲突。</p>'}`;
+  }catch(e){
+    const item=state.selected;
+    panel.innerHTML=`<div class="notice">来源协议接口尚未启用（合并知识维护后端后自动可用）。当前可核对：修订 r${esc(item.revision)}、证据 ${(item.evidenceRefs??[]).length} 条、来源 ${esc(item.sourceRef??'—')}。</div>`;
+  }
+}
+async function loadUsage(id){
+  const panel=$('#usagePanel');if(!panel)return;
+  try{
+    const usages=await api(`/api/knowledge/usages?knowledgeId=${encodeURIComponent(id)}`);
+    panel.innerHTML=usages.length?usages.map(item=>`<div class="usage-item"><div><strong>${esc(item.targetRunId??item.target_run_id??'run')}</strong><small>r${esc(item.revision)} · ${esc(item.outcome??'unknown')} · ${esc(item.observedBenefit??item.observed_benefit??'unknown')}</small></div><small>${esc(item.contextSnapshotId??item.context_snapshot_id??'')}</small></div>`).join(''):'<p class="empty-line">还没有使用记录。Context Compiler 引用后会在这里出现。</p>';
+  }catch(e){panel.innerHTML=`<p class="empty-line">使用记录读取失败：${esc(e.message)}</p>`;}
+}
+async function loadConflicts(id){
+  const panel=$('#conflictPanel');if(!panel)return;
+  try{
+    const p=await api(`/api/knowledge/${encodeURIComponent(id)}/provenance`);
+    const conflicts=p.conflicts??[];
+    panel.innerHTML=conflicts.length?conflicts.map(item=>`<div class="maintenance-item"><strong>${esc(item.field)}</strong><small>本地 r${item.localRevision} vs 远端 r${item.incomingRevision} · ${esc(item.incomingOrigin??'')}</small><pre class="mini-diff">${esc(JSON.stringify({local:item.localValue,incoming:item.incomingValue},null,2).slice(0,600))}</pre></div>`).join(''):'<p class="empty-line">没有未解决冲突。</p>';
+  }catch(e){panel.innerHTML='<p class="empty-line">冲突接口尚未启用（合并知识维护后端后自动可用）。</p>';}
+}
 async function loadProposals(){try{state.proposals=await api('/api/proposals');
-  $('#reviewList').innerHTML=state.proposals.length?state.proposals.map(x=>`<div class="review-card"><div class="item-top"><h3>${esc(x.payload.title)}</h3>${tag(x.status,x.status==='pending'?'warn':'dim')}</div>
+  $('#reviewList').innerHTML=state.proposals.length?state.proposals.map(x=>{
+    const content=String(x.payload.content??'');
+    const long=content.length>900;
+    const domains=(x.payload.domains??[]).map(d=>tag(d,'dim')).join('');
+    return `<div class="review-card"><div class="item-top"><h3>${esc(x.payload.title)}</h3>${tag(x.status,x.status==='pending'?'warn':'dim')}</div>
     <div class="review-meta"><span>提议者：${esc(x.actor)}</span><span>${esc(x.created_at?.slice(0,16))}</span><span>${x.target_id?'基于修订 r'+esc(x.target_revision??'?'):'创建新知识'}</span></div>
-    <p>${esc(x.payload.content)}</p><div class="tags">${tag(nameLayer(x.payload.layer))}${x.payload.domains.map(d=>tag(d,'dim')).join('')}</div>
-    ${x.status==='pending'?`<div class="review-actions" style="margin-top:14px"><button data-approve="${esc(x.id)}" class="button primary small">接受提案</button><button data-reject="${esc(x.id)}" class="button danger small">拒绝</button></div>`:''}
-  </div>`).join(''):'<div class="empty-state"><h2>暂无提案</h2><p>Agent 可以通过本地 API 提交知识变更建议，等待你审核。</p></div>';
+    <div class="markdown${long?' clamped':''}">${renderMarkdown(content)}</div>
+    ${long?'<button class="button ghost small expand-md" type="button">展开全文</button>':''}
+    <div class="tags">${tag(nameLayer(x.payload.layer))}${domains}</div>
+    ${x.status==='pending'?`<div class="review-actions"><button data-approve="${esc(x.id)}" class="button primary small">接受提案</button><button data-reject="${esc(x.id)}" class="button danger small">拒绝</button></div>`:''}
+  </div>`;}).join(''):'<div class="empty-state"><h2>暂无提案</h2><p>Agent 可以通过本地 API 提交知识变更建议，等待你审核。</p></div>';
+  $('#reviewList').querySelectorAll('.expand-md').forEach(button=>button.addEventListener('click',()=>{
+    const body=button.previousElementSibling;
+    const clamped=body.classList.toggle('clamped');
+    button.textContent=clamped?'展开全文':'收起';
+  }));
   $('#reviewList').querySelectorAll('[data-approve],[data-reject]').forEach(button=>button.addEventListener('click',async()=>{
     const id=button.dataset.approve??button.dataset.reject;
     const proposal=state.proposals.find(x=>x.id===id);
@@ -140,6 +234,71 @@ async function exportKnowledge(){try{const data={format:'domain-knowledge-person
   }
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='domain-knowledge-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }catch(e){hintError(e);}}
+async function loadMaintenance(){
+  const notice=$('#maintenanceNotice');
+  const results=await Promise.allSettled([
+    api('/api/maintenance/summary'),api('/api/maintenance/conflicts?status=open'),
+    api('/api/maintenance/revalidations?status=pending'),api('/api/maintenance/sources?limit=50'),
+    api('/api/stats')
+  ]);
+  const [summary,conflicts,revalidations,sources,stats]=results;
+  const unavailable=results.slice(0,4).some(item=>item.status==='rejected');
+  notice.hidden=!unavailable;
+  if(unavailable){
+    notice.textContent='知识维护 API 尚未启用：合并知识维护后端（#26）后，冲突、重验证、来源与同步状态会在这里出现。当前仍可通过修订历史核对来源。';
+  }
+  if(summary.status==='fulfilled'){
+    const s=summary.value;
+    $('#maintenanceSummary').innerHTML=[
+      ['并发冲突',s.openConflicts??0,'保留双方修订，等待 Owner 裁决'],
+      ['待重新验证',s.pendingRevalidations??0,'来源版本变化或不可访问'],
+      ['远端候选',s.openCandidates??0,'分叉分支，不自动覆盖 Head'],
+      ['来源',s.sources??0,'Git / 文件 / GitHub / Run / Session']
+    ].map(v=>`<div class="stat"><label>${esc(v[0])}</label><strong>${esc(v[1])}</strong><small>${esc(v[2])}</small></div>`).join('');
+    $('#maintenanceSync').innerHTML=`<div class="owner-task"><span>协议版本</span><small>v${esc(s.schemaVersion??'—')} · knowledge-sync/v2</small></div>
+      <div class="owner-task"><span>最近导入游标</span><small>${esc(s.lastImport?.value??'尚未导入')}</small></div>`;
+  }else{
+    const count=stats.status==='fulfilled'?(stats.value.knowledge??stats.value.personal??0):0;
+    $('#maintenanceSummary').innerHTML=`<div class="stat"><label>本地知识</label><strong>${esc(count)}</strong><small>维护接口未启用</small></div>`;
+    $('#maintenanceSync').innerHTML='<p class="empty-line">同步状态接口未启用。</p>';
+  }
+  const renderList=(result,selector,empty,renderer)=>{
+    const box=$(selector);
+    if(!box)return;
+    if(result.status!=='fulfilled'){box.innerHTML=`<p class="empty-line">${empty}</p>`;return;}
+    const items=result.value;
+    box.innerHTML=items.length?items.map(renderer).join(''):`<p class="empty-line">${empty}</p>`;
+  };
+  renderList(conflicts,'#maintenanceConflicts','没有待处理冲突。',item=>`<div class="maintenance-item" data-conflict="${esc(item.id)}">
+      <div class="maintenance-head"><strong>${esc(item.unitTitle??item.unitId)}</strong><span class="source-chip">${esc(item.field)}</span></div>
+      <small>本地 r${esc(item.localRevision)} vs 远端 r${esc(item.incomingRevision)} · ${esc(item.incomingOrigin??'')}</small>
+      <pre class="mini-diff">${esc(JSON.stringify({local:item.localValue,incoming:item.incomingValue},null,2).slice(0,700))}</pre>
+      <div class="maintenance-actions"><button class="button small ghost" data-decision="accept-local">保留本地</button><button class="button small primary" data-decision="accept-incoming">采用远端</button><button class="button small ghost" data-decision="dismiss">仅关闭</button></div>
+    </div>`);
+  renderList(revalidations,'#maintenanceRevalidations','没有待重新验证项。',item=>`<div class="maintenance-item" data-revalidation="${esc(item.id)}">
+      <div class="maintenance-head"><strong>${esc(item.unitTitle??item.unitId)}</strong><span class="source-chip">r${esc(item.revision)}</span></div>
+      <small>${esc(item.reason)} · 来源 ${esc(item.sourceId)}</small>
+      <div class="maintenance-actions"><button class="button small primary" data-decision="accepted">标记待重验证</button><button class="button small ghost" data-decision="dismissed">忽略</button></div>
+    </div>`);
+  if(sources.status==='fulfilled'){
+    const items=sources.value;
+    $('#maintenanceSources').innerHTML=items.length?items.map(item=>`<div class="owner-task"><span>${esc(item.sourceType)} · ${esc(item.objectId||item.namespace)}</span><small>${esc(item.sourceVersion||'version unknown')} · ${esc(item.availability)}</small></div>`).join(''):'<p class="empty-line">还没有登记来源。</p>';
+  }else{
+    $('#maintenanceSources').innerHTML='<p class="empty-line">来源接口未启用。</p>';
+  }
+  $('#maintenanceConflicts').querySelectorAll('[data-conflict]').forEach(card=>{
+    card.querySelectorAll('[data-decision]').forEach(button=>button.addEventListener('click',async()=>{
+      const decision=button.dataset.decision;
+      if(decision==='accept-incoming'&&!confirm('采用远端修订会生成本地新修订，但仍需你之后确认采纳。继续？'))return;
+      try{await api(`/api/maintenance/conflicts/${encodeURIComponent(card.dataset.conflict)}/resolve`,'POST',{decision,actor:'owner'});toast('冲突已处理');await loadMaintenance();}catch(e){hintError(e);}
+    }));
+  });
+  $('#maintenanceRevalidations').querySelectorAll('[data-revalidation]').forEach(card=>{
+    card.querySelectorAll('[data-decision]').forEach(button=>button.addEventListener('click',async()=>{
+      try{await api(`/api/maintenance/revalidations/${encodeURIComponent(card.dataset.revalidation)}/resolve`,'POST',{decision:button.dataset.decision,actor:'owner'});toast('重验证项已处理');await loadMaintenance();}catch(e){hintError(e);}
+    }));
+  });
+}
 async function init(){try{document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.tab)));
   $('#searchInput').addEventListener('input',()=>void refresh());$('#scopeFilter').addEventListener('change',()=>void refresh());$('#layerFilter').addEventListener('change',()=>void refresh());
   $('#newBtn').addEventListener('click',newKnowledge);$('#addDomain').addEventListener('click',()=>void addDomain());$('#exportBtn').addEventListener('click',()=>void exportKnowledge());
@@ -147,16 +306,13 @@ async function init(){try{document.querySelectorAll('[data-tab]').forEach(b=>b.a
   $('#ownerRegisterForm').addEventListener('submit',event=>{event.preventDefault();void registerOwnerProject();});
   $('#ownerTaskForm').addEventListener('submit',event=>{event.preventDefault();void createOwnerTask();});
   $('#ownerSuggestForm').addEventListener('submit',event=>{event.preventDefault();void createOwnerSuggestion();});
-  $('#companionToggle').addEventListener('click',()=>{$('#companionPanel').hidden=!$('#companionPanel').hidden;});
-  $('#companionClose').addEventListener('click',()=>{$('#companionPanel').hidden=true;});
-  $('#companionChat').addEventListener('submit',event=>{event.preventDefault();void ownerAsk();});
   setView('owner');await refresh();renderProjects();await loadOwner();
   setInterval(()=>{if(state.tab==='owner')void loadOwner(true);},15000);
 }catch(e){hintError(e);}}
 void init();
 
 
-// Owner dashboard and browser-based desktop-companion preview.
+// Owner dashboard.
 let ownerSnapshot=null;
 async function loadOwner(silent=false){try{
   const [summary,attention,suggestions,events]=await Promise.all([
@@ -189,10 +345,6 @@ async function registerOwnerProject(){try{
   $('#ownerRegisterForm').reset();toast('项目已注册');await loadOwner();
 }catch(e){hintError(e);}}
 async function createOwnerTask(){try{await api('/api/owner/tasks','POST',{projectId:$('#ownerTaskProject').value,title:$('#ownerTaskTitle').value.trim()});$('#ownerTaskTitle').value='';await loadOwner();toast('任务已创建');}catch(e){hintError(e);}}
-async function ownerAsk(){const q=$('#companionQuery').value.trim();if(!q)return;
-  const holder=$('#companionMessages');holder.insertAdjacentHTML('beforeend',`<div class="companion-bubble user">${esc(q)}</div>`);$('#companionQuery').value='';
-  try{const response=await api('/api/owner/ask','POST',{question:q});holder.insertAdjacentHTML('beforeend',`<div class="companion-bubble">${esc(response.answer)}<small>依据：${esc(response.basis.join(', ')||'无')} · ${esc(response.mode)}</small></div>`);}catch(e){holder.insertAdjacentHTML('beforeend',`<div class="companion-bubble">${esc(e.message)}</div>`);}holder.scrollTop=holder.scrollHeight;
-}
 
 async function createOwnerSuggestion(){try{
   await api('/api/owner/suggestions','POST',{sourceProjectId:$('#ownerSourceProject').value,targetProjectId:$('#ownerTargetProject').value,

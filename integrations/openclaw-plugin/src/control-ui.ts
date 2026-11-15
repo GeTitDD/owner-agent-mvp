@@ -78,8 +78,12 @@ export default defineControlUiPlugin({
         const root = el("div", "owner-page");
         const header = el("div", "owner-header");
         const heading = el("h1", undefined, "Owner Agent");
+        const workerState = el("span", "owner-worker-state", "Worker: idle");
+        const advance = el("button", "owner-button owner-button-primary", "Advance");
         const refresh = el("button", "owner-button", "Refresh");
-        header.append(heading, refresh);
+        const headerActions = el("div", "owner-header-actions");
+        headerActions.append(workerState, advance, refresh);
+        header.append(heading, headerActions);
 
         // ---- 审批令牌：只存在于当前浏览器标签，不经过 Gateway ----
         const tokenBar = el("div", "owner-token-bar");
@@ -109,6 +113,7 @@ export default defineControlUiPlugin({
 
         let disposed = false;
         let loading = false;
+        let pollTimer: number | null = null;
         let sidecar = {
           baseUrl: "http://127.0.0.1:47830",
           approvalRequired: true,
@@ -143,7 +148,7 @@ export default defineControlUiPlugin({
             return "Owner sidecar token is missing. Set OWNER_AGENT_SIDECAR_TOKEN_FILE or place sidecar.token in ~/.domain-context.";
           }
           if (/ECONNREFUSED|fetch failed|failed to fetch/i.test(message)) {
-            return `Cannot reach the Owner sidecar at ${sidecar.baseUrl}. Start it with: node bin/ownerctl.mjs serve`;
+            return `Cannot reach the Owner sidecar at ${sidecar.baseUrl}. Start it with: node bin/ownerctl.mjs serve --worker`;
           }
           if (/plugin session action failed/i.test(message)) {
             return "The Owner plugin could not reach its sidecar. Check the sidecar URL and token, then retry.";
@@ -180,6 +185,8 @@ export default defineControlUiPlugin({
           }
           return data;
         };
+
+        const rowActions = (): HTMLElement => el("span", "owner-row-actions");
 
         /**
          * 审批前必须展示冻结内容，并要求显式勾选。
@@ -254,7 +261,7 @@ export default defineControlUiPlugin({
               try {
                 await onConfirm?.();
                 dialog.close();
-                await load();
+                await load({ silent: true });
                 notice.textContent = success ?? "";
               } catch (cause) {
                 reviewError.textContent = friendly(cause);
@@ -265,6 +272,59 @@ export default defineControlUiPlugin({
             };
           }
 
+          dialog.replaceChildren(panel);
+          if (!dialog.open) dialog.showModal();
+        };
+
+        /** 结果面板：时间线 + 两个 Diff + 测试输出。 */
+        const showResult = async (cycle: any): Promise<void> => {
+          const detail = await feature.invoke("repair.detail", { cycleId: cycle.id });
+          const source = await feature.invoke("sandbox.detail", { runId: detail.sourceSandboxRunId });
+          const sourceLogs = await feature.invoke("sandbox.logs", { runId: detail.sourceSandboxRunId });
+          const sourcePatch = await feature.invoke("patch.detail", { proposalId: source.proposalId });
+
+          let repairRun: any = null;
+          let repairLogs: any = null;
+          let repairPatch: any = null;
+          if (detail.repairRunId) {
+            repairRun = await feature.invoke("sandbox.detail", { runId: detail.repairRunId });
+            repairLogs = await feature.invoke("sandbox.logs", { runId: detail.repairRunId });
+            repairPatch = await feature.invoke("patch.detail", { proposalId: repairRun.proposalId });
+          }
+
+          const panel = el("div", "owner-review");
+          panel.append(el("h2", undefined, `Repair ${detail.id.slice(0, 8)} result`));
+          const list = el("dl", "owner-review-list");
+          const add = (label: string, value: string): void => {
+            list.append(el("dt", undefined, label));
+            const dd = el("dd");
+            dd.append(mono(value));
+            list.append(dd);
+          };
+          add("Cycle status", detail.status);
+          add("Repair scope", detail.repairScope.join(", ") || "-");
+          add("Approval hash", detail.approvalHash);
+          add("Source run", `${source.id} · ${source.status}/${source.executionStatus}/${source.testStatus}`);
+          add("Repair run", repairRun
+            ? `${repairRun.id} · ${repairRun.status}/${repairRun.executionStatus}/${repairRun.testStatus}`
+            : "(not started)");
+          panel.append(list);
+
+          const block = (title: string, text: string): void => {
+            if (!text) return;
+            panel.append(el("h3", undefined, title));
+            panel.append(el("pre", "owner-diff", text));
+          };
+          block("Source patch diff", sourcePatch.diff);
+          block("Source test output", [sourceLogs.stdout, sourceLogs.stderr].filter(Boolean).join("\n"));
+          if (repairPatch) block("Repair patch diff", repairPatch.diff);
+          if (repairLogs) block("Repair test output", [repairLogs.stdout, repairLogs.stderr].filter(Boolean).join("\n"));
+
+          const actions = el("div", "owner-review-actions");
+          const close = el("button", "owner-button", "Close");
+          close.onclick = () => dialog.close();
+          actions.append(close);
+          panel.append(actions);
           dialog.replaceChildren(panel);
           if (!dialog.open) dialog.showModal();
         };
@@ -315,7 +375,7 @@ export default defineControlUiPlugin({
           const panel = el("div", "owner-connect");
           panel.append(el("h2", undefined, "Owner sidecar is not connected"));
           panel.append(el("p", "owner-muted",
-            `Target: ${sidecar.baseUrl}. Start it with "node bin/ownerctl.mjs serve".`));
+            `Target: ${sidecar.baseUrl}. Start it with "node bin/ownerctl.mjs serve --worker".`));
           if (sidecar.error) panel.append(el("pre", "owner-detail", sidecar.error));
           panel.append(actionButton("Retry", () => { void load(); }));
           return panel;
@@ -334,6 +394,24 @@ export default defineControlUiPlugin({
           success: `Job ${job.id.slice(0, 8)} approved.`,
           onConfirm: () => decision(`/owner/v1/jobs/${encodeURIComponent(job.id)}/approve`, {})
         });
+
+        const viewPatch = async (patch: any): Promise<void> => {
+          const detail = await feature.invoke("patch.detail", { proposalId: patch.id });
+          openReview({
+            title: `Patch ${detail.id.slice(0, 8)}`,
+            rows: [
+              ["Proposal id", detail.id],
+              ["Status", detail.status],
+              ["Project", detail.projectId],
+              ["Base", detail.baseSha],
+              ["Proposal hash", detail.proposalHash],
+              ["Approved hash", detail.approvedHash || "(not approved)"],
+              ["Paths", detail.paths.join(", ") || "-"]
+            ],
+            diff: detail.diff || "(no diff recorded)",
+            readOnly: true
+          });
+        };
 
         const reviewPatch = async (patch: any): Promise<void> => {
           const detail = await feature.invoke("patch.detail", { proposalId: patch.id });
@@ -358,24 +436,6 @@ export default defineControlUiPlugin({
               `/owner/v1/patches/${encodeURIComponent(detail.id)}/${applying ? "apply" : "approve"}`,
               { hash: detail.proposalHash }
             )
-          });
-        };
-
-        const viewPatch = async (patch: any): Promise<void> => {
-          const detail = await feature.invoke("patch.detail", { proposalId: patch.id });
-          openReview({
-            title: `Patch ${detail.id.slice(0, 8)}`,
-            rows: [
-              ["Proposal id", detail.id],
-              ["Status", detail.status],
-              ["Project", detail.projectId],
-              ["Base", detail.baseSha],
-              ["Proposal hash", detail.proposalHash],
-              ["Approved hash", detail.approvedHash || "(not approved)"],
-              ["Paths", detail.paths.join(", ") || "-"]
-            ],
-            diff: detail.diff || "(no diff recorded)",
-            readOnly: true
           });
         };
 
@@ -430,12 +490,16 @@ export default defineControlUiPlugin({
         };
 
         const createSandbox = (patch: any): void => {
-          if (!window.confirm(
+          const include = window.prompt(
             `Create a pending sandbox run for proposal ${patch.id.slice(0, 8)}?\n`
-            + `hash: ${patch.proposalHash}\nIt still needs a separate hash-bound approval.`
-          )) return;
+            + `hash: ${patch.proposalHash}\n`
+            + "Include paths (comma separated; the test entry must be included):",
+            "package.json,tests/sandbox-smoke.test.mjs"
+          );
+          if (include === null) return;
+          const includePaths = include.split(",").map((part) => part.trim()).filter(Boolean);
           error.textContent = "";
-          void feature.invoke("sandbox.submit", { proposalId: patch.id })
+          void feature.invoke("sandbox.submit", { proposalId: patch.id, includePaths })
             .then(async () => {
               await load();
               notice.textContent = "Sandbox run created; review it below.";
@@ -443,12 +507,43 @@ export default defineControlUiPlugin({
             .catch(report);
         };
 
-        const load = async (): Promise<void> => {
+        const createRepair = (run: any): void => {
+          if (!window.confirm(
+            `Create a repair cycle from failed run ${run.id.slice(0, 8)}?\n`
+            + "The repair job still needs a separate approval."
+          )) return;
+          error.textContent = "";
+          void feature.invoke("repair.submit", { sandboxRunId: run.id })
+            .then(async () => {
+              await load();
+              notice.textContent = "Repair cycle created; review it below.";
+            })
+            .catch(report);
+        };
+
+        const startPolling = (): void => {
+          if (pollTimer !== null) return;
+          pollTimer = window.setInterval(() => {
+            if (disposed) {
+              stopPolling();
+              return;
+            }
+            void load({ silent: true });
+          }, 2000);
+        };
+
+        const stopPolling = (): void => {
+          if (pollTimer === null) return;
+          window.clearInterval(pollTimer);
+          pollTimer = null;
+        };
+
+        const load = async ({ silent = false }: { silent?: boolean } = {}): Promise<void> => {
           if (loading || disposed) return;
           loading = true;
           refresh.disabled = true;
           error.textContent = "";
-          sections.replaceChildren(empty("Loading Owner data…"));
+          if (!silent) sections.replaceChildren(empty("Loading Owner data…"));
           try {
             const info = await feature.invoke("sidecar.info", {});
             if (disposed) return;
@@ -459,18 +554,29 @@ export default defineControlUiPlugin({
               return;
             }
 
-            const [summary, jobs, patches, repairs, sandboxes] = await Promise.all([
+            const [summary, jobs, patches, repairs, sandboxes, worker] = await Promise.all([
               feature.invoke("status", {}),
               feature.invoke("jobs.list", { limit: 20 }),
               feature.invoke("patch.list", { limit: 20 }),
               feature.invoke("repair.list", { limit: 20 }),
-              feature.invoke("sandbox.list", { limit: 20 })
+              feature.invoke("sandbox.list", { limit: 20 }),
+              feature.invoke("worker.status", {})
             ]);
             if (disposed) return;
             renderStatus(summary);
+
+            workerState.textContent = worker.running
+              ? `Worker: working${worker.currentKind ? ` (${worker.currentKind})` : ""}…`
+              : worker.lastKind
+                ? `Worker: ${worker.lastKind} ${worker.lastOutcome || ""}`.trim()
+                : "Worker: idle";
+            workerState.classList.toggle("owner-worker-busy", worker.running);
+
             const sandboxByProposal = new Set(sandboxes.items.map((run) => run.proposalId));
+            const cycleBySource = new Set(repairs.items.map((cycle) => cycle.sourceSandboxRunId));
+
             const patchActions = (patch: any): HTMLElement => {
-              const wrap = el("span", "owner-row-actions");
+              const wrap = rowActions();
               if (patch.status === "proposed") {
                 wrap.append(actionButton("Review", () => { void reviewPatch(patch).catch(report); }));
               } else if (patch.status === "approved") {
@@ -485,11 +591,22 @@ export default defineControlUiPlugin({
               return wrap;
             };
 
+            const sandboxActions = (run: any): HTMLElement | string => {
+              if (run.status === "pending_approval") {
+                return actionButton("Review", () => { void reviewSandbox(run).catch(report); });
+              }
+              if (run.status === "completed" && run.testStatus === "fail" && !cycleBySource.has(run.id)) {
+                return actionButton("Create repair", () => createRepair(run));
+              }
+              if (run.status === "queued") return "waiting for worker…";
+              return "";
+            };
+
             sections.replaceChildren(
               section(
                 "Jobs",
                 jobs.items.length === 0
-                  ? empty("No jobs yet.")
+                  ? empty("No jobs yet. Ask OpenClaw to create one, or use the Owner tools.")
                   : table(
                     ["Title", "Type", "Status", ""],
                     jobs.items.map((job) => [
@@ -530,9 +647,7 @@ export default defineControlUiPlugin({
                       ),
                       run.executionStatus || "-",
                       run.testStatus || "-",
-                      run.status === "pending_approval"
-                        ? actionButton("Review", () => { void reviewSandbox(run).catch(report); })
-                        : ""
+                      sandboxActions(run)
                     ])
                   )
               ),
@@ -542,22 +657,51 @@ export default defineControlUiPlugin({
                   ? empty("No repair cycles.")
                   : table(
                     ["Cycle", "Status", ""],
-                    repairs.items.map((cycle) => [
-                      cycle.id.slice(0, 8),
-                      statusChip(cycle.status),
-                      cycle.status === "pending_approval"
-                        ? actionButton("Review", () => { void reviewRepair(cycle).catch(report); })
-                        : ""
-                    ])
+                    repairs.items.map((cycle) => {
+                      const actions = rowActions();
+                      if (cycle.status === "pending_approval") {
+                        actions.append(actionButton("Review", () => { void reviewRepair(cycle).catch(report); }));
+                      }
+                      actions.append(actionButton("View result", () => { void showResult(cycle).catch(report); }));
+                      return [
+                        cycle.id.slice(0, 8),
+                        statusChip(cycle.status),
+                        actions
+                      ];
+                    })
                   )
               )
             );
+
+            const active = worker.running
+              || jobs.items.some((job) => ["queued", "leased", "running", "cancel_requested"].includes(job.status))
+              || sandboxes.items.some((run) => ["queued", "leased", "running", "creating"].includes(run.status))
+              || repairs.items.some((cycle) => ["queued", "running"].includes(cycle.status));
+            if (active) startPolling();
+            else stopPolling();
           } catch (cause) {
             report(cause);
-            sections.replaceChildren(empty("Could not load Owner data."));
+            if (!silent) sections.replaceChildren(empty("Could not load Owner data."));
           } finally {
             loading = false;
             if (!disposed) refresh.disabled = false;
+          }
+        };
+
+        advance.onclick = async () => {
+          advance.disabled = true;
+          error.textContent = "";
+          try {
+            const result = await feature.invoke("worker.tick", {});
+            notice.textContent = result.started
+              ? "Worker started; waiting for results…"
+              : "Worker is already running.";
+            startPolling();
+            await load({ silent: true });
+          } catch (cause) {
+            report(cause);
+          } finally {
+            if (!disposed) advance.disabled = false;
           }
         };
 
@@ -567,6 +711,7 @@ export default defineControlUiPlugin({
         return {
           dispose: () => {
             disposed = true;
+            stopPolling();
             root.remove();
           }
         };

@@ -1,0 +1,405 @@
+{
+  "schemaVersion": 3,
+  "id": "owner-companion",
+  "name": "Owner Companion",
+  "description": "项目画像、想法池、知识笔记与依赖图。数据全部保存在本机插件目录，不依赖其他客户端。",
+  "whenToUse": "需要查看项目进度、项目画像、收集或整理改进想法、记录项目知识、生成依赖图，或了解某个项目现在该做什么时找我",
+  "version": "0.4.9",
+  "minCindyVersion": "0.1.122",
+  "entry": "main.js",
+  "command": "项目",
+  "node": {
+    "entry": "node/worker.cjs",
+    "protocol": "json-rpc-stdio"
+  },
+  "mainView": {
+    "title": "Owner",
+    "icon": "folder",
+    "html": "main-view.html"
+  },
+  "panel": {
+    "title": "Owner",
+    "html": "main-view.html",
+    "position": "right"
+  },
+  "settingsHtml": "settings.html",
+  "mobile": {
+    "channels": [
+      "owner-companion"
+    ],
+    "mainView": "main-view.html",
+    "settings": "settings.html"
+  },
+  "readme": {
+    "en": "README.md",
+    "zh-CN": "README.zh-CN.md"
+  },
+  "tools": [
+    {
+      "name": "owner_projects",
+      "description": "列出 Owner 里登记的项目（id、名称、目录）。只读，不修改任何文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_project_overview",
+      "description": "读取一个项目的画像、下一步建议、想法与知识计数、图谱版本。只读；不传 projectId 时使用当前项目。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id；不传则用第一个项目"
+          }
+        },
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_brief_refresh",
+      "description": "重新本地扫描项目并生成画像（README、脚本、目录、测试与 TODO），不调用模型、不修改项目文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_ideas",
+      "description": "列出项目的改进想法，可按状态过滤（todo/doing/blocked/done）。只读。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          },
+          "status": {
+            "type": "string",
+            "description": "todo / doing / blocked / done"
+          }
+        },
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_idea_add",
+      "description": "把一条改进想法记进项目想法池。只写插件自己的数据，不修改项目文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          },
+          "title": {
+            "type": "string",
+            "description": "想法原文，尽量保留用户原话"
+          }
+        },
+        "required": [
+          "projectId",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_idea_status",
+      "description": "更新想法状态：todo / doing / blocked / done。只改插件数据。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "想法 id"
+          },
+          "status": {
+            "type": "string",
+            "description": "todo / doing / blocked / done"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_knowledge",
+      "description": "列出项目的知识条目（标题、状态、标签），可按状态过滤：proposed / unverified / verified / rejected。只读。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          },
+          "status": {
+            "type": "string",
+            "description": "proposed / unverified / verified / rejected"
+          }
+        },
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_knowledge_add",
+      "description": "把一条项目知识直接记进知识库（未验证）。只写插件数据，不修改项目文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          },
+          "title": {
+            "type": "string",
+            "description": "一句话结论"
+          },
+          "body": {
+            "type": "string",
+            "description": "细节、证据或适用条件"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "最多 8 个标签"
+          }
+        },
+        "required": [
+          "projectId",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_knowledge_propose",
+      "description": "把提炼结果写成待审核候选（proposed），等用户在插件里接受或拒绝。只写插件数据。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          },
+          "title": {
+            "type": "string",
+            "description": "一句话结论"
+          },
+          "body": {
+            "type": "string",
+            "description": "细节、证据或适用条件"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "最多 8 个标签"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "证据：文件:行号 或对话片段"
+          }
+        },
+        "required": [
+          "projectId",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_knowledge_tidy",
+      "description": "检查知识库的重复、过短、未验证与待审核条目，返回报告；不会自动合并或删除。只读。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          }
+        },
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_knowledge_search",
+      "description": "按关键词搜索项目知识（标题、正文、标签）。只读。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "关键词"
+          },
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_experience_add",
+      "description": "记录一条原始经验（还没提炼的观察、结果或教训）。只写插件数据。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          },
+          "text": {
+            "type": "string",
+            "description": "经验原文"
+          },
+          "outcome": {
+            "type": "string",
+            "description": "success / failure / unknown"
+          }
+        },
+        "required": [
+          "projectId",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_github_status",
+      "description": "读取项目关联的 GitHub 仓库、最近 Issues 与 PR、当前分支与工作区是否干净。只读，使用本机 gh CLI。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_patch_propose",
+      "description": "提交一份 git diff 格式的补丁提案，等待用户在插件里批准；不会自动应用、不写项目文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          },
+          "title": {
+            "type": "string",
+            "description": "一句话说明改什么"
+          },
+          "diff": {
+            "type": "string",
+            "description": "git diff 输出（以 diff --git 开头）"
+          }
+        },
+        "required": [
+          "projectId",
+          "title",
+          "diff"
+        ],
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_test_run",
+      "description": "在项目里运行允许的测试命令（npm test / npm run <script> / node --test / pytest / dotnet test / cargo test / go test），返回输出摘要。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          },
+          "command": {
+            "type": "string",
+            "description": "测试命令；留空默认 npm test"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    },
+    {
+      "name": "owner_diagram",
+      "description": "扫描项目依赖并返回 Mermaid 依赖图（flowchart）。只读；不修改项目文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "项目 id"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "additionalProperties": false
+      },
+      "approval": "auto"
+    }
+  ],
+  "taskView": {
+    "title": "Owner",
+    "html": "main-view.html"
+  },
+  "skill": {
+    "items": [
+      {
+        "dir": "skills/owner-companion",
+        "name": "owner-companion",
+        "description": "Use Owner Companion tools for project progress, project briefs, ideas, knowledge and dependency diagrams. Read-only by default; apply patches and create PRs only through the Owner plugin UI."
+      }
+    ]
+  },
+  "card": {}
+}

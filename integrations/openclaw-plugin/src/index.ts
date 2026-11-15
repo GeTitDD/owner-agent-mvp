@@ -82,6 +82,38 @@ export default defineFeaturePlugin({
           pendingSandboxApprovals: num(summary.pendingSandboxApprovals)
         };
       },
+      "projects.list": async () => {
+        const payload = await owner().get("/owner/v1/projects");
+        return {
+          items: (payload.items ?? []).map((project: any) => ({
+            id: String(project.id),
+            name: String(project.name),
+            baseSha: String(project.baseSha ?? "")
+          }))
+        };
+      },
+      "tasks.list": async ({ projectId }: { projectId: string }) => {
+        const payload = await owner().get(
+          `/owner/v1/tasks?projectId=${encodeURIComponent(projectId)}`
+        );
+        return {
+          items: (payload.items ?? []).map((task: any) => ({
+            id: String(task.id),
+            projectId: String(task.project_id),
+            title: String(task.title),
+            status: String(task.status)
+          }))
+        };
+      },
+      "task.create": async ({ projectId, title }: { projectId: string; title: string }) => {
+        const task = await owner().post("/owner/v1/tasks", { projectId, title });
+        return {
+          id: String(task.id),
+          projectId: String(task.project_id),
+          title: String(task.title),
+          status: String(task.status)
+        };
+      },
       "jobs.list": async ({ projectId, status, limit }: {
         projectId?: string;
         status?: string;
@@ -149,12 +181,19 @@ export default defineFeaturePlugin({
             id: String(cycle.id),
             projectId: String(cycle.project_id),
             status: String(cycle.status),
-            approvalHash: String(cycle.approval_hash)
+            approvalHash: String(cycle.approval_hash),
+            sourceSandboxRunId: String(cycle.source_sandbox_run_id)
           }))
         };
       },
       "repair.detail": async ({ cycleId }: { cycleId: string }) => {
         const cycle = await owner().get(`/owner/v1/repair-cycles/${encodeId(cycleId)}`);
+        const runs = await owner().get(
+          `/owner/v1/sandbox-runs?projectId=${encodeURIComponent(String(cycle.project_id))}&limit=200`
+        );
+        const repairRun = (runs.items ?? []).find(
+          (run: any) => run.repair_cycle_id === cycle.id
+        );
         return {
           id: String(cycle.id),
           projectId: String(cycle.project_id),
@@ -166,6 +205,8 @@ export default defineFeaturePlugin({
               ? cycle.repairScope.map(String)
               : [],
           sourceSandboxRunId: String(cycle.source_sandbox_run_id),
+          repairRunId: String(repairRun?.id ?? ""),
+          jobId: String(cycle.job_id ?? ""),
           sourceBaseSha: String(cycle.source_base_sha),
           contextHash: String(cycle.context_hash),
           iteration: num(cycle.iteration),
@@ -184,6 +225,7 @@ export default defineFeaturePlugin({
             id: String(run.id),
             projectId: String(run.project_id),
             proposalId: String(run.proposal_id),
+            repairCycleId: String(run.repair_cycle_id ?? ""),
             status: String(run.status),
             executionStatus: text(run.execution_status),
             testStatus: text(run.test_status),
@@ -224,6 +266,48 @@ export default defineFeaturePlugin({
           id: String(run.id),
           status: String(run.status),
           approvalHash: String(run.approval_hash ?? run.approvalHash ?? "")
+        };
+      },
+      "worker.status": async () => {
+        const state = await owner().get("/owner/v1/worker/status");
+        return {
+          configured: Boolean(state.configured),
+          running: Boolean(state.running),
+          currentKind: String(state.current?.kind ?? ""),
+          currentStartedAt: String(state.current?.startedAt ?? ""),
+          lastKind: String(state.last?.kind ?? ""),
+          lastOutcome: String(state.last?.outcome ?? ""),
+          lastError: String(state.last?.error ?? ""),
+          lastAt: String(state.last?.at ?? "")
+        };
+      },
+      "worker.tick": async ({ projectId }: { projectId?: string }) => {
+        const result = await owner().post(
+          "/owner/v1/worker/tick",
+          projectId ? { projectId } : {}
+        );
+        return {
+          started: Boolean(result.started),
+          reason: String(result.reason ?? "")
+        };
+      },
+      "repair.submit": async ({ sandboxRunId }: { sandboxRunId: string }) => {
+        const cycle = await owner().post("/owner/v1/repair-cycles", {
+          sandboxRunId,
+          idempotencyKey: `ui-${sandboxRunId}`
+        });
+        return {
+          id: String(cycle.id),
+          status: String(cycle.status),
+          approvalHash: String(cycle.approval_hash)
+        };
+      },
+      "sandbox.logs": async ({ runId }: { runId: string }) => {
+        const run = await owner().get(`/owner/v1/sandbox-runs/${encodeId(runId)}?logs=1`);
+        return {
+          stdout: String(run.stdout ?? ""),
+          stderr: String(run.stderr ?? ""),
+          result: String(run.result ?? "")
         };
       },
       "sidecar.info": async () => {

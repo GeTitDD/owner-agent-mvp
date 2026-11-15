@@ -4,6 +4,60 @@
 
 **以 Owner 为中心的多项目管理 Agent + 个人领域知识资产工作台 + 可选桌面宠物。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
 
+> **Telegram 入口（推荐）**：日常使用已迁到 OpenClaw + Telegram，代码在
+> `integrations/openclaw-owner-mcp/`。项目、画像、想法、知识审核、图表、GitHub、
+> 测试、补丁应用与草稿 PR 都能在 Telegram 面板里完成；Cindy 面板标为已弃用，
+> 只保留数据与历史入口，不再新增功能。
+
+## 许可
+
+本项目采用 [PolyForm Noncommercial License 1.0.0](LICENSE)。
+
+**允许**：个人学习、研究、自用、爱好项目，以及非营利组织（学校、公益、政府机构）的使用；可以修改、也可以分发，但必须附带本许可证。
+
+**禁止**：任何商业用途，包括但不限于商业产品集成、付费服务、SaaS 对外提供、公司内部商业使用。需要商用授权请单独联系作者。
+
+> 说明：这类「禁止商用」的许可证不属于 OSI 定义的「开源」（OSI 不接受按使用领域设限），准确说法是 **source-available / 源码可见**。第三方依赖各自遵循其原许可证。
+
+
+## 形态说明（v0.2）
+
+- **新开发**：`plugins/owner-companion/`，以 Cindy 为宿主和客户端，自包含项目数据、画像、想法、知识与依赖图；手机端复用 Cindy 手机 App。
+- **旧客户端**：`desktop/`（Electron）与 `src/mobile-server.mjs` 保留为迁移与备份，不再新增功能；等插件稳定后归档。
+
+## 桌面宠物 Owner Companion（v1.0）
+
+![Owner Companion](docs/assets/companion/shell-panel.png)
+
+桌宠是产品入口：自然语言交办、处理决策、异常恢复、查看成果。它启动进程内 Owner Runtime（sidecar + Worker），审批令牌只留在主进程；L1 不依赖 OpenClaw，L2 完整工作台才连接 OpenClaw Control UI。
+
+- 运行：`npm install && npm run desktop`
+- pstack Playbook：面板内 12 个按钮 + 4 个一键沉淀预设；只读分析，结论可沉淀为项目知识候选，改动一律走「提案 → 你批准 → 沙箱」。见 [docs/PSTACK_PLAYBOOKS_V1.md](docs/PSTACK_PLAYBOOKS_V1.md)
+- GitHub 关联：自动从 `git remote` 识别仓库，项目行 `GH` 徽章打开仓库；用本机 `gh` CLI 读取私有/公开、默认分支、星标、最近提交与打开的 Issues/PR；复测通过后可预览并二次确认创建 Draft PR（只推 owner/ 分支，不合并）
+- Windows 打包：`npm run desktop:pack`（CI `desktop-package` 上传私有 RC Artifact + SHA256）
+- 桌面 E2E：`npm run e2e:desktop`（真实 Docker + 真实 Pi）
+- 定向回归：`npm run e2e:desktop:sandbox-config`、`npm run e2e:desktop:multiproject`、`npm run e2e:desktop:knowledge`、`npm run e2e:desktop:playbooks`
+- 用户语义层：首页只暴露「理解项目 / 整理知识 / 复盘沉淀 / 验收 / 修复 / 交付」，并给出一个「下一步建议」；一键理解先本地快速扫描，深度理解可选，画像按 commit 判断过期
+- 双层工作区：上半部分围绕当前项目（画像、图谱、想法、知识、Playbook），下半部分跨项目管理（决定、运行、结果）；「想法」是改进意见收件箱，对话里提到的建议自动采集，只收集不执行
+- 输入框只保留项目选择 + 一句话 + 发送；分析与讨论都在同一处继续，不再显示沙箱/范围/模型等额外组件
+- 手机端：直接用 Cindy 的手机 App，插件声明 mobile 投影即可（同一账号、同一台电脑）；不再维护独立 Expo 客户端。详见 [docs/MOBILE.md](docs/MOBILE.md)
+- Cindy 插件：`plugins/owner-companion/` 是自包含插件（项目、画像、想法、知识、依赖图都在插件自己的 Node worker 里），已在 Cindy 0.1.124 实测；安装后从左侧导航打开 Owner，手机端复用 Cindy 手机 App；打包产物 `plugins/dist/owner-companion-0.3.1.cindy`（`npm run cindy:pack`）
+- 知识流：经验 → 候选 → 人工接受 → 未验证 → 标记已验证；整理只报告重复/过短/未验证，不自动合并
+- GitHub / 补丁：只读仓库、Issues、PR；Draft PR 创建与补丁应用仅 UI 且需勾选确认；测试运行只允许 npm/node/pytest/dotnet/cargo/go 白名单命令
+- 项目图谱：依赖图本地扫描，控制流/数据流/状态/时序走 pstack 只读分析；模型只产出结构化图数据，Mermaid 由代码生成，可复制/导出 SVG；生成中显示已用时间，失败可重试，设置里可指定「图谱备用模型」自动回退
+- 知识闭环：`npm run knowledge:demo`；自动采集 `npm run knowledge:auto -- --once`；CLI `npm run knowledge -- --help`
+- A→B 实验：`npm run knowledge:eval:ab -- --root <dir> --allow-model`；Oracle Control 用 `knowledge:eval:hard`
+- 知识报告：[docs/KNOWLEDGE_LOOP_V1_DELIVERY.md](docs/KNOWLEDGE_LOOP_V1_DELIVERY.md)
+- 桌宠皮肤：Cindy 静态皮肤 + Codex Pet `pet.json` / spritesheet 动画包；悬停 `↻` 一键换肤、右键打开皮肤选择、设置页可导入动画包，见 [docs/MASCOT_PACK.md](docs/MASCOT_PACK.md)
+- 主界面：Cindy 式活动流 + 会话时间线 + Composer（Enter 发送 / Shift+Enter 列表接续）；页脚「诊断」可导出运行快照
+- UI 方向：任务驾驶舱（需要你 → 最近任务 → Composer 作用域）+ 任务详情 + 知识详情「内容/修订/来源/使用/冲突」；见 [docs/UI_GUIDE.md](docs/UI_GUIDE.md)
+- 沙箱策略：`auto` 按生态与一层子目录选择 profile（node-smoke / godot-headless / python-pytest），可按项目覆盖；缺失方案可「让 Agent 识别」后由你采用
+- 受控写入：交办先只读分诊；需要改文件时自动生成 HITL 写请求 → 你批准 → 隔离 worktree 子 Agent（own_python/Monty、无 bash/网络）→ 补丁审批 → 沙箱，见 [docs/WRITE_SUBAGENT.md](docs/WRITE_SUBAGENT.md)
+- 只读 Python：Playbook 分析也可用 `own_python`（仓库以只读方式挂载 `/workspace`）；打包自检 `npm run e2e:packaged:monty`
+- 第三方声明：[docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)
+- 交付报告：[docs/COMPANION_V1_DELIVERY.md](docs/COMPANION_V1_DELIVERY.md)
+- Release Notes：[docs/RELEASE_NOTES_V1.0.md](docs/RELEASE_NOTES_V1.0.md)
+
 ## v1.0（已合并）：Patch–Test–Repair
 
 从一次**已完成且失败**的 SandboxRun 出发，Owner 显式批准一次有界修复：新的 `code-patch` Job 在原 base 上创建全新 Worktree，模型收到上一补丁 diff 与脱敏失败证据（明确标记为不可信数据），输出完整替换提案；Owner 再次审批 apply，并再次审批 sandbox 测试。**不做自动循环、自动 apply/test/merge，也不改 OwnerTask。**

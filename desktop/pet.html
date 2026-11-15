@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Owner Companion</title>
+  <link rel="stylesheet" href="./pet.css" />
+</head>
+<body>
+  <div class="stage">
+    <button id="pet" class="pet" data-phase="idle" type="button" aria-label="Owner Companion">
+      <div id="sprite" class="sprite" aria-hidden="true" hidden></div>
+      <img id="mascot" class="mascot" alt="" draggable="false" />
+      <span class="badge" id="badge" hidden>0</span>
+      <span class="phase-dot" id="phaseDot" aria-hidden="true"></span>
+    </button>
+    <div class="pet-tools" aria-label="宠物操作">
+      <button id="skinNext" class="pet-tool" type="button" title="换一个皮肤（一键）" aria-label="换一个皮肤">↻</button>
+      <button id="skinPicker" class="pet-tool" type="button" title="皮肤选择" aria-label="皮肤选择">▦</button>
+      <button id="hidePet" class="pet-tool" type="button" title="隐藏宠物" aria-label="隐藏宠物">×</button>
+    </div>
+    <div class="hint" id="hint">Owner</div>
+  </div>
+  <script src="./pet.js"></script>
+</body>
+</html>

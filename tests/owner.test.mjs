@@ -148,15 +148,22 @@ test('unregistered project cwd is ignored by Pi adapter',()=>withStore(async({db
   }finally{await rm(other,{recursive:true,force:true});}
 }));
 
-test('native companion HTML/JS are served as same-origin local assets',()=>withStore(async({dbPath})=>{
+test('workbench serves only its own assets; the old companion chat is retired',()=>withStore(async({dbPath})=>{
   const wb=await createWorkbenchServer({dbPath,port:0});const {port}=await wb.listen();
   try{
     const base=`http://127.0.0.1:${port}`;
-    const html=await fetch(base+'/companion.html');assert.equal(html.status,200);
-    assert.match(await html.text(),/Owner Companion/);
-    const js=await fetch(base+'/companion.js');assert.equal(js.status,200);
-    assert.match(await js.text(),/ownerDesktop/);
-    const style=await fetch(base+'/companion.css');assert.equal(style.status,200);
-    assert.match(await style.text(),/pet-face/);
+    const html=await fetch(base+'/');assert.equal(html.status,200);
+    const htmlText=await html.text();
+    assert.match(htmlText,/Workbench/i);
+    assert.doesNotMatch(htmlText,/companion-panel|companionChat/);
+    for(const name of ['/app.js','/styles.css']){
+      const asset=await fetch(base+name);assert.equal(asset.status,200);
+    }
+    const appJs=await (await fetch(base+'/app.js')).text();
+    assert.doesNotMatch(appJs,/ownerAsk|companionQuery/);
+    // 旧的 companion.* 是第二套聊天入口，已删；必须 404，避免两套状态并存。
+    for(const name of ['/companion.html','/companion.js','/companion.css']){
+      const gone=await fetch(base+name);assert.equal(gone.status,404);
+    }
   }finally{await wb.close();}
 }));

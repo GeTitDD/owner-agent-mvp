@@ -6,6 +6,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { resolvePiModel } from '../pi-model-catalog.mjs';
 
 export const HARVEST_DISCIPLINE = [
   'You are a read-only knowledge harvester. You cannot write files, run commands, or access the network.',
@@ -58,7 +59,7 @@ export function createHarvestSessionFactory({ pstackDir = process.env.PSTACK_DIR
             noTools: true,
             sessionManager: sdk.SessionManager.inMemory(),
             resourceLoader: loader,
-            ...(model ? { model } : {})
+            ...(model ? { model: resolvePiModel(model) } : {})
           });
           let disposed = false;
           return {

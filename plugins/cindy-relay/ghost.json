@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 3,
+  "id": "relay-handoff",
+  "name": "Relay",
+  "description": "把当前任务里新增的对话原样转交给另一个任务、伙伴或新任务（可选 Codex / Claude / Pi），不自动发送，由你确认。",
+  "whenToUse": "需要把当前任务的上下文交给另一个 Agent 继续（比如让 Codex 复核 Claude 的方案），或查看有哪些内容还没转交时找我",
+  "version": "0.2.6",
+  "minCindyVersion": "0.1.124",
+  "kind": "chip",
+  "entry": "main.js",
+  "command": "relay",
+  "launch": "resident",
+  "subscribe": {
+    "topics": [
+      "turn"
+    ],
+    "hooks": [
+      "will-user-message",
+      "will-assistant-message"
+    ]
+  },
+  "agent": {
+    "tasks": true,
+    "targets": true
+  },
+  "sessionContext": true,
+  "mainView": {
+    "title": "Relay",
+    "icon": "message-circle",
+    "html": "relay.html"
+  },
+  "taskView": {
+    "title": "Relay",
+    "html": "relay.html"
+  },
+  "mobile": {
+    "channels": [
+      "cindy-relay"
+    ],
+    "mainView": "relay.html"
+  },
+  "readme": {
+    "en": "README.md",
+    "zh-CN": "README.zh-CN.md"
+  },
+  "card": {},
+  "tools": [
+    {
+      "name": "relay_status",
+      "description": "查看当前任务自上次转交以来累积了多少条对话、多少字，以及上次转交给谁。只读。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "relay_open",
+      "description": "在聊天里给出一张转交卡，用户点按钮打开 Relay 页签挑选目标和范围。只准备，不发送。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "description": "可选的备注，会预填到页签的备注框"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "relay_history",
+      "description": "列出最近的转交记录（时间、来源任务、目标、字数）。只读。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "最多几条，默认 10"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "skill": {
+    "items": [
+      {
+        "dir": "skills/relay",
+        "name": "relay",
+        "description": "Use Relay when the user wants to hand off the current task's context to another agent or task. Relay never sends by itself; it opens a tab where the user picks the target and confirms."
+      }
+    ]
+  },
+  "node": {
+    "entry": "node/worker.cjs",
+    "protocol": "json-rpc-stdio"
+  }
+}

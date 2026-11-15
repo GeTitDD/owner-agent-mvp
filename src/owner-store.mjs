@@ -38,7 +38,7 @@ const originShape=(value)=>{
 // Job coordination (P0 control plane): explicit state machine, whitelisted job types only.
 const jobStatuses=new Set(['pending_approval','queued','leased','running','cancel_requested','succeeded','failed','cancelled','rejected','needs_reconciliation']);
 const activeJobStatuses=new Set(['queued','leased','running','cancel_requested']);
-const jobTypes=new Set(['noop','status-note','fake-analysis','pi-analysis','code-patch']);
+const jobTypes=new Set(['noop','status-note','fake-analysis','pi-analysis','code-patch','code-write']);
 const attemptStatuses=new Set(['claimed','running','succeeded','failed','cancelled','orphaned']);
 const jobFilterStatuses=new Set([...jobStatuses]);
 const safeArray=(v,label)=>{check(Array.isArray(v)&&v.length<=30&&v.every(x=>typeof x==='string'&&x.length<=80&&/^[\w.-]+$/.test(x)),`Invalid ${label}`);return [...new Set(v)].sort();};
@@ -47,6 +47,18 @@ const suggestion=row=>row?{...row,evidenceRefs:parse(row.evidence_refs)}:null;
 const jobRow=row=>row?{...row,payload:parse(row.payload)}:null;
 const sandboxRow=row=>row?{...row,profile:parse(row.profile_json),includePaths:parse(row.include_paths)}:null;
 const repairRow=row=>row?{...row,repairScope:parse(row.repair_scope)}:null;
+const queueRow=row=>row?{
+  id:row.id,projectId:row.project_id,title:row.title,body:row.body,status:row.status,
+  kind:row.kind??'task',position:row.position,source:row.source,linkedJobId:row.linked_job_id,
+  createdAt:row.created_at,updatedAt:row.updated_at,completedAt:row.completed_at
+}:null;
+const diagramRow=row=>row?{
+  projectId:row.project_id,kind:row.kind,scope:row.scope,version:row.version,
+  title:row.title,summary:row.summary,mermaid:row.mermaid,data:parse(row.data_json),
+  unknowns:parse(row.unknowns_json),confidence:row.confidence,source:row.source,
+  runId:row.run_id,basedOnCommit:row.based_on_commit,
+  createdAt:row.created_at,updatedAt:row.updated_at
+}:null;
 const repairCycleIdFromJob=row=>{try{const payload=parse(row?.payload??'{}');return typeof payload.repairCycleId==='string'?payload.repairCycleId:null;}catch{return null;}};
 // Flat primitive-only payload: no nested structures, no unbounded strings, control chars rejected.
 const cleanPayload=v=>{check(v!==null&&typeof v==='object'&&!Array.isArray(v),'Payload must be a flat JSON object');
@@ -103,6 +115,75 @@ export class OwnerStore {
         approved_at TEXT NOT NULL, PRIMARY KEY(project_id,knowledge_id,revision)
       );
       CREATE INDEX IF NOT EXISTS owner_suggestions_target ON owner_suggestions(target_project_id,status);
+      CREATE TABLE IF NOT EXISTS owner_project_briefs(
+        project_id TEXT PRIMARY KEY REFERENCES owner_projects(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        generated_at TEXT NOT NULL,
+        based_on_commit TEXT NOT NULL DEFAULT '',
+        source_run_id TEXT NOT NULL DEFAULT '',
+        payload TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS owner_project_brief_revisions(
+        project_id TEXT NOT NULL REFERENCES owner_projects(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        generated_at TEXT NOT NULL,
+        based_on_commit TEXT NOT NULL DEFAULT '',
+        source_run_id TEXT NOT NULL DEFAULT '',
+        payload TEXT NOT NULL,
+        PRIMARY KEY(project_id,version)
+      );
+      CREATE TABLE IF NOT EXISTS owner_project_queue(
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES owner_projects(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL CHECK(status IN ('todo','doing','blocked','done','failed')),
+        kind TEXT NOT NULL DEFAULT 'task',
+        position INTEGER NOT NULL DEFAULT 0,
+        source TEXT NOT NULL DEFAULT 'owner',
+        linked_job_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS owner_project_queue_project
+        ON owner_project_queue(project_id,status,position,created_at);
+      CREATE TABLE IF NOT EXISTS owner_project_diagrams(
+        project_id TEXT NOT NULL REFERENCES owner_projects(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'project',
+        version INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        mermaid TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        unknowns_json TEXT NOT NULL DEFAULT '[]',
+        confidence TEXT NOT NULL DEFAULT 'medium',
+        source TEXT NOT NULL DEFAULT '',
+        run_id TEXT NOT NULL DEFAULT '',
+        based_on_commit TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(project_id,kind,scope)
+      );
+      CREATE TABLE IF NOT EXISTS owner_project_diagram_revisions(
+        project_id TEXT NOT NULL REFERENCES owner_projects(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'project',
+        version INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        mermaid TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        unknowns_json TEXT NOT NULL DEFAULT '[]',
+        confidence TEXT NOT NULL DEFAULT 'medium',
+        source TEXT NOT NULL DEFAULT '',
+        run_id TEXT NOT NULL DEFAULT '',
+        based_on_commit TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(project_id,kind,scope,version)
+      );
       CREATE TABLE IF NOT EXISTS owner_jobs(
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL REFERENCES owner_projects(id),
@@ -326,6 +407,9 @@ export class OwnerStore {
     // v0.7: re-entrant column migration for Pi session metadata on attempts.
     const attemptColumns=this.db.prepare('PRAGMA table_info(owner_job_attempts)').all().map(c=>c.name);
     if(!attemptColumns.includes('session_id'))this.db.exec(`ALTER TABLE owner_job_attempts ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`);
+    // 项目队列分两类：task（可交办）与 idea（灵感/改进意见，只收集不执行）。
+    const queueColumns=this.db.prepare('PRAGMA table_info(owner_project_queue)').all().map(c=>c.name);
+    if(!queueColumns.includes('kind'))this.db.exec(`ALTER TABLE owner_project_queue ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'`);
     // v0.7: approval-time snapshot of the referenced owner task input (title/note), so later
     // task edits cannot change what an approved job will analyse.
     const jobColumns=this.db.prepare('PRAGMA table_info(owner_jobs)').all().map(c=>c.name);
@@ -364,6 +448,165 @@ export class OwnerStore {
   }
   getProject(id){return entry(this.db.prepare('SELECT * FROM owner_projects WHERE id=?').get(id));}
   getProjectByRoot(root){let resolved;try{resolved=realpathSync(root);}catch{return null;}return entry(this.db.prepare('SELECT * FROM owner_projects WHERE root=?').get(resolved));}
+  getProjectBrief(projectId){
+    const row=this.db.prepare('SELECT * FROM owner_project_briefs WHERE project_id=?').get(projectId);
+    if(!row)return null;
+    return {
+      projectId:row.project_id, version:row.version, generatedAt:row.generated_at,
+      basedOnCommit:row.based_on_commit, sourceRunId:row.source_run_id,
+      payload:parse(row.payload), updatedAt:row.updated_at
+    };
+  }
+  saveProjectBrief({projectId,payload,basedOnCommit='',sourceRunId='',now=stamp()}={}){
+    check(!!this.getProject(projectId),'Unknown project',404);
+    check(payload&&typeof payload==='object'&&!Array.isArray(payload),'Brief payload must be an object');
+    const current=this.db.prepare('SELECT version FROM owner_project_briefs WHERE project_id=?').get(projectId);
+    const version=(current?.version??0)+1;
+    const body=json(payload);
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      this.db.prepare(`INSERT INTO owner_project_briefs(
+        project_id,version,generated_at,based_on_commit,source_run_id,payload,updated_at
+      ) VALUES(?,?,?,?,?,?,?)
+      ON CONFLICT(project_id) DO UPDATE SET version=excluded.version,generated_at=excluded.generated_at,
+        based_on_commit=excluded.based_on_commit,source_run_id=excluded.source_run_id,
+        payload=excluded.payload,updated_at=excluded.updated_at`)
+        .run(projectId,version,now,String(basedOnCommit??''),String(sourceRunId??''),body,now);
+      this.db.prepare(`INSERT INTO owner_project_brief_revisions(
+        project_id,version,generated_at,based_on_commit,source_run_id,payload
+      ) VALUES(?,?,?,?,?,?)`).run(projectId,version,now,String(basedOnCommit??''),String(sourceRunId??''),body);
+      this.db.exec('COMMIT');
+    }catch(error){try{this.db.exec('ROLLBACK');}catch{/* ignore */}throw error;}
+    return this.getProjectBrief(projectId);
+  }
+  listProjectBriefRevisions(projectId,{limit=10}={}){
+    check(Number.isSafeInteger(limit)&&limit>=1&&limit<=50,'Invalid limit');
+    return this.db.prepare(`SELECT * FROM owner_project_brief_revisions WHERE project_id=? ORDER BY version DESC LIMIT ?`)
+      .all(projectId,limit).map((row)=>({
+        projectId:row.project_id, version:row.version, generatedAt:row.generated_at,
+        basedOnCommit:row.based_on_commit, sourceRunId:row.source_run_id,
+        payload:parse(row.payload)
+      }));
+  }
+  getProjectQueueItem(id){
+    const row=this.db.prepare('SELECT * FROM owner_project_queue WHERE id=?').get(id);
+    return queueRow(row);
+  }
+  listProjectQueue(projectId,kind=''){
+    const rows=kind
+      ? this.db.prepare(`SELECT * FROM owner_project_queue WHERE project_id=? AND kind=?
+          ORDER BY CASE status WHEN 'doing' THEN 0 WHEN 'blocked' THEN 1 WHEN 'todo' THEN 2
+            WHEN 'failed' THEN 3 ELSE 4 END, position ASC, created_at ASC`).all(projectId,kind)
+      : this.db.prepare(`SELECT * FROM owner_project_queue WHERE project_id=?
+          ORDER BY CASE status WHEN 'doing' THEN 0 WHEN 'blocked' THEN 1 WHEN 'todo' THEN 2
+            WHEN 'failed' THEN 3 ELSE 4 END, position ASC, created_at ASC`).all(projectId);
+    return rows.map(queueRow);
+  }
+  addProjectQueueItem({projectId,title,body='',source='owner',kind='task'}={}){
+    check(!!this.getProject(projectId),'Unknown project',404);
+    check(kind==='task'||kind==='idea','Invalid queue kind');
+    const titleText=txt(title,'title',300);
+    // 灵感去重：同一项目下标题相同的想法只保留一条，避免对话里反复提到就刷屏。
+    if(kind==='idea'){
+      const existing=this.db.prepare('SELECT * FROM owner_project_queue WHERE project_id=? AND kind=? AND title=? LIMIT 1')
+        .get(projectId,kind,titleText);
+      if(existing)return queueRow(existing);
+    }
+    const id=randomUUID();const now=stamp();
+    const next=this.db.prepare('SELECT COALESCE(MAX(position),0)+1 AS pos FROM owner_project_queue WHERE project_id=?')
+      .get(projectId)?.pos ?? 1;
+    this.db.prepare(`INSERT INTO owner_project_queue(
+      id,project_id,title,body,status,kind,position,source,linked_job_id,created_at,updated_at,completed_at
+    ) VALUES(?,?,?,?, 'todo', ?, ?, ?, NULL, ?, ?, NULL)`)
+      .run(id,projectId,titleText,txt(body,'body',4000,false),kind,next,txt(source,'source',40),now,now);
+    return this.getProjectQueueItem(id);
+  }
+  getProjectDiagram(projectId,kind,scope='project'){
+    const row=this.db.prepare('SELECT * FROM owner_project_diagrams WHERE project_id=? AND kind=? AND scope=?')
+      .get(projectId,String(kind),String(scope));
+    return diagramRow(row);
+  }
+  listProjectDiagrams(projectId){
+    return this.db.prepare('SELECT * FROM owner_project_diagrams WHERE project_id=? ORDER BY kind,scope')
+      .all(projectId).map(diagramRow);
+  }
+  saveProjectDiagram({
+    projectId,kind,scope='project',title='',summary='',mermaid='',data={},
+    unknowns=[],confidence='medium',source='',runId='',basedOnCommit='',now=stamp()
+  }={}){
+    check(!!this.getProject(projectId),'Unknown project',404);
+    check(['dependency','control','dataflow','state','sequence'].includes(kind),'Invalid diagram kind');
+    check(typeof mermaid==='string'&&mermaid.length<=200000,'Invalid mermaid');
+    const current=this.db.prepare('SELECT version FROM owner_project_diagrams WHERE project_id=? AND kind=? AND scope=?')
+      .get(projectId,kind,scope);
+    const version=(current?.version??0)+1;
+    const body=json(data);
+    const unknownBody=json(unknowns);
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      this.db.prepare(`INSERT INTO owner_project_diagrams(
+        project_id,kind,scope,version,title,summary,mermaid,data_json,unknowns_json,
+        confidence,source,run_id,based_on_commit,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(project_id,kind,scope) DO UPDATE SET version=excluded.version,title=excluded.title,
+        summary=excluded.summary,mermaid=excluded.mermaid,data_json=excluded.data_json,
+        unknowns_json=excluded.unknowns_json,confidence=excluded.confidence,source=excluded.source,
+        run_id=excluded.run_id,based_on_commit=excluded.based_on_commit,updated_at=excluded.updated_at`)
+        .run(projectId,kind,scope,version,txt(title,'title',200),txt(summary,'summary',1000,false),
+          mermaid,body,unknownBody,txt(confidence,'confidence',20),txt(source,'source',80,false),
+          txt(runId,'run id',90,false),txt(basedOnCommit,'commit',64,false),now,now);
+      this.db.prepare(`INSERT INTO owner_project_diagram_revisions(
+        project_id,kind,scope,version,title,summary,mermaid,data_json,unknowns_json,
+        confidence,source,run_id,based_on_commit,created_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(projectId,kind,scope,version,txt(title,'title',200),txt(summary,'summary',1000,false),
+          mermaid,body,unknownBody,txt(confidence,'confidence',20),txt(source,'source',80,false),
+          txt(runId,'run id',90,false),txt(basedOnCommit,'commit',64,false),now);
+      this.db.exec('COMMIT');
+    }catch(error){try{this.db.exec('ROLLBACK');}catch{/* ignore */}throw error;}
+    return this.getProjectDiagram(projectId,kind,scope);
+  }
+  updateProjectQueueItem(id,{title,body,status,linkedJobId}={}){
+    const item=this.getProjectQueueItem(id);
+    check(!!item,'Unknown queue item',404);
+    const nextStatus=status===undefined?item.status:status;
+    check(['todo','doing','blocked','done','failed'].includes(nextStatus),'Invalid queue status');
+    const now=stamp();
+    this.db.prepare(`UPDATE owner_project_queue SET title=?,body=?,status=?,linked_job_id=?,updated_at=?,completed_at=?
+      WHERE id=?`).run(
+      title===undefined?item.title:txt(title,'title',300),
+      body===undefined?item.body:txt(body,'body',4000,false),
+      nextStatus,
+      linkedJobId===undefined?item.linkedJobId:txt(linkedJobId,'linked job',90,false),
+      now,
+      nextStatus==='done'?now:(item.completedAt??null),
+      id
+    );
+    return this.getProjectQueueItem(id);
+  }
+  removeProjectQueueItem(id){
+    const changed=this.db.prepare('DELETE FROM owner_project_queue WHERE id=?').run(id);
+    check(changed.changes===1,'Unknown queue item',404);
+    return {removed:id};
+  }
+  moveProjectQueueItem(id,{direction='up'}={}){
+    const item=this.getProjectQueueItem(id);
+    check(!!item,'Unknown queue item',404);
+    check(direction==='up'||direction==='down','Invalid direction');
+    const rows=this.db.prepare('SELECT id,position FROM owner_project_queue WHERE project_id=? ORDER BY position ASC,created_at ASC')
+      .all(item.projectId);
+    const index=rows.findIndex((row)=>row.id===id);
+    const swapIndex=direction==='up'?index-1:index+1;
+    if(index<0||swapIndex<0||swapIndex>=rows.length)return {moved:false};
+    const other=rows[swapIndex];
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      this.db.prepare('UPDATE owner_project_queue SET position=? WHERE id=?').run(other.position,item.id);
+      this.db.prepare('UPDATE owner_project_queue SET position=? WHERE id=?').run(item.position,other.id);
+      this.db.exec('COMMIT');
+    }catch(error){try{this.db.exec('ROLLBACK');}catch{/* ignore */}throw error;}
+    return {moved:true};
+  }
   listProjects(){return this.db.prepare('SELECT * FROM owner_projects ORDER BY updated_at DESC,id').all().map(entry);}
   updateProject(id,{status,goal,ownerNote}={}){
     const p=this.getProject(id);check(!!p,'Unknown project',404);
@@ -513,13 +756,13 @@ export class OwnerStore {
       // The analysis input comes from the referenced owner task, never from free-form payloads.
       check(!!ownerTaskId,'pi-analysis jobs require an owner task reference');
     }
-    if(jobType==='code-patch'){
-      // A coding proposal is always scoped to one owner task and one explicit base commit.
-      check(!!ownerTaskId,'code-patch jobs require an owner task reference');
-      check(typeof payload.baseSha==='string'&&/^[0-9a-f]{40}$/.test(payload.baseSha),'code-patch payload.baseSha must be an explicit 40-hex commit SHA');
-      check(typeof payload.allowedPaths==='string'&&payload.allowedPaths.length<=300,'code-patch payload.allowedPaths is required');
+    if(jobType==='code-patch'||jobType==='code-write'){
+      // 写入类 Job 都绑定一个 OwnerTask 与显式 base commit；真正的写发生在隔离 worktree。
+      check(!!ownerTaskId,`${jobType} jobs require an owner task reference`);
+      check(typeof payload.baseSha==='string'&&/^[0-9a-f]{40}$/.test(payload.baseSha),`${jobType} payload.baseSha must be an explicit 40-hex commit SHA`);
+      check(typeof payload.allowedPaths==='string'&&payload.allowedPaths.length<=300,`${jobType} payload.allowedPaths is required`);
       const allowed=payload.allowedPaths.split(',').map(part=>part.trim()).filter(Boolean);
-      check(allowed.length>=1&&allowed.length<=5,'code-patch requires 1-5 allowed paths');
+      check(allowed.length>=1&&allowed.length<=5,`${jobType} requires 1-5 allowed paths`);
     }
     if(ownerTaskId){const task=this.getTask(ownerTaskId);check(!!task,'Unknown owner task',404);check(task.project_id===projectId,'Owner task belongs to a different project');}
     actor=txt(actor,'actor',80);
