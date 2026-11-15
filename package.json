@@ -2,6 +2,7 @@
   "name": "owner-agent-mvp",
   "version": "1.0.0",
   "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "description": "Owner-centric resident multi-project agent with composable knowledge workbench and opt-in Pi event capture",
   "author": "Owner Companion",
