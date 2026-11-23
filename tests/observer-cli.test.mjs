@@ -7,6 +7,8 @@ import { promisify } from 'node:util';
 import { rm } from 'node:fs/promises';
 import { OwnerStore } from '../src/owner-store.mjs';
 import { ObserverStore } from '../src/observer/store.mjs';
+import { probeProject } from '../src/observer/probe.mjs';
+import { detectStaleEvent } from '../src/observer/events.mjs';
 import { makeRepo, makeTempDir, statusText, treeDigest } from './helpers/observer-fixture.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -120,3 +122,72 @@ test('未登记的项目让命令行以非零码退出并给出明确错误', ()
   assert.equal(result.status, 1);
   assert.match(result.stderr, /not registered|unknown project/i);
 }));
+
+// #28 验收：两次独立的命令行进程（中间没有共享内存）只推送一条。
+test('冷却：进程重启后再跑一次，同一停滞事件不重复推送', () => withContext(async ({ dir, requests, webhookUrl }) => {
+  const dbPath = path.join(dir, 'observer.sqlite');
+  const root = makeRepo({ root: path.join(dir, 'stale'), commitAt: FOUR_DAYS_AGO });
+  registerProject(dbPath, root, 'obs-cli-cool', 'CLI Cool');
+
+  const args = [
+    CLI, 'stale',
+    '--project', 'obs-cli-cool',
+    '--db', dbPath,
+    '--config', path.join(dir, 'missing-feishu.json'),
+    '--webhook', webhookUrl,
+    '--json'
+  ];
+  const first = JSON.parse((await runCli(process.execPath, args, { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath) })).stdout);
+  const second = JSON.parse((await runCli(process.execPath, args, { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath) })).stdout);
+
+  assert.equal(first.delivery.status, 'sent');
+  assert.equal(second.delivery.status, 'skipped');
+  assert.match(second.delivery.detail, /cooldown/);
+  assert.equal(requests.length, 1);
+
+  const store = new ObserverStore(dbPath);
+  try {
+    assert.equal(store.listEvents({ projectId: 'obs-cli-cool' }).length, 1);
+    assert.deepEqual(
+      store.listDeliveries({ fingerprint: first.event.fingerprint }).map((d) => d.status),
+      ['sent', 'skipped']
+    );
+  } finally { store.close(); }
+}));
+
+// #28 验收：审计库里上次成功投递已过期时，同一事件可以再次推送。
+test('冷却：上次成功投递已超过 24 小时，命令行再次推送同一事件', () => withContext(async ({ dir, requests, webhookUrl }) => {
+  const dbPath = path.join(dir, 'observer.sqlite');
+  const root = makeRepo({ root: path.join(dir, 'stale'), commitAt: FOUR_DAYS_AGO });
+  registerProject(dbPath, root, 'obs-cli-expire', 'CLI Expire');
+
+  // 预置一条 25 小时前的成功投递；指纹与实际探测结果一致，避免依赖测试机器当前时间。
+  const store = new ObserverStore(dbPath);
+  try {
+    const event = detectStaleEvent(
+      probeProject({ projectId: 'obs-cli-expire', projectName: 'CLI Expire', root }),
+      { now: new Date() }
+    );
+    const { id } = store.recordEvent(event);
+    store.recordDelivery({
+      eventId: id,
+      fingerprint: event.fingerprint,
+      status: 'sent',
+      detail: 'seeded',
+      at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString()
+    });
+  } finally { store.close(); }
+
+  const summary = JSON.parse((await runCli(process.execPath, [
+    CLI, 'stale',
+    '--project', 'obs-cli-expire',
+    '--db', dbPath,
+    '--config', path.join(dir, 'missing-feishu.json'),
+    '--webhook', webhookUrl,
+    '--json'
+  ], { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath) })).stdout);
+
+  assert.equal(summary.delivery.status, 'sent');
+  assert.equal(requests.length, 1);
+}));
+

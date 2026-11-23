@@ -1,8 +1,8 @@
 // 观察事件的审计存储。
 //
 // 审计只生不灭：事件与投递记录都写在这里，观察台与冷却逻辑只读这里（ADR-0002）。
-// 本票只落「停滞」事件；指纹唯一索引保证同一事件重复写入不会产生新行，
-// 但 24 小时冷却属于 #28，这里不做投递去重。
+// 本票落「停滞」事件；指纹唯一索引保证同一事件重复写入不会产生新行。
+// 投递记录同时是冷却的唯一依据（lastSentAt）：同一指纹 24 小时内不再通知（#28）。
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -150,6 +150,22 @@ export class ObserverStore {
       VALUES(?,?,?,?,?,?)`).run(id, fp, text(channel, 'channel', 40), status,
       optionalText(detail, 'detail', 1000), iso(at, 'delivery time'));
     return { seq: Number(result.lastInsertRowid) };
+  }
+
+  /**
+   * 某指纹在指定渠道上最后一次成功投递的时间；没有成功投递时返回 null。
+   * 冷却判断只读这一个值，因此进程重启后状态自动恢复（ADR-0002：状态在审计库）。
+   * 按 seq 倒序而不是按 at：seq 是插入顺序，不受时间字符串时区写法影响。
+   * @param {{fingerprint:string, channel?:string}} options
+   * @returns {string|null} ISO 时间
+   */
+  lastSentAt({ fingerprint, channel = 'feishu' } = {}) {
+    const fp = text(fingerprint, 'fingerprint', 64);
+    check(/^[0-9a-f]{64}$/.test(fp), 'Invalid fingerprint');
+    const row = this.db.prepare(`SELECT at FROM observer_deliveries
+      WHERE fingerprint=? AND channel=? AND status='sent' ORDER BY seq DESC LIMIT 1`)
+      .get(fp, text(channel, 'channel', 40));
+    return row?.at ?? null;
   }
 
   listDeliveries({ eventId = '', fingerprint = '', limit = 50 } = {}) {

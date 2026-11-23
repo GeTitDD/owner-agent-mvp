@@ -72,6 +72,37 @@ test('投递结果写入审计库：sent / failed / skipped 都留痕', () => wi
   } finally { store.close(); }
 }));
 
+test('lastSentAt 只认成功投递，且跨进程重开数据库后仍能读到（重启恢复）', () => withDb(async (dbPath) => {
+  const first = new ObserverStore(dbPath);
+  const { id } = first.recordEvent(event());
+  assert.equal(first.lastSentAt({ fingerprint: 'a'.repeat(64) }), null);
+
+  first.recordDelivery({
+    eventId: id, fingerprint: 'a'.repeat(64), status: 'failed', detail: 'http 500',
+    at: '2026-11-24T01:00:00.000Z'
+  });
+  first.recordDelivery({
+    eventId: id, fingerprint: 'a'.repeat(64), status: 'skipped', detail: 'webhook not configured',
+    at: '2026-11-24T02:00:00.000Z'
+  });
+  assert.equal(first.lastSentAt({ fingerprint: 'a'.repeat(64) }), null, 'failed / skipped 不占用冷却');
+
+  first.recordDelivery({
+    eventId: id, fingerprint: 'a'.repeat(64), status: 'sent', detail: 'feishu code 0',
+    at: '2026-11-24T03:00:00.000Z'
+  });
+  assert.equal(first.lastSentAt({ fingerprint: 'a'.repeat(64) }), '2026-11-24T03:00:00.000Z');
+  first.close();
+
+  const reopened = new ObserverStore(dbPath);
+  try {
+    assert.equal(reopened.lastSentAt({ fingerprint: 'a'.repeat(64) }), '2026-11-24T03:00:00.000Z');
+    // 指纹与渠道都参与定位：换个渠道或指纹不应该读到这条记录。
+    assert.equal(reopened.lastSentAt({ fingerprint: 'a'.repeat(64), channel: 'telegram' }), null);
+    assert.equal(reopened.lastSentAt({ fingerprint: 'c'.repeat(64) }), null);
+  } finally { reopened.close(); }
+}));
+
 test('非法事件与投递状态在存储边界被拒绝', () => withDb(async (dbPath) => {
   const store = new ObserverStore(dbPath);
   try {
