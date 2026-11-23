@@ -1,0 +1,208 @@
+/* 观察台样式：只服务 /observer 一个页面，保持无构建、无依赖。 */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #1c1f23;
+  --muted: #626b76;
+  --line: #e2e5ea;
+  --danger: #c0392b;
+  --danger-bg: #fdecea;
+  --warn: #a0641a;
+  --warn-bg: #fdf3e3;
+  --unknown: #5c6570;
+  --unknown-bg: #eef1f4;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171a;
+    --panel: #1c2024;
+    --text: #e9edf1;
+    --muted: #9aa4af;
+    --line: #2b3138;
+    --danger: #ff8e80;
+    --danger-bg: #3a1f1c;
+    --warn: #f0bd72;
+    --warn-bg: #3a2d17;
+    --unknown: #a5afba;
+    --unknown-bg: #262b31;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 28px clamp(16px, 4vw, 44px) 48px;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+.board-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 28px;
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+h1 { margin: 0; font-size: 26px; letter-spacing: -0.01em; }
+
+.sub { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+
+.head-actions { text-align: right; }
+
+.stamp { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+
+.refresh {
+  display: inline-block;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.refresh:hover { border-color: var(--muted); }
+
+main { display: grid; gap: 32px; }
+
+.panel h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 14px;
+  font-size: 17px;
+}
+
+.panel h2 small { color: var(--muted); font-size: 12px; font-weight: 400; }
+
+.cards {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--unknown);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.card.risk-stale { border-left-color: var(--danger); }
+.card.risk-watch { border-left-color: var(--warn); }
+
+.card-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.card h3 { margin: 0; font-size: 16px; }
+
+.card-id {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-stale { background: var(--danger-bg); color: var(--danger); }
+.badge-watch { background: var(--warn-bg); color: var(--warn); }
+.badge-unknown { background: var(--unknown-bg); color: var(--unknown); }
+
+.card-meta {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.card-meta > div {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 8px;
+}
+
+.card-meta dt { color: var(--muted); font-size: 12px; }
+.card-meta dd { margin: 0; font-size: 13px; }
+.card-meta .path {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+.empty {
+  margin: 0;
+  padding: 22px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.empty code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--unknown-bg);
+  font-size: 12px;
+}
+
+.events {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  background: var(--panel);
+  font-size: 13px;
+}
+
+.events th {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.events td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.events tr:last-child td { border-bottom: none; }
+
+.events .when { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+.events .who { font-weight: 600; }
+.events .card-id { display: inline; margin: 0; }
