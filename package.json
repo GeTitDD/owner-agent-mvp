@@ -41,6 +41,7 @@
     "desktop:dir": "electron-builder --win dir --x64",
     "desktop:pack": "electron-builder --win portable --x64",
     "knowledge:auto": "node scripts/knowledge-loop/auto-runtime.mjs",
+    "observer": "node bin/observerctl.mjs",
     "knowledge:eval:ab": "node scripts/knowledge-loop/eval-ab-learning.mjs",
     "e2e:desktop:playbooks": "node scripts/e2e/desktop-playbooks.mjs",
     "e2e:desktop:harvest": "node scripts/e2e/desktop-knowledge-harvest.mjs",
