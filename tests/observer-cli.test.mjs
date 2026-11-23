@@ -47,7 +47,9 @@ const registerProject = (dbPath, root, id, name) => {
 const childEnv = (dbPath) => ({
   ...process.env,
   OWNER_AGENT_DB: dbPath,
-  OWNER_OBSERVER_FEISHU_WEBHOOK: ''
+  OWNER_OBSERVER_FEISHU_WEBHOOK: '',
+  // 显式指向不存在的阈值文件，避免读到本机 ~/.owner-agent/thresholds.json。
+  OWNER_OBSERVER_THRESHOLDS: path.join(path.dirname(dbPath), 'missing-thresholds.json')
 });
 
 test('命令行单项目停滞检查：不启动 Electron，飞书收到通知，被观察仓库保持不变', () => withContext(async ({ dir, requests, webhookUrl }) => {
