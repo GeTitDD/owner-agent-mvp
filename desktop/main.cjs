@@ -43,6 +43,7 @@ else app.setPath('userData', path.join(app.getPath('appData'), 'owner-agent-mvp'
 let pet = null;
 let panel = null;
 let fullWindow = null;
+let observerWindow = null;
 let tray = null;
 let store = null;
 let personalStore = null;
@@ -1898,6 +1899,38 @@ const openKnowledgeWorkbench = async () => {
   fullWindow.on('closed', () => { fullWindow = null; });
 };
 
+/**
+ * 打开 Web 观察台：复用主进程里已启动的 workbench server（只 loadURL），
+ * 不新建服务、不占用新端口；窗口关掉后可从托盘再次打开。
+ */
+const openObserver = async () => {
+  if (!workbenchUrl) throw new Error('本地 Workbench 尚未启动，观察台不可用');
+  if (observerWindow && !observerWindow.isDestroyed()) {
+    observerWindow.show();
+    observerWindow.focus();
+    return;
+  }
+  observerWindow = new BrowserWindow({
+    width: 1180,
+    height: 820,
+    minWidth: 800,
+    minHeight: 600,
+    title: 'Owner Companion · 观察台',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      devTools: false
+    }
+  });
+  observerWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  watchWindow(observerWindow, 'observer');
+  // 直连 workbench 的 /observer 路由，保证与浏览器直开的页面同源同内容。
+  observerWindow.loadURL(`${workbenchUrl}/observer`);
+  observerWindow.on('closed', () => { observerWindow = null; });
+};
+
 const createTray = () => {
   const image = nativeImage.createFromPath(path.join(__dirname, 'tray.png'));
   tray = new Tray(image);
@@ -1907,6 +1940,12 @@ const createTray = () => {
       { label: '显示桌宠', click: () => { if (pet) { pet.show(); positionPet(); } } },
       { label: '打开面板', click: showPanel },
       { label: '完整工作台', click: () => { void openFull().catch(() => showPanel()); } },
+      {
+        label: '观察台',
+        click: () => {
+          void openObserver().catch((error) => { logError('observer.open', error); showPanel(); });
+        }
+      },
       { type: 'separator' },
       { label: '设置', click: () => { showPanel(); panel?.webContents.send('companion:open-settings'); } },
       { type: 'separator' },
