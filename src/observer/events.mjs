@@ -14,16 +14,18 @@ export const DEFAULT_STALE_THRESHOLD_DAYS = 3;
 export const branchLabelOf = (snapshot) => snapshot.branch ?? '(detached HEAD)';
 
 /**
- * 停滞事件指纹：由项目、分支标签、事件类型与关键值（最后提交）派生。
- * 同一仓库同一分支停在同一个提交上，指纹稳定；换分支或换提交都会产生新指纹。
- * @param {{projectId:string, branchLabel:string, head:string}} input
+ * 停滞事件指纹：由仓库（projectId）、分支标签与事件类型派生。
+ *
+ * 刻意不含 HEAD、停滞天数与检测时间：票据 #28 要求「同一项目、同一分支、同一类事件
+ * 24 小时内只通知一次」，若把 HEAD 放进指纹，同分支推一个新提交就会换指纹、绕过冷却。
+ * HEAD 等仍作为事件证据字段保留在事件对象与审计表里，只是不参与指纹。
+ * @param {{projectId:string, branchLabel:string}} input
  * @returns {string} 64 位十六进制
  */
-export const staleFingerprint = ({ projectId, branchLabel, head }) => sha256(canonical({
+export const staleFingerprint = ({ projectId, branchLabel }) => sha256(canonical({
   type: 'stale',
   projectId,
-  branch: branchLabel,
-  head
+  branch: branchLabel
 }));
 
 /**
@@ -45,7 +47,7 @@ export function detectStaleEvent(snapshot, { now = new Date(), thresholdDays = D
   const branchLabel = branchLabelOf(snapshot);
   return {
     type: 'stale',
-    fingerprint: staleFingerprint({ projectId: snapshot.projectId, branchLabel, head: snapshot.head }),
+    fingerprint: staleFingerprint({ projectId: snapshot.projectId, branchLabel }),
     projectId: snapshot.projectId,
     projectName: snapshot.projectName ?? '',
     branch: snapshot.branch,

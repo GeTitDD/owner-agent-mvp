@@ -47,7 +47,7 @@ test('无提交历史的项目不产生停滞事件', () => withDir(async (dir) 
   assert.equal(detectStaleEvent(snapshot, { now: NOW, thresholdDays: 3 }), null);
 }));
 
-test('指纹只由项目、分支与最后提交决定：重复检测稳定，换分支或换提交则变化', () => withDir(async (dir) => {
+test('指纹只由项目、分支与事件类型决定：换分支变化，换提交不变', () => withDir(async (dir) => {
   const root = makeRepo({ root: path.join(dir, 'repo'), commitAt: FOUR_DAYS_AGO });
   const snapshot = probeProject({ projectId: 'obs-fp', projectName: 'FP', root });
 
@@ -62,10 +62,13 @@ test('指纹只由项目、分支与最后提交决定：重复检测稳定，�
   const onBranch = detectStaleEvent(probeProject({ projectId: 'obs-fp', root }), { now: NOW, thresholdDays: 3 });
   assert.notEqual(first.fingerprint, onBranch.fingerprint);
 
+  // HEAD 不参与指纹：同分支新提交仍算同一条事件，避免绕过 24 小时冷却。
   git(root, ['commit', '-q', '--allow-empty', '-m', 'next'],
     { GIT_AUTHOR_DATE: '2026-11-21T08:00:00+08:00', GIT_COMMITTER_DATE: '2026-11-21T08:00:00+08:00' });
   const newHead = detectStaleEvent(probeProject({ projectId: 'obs-fp', root }), { now: NOW, thresholdDays: 3 });
-  assert.notEqual(onBranch.fingerprint, newHead.fingerprint);
+  assert.equal(onBranch.fingerprint, newHead.fingerprint);
+  // HEAD 仍是事件证据字段，只是不参与指纹。
+  assert.notEqual(newHead.head, onBranch.head);
 }));
 
 test('detached HEAD 的停滞事件带可读的分支标签', () => withDir(async (dir) => {

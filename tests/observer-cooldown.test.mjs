@@ -175,3 +175,28 @@ test('不同项目、不同分支的同类事件各自独立计算冷却', () =>
 
   assert.equal(requests.length, 3);
 }));
+
+// #28 验收：指纹不含 HEAD，同分支新提交不能绕过冷却。
+test('同分支出现新提交且仍然停滞：24 小时内不重复通知', () => withWebhook(async ({ dir, dbPath, requests, webhookUrl }) => {
+  const root = makeRepo({ root: path.join(dir, 'stale'), commitAt: FOUR_DAYS_AGO });
+  const project = { id: 'obs-new-commit', name: 'New Commit', root };
+
+  await reopen(dbPath, async (store) => {
+    const first = await runStaleCheck({ project, store, webhookUrl, now: NOW });
+    assert.equal(first.delivery.status, 'sent');
+
+    // 新提交本身也已经是 3 天前，停滞条件依旧成立；只换 HEAD，不换项目/分支。
+    git(root, ['commit', '-q', '--allow-empty', '-m', 'next'],
+      { GIT_AUTHOR_DATE: '2026-11-21T09:00:00+08:00', GIT_COMMITTER_DATE: '2026-11-21T09:00:00+08:00' });
+    const again = await runStaleCheck({
+      project, store, webhookUrl, now: new Date(NOW.getTime() + HOUR_MS)
+    });
+
+    assert.equal(again.delivery.status, 'skipped');
+    assert.equal(again.cooldown.coolingDown, true);
+    assert.equal(again.event.fingerprint, first.event.fingerprint);
+    assert.notEqual(again.event.head, first.event.head);
+  });
+
+  assert.equal(requests.length, 1);
+}));
