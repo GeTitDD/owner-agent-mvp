@@ -1,7 +1,9 @@
-// 单项目观察流程编排：探针 → 事件 → 审计 → 投递。
+// 单项目观察流程编排：探针 → 事件 → 审计 → 冷却 → 投递。
 //
-// #27 只做「停滞」；#29 在同一个探针与同一条投递链路上补上「漂移」与「积压」。
-// 多项目聚合、夜间静默与重试属于 #30，指纹冷却属于 #28，这里都不实现。
+// 三条命令共用同一条投递链路（deliverEvent）：每条事件先落审计库，再按指纹判断冷却，
+// 冷却期内只记一条 skipped 投递，不发消息。冷却依据是审计库里同一指纹最后一次成功投递
+// 的时间（ObserverStore.lastSentAt），因此不持有进程内状态：重启后自然恢复，也不补发历史事件。
+// 多项目聚合、夜间静默与投递重试属于 #30，这里不实现。
 import { probeProject } from './probe.mjs';
 import {
   detectStaleEvent,
@@ -10,15 +12,56 @@ import {
   DEFAULT_STALE_THRESHOLD_DAYS
 } from './events.mjs';
 import { DEFAULT_THRESHOLDS } from './thresholds.mjs';
-import { deliverFeishu, formatStaleMessage, formatEventMessage } from './feishu.mjs';
+import { deliverFeishu, formatEventMessage } from './feishu.mjs';
+import { evaluateCooldown, DEFAULT_COOLDOWN_MS } from './cooldown.mjs';
 
 /**
- * 对一个已登记项目执行一次停滞检查。
- * 事件先落审计库再投递：即使投递失败或未配置，事实仍然留痕。
+ * 单条事件的统一出口：记录事件 → 判断冷却 → 投递（或跳过）→ 记录投递。
+ *
+ * 冷却期内不发消息，但仍然写一条 status='skipped' 的投递记录：
+ * 这样才能查清「为什么这次没收到」。只有 status='sent' 会占用窗口（见 cooldown.mjs）。
+ * @param {{event:object, store:object, webhookUrl?:string, now:Date, cooldownMs?:number,
+ *   channel?:string, fetchImpl?:Function}} options
+ * @returns {Promise<{eventId:string, duplicate:boolean, delivery:object, cooldown:object, text:string}>}
+ */
+async function deliverEvent({
+  event,
+  store,
+  webhookUrl = '',
+  now,
+  cooldownMs = DEFAULT_COOLDOWN_MS,
+  channel = 'feishu',
+  fetchImpl
+}) {
+  const saved = store.recordEvent(event);
+  const text = formatEventMessage(event);
+  const cooldown = evaluateCooldown({
+    lastSentAt: store.lastSentAt({ fingerprint: event.fingerprint, channel }),
+    now,
+    cooldownMs
+  });
+  const delivery = cooldown.coolingDown
+    ? { status: 'skipped', detail: `cooldown active until ${cooldown.resumesAt}` }
+    : await deliverFeishu({ webhookUrl, text, fetchImpl });
+
+  store.recordDelivery({
+    eventId: saved.id,
+    fingerprint: event.fingerprint,
+    channel,
+    status: delivery.status,
+    detail: delivery.detail,
+    at: now.toISOString()
+  });
+  return { eventId: saved.id, duplicate: saved.duplicate, delivery, cooldown, text };
+}
+
+/**
+ * 对一个已登记项目执行一次停滞检查（#27 的窄路径，保持原有返回结构）。
  * @param {{project:{id:string,name?:string,root:string}, store:object, webhookUrl?:string,
- *   now?:Date, thresholdDays?:number, fetchImpl?:Function, gitBin?:string}} options
- * @returns {Promise<{snapshot:object, event:object|null, eventId?:string,
- *   duplicate?:boolean, delivery:object|null, text?:string}>}
+ *   now?:Date, thresholdDays?:number, cooldownMs?:number, channel?:string,
+ *   fetchImpl?:Function, gitBin?:string}} options
+ * @returns {Promise<{snapshot:object, event:object|null, eventId?:string, duplicate?:boolean,
+ *   delivery:object|null, cooldown?:object, text?:string}>}
  */
 export async function runStaleCheck({
   project,
@@ -26,6 +69,8 @@ export async function runStaleCheck({
   webhookUrl = '',
   now = new Date(),
   thresholdDays = DEFAULT_STALE_THRESHOLD_DAYS,
+  cooldownMs = DEFAULT_COOLDOWN_MS,
+  channel = 'feishu',
   fetchImpl,
   gitBin = 'git'
 } = {}) {
@@ -39,24 +84,17 @@ export async function runStaleCheck({
   const event = detectStaleEvent(snapshot, { now, thresholdDays });
   if (!event) return { snapshot, event: null, delivery: null };
 
-  const saved = store.recordEvent(event);
-  const text = formatStaleMessage(event);
-  const delivery = await deliverFeishu({ webhookUrl, text, fetchImpl });
-  store.recordDelivery({
-    eventId: saved.id,
-    fingerprint: event.fingerprint,
-    status: delivery.status,
-    detail: delivery.detail,
-    at: now.toISOString()
-  });
-  return { snapshot, event, eventId: saved.id, duplicate: saved.duplicate, delivery, text };
+  // 停滞消息由 formatEventMessage 按类型选中（与 #27 的格式一致）。
+  const delivered = await deliverEvent({ event, store, webhookUrl, now, cooldownMs, channel, fetchImpl });
+  return { snapshot, event, ...delivered };
 }
 
 /**
  * 对一个已登记项目执行一次全量检查：停滞、漂移、积压共用同一份阈值与同一条投递链路。
- * 每条事件各自先落审计库再投递；单条投递失败不影响其余事件。
+ * 每条事件各自先落审计库、各自判断冷却；单条投递失败不影响其余事件。
  * @param {{project:{id:string,name?:string,root:string}, store:object, webhookUrl?:string,
- *   now?:Date, thresholds?:object, fetchImpl?:Function, gitBin?:string}} options
+ *   now?:Date, thresholds?:object, cooldownMs?:number, channel?:string,
+ *   fetchImpl?:Function, gitBin?:string}} options
  * @returns {Promise<{snapshot:object, events:object[], results:object[], deliveries:object[]}>}
  */
 export async function runProjectCheck({
@@ -65,6 +103,8 @@ export async function runProjectCheck({
   webhookUrl = '',
   now = new Date(),
   thresholds = DEFAULT_THRESHOLDS,
+  cooldownMs = DEFAULT_COOLDOWN_MS,
+  channel = 'feishu',
   fetchImpl,
   gitBin = 'git'
 } = {}) {
@@ -83,21 +123,15 @@ export async function runProjectCheck({
     detectBacklogEvent(snapshot, { now, backlogFiles: limits.backlogFiles })
   ].filter(Boolean);
 
-  const events = [];
   const results = [];
   for (const event of detected) {
-    const saved = store.recordEvent(event);
-    const text = formatEventMessage(event);
-    const delivery = await deliverFeishu({ webhookUrl, text, fetchImpl });
-    store.recordDelivery({
-      eventId: saved.id,
-      fingerprint: event.fingerprint,
-      status: delivery.status,
-      detail: delivery.detail,
-      at: now.toISOString()
-    });
-    events.push(event);
-    results.push({ event, eventId: saved.id, duplicate: saved.duplicate, delivery, text });
+    const delivered = await deliverEvent({ event, store, webhookUrl, now, cooldownMs, channel, fetchImpl });
+    results.push({ event, ...delivered });
   }
-  return { snapshot, events, results, deliveries: results.map((item) => item.delivery) };
+  return {
+    snapshot,
+    events: results.map((item) => item.event),
+    results,
+    deliveries: results.map((item) => item.delivery)
+  };
 }

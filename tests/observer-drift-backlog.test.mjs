@@ -119,7 +119,7 @@ test('三类事件的指纹互不冲突', () => withDir(async (dir) => {
   assert.equal(fingerprints.size, 3);
 }));
 
-test('同一滞留在同一提交上漂移指纹稳定，落后更多则变化', () => withDir(async (dir) => {
+test('漂移指纹只由仓库与分支决定：落后更多也不换指纹，只更新证据字段', () => withDir(async (dir) => {
   const root = makeBehindRepo({ root: path.join(dir, 'stable'), behind: 12, commitAt: FOUR_DAYS_AGO });
   const projectId = 'obs-stable-fp';
 
@@ -134,8 +134,9 @@ test('同一滞留在同一提交上漂移指纹稳定，落后更多则变化',
   git(root, ['commit', '-q', '--allow-empty', '-m', 'more trunk']);
   git(root, ['checkout', '-q', 'feature']);
   const deeper = detectDriftEvent(probeProject({ projectId, root }), { now: NOW, driftCommits: 10 });
+  // 落后加深不换指纹：#28 的 24 小时冷却必须覆盖「同一分支漂移更深」这一情况。
   assert.equal(deeper.behindTrunk, 13);
-  assert.notEqual(first.fingerprint, deeper.fingerprint);
+  assert.equal(first.fingerprint, deeper.fingerprint);
 }));
 
 test('三类事件的阈值集中在一处配置：文件覆盖默认值，环境变量覆盖文件', () => withDir(async (dir) => {

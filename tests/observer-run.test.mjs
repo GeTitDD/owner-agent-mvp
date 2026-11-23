@@ -89,15 +89,20 @@ test('未越过阈值的项目不产生事件、不投递', () => withContext(as
   assert.equal(store.listEvents({ projectId: 'obs-fresh' }).length, 0);
 }));
 
-test('#27 不做冷却：同一事件重复运行仍会投递，冷却由 #28 接手', () => withContext(async ({ dir, store, requests, webhookUrl }) => {
+test('#28 冷却：同一事件重复运行只投递一次，第二次记为冷却跳过', () => withContext(async ({ dir, store, requests, webhookUrl }) => {
   const root = makeRepo({ root: path.join(dir, 'stale'), commitAt: FOUR_DAYS_AGO });
   const project = { id: 'obs-repeat', name: 'Repeat', root };
 
   const first = await runStaleCheck({ project, store, webhookUrl, now: NOW });
   const second = await runStaleCheck({ project, store, webhookUrl, now: NOW });
 
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 1);
   assert.equal(store.listEvents({ projectId: 'obs-repeat' }).length, 1);
   assert.equal(first.event.fingerprint, second.event.fingerprint);
-  assert.equal(store.listDeliveries({ fingerprint: first.event.fingerprint }).length, 2);
+  assert.equal(second.delivery.status, 'skipped');
+  assert.match(second.delivery.detail, /cooldown/);
+  assert.deepEqual(
+    store.listDeliveries({ fingerprint: first.event.fingerprint }).map((d) => d.status),
+    ['sent', 'skipped']
+  );
 }));

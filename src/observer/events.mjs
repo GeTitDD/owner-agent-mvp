@@ -1,6 +1,7 @@
 // 事件判定（纯函数）。
 //
-// 三类事件共用 thresholds.mjs 的阈值；24 小时指纹冷却属于 #28，不在这里实现。
+// 三类事件共用 thresholds.mjs 的阈值；指纹在此派生（#28），
+// 24 小时冷却在 cooldown.mjs 里按指纹判断。
 // 事件只描述事实，投递格式留给 feishu 模块。
 import { canonical, sha256 } from '../utils.mjs';
 import { DEFAULT_THRESHOLDS } from './thresholds.mjs';
@@ -14,17 +15,29 @@ export const DEFAULT_STALE_THRESHOLD_DAYS = DEFAULT_THRESHOLDS.staleDays;
 export const branchLabelOf = (snapshot) => snapshot.branch ?? '(detached HEAD)';
 
 /**
- * 停滞事件指纹：由项目、分支标签、事件类型与关键值（最后提交）派生。
- * 同一仓库同一分支停在同一个提交上，指纹稳定；换分支或换提交都会产生新指纹。
- * @param {{projectId:string, branchLabel:string, head:string}} input
+ * 事件指纹：由事件类型、仓库（projectId）与分支标签派生。
+ *
+ * 刻意不含 HEAD、落后提交数、未提交文件数、阈值与检测时间：票据 #28 要求
+ * 「同一项目、同一分支、同一类事件 24 小时内只通知一次」；若把 HEAD 或计数放进指纹，
+ * 推一个新提交或积压更多文件就会换指纹、绕过冷却。这些量仍作为事件证据字段
+ * 保留在事件对象与审计表里，只是不参与指纹。
+ * @param {'stale'|'drift'|'backlog'} type
+ * @param {string} projectId 已登记仓库标识
+ * @param {string} branchLabel 分支标签（detached HEAD 用可读标签）
  * @returns {string} 64 位十六进制
  */
-export const staleFingerprint = ({ projectId, branchLabel, head }) => sha256(canonical({
-  type: 'stale',
+const eventFingerprint = (type, projectId, branchLabel) => sha256(canonical({
+  type,
   projectId,
-  branch: branchLabel,
-  head
+  branch: branchLabel
 }));
+
+/**
+ * 停滞事件指纹：事件类型 + 仓库 + 分支。
+ * @param {{projectId:string, branchLabel:string}} input
+ * @returns {string} 64 位十六进制
+ */
+export const staleFingerprint = ({ projectId, branchLabel }) => eventFingerprint('stale', projectId, branchLabel);
 
 /**
  * 判断快照是否越过了停滞阈值。
@@ -45,7 +58,7 @@ export function detectStaleEvent(snapshot, { now = new Date(), thresholdDays = D
   const branchLabel = branchLabelOf(snapshot);
   return {
     type: 'stale',
-    fingerprint: staleFingerprint({ projectId: snapshot.projectId, branchLabel, head: snapshot.head }),
+    fingerprint: staleFingerprint({ projectId: snapshot.projectId, branchLabel }),
     projectId: snapshot.projectId,
     projectName: snapshot.projectName ?? '',
     branch: snapshot.branch,
@@ -58,20 +71,11 @@ export function detectStaleEvent(snapshot, { now = new Date(), thresholdDays = D
 }
 
 /**
- * 漂移事件指纹：由项目、分支标签、HEAD、主干与落后提交数派生。
- * 落后得更深会换指纹，停在原地则指纹稳定。
- * @param {{projectId:string, branchLabel:string, head:string|null, trunkRef:string,
- *   behindTrunk:number}} input
+ * 漂移事件指纹：事件类型 + 仓库 + 分支；落后加深不换指纹，只更新证据字段。
+ * @param {{projectId:string, branchLabel:string}} input
  * @returns {string} 64 位十六进制
  */
-export const driftFingerprint = ({ projectId, branchLabel, head, trunkRef, behindTrunk }) => sha256(canonical({
-  type: 'drift',
-  projectId,
-  branch: branchLabel,
-  head,
-  trunk: trunkRef,
-  behind: behindTrunk
-}));
+export const driftFingerprint = ({ projectId, branchLabel }) => eventFingerprint('drift', projectId, branchLabel);
 
 /**
  * 判断当前分支是否落后主干超过阈值（默认 10 个提交）。
@@ -90,13 +94,7 @@ export function detectDriftEvent(snapshot, { now = new Date(), driftCommits = DE
   const branchLabel = branchLabelOf(snapshot);
   return {
     type: 'drift',
-    fingerprint: driftFingerprint({
-      projectId: snapshot.projectId,
-      branchLabel,
-      head: snapshot.head,
-      trunkRef: snapshot.trunkRef,
-      behindTrunk
-    }),
+    fingerprint: driftFingerprint({ projectId: snapshot.projectId, branchLabel }),
     projectId: snapshot.projectId,
     projectName: snapshot.projectName ?? '',
     branch: snapshot.branch,
@@ -109,18 +107,11 @@ export function detectDriftEvent(snapshot, { now = new Date(), driftCommits = DE
 }
 
 /**
- * 积压事件指纹：由项目、分支标签、HEAD 与未提交文件数派生。
- * 文件数变化会换指纹，保持同一积压规模则指纹稳定。
- * @param {{projectId:string, branchLabel:string, head:string|null, uncommittedFiles:number}} input
+ * 积压事件指纹：事件类型 + 仓库 + 分支；文件数变化不换指纹，只更新证据字段。
+ * @param {{projectId:string, branchLabel:string}} input
  * @returns {string} 64 位十六进制
  */
-export const backlogFingerprint = ({ projectId, branchLabel, head, uncommittedFiles }) => sha256(canonical({
-  type: 'backlog',
-  projectId,
-  branch: branchLabel,
-  head,
-  files: uncommittedFiles
-}));
+export const backlogFingerprint = ({ projectId, branchLabel }) => eventFingerprint('backlog', projectId, branchLabel);
 
 /**
  * 判断未提交文件是否达到积压阈值（默认 20 个，达到即触发）。
@@ -137,12 +128,7 @@ export function detectBacklogEvent(snapshot, { now = new Date(), backlogFiles = 
   const branchLabel = branchLabelOf(snapshot);
   return {
     type: 'backlog',
-    fingerprint: backlogFingerprint({
-      projectId: snapshot.projectId,
-      branchLabel,
-      head: snapshot.head ?? null,
-      uncommittedFiles
-    }),
+    fingerprint: backlogFingerprint({ projectId: snapshot.projectId, branchLabel }),
     projectId: snapshot.projectId,
     projectName: snapshot.projectName ?? '',
     branch: snapshot.branch ?? null,
