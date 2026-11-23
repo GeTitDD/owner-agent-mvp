@@ -12,6 +12,10 @@
   --warn-bg: #fdf3e3;
   --unknown: #5c6570;
   --unknown-bg: #eef1f4;
+  --drift: #2f6f9f;
+  --drift-bg: #e8f1f8;
+  --backlog: #7a4b9c;
+  --backlog-bg: #f2ecf8;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -27,6 +31,10 @@
     --warn-bg: #3a2d17;
     --unknown: #a5afba;
     --unknown-bg: #262b31;
+    --drift: #7fb8dd;
+    --drift-bg: #1b2b36;
+    --backlog: #cba6e8;
+    --backlog-bg: #2c2338;
   }
 }
 
@@ -108,6 +116,9 @@ main { display: grid; gap: 32px; }
 }
 
 .card.risk-stale { border-left-color: var(--danger); }
+.card.risk-critical { border-left-color: var(--danger); box-shadow: inset 3px 0 0 var(--danger); }
+.card.risk-drift { border-left-color: var(--drift); }
+.card.risk-backlog { border-left-color: var(--backlog); }
 .card.risk-watch { border-left-color: var(--warn); }
 
 .card-head {
@@ -136,8 +147,32 @@ main { display: grid; gap: 32px; }
 }
 
 .badge-stale { background: var(--danger-bg); color: var(--danger); }
+.badge-critical { background: var(--danger-bg); color: var(--danger); }
+.badge-drift { background: var(--drift-bg); color: var(--drift); }
+.badge-backlog { background: var(--backlog-bg); color: var(--backlog); }
 .badge-watch { background: var(--warn-bg); color: var(--warn); }
 .badge-unknown { background: var(--unknown-bg); color: var(--unknown); }
+
+/* 顶部结论：打开页面先看到「现在最该看的是哪个项目」。 */
+.attention {
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--unknown);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.attention.risk-critical,
+.attention.risk-stale { border-left-color: var(--danger); }
+.attention.risk-drift { border-left-color: var(--drift); }
+.attention.risk-backlog { border-left-color: var(--backlog); }
+.attention.risk-watch { border-left-color: var(--warn); }
+
+.attention-name { margin: 0 0 4px; font-size: 20px; font-weight: 700; }
+
+.attention-reason { margin: 0; color: var(--muted); font-size: 14px; }
+
+.attention .empty { border: 1px dashed var(--line); }
 
 .card-meta {
   display: grid;
