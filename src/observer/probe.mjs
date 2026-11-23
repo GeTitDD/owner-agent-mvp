@@ -43,12 +43,46 @@ const tryGit = (gitBin, root, args) => {
   }
 };
 
+// 主干候选：优先远端跟踪分支（最后一次 fetch 的结果），其次本地同名分支。
+// 只读取本地已有引用，不 fetch —— 探针保持只读、不联网。
+const TRUNK_NAMES = ['main', 'master'];
+
+const firstExistingRef = (gitBin, root, candidates) => {
+  for (const ref of candidates) {
+    // 用 rev-parse --verify 确认引用可解析为提交；失败按“没有该主干”处理。
+    if (tryGit(gitBin, root, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])) return ref;
+  }
+  return null;
+};
+
+/**
+ * 选出用于漂移比较的主干引用。
+ * 远端 HEAD 指向的分支最可信；否则按 origin/main、origin/master、本地 main/master 依次尝试。
+ * 当前分支本身不作为主干，避免“自己落后自己”。
+ */
+const resolveTrunkRef = (gitBin, root, branch) => {
+  const originHead = tryGit(gitBin, root, ['symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD'])?.trim() || '';
+  const candidates = [];
+  if (originHead) candidates.push(originHead);
+  for (const name of TRUNK_NAMES) candidates.push(`origin/${name}`);
+  for (const name of TRUNK_NAMES) if (name !== branch) candidates.push(name);
+  return firstExistingRef(gitBin, root, [...new Set(candidates)]);
+};
+
+// 只统计落后/领先的提交数；两个引用无共同祖先时 rev-list 仍能给出计数，不会抛错。
+const countCommits = (gitBin, root, range) => {
+  const output = tryGit(gitBin, root, ['rev-list', '--count', range]);
+  const count = Number.parseInt(String(output ?? '').trim(), 10);
+  return Number.isSafeInteger(count) && count >= 0 ? count : 0;
+};
+
 /**
  * 采集单个项目的只读快照。
  * @param {{projectId:string, projectName?:string, root:string, gitBin?:string}} options
  * @returns {{projectId:string, projectName:string, root:string, branch:string|null,
  *   detached:boolean, head:string|null, hasCommits:boolean, lastCommitAt:string|null,
- *   uncommittedFiles:number, hasRemote:boolean}}
+ *   uncommittedFiles:number, hasRemote:boolean, trunkRef:string|null,
+ *   behindTrunk:number, aheadTrunk:number}}
  */
 export function probeProject({ projectId, projectName = '', root, gitBin = 'git' } = {}) {
   if (typeof projectId !== 'string' || !projectId.trim()) throw new ObserverProbeError('Invalid project id');
@@ -64,6 +98,9 @@ export function probeProject({ projectId, projectName = '', root, gitBin = 'git'
   const status = tryGit(gitBin, root, ['status', '--porcelain=v1', '--untracked-files=all']) ?? '';
   const uncommittedFiles = status.split(/\r?\n/).filter(Boolean).length;
   const remotes = tryGit(gitBin, root, ['remote']) ?? '';
+  const trunkRef = head ? resolveTrunkRef(gitBin, root, branch) : null;
+  const behindTrunk = trunkRef ? countCommits(gitBin, root, `HEAD..${trunkRef}`) : 0;
+  const aheadTrunk = trunkRef ? countCommits(gitBin, root, `${trunkRef}..HEAD`) : 0;
 
   return {
     projectId: projectId.trim(),
@@ -75,6 +112,9 @@ export function probeProject({ projectId, projectName = '', root, gitBin = 'git'
     hasCommits: Boolean(head),
     lastCommitAt,
     uncommittedFiles,
-    hasRemote: remotes.split(/\r?\n/).some(Boolean)
+    hasRemote: remotes.split(/\r?\n/).some(Boolean),
+    trunkRef,
+    behindTrunk,
+    aheadTrunk
   };
 }
