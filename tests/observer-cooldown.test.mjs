@@ -156,7 +156,8 @@ test('不同项目、不同分支的同类事件各自独立计算冷却', () =>
 
     const a1 = await runStaleCheck({ project: projectA, store, webhookUrl, now: NOW });
     // 另一个项目即使 HEAD、提交时间与分支都相同，也单独通知。
-    const b1 = await runStaleCheck({ project: { id: 'obs-iso-b', name: 'B', root: rootB }, store, webhookUrl, now: NOW });
+    const projectB = { id: 'obs-iso-b', name: 'B', root: rootB };
+    const b1 = await runStaleCheck({ project: projectB, store, webhookUrl, now: NOW });
     // 同一仓库换分支：新分支是独立事件，第一次照样通知。
     git(rootA, ['checkout', '-q', '-b', 'feature']);
     const a2 = await runStaleCheck({ project: projectA, store, webhookUrl, now: NOW });
