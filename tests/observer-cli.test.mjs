@@ -9,7 +9,14 @@ import { OwnerStore } from '../src/owner-store.mjs';
 import { ObserverStore } from '../src/observer/store.mjs';
 import { probeProject } from '../src/observer/probe.mjs';
 import { detectStaleEvent } from '../src/observer/events.mjs';
-import { makeRepo, makeTempDir, statusText, treeDigest } from './helpers/observer-fixture.mjs';
+import {
+  addUntrackedFiles,
+  makeBehindRepo,
+  makeRepo,
+  makeTempDir,
+  statusText,
+  treeDigest
+} from './helpers/observer-fixture.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLI = path.join(ROOT, 'bin', 'observerctl.mjs');
@@ -49,7 +56,9 @@ const registerProject = (dbPath, root, id, name) => {
 const childEnv = (dbPath) => ({
   ...process.env,
   OWNER_AGENT_DB: dbPath,
-  OWNER_OBSERVER_FEISHU_WEBHOOK: ''
+  OWNER_OBSERVER_FEISHU_WEBHOOK: '',
+  // 显式指向不存在的阈值文件，避免读到本机 ~/.owner-agent/thresholds.json。
+  OWNER_OBSERVER_THRESHOLDS: path.join(path.dirname(dbPath), 'missing-thresholds.json')
 });
 
 test('命令行单项目停滞检查：不启动 Electron，飞书收到通知，被观察仓库保持不变', () => withContext(async ({ dir, requests, webhookUrl }) => {
@@ -189,5 +198,30 @@ test('冷却：上次成功投递已超过 24 小时，命令行再次推送同�
 
   assert.equal(summary.delivery.status, 'sent');
   assert.equal(requests.length, 1);
+}));
+
+// #28 × #29：全量检查的三类事件也走冷却，重启进程后不重复推送。
+test('冷却作用于全量检查：check 连跑两次，三类事件都不重复推送', () => withContext(async ({ dir, requests, webhookUrl }) => {
+  const dbPath = path.join(dir, 'observer.sqlite');
+  const root = makeBehindRepo({ root: path.join(dir, 'all'), behind: 12, commitAt: FOUR_DAYS_AGO });
+  addUntrackedFiles(root, 25);
+  registerProject(dbPath, root, 'obs-cli-cooldown', 'CLI Cooldown');
+
+  const args = [
+    CLI, 'check',
+    '--project', 'obs-cli-cooldown',
+    '--db', dbPath,
+    '--config', path.join(dir, 'missing-feishu.json'),
+    '--thresholds', path.join(dir, 'missing-thresholds.json'),
+    '--webhook', webhookUrl,
+    '--json'
+  ];
+  const first = JSON.parse((await runCli(process.execPath, args, { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath) })).stdout);
+  const second = JSON.parse((await runCli(process.execPath, args, { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath) })).stdout);
+
+  assert.deepEqual(first.events.map((event) => event.type).sort(), ['backlog', 'drift', 'stale']);
+  assert.ok(first.deliveries.every((delivery) => delivery.status === 'sent'));
+  assert.ok(second.deliveries.every((delivery) => delivery.status === 'skipped'));
+  assert.equal(requests.length, 3);
 }));
 

@@ -4,9 +4,15 @@ import http from 'node:http';
 import path from 'node:path';
 import { rm } from 'node:fs/promises';
 import { evaluateCooldown } from '../src/observer/cooldown.mjs';
-import { runStaleCheck } from '../src/observer/service.mjs';
+import { runStaleCheck, runProjectCheck } from '../src/observer/service.mjs';
 import { ObserverStore } from '../src/observer/store.mjs';
-import { git, makeRepo, makeTempDir } from './helpers/observer-fixture.mjs';
+import {
+  addUntrackedFiles,
+  git,
+  makeBehindRepo,
+  makeRepo,
+  makeTempDir
+} from './helpers/observer-fixture.mjs';
 
 const NOW = new Date('2026-11-24T09:00:00+08:00');
 const FOUR_DAYS_AGO = '2026-11-20T09:00:00+08:00';
@@ -199,4 +205,31 @@ test('同分支出现新提交且仍然停滞：24 小时内不重复通知', ()
   });
 
   assert.equal(requests.length, 1);
+}));
+
+// #28 × #29：三类事件在同一条链路上各自冷却，互不占用对方的窗口。
+test('全量检查的三类事件各自冷却：第二次全部跳过，24 小时后各自再推送', () => withWebhook(async ({ dir, dbPath, requests, webhookUrl }) => {
+  const root = makeBehindRepo({ root: path.join(dir, 'all'), behind: 12, commitAt: FOUR_DAYS_AGO });
+  addUntrackedFiles(root, 25);
+  const project = { id: 'obs-three-cool', name: 'Three Cool', root };
+
+  await reopen(dbPath, async (store) => {
+    const first = await runProjectCheck({ project, store, webhookUrl, now: NOW });
+    assert.deepEqual(first.events.map((event) => event.type).sort(), ['backlog', 'drift', 'stale']);
+    assert.ok(first.deliveries.every((delivery) => delivery.status === 'sent'));
+    assert.equal(requests.length, 3);
+
+    const second = await runProjectCheck({
+      project, store, webhookUrl, now: new Date(NOW.getTime() + HOUR_MS)
+    });
+    assert.ok(second.deliveries.every((delivery) => delivery.status === 'skipped'));
+    assert.ok(second.results.every((item) => item.cooldown.coolingDown));
+    assert.equal(requests.length, 3, '冷却期内不应再发请求');
+
+    const third = await runProjectCheck({
+      project, store, webhookUrl, now: new Date(NOW.getTime() + 25 * HOUR_MS)
+    });
+    assert.ok(third.deliveries.every((delivery) => delivery.status === 'sent'));
+    assert.equal(requests.length, 6);
+  });
 }));

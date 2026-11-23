@@ -1,7 +1,7 @@
 // 观察事件的审计存储。
 //
 // 审计只生不灭：事件与投递记录都写在这里，观察台与冷却逻辑只读这里（ADR-0002）。
-// 本票落「停滞」事件；指纹唯一索引保证同一事件重复写入不会产生新行。
+// 三类事件（停滞 / 漂移 / 积压）共用一张表；指纹唯一索引保证同一事件重复写入不会产生新行。
 // 投递记录同时是冷却的唯一依据（lastSentAt）：同一指纹 24 小时内不再通知（#28）。
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
@@ -9,7 +9,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { defaultDbPath } from '../storage.mjs';
 
-const EVENT_TYPES = new Set(['stale']);
+const EVENT_TYPES = new Set(['stale', 'drift', 'backlog']);
 const DELIVERY_STATUSES = new Set(['sent', 'failed', 'skipped']);
 
 const check = (ok, message) => { if (!ok) throw new Error(message); };
@@ -37,6 +37,9 @@ const eventRow = (row) => row && {
   head: row.last_commit_sha,
   lastCommitAt: row.last_commit_at ?? null,
   daysStale: row.days_stale,
+  trunkRef: row.trunk_ref ?? null,
+  behindTrunk: row.behind_trunk ?? 0,
+  uncommittedFiles: row.uncommitted_files ?? 0,
   detectedAt: row.detected_at
 };
 const deliveryRow = (row) => row && {
@@ -66,6 +69,9 @@ export class ObserverStore {
         last_commit_sha TEXT NOT NULL DEFAULT '',
         last_commit_at TEXT,
         days_stale INTEGER NOT NULL DEFAULT 0,
+        trunk_ref TEXT,
+        behind_trunk INTEGER NOT NULL DEFAULT 0,
+        uncommitted_files INTEGER NOT NULL DEFAULT 0,
         detected_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS observer_events_project ON observer_events(project_id,detected_at DESC);
@@ -81,6 +87,16 @@ export class ObserverStore {
       CREATE INDEX IF NOT EXISTS observer_deliveries_event ON observer_deliveries(event_id,seq);
       CREATE INDEX IF NOT EXISTS observer_deliveries_fingerprint ON observer_deliveries(fingerprint,seq DESC);
     `);
+    // #27 建的库没有漂移 / 积压列，就地补列，避免要求手工迁移。
+    const columns = this.db.prepare('PRAGMA table_info(observer_events)').all().map((item) => item.name);
+    const added = [
+      ['trunk_ref', 'TEXT'],
+      ['behind_trunk', 'INTEGER NOT NULL DEFAULT 0'],
+      ['uncommitted_files', 'INTEGER NOT NULL DEFAULT 0']
+    ];
+    for (const [column, ddl] of added) {
+      if (!columns.includes(column)) this.db.exec(`ALTER TABLE observer_events ADD COLUMN ${column} ${ddl}`);
+    }
   }
 
   close() { this.db.close(); }
@@ -102,6 +118,10 @@ export class ObserverStore {
     const lastCommitAt = event.lastCommitAt === null || event.lastCommitAt === undefined
       ? null : iso(event.lastCommitAt, 'last commit time');
     const daysStale = Number.isSafeInteger(event.daysStale) && event.daysStale >= 0 ? event.daysStale : 0;
+    const trunkRef = optionalText(event.trunkRef, 'trunk ref', 300) || null;
+    const behindTrunk = Number.isSafeInteger(event.behindTrunk) && event.behindTrunk >= 0 ? event.behindTrunk : 0;
+    const uncommittedFiles = Number.isSafeInteger(event.uncommittedFiles) && event.uncommittedFiles >= 0
+      ? event.uncommittedFiles : 0;
     const detectedAt = iso(event.detectedAt, 'detected time');
 
     const existing = this.db.prepare('SELECT id FROM observer_events WHERE fingerprint=?').get(fingerprint);
@@ -110,10 +130,10 @@ export class ObserverStore {
     const id = randomUUID();
     this.db.prepare(`INSERT INTO observer_events(
       id,fingerprint,type,project_id,project_name,branch,branch_label,
-      last_commit_sha,last_commit_at,days_stale,detected_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(
+      last_commit_sha,last_commit_at,days_stale,trunk_ref,behind_trunk,uncommitted_files,detected_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id, fingerprint, event.type, projectId, projectName, branch, branchLabel,
-      head, lastCommitAt, daysStale, detectedAt
+      head, lastCommitAt, daysStale, trunkRef, behindTrunk, uncommittedFiles, detectedAt
     );
     return { id, duplicate: false };
   }

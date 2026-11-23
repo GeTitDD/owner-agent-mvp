@@ -66,3 +66,29 @@ export const treeDigest = (root) => {
 
 /** 只读的 git status 输出，用于前后对比。 */
 export const statusText = (root) => git(root, ['status', '--porcelain=v1']);
+
+/**
+ * 建立一个当前分支落后主干指定提交数的仓库。
+ * 先切出 feature，再在 main 上追加空提交，最后切回 feature —— 全程本地操作，不需要 remote。
+ * @param {{root:string, behind?:number, branch?:string, trunk?:string, commitAt?:string}} options
+ * @returns {string} 仓库根目录
+ */
+export const makeBehindRepo = ({ root, behind = 12, branch = 'feature', trunk = 'main',
+  commitAt = null }) => {
+  makeRepo({ root, commitAt });
+  git(root, ['checkout', '-q', '-b', branch]);
+  git(root, ['checkout', '-q', trunk]);
+  for (let index = 0; index < behind; index += 1) {
+    git(root, ['commit', '-q', '--allow-empty', '-m', `trunk ${index + 1}`]);
+  }
+  git(root, ['checkout', '-q', branch]);
+  return root;
+};
+
+/** 在仓库里制造指定数量的未跟踪文件（不加入索引）。 */
+export const addUntrackedFiles = (root, count, prefix = 'untracked') => {
+  const files = {};
+  for (let index = 0; index < count; index += 1) files[`${prefix}-${index + 1}.txt`] = `file ${index + 1}\n`;
+  writeFiles(root, files);
+  return count;
+};
