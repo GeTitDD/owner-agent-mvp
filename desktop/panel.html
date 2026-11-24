@@ -33,6 +33,11 @@
       <button type="button" data-mode="C">对话</button>
     </nav>
 
+    <!-- Toast 挂在模式栏正下方：既不会盖住导航，也不会压到底部输入区。 -->
+    <div class="toast-host">
+      <div id="toast" class="toast" hidden></div>
+    </div>
+
     <section id="modeA" class="mode" hidden>
       <div class="a-wrap">
         <!-- 专注第一张卡：待办（知识模式只管浏览，处理决定留在这里）。
@@ -373,7 +378,6 @@
     </div>
   </div>
 
-  <div id="toast" class="toast" hidden></div>
   <script src="./composer-list.js"></script>
   <script src="./focus-detail.cjs"></script>
   <script src="./panel-selection.cjs"></script>

@@ -54,3 +54,24 @@ test('渲染层没有全局项目下拉，也不再调用 settings.set({ project
   // 发送前先取显式目标，取不到就地拦下。
   assert.match(panel, /const target = submitTarget\(\);\s*\n\s*if \(!target\)/u);
 });
+
+test('待办卡只标项目名，不再分「当前/其他」两堆', () => {
+  const panel = fs.readFileSync(path.join(root, 'desktop/panel.js'), 'utf8');
+  assert.equal(panel.includes('其他项目 ·'), false);
+  assert.equal(panel.includes('所选项目 ·'), false);
+  assert.match(panel, /el\('div', 'pending-project', item\.projectName\)/u);
+});
+
+test('沙箱提示不再打印 unknown 占位', () => {
+  const panel = fs.readFileSync(path.join(root, 'desktop/panel.js'), 'utf8');
+  assert.equal(panel.includes("ecosystem || 'unknown'"), false);
+  assert.match(panel, /这个项目还没有可用的沙箱 profile/u);
+});
+
+test('toast 挂在模式栏下方：不盖导航、不压输入区', () => {
+  const html = fs.readFileSync(path.join(root, 'desktop/panel.html'), 'utf8');
+  const css = fs.readFileSync(path.join(root, 'desktop/panel.css'), 'utf8');
+  assert.match(html, /<\/nav>[\s\S]{0,200}?<div class="toast-host">[\s\S]{0,40}?<div id="toast"/u);
+  assert.equal(/\.toast\s*\{[^}]*top:\s*70px/u.test(css), false);
+  assert.match(css, /\.toast-host\s*\{[^}]*position:\s*relative/u);
+});
