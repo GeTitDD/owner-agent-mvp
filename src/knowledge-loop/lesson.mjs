@@ -55,7 +55,8 @@ export class LessonDistiller {
     const id = String(projectId ?? '').trim();
     if (!id) throw new Error('projectId is required');
     const { records, truncated } = this.listRecords({ ownerStore: this.owner, projectId: id, limit });
-    const distilled = new Set(this.personal.lessonedRecordIds({ projectId: id }));
+    // 去重后一条经验可能带多条执行记录的证据，队列要按「来源记录 + 证据所属记录」一起判断。
+    const distilled = new Set(this.personal.distilledRecordIds({ projectId: id }));
     const pending = records.filter((record) => !distilled.has(record.id));
     return { projectId: id, records: pending, total: pending.length, truncated };
   }
@@ -220,7 +221,8 @@ export class LessonDistiller {
         extractor: this.model || 'injected',
         createdAt: this.clock()
       });
-      stored = this.personal.addLesson(lesson, {
+      // 同现象同作用域会命中已有经验：只追加证据、累加计数，不新增经验行。
+      stored = this.personal.recordLesson(lesson, {
         evidence: cited.map((item) => ({ ref: item.ref, recordId: record.id, kind: item.kind, excerpt: item.excerpt }))
       });
     } catch (error) {
