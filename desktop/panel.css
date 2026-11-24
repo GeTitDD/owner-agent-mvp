@@ -339,10 +339,11 @@ pre.diff, pre.logs {
 }
 .confirm-row { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; }
 
+.toast-host { position: relative; flex: none; height: 0; z-index: 40; }
 .toast {
   position: absolute;
+  top: 6px;
   left: 50%;
-  bottom: 56px;
   transform: translateX(-50%);
   background: rgba(17, 24, 39, 0.92);
   color: #fff;
@@ -1362,10 +1363,6 @@ pre.diff, pre.logs {
   flex: none; max-width: 42%; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
 }
-.toast { bottom: 190px; }
-
-.toast { top: 70px; bottom: auto; right: 16px; max-width: calc(100% - 32px); }
-
 .toast { max-width: 72%; font-size: 12px; }
 #runningBadge { color: var(--muted); background: transparent; border-color: var(--line); }
 

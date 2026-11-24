@@ -3535,6 +3535,15 @@ async function boot() {
             const draftKept = input.value;
             const selectedRow = document.querySelector('#projectList .project-row.selected')?.dataset.project ?? '';
             const detailTab = document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
+            // toast 位置验收：不能压住模式栏，也不能压住底部输入区。
+            const rectOf = (node) => {
+              if (!node) return null;
+              const rect = node.getBoundingClientRect();
+              return { top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
+            };
+            const toastRect = rectOf(toast);
+            const navRect = rectOf(document.getElementById('modeBar'));
+            const composerRect = rectOf(document.getElementById('composeSection'));
             const view = await window.companion.snapshot();
             const settings = await window.companion.settings.get();
             return {
@@ -3545,6 +3554,11 @@ async function boot() {
               blockedToastVisible: toastVisible,
               draftKept,
               viewProjectFromDom: selectedRow || detailTab,
+              toastRect,
+              navRect,
+              composerRect,
+              toastOverlapsNav: Boolean(toastRect && navRect && toastRect.top < navRect.bottom),
+              toastOverlapsComposer: Boolean(toastRect && composerRect && toastRect.bottom > composerRect.top),
               settingsProjectId: settings?.projectId ?? null
             };
           })()`);
@@ -3562,6 +3576,21 @@ async function boot() {
             path.join(screenshotDir, focusRestarted ? 'panel-A-restart.png' : 'panel-A-no-project.png'),
             focusImage.toPNG()
           );
+          // toast 三档位置验收：同一次显示内依次切模式截图（toast 2.6 秒后自动消失）。
+          fs.writeFileSync(path.join(screenshotDir, 'toast-A.png'), focusImage.toPNG());
+          for (const mode of ['B', 'C']) {
+            await panel.webContents.executeJavaScript(
+              `document.querySelector('#modeBar button[data-mode="${mode}"]')?.click();`
+            );
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            const toastImage = await panel.webContents.capturePage();
+            fs.writeFileSync(path.join(screenshotDir, `toast-${mode}.png`), toastImage.toPNG());
+          }
+          // 回到专注：后面的项目选择与截图都在专注页。
+          await panel.webContents.executeJavaScript(
+            `document.querySelector('#modeBar button[data-mode="A"]')?.click();`
+          );
+          await new Promise((resolve) => setTimeout(resolve, 300));
           if (focusIdle.hasProjects) {
             const focusPicked = await panel.webContents.executeJavaScript(`(async () => {
               const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
