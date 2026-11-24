@@ -696,7 +696,12 @@ const skillCatalogPayload = async ({ refresh = false } = {}) => {
         domainRoot: path.join(__dirname, '..', 'domains'),
         pluginsDir: path.join(__dirname, '..', 'plugins'),
         pstackSkillsDir: resolvePstackSkillsDir(),
-        pstackSkillIds: registry.PLAYBOOKS.map((item) => item.id)
+        pstackSkillIds: registry.PLAYBOOKS.map((item) => ({
+          id: item.id,
+          playbookLabel: item.label,
+          // 图谱 playbook 由面板按钮直接生成，磁盘上没有 SKILL.md 是设计如此。
+          noSkillDir: Boolean(item.diagramKind)
+        }))
       })
     });
   }
@@ -2257,16 +2262,6 @@ const playbookListPayload = async (projectId) => {
   };
 };
 
-/** 解析项目：只接受已登记项目；缺省用当前项目，再退到第一个。 */
-const resolveProject = async (projectId = '') => {
-  const projects = (await api('/owner/v1/projects')).items ?? [];
-  const project = projects.find((item) => item.id === projectId)
-    ?? projects.find((item) => item.id === config.projectId)
-    ?? projects[0];
-  if (!project) throw new Error('还没有项目，请先在设置里添加一个项目目录。');
-  return project;
-};
-
 let companionSubmitModule = null;
 const loadCompanionSubmit = async () => {
   companionSubmitModule ??= await importEsm('../src/companion-submit.mjs');
@@ -2324,9 +2319,10 @@ const createWriteRequest = async ({
   return { jobId: job.id, status: job.status, projectId: project.id };
 };
 
-/** 兼容旧路径：面板“生成改动提案”也走同一个受控写入链路。 */
+/** 兼容旧路径：面板“生成改动提案”也走同一个受控写入链路；必须显式给项目。 */
 const createPatchJob = async ({ text, projectId, jobType = 'code-write', ...rest }) => {
-  const project = await resolveProject(projectId);
+  // 写路径必须显式给项目：没给就报错，不保留「没指定就写进第一个项目」的通路。
+  const project = await registeredProject(projectId, '生成改动提案要选择一个项目。');
   return createWriteRequest({ project, text, ...rest });
 };
 
@@ -2408,12 +2404,19 @@ const requireChatSessions = () => {
   return chatSessionStore;
 };
 
-/** 新建会话只接受已登记项目，不做「找不到就退回第一个」的静默兜底。 */
+/** 按 id 找已登记项目；找不到返回 null。主进程与渲染进程各留一份（不强行共用浏览器模块）。 */
+const findProjectById = (projects, projectId) => {
+  const id = String(projectId ?? '').trim();
+  if (!id) return null;
+  return (Array.isArray(projects) ? projects : []).find((item) => item?.id === id) ?? null;
+};
+
+/** 新建会话/交办只接受已登记项目，不做「找不到就退回第一个」的静默兜底。 */
 const registeredProject = async (projectId, missingMessage = '新建会话要选择一个项目。') => {
   const id = String(projectId ?? '').trim();
   if (!id) throw new Error(missingMessage);
   const items = (await api('/owner/v1/projects')).items ?? [];
-  const project = items.find((item) => item.id === id);
+  const project = findProjectById(items, id);
   if (!project) throw new Error(`项目不存在：${id}`);
   return project;
 };
@@ -2482,29 +2485,29 @@ const registerIpc = () => {
     return requireChatSessions().deleteSession(String(input?.id ?? ''));
   });
 
+  ipcMain.handle('companion:chat-session-append', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().appendMessage({
+      sessionId: String(input?.id ?? ''),
+      role: String(input?.role ?? ''),
+      text: String(input?.text ?? ''),
+      status: input?.status === 'error' ? 'error' : 'ok',
+      citations: Array.isArray(input?.citations) ? input.citations : []
+    });
+  });
+
   // 对话模式：只读 Pi SDK 会话（read/grep/find/ls），不能写文件。
   // 会话消息落本地库：模型失败也保留问题，重启后能接着看。
   ipcMain.handle('companion:chat-ask', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const service = await getChatService();
     const question = String(input?.question ?? '');
-    let project = null;
-    try {
-      project = await resolveProject(String(input?.projectId ?? ''));
-    } catch {
-      // 还没有项目时交给服务返回 no-project，而不是让 IPC 抛裸错误。
-      project = null;
-    }
     const sessionId = String(input?.sessionId ?? '').trim();
-    let session = null;
-    if (sessionId) {
-      session = requireChatSessions().getSession(sessionId);
-      // 会话绑定哪个项目就只读哪个项目，避免在 A 会话里问到 B 项目。
-      if (!project || project.id !== session.projectId) {
-        const items = (await api('/owner/v1/projects')).items ?? [];
-        project = items.find((item) => item.id === session.projectId) ?? null;
-      }
-    }
+    const session = sessionId ? requireChatSessions().getSession(sessionId) : null;
+    // 项目只认「会话绑定」或「本次显式传入」；找不到就让服务返回 no-project，不回退第一个。
+    const wantedId = String(session?.projectId || input?.projectId || '').trim();
+    const items = wantedId ? ((await api('/owner/v1/projects')).items ?? []) : [];
+    const project = findProjectById(items, wantedId);
     // 续聊上下文在写入本次问题之前取，避免把问句重复塞进历史。
     const history = session ? requireChatSessions().historyForPrompt(session.id) : [];
     const text = question.trim();
@@ -2549,7 +2552,8 @@ const registerIpc = () => {
 
   ipcMain.handle('companion:queue-add', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    const project = await resolveProject(String(input?.projectId ?? ''));
+    // 写路径显式指定项目：缺了就报错，不写进第一个项目。
+    const project = await registeredProject(input?.projectId, '记想法要选择一个项目。');
     return api('/owner/v1/queue', {
       method: 'POST',
       body: {
@@ -2873,8 +2877,9 @@ const registerIpc = () => {
     const patch = proposalId
       ? await api(`/owner/v1/patches/${encodeURIComponent(proposalId)}`).catch(() => null)
       : null;
-    const project = await resolveProject(
-      projectIdOf(patch ?? {}) || String(input?.projectId ?? '')
+    const project = await registeredProject(
+      projectIdOf(patch ?? {}) || String(input?.projectId ?? ''),
+      '创建沙箱要指定一个项目。'
     );
     const testConfig = await testConfigForProject(project);
     if (!testConfig.enabled) {
@@ -3460,7 +3465,7 @@ async function boot() {
         }
         if (panel) {
           // 三种模式各截一张：直接点顶部的模式按钮，避免 reload 的竞态。
-          for (const mode of ['A', 'B', 'C']) {
+          for (const mode of ['focus', 'knowledge', 'chat']) {
             await panel.webContents.executeJavaScript(
               `document.querySelector('#modeBar button[data-mode="${mode}"]')?.click();`
             );
@@ -3468,7 +3473,7 @@ async function boot() {
             const image = await panel.webContents.capturePage();
             fs.writeFileSync(path.join(screenshotDir, `panel-${mode}.png`), image.toPNG());
             // 知识审核验收：先保留接受前的 B 模式，再点第一条候选的「接受」补一张。
-            if (mode === 'B') {
+            if (mode === 'knowledge') {
               const reviewProbe = await panel.webContents.executeJavaScript(`(async () => {
                 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                 let button = null;
@@ -3514,10 +3519,10 @@ async function boot() {
           if (!focusRestarted) fs.writeFileSync(focusMarker, new Date().toISOString(), 'utf8');
           const focusIdle = await panel.webContents.executeJavaScript(`(async () => {
             const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-            document.querySelector('#modeBar button[data-mode="A"]')?.click();
+            document.querySelector('#modeBar button[data-mode="focus"]')?.click();
             await wait(700);
-            const chip = document.getElementById('composerProject');
-            const name = document.getElementById('composerProjectName');
+            const chip = document.getElementById('handoffTarget');
+            const name = document.getElementById('handoffTargetName');
             const input = document.getElementById('taskInput');
             const before = {
               projectId: chip?.dataset.projectId ?? '',
@@ -3578,7 +3583,7 @@ async function boot() {
           );
           // toast 三档位置验收：同一次显示内依次切模式截图（toast 2.6 秒后自动消失）。
           fs.writeFileSync(path.join(screenshotDir, 'toast-A.png'), focusImage.toPNG());
-          for (const mode of ['B', 'C']) {
+          for (const mode of ['knowledge', 'chat']) {
             await panel.webContents.executeJavaScript(
               `document.querySelector('#modeBar button[data-mode="${mode}"]')?.click();`
             );
@@ -3588,18 +3593,18 @@ async function boot() {
           }
           // 回到专注：后面的项目选择与截图都在专注页。
           await panel.webContents.executeJavaScript(
-            `document.querySelector('#modeBar button[data-mode="A"]')?.click();`
+            `document.querySelector('#modeBar button[data-mode="focus"]')?.click();`
           );
           await new Promise((resolve) => setTimeout(resolve, 300));
           if (focusIdle.hasProjects) {
             const focusPicked = await panel.webContents.executeJavaScript(`(async () => {
               const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-              const chip = document.getElementById('composerProject');
-              const name = document.getElementById('composerProjectName');
+              const chip = document.getElementById('handoffTarget');
+              const name = document.getElementById('handoffTargetName');
               const beforeView = (await window.companion.snapshot())?.config?.projectId ?? '';
               chip?.click();
               await wait(300);
-              const options = [...document.querySelectorAll('#composerProjectMenu .composer-project-option')];
+              const options = [...document.querySelectorAll('#handoffTargetMenu .composer-project-option')];
               const target = options.find((item) => item.dataset.project !== beforeView) ?? options[0];
               target?.click();
               // 选中后等界面真正换到该项目（快照要走一遍服务探测），最多等 6 秒。
@@ -3649,7 +3654,7 @@ async function boot() {
           }
           // 技能目录验收：列表（含插件组）、展开详情、缺失条目详情（#44）。
           await panel.webContents.executeJavaScript(`
-            document.querySelector('#modeBar button[data-mode="B"]')?.click();
+            document.querySelector('#modeBar button[data-mode="knowledge"]')?.click();
             document.getElementById('skillCatalog')?.scrollIntoView({ block: 'start' });
           `);
           await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -3690,6 +3695,9 @@ async function boot() {
                   source: group.key, name: group.items[0].name, path: group.items[0].path,
                   missing: group.items[0].missing, reason: group.items[0].reason
                 } : null)),
+                playbookOnly: (first.groups ?? []).flatMap((group) => group.items ?? [])
+                  .filter((item) => item.playbookOnly)
+                  .map((item) => ({ id: item.id, name: item.name, missing: item.missing, source: item.source })),
                 cachedFlags: [first.cached, second.cached, forced.cached]
               };
             })()
@@ -3725,9 +3733,9 @@ async function boot() {
                   projectId: (projects[1] ?? projects[0]).id,
                   title: '重启后还在的会话'
                 });
-                document.querySelector('#modeBar button[data-mode="A"]')?.click();
+                document.querySelector('#modeBar button[data-mode="focus"]')?.click();
                 await wait(400);
-                document.querySelector('#modeBar button[data-mode="C"]')?.click();
+                document.querySelector('#modeBar button[data-mode="chat"]')?.click();
                 await wait(900);
                 const fresh = (await list()).find((s) => s.title === '新会话') ?? (await list())[0];
                 document.querySelector('[data-session-id="' + fresh.id + '"] .c-session-open')?.click();
@@ -3747,7 +3755,7 @@ async function boot() {
                   activeId: localStorage.getItem('owner-chat-session')
                 };
               }
-              document.querySelector('#modeBar button[data-mode="C"]')?.click();
+              document.querySelector('#modeBar button[data-mode="chat"]')?.click();
               await wait(900);
               const sessions = await list();
               const activeId = localStorage.getItem('owner-chat-session');
@@ -3792,9 +3800,9 @@ async function boot() {
                 id: target.id,
                 title: '重启后还在的会话（已改名）'
               });
-              document.querySelector('#modeBar button[data-mode="A"]')?.click();
+              document.querySelector('#modeBar button[data-mode="focus"]')?.click();
               await wait(400);
-              document.querySelector('#modeBar button[data-mode="C"]')?.click();
+              document.querySelector('#modeBar button[data-mode="chat"]')?.click();
               await wait(900);
               const listNode = document.querySelector('#cSessionList');
               if (listNode) listNode.hidden = false;
@@ -3849,7 +3857,7 @@ async function boot() {
           handoffSteps.before = await panel.webContents.executeJavaScript(`
             (async () => {
               const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              document.querySelector('#modeBar button[data-mode="A"]')?.click();
+              document.querySelector('#modeBar button[data-mode="focus"]')?.click();
               await wait(1000);
               document.getElementById('needsSection')?.scrollIntoView({ block: 'start' });
               document.getElementById('toast').hidden = true;
@@ -3868,7 +3876,7 @@ async function boot() {
           handoffSteps.idle = await panel.webContents.executeJavaScript(`
             (async () => {
               const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              document.querySelector('#modeBar button[data-mode="C"]')?.click();
+              document.querySelector('#modeBar button[data-mode="chat"]')?.click();
               await wait(900);
               const view = await window.companion.snapshot();
               const projects = view?.projects ?? [];
@@ -3876,9 +3884,9 @@ async function boot() {
               // 没有会话时先建一条（绑定第一个项目），别让发送落到「新建会话」弹窗里。
               if (!sessions.length && projects.length) {
                 await window.companion.chat.sessions.create({ projectId: projects[0].id });
-                document.querySelector('#modeBar button[data-mode="A"]')?.click();
+                document.querySelector('#modeBar button[data-mode="focus"]')?.click();
                 await wait(400);
-                document.querySelector('#modeBar button[data-mode="C"]')?.click();
+                document.querySelector('#modeBar button[data-mode="chat"]')?.click();
                 await wait(900);
                 sessions = (await window.companion.chat.sessions.list()).items ?? [];
               }
@@ -3939,7 +3947,7 @@ async function boot() {
           handoffSteps.focusAfterOff = await panel.webContents.executeJavaScript(`
             (async () => {
               const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              document.querySelector('#modeBar button[data-mode="A"]')?.click();
+              document.querySelector('#modeBar button[data-mode="focus"]')?.click();
               await wait(1000);
               document.getElementById('needsSection')?.scrollIntoView({ block: 'start' });
               document.getElementById('toast').hidden = true;
@@ -3957,7 +3965,7 @@ async function boot() {
           handoffSteps.armed = await panel.webContents.executeJavaScript(`
             (async () => {
               const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              document.querySelector('#modeBar button[data-mode="C"]')?.click();
+              document.querySelector('#modeBar button[data-mode="chat"]')?.click();
               await wait(900);
               document.getElementById('cHandoff')?.click();
               await wait(250);
@@ -4006,7 +4014,7 @@ async function boot() {
           handoffSteps.focus = await panel.webContents.executeJavaScript(`
             (async () => {
               const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              document.querySelector('#modeBar button[data-mode="A"]')?.click();
+              document.querySelector('#modeBar button[data-mode="focus"]')?.click();
               await wait(1200);
               const cards = [...document.querySelectorAll('#pendingList .pending-card')];
               const target = cards.find((card) =>
@@ -4031,6 +4039,198 @@ async function boot() {
             path.join(screenshotDir, 'chat-handoff-probe.json'),
             JSON.stringify(handoffSteps, null, 2)
           );
+
+          // ---- 审查修复验收：P0-1 视图项目 / 交办目标分离 ----
+          const splitInitial = await panel.webContents.executeJavaScript(`(async () => {
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            document.querySelector('#modeBar button[data-mode="focus"]')?.click();
+            await wait(1200);
+            const projects = (await window.companion.snapshot())?.projects ?? [];
+            const chip = document.getElementById('handoffTarget');
+            const name = document.getElementById('handoffTargetName');
+            const tabOf = () => document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
+            const rowOf = () => document.querySelector('#projectList .project-row.selected')?.dataset.project ?? '';
+            const handoffOf = () => ({ id: chip?.dataset.projectId ?? '', label: name?.textContent?.trim() ?? '' });
+            if (projects.length < 2) return { skipped: 'need-two-projects', count: projects.length };
+            const initial = { view: tabOf(), selectedRow: rowOf(), handoff: handoffOf() };
+            // 点详情卡的项目标签看另一个项目：只应换视图，交办仍是「未选项目」。
+            const other = projects[1];
+            const tab = [...document.querySelectorAll('#fdTabs .fd-tab')]
+              .find((node) => node.dataset.project === other.id);
+            tab?.click();
+            for (let i = 0; i < 60; i += 1) {
+              await wait(150);
+              if (tabOf() === other.id && rowOf() === other.id) break;
+            }
+            await wait(600);
+            // 截图要同时看到详情卡标签（视图项目）与底部「交办到 …」（交办目标）。
+            document.getElementById('focusDetail')?.scrollIntoView({ block: 'start' });
+            await wait(500);
+            document.getElementById('toast').hidden = true;
+            return {
+              projectIds: projects.map((item) => item.id),
+              initial,
+              afterTab: { view: tabOf(), selectedRow: rowOf(), handoff: handoffOf() },
+              clicked: other.id
+            };
+          })()`);
+          let splitImage = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'panel-A-view-vs-handoff.png'), splitImage.toPNG());
+          const splitMenu = await panel.webContents.executeJavaScript(`(async () => {
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            const projects = (await window.companion.snapshot())?.projects ?? [];
+            const viewBefore = document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
+            const target = projects.find((item) => item.id !== viewBefore) ?? projects[0];
+            document.getElementById('handoffTarget')?.click();
+            await wait(300);
+            document.querySelector('#handoffTargetMenu .composer-project-option[data-project="' + target.id + '"]')?.click();
+            await wait(500);
+            return {
+              viewBefore,
+              target: target.id,
+              viewAfter: document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '',
+              handoff: {
+                id: document.getElementById('handoffTarget')?.dataset.projectId ?? '',
+                label: document.getElementById('handoffTargetName')?.textContent?.trim() ?? ''
+              }
+            };
+          })()`);
+          splitImage = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'panel-A-handoff-menu-picked.png'), splitImage.toPNG());
+          fs.writeFileSync(
+            path.join(screenshotDir, 'view-handoff-split.json'),
+            JSON.stringify({ splitInitial, splitMenu }, null, 2)
+          );
+
+          // ---- 审查修复验收：P0-2 新建会话默认空选项、未选禁用创建 ----
+          const newSessionBefore = await panel.webContents.executeJavaScript(`(async () => {
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            document.querySelector('#modeBar button[data-mode="chat"]')?.click();
+            await wait(900);
+            document.getElementById('cSessionNew')?.click();
+            await wait(500);
+            const modal = document.getElementById('modal');
+            const select = modal.querySelector('.sheet-body select');
+            const create = [...modal.querySelectorAll('.sheet-foot button')]
+              .find((node) => node.textContent.trim() === '新建会话');
+            return {
+              open: !modal.hidden,
+              value: select?.value ?? '',
+              options: select ? [...select.options].map((node) => ({
+                value: node.value, label: node.textContent, disabled: node.disabled
+              })) : [],
+              createDisabled: create?.disabled === true
+            };
+          })()`);
+          let sessionFormImage = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'panel-C-new-session-empty.png'), sessionFormImage.toPNG());
+          const newSessionAfter = await panel.webContents.executeJavaScript(`(async () => {
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            const modal = document.getElementById('modal');
+            const select = modal.querySelector('.sheet-body select');
+            const create = [...modal.querySelectorAll('.sheet-foot button')]
+              .find((node) => node.textContent.trim() === '新建会话');
+            const option = [...(select?.options ?? [])].find((node) => node.value);
+            if (select && option) {
+              select.value = option.value;
+              select.dispatchEvent(new Event('change'));
+            }
+            await wait(250);
+            const enabled = create?.disabled === false;
+            document.getElementById('closeModal')?.click();
+            return { picked: option?.value ?? '', createEnabledAfterPick: enabled };
+          })()`);
+          fs.writeFileSync(
+            path.join(screenshotDir, 'new-session-probe.json'),
+            JSON.stringify({ before: newSessionBefore, after: newSessionAfter }, null, 2)
+          );
+
+          // ---- 审查修复验收：P0-5 知识档只剩两块；四个入口跳转 + 兜底 ----
+          const knowledgeBlocks = await panel.webContents.executeJavaScript(`(async () => {
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            document.querySelector('#modeBar button[data-mode="knowledge"]')?.click();
+            await wait(1400);
+            document.getElementById('knowledgeBrowse')?.scrollIntoView({ block: 'start' });
+            await wait(400);
+            const modeB = document.getElementById('modeB');
+            const modeA = document.getElementById('modeA');
+            const workspace = document.getElementById('workspaceToggle');
+            const browse = document.getElementById('knowledgeBrowse');
+            return {
+              blocks: [...modeB.querySelectorAll(':scope > .scroll > section')]
+                .map((node) => ({ id: node.id, className: node.className })),
+              hasWorkspaceInKnowledge: modeB.contains(workspace),
+              workspaceInFocus: modeA.contains(workspace),
+              workspaceOpen: workspace?.open === true,
+              renderMs: browse?.dataset.renderMs ?? '',
+              renderBudget: browse?.dataset.renderBudget ?? ''
+            };
+          })()`);
+          fs.writeFileSync(
+            path.join(screenshotDir, 'knowledge-mode-blocks.json'),
+            JSON.stringify(knowledgeBlocks, null, 2)
+          );
+          let knowledgeImage = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'panel-knowledge-two-blocks.png'), knowledgeImage.toPNG());
+          const jumpTargets = {
+            knowledge: 'knowledgeBrowse',
+            tests: 'runningSection',
+            patches: 'needsSection',
+            runs: 'runningSection'
+          };
+          const jumpResults = [];
+          for (const key of Object.keys(jumpTargets)) {
+            const result = await panel.webContents.executeJavaScript(`(async () => {
+              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+              document.querySelector('#modeBar button[data-mode="focus"]')?.click();
+              await wait(900);
+              const entry = document.querySelector('#fdBody .fd-entry[data-entry="${key}"]');
+              if (!entry) return { key: '${key}', error: 'entry-not-rendered' };
+              entry.click();
+              await wait(1200);
+              const views = { focus: 'modeA', knowledge: 'modeB', chat: 'modeC' };
+              const visible = Object.entries(views)
+                .find(([, id]) => !document.getElementById(id).hidden)?.[0] ?? '';
+              const node = document.getElementById('${jumpTargets[key]}');
+              const workspace = document.getElementById('workspaceToggle');
+              const rect = node?.getBoundingClientRect();
+              return {
+                key: '${key}',
+                visible,
+                target: '${jumpTargets[key]}',
+                inWorkspace: Boolean(workspace && node && workspace.contains(node)),
+                workspaceOpen: workspace?.open === true,
+                top: rect ? Math.round(rect.top) : null
+              };
+            })()`);
+            jumpResults.push(result);
+            const image = await panel.webContents.capturePage();
+            fs.writeFileSync(path.join(screenshotDir, `focus-jump-${key}.png`), image.toPNG());
+          }
+          // 目标不存在时退回该模式顶部：临时摘掉 id，确认不抛错、仍停在专注页。
+          const jumpFallback = await panel.webContents.executeJavaScript(`(async () => {
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            document.querySelector('#modeBar button[data-mode="focus"]')?.click();
+            await wait(700);
+            const node = document.getElementById('runningSection');
+            const saved = node.id;
+            node.id = 'runningSection-detached';
+            document.querySelector('#fdBody .fd-entry[data-entry="runs"]')?.click();
+            await wait(900);
+            node.id = saved;
+            const wrap = document.querySelector('#modeA .a-wrap');
+            const rect = wrap?.getBoundingClientRect();
+            return {
+              stillFocus: !document.getElementById('modeA').hidden,
+              wrapTop: rect ? Math.round(rect.top) : null,
+              wrapScrollTop: wrap ? wrap.scrollTop : null
+            };
+          })()`);
+          fs.writeFileSync(
+            path.join(screenshotDir, 'focus-jump-probe.json'),
+            JSON.stringify({ knowledgeBlocks, jumpResults, jumpFallback }, null, 2)
+          );
+
           // 顺手记录按项目取数的结果，验证预重构没有破坏默认行为。
           const probe = [];
           for (const projectId of ['companion-demo', 'cultivation-agent']) {

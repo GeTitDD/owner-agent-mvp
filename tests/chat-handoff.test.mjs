@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const handoff = require('../desktop/chat-handoff.cjs');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
 const projects = [
   { id: 'alpha', name: 'Alpha Repo' },
@@ -30,12 +31,18 @@ test('只有显式打开才走交办', () => {
   assert.equal(handoff.routeOf(true), 'handoff');
 });
 
-test('交办目标沿用 #41：会话没绑定或项目已删都拦下，不回退第一个', () => {
-  assert.equal(handoff.targetOf(projects, null), null);
-  assert.equal(handoff.targetOf(projects, { projectId: '' }), null);
-  assert.equal(handoff.targetOf(projects, { projectId: 'gone' }), null);
-  assert.equal(handoff.targetOf([], { projectId: 'alpha' }), null);
-  assert.equal(handoff.targetOf(projects, { projectId: 'beta' }).id, 'beta');
+test('交办目标统一由 panel-selection 解析：会话只提供显式项目 id', () => {
+  const panel = read('desktop/panel.js');
+  // 三个旧名字（submitTarget / composerProjects / chatHandoffTarget）全部收敛到 handoffTarget。
+  assert.equal(panel.includes('submitTarget'), false);
+  assert.equal(panel.includes('composerProjects'), false);
+  assert.equal(panel.includes('chatHandoffTarget'), false);
+  assert.match(panel, /const handoffTarget = \(projectId = handoffProjectId\)/u);
+  // 对话入口传会话绑定的项目 id，不传「第一个项目」。
+  assert.match(panel, /handoffTarget\(activeChatSession\(\)\?\.projectId\)/u);
+  const selection = require('../desktop/panel-selection.cjs');
+  assert.equal(selection.submitProject(projects, 'beta').id, 'beta');
+  assert.equal(selection.submitProject(projects, ''), null);
 });
 
 test('发送按钮文案：关闭是「发送」，打开是「交办」', () => {
@@ -73,7 +80,7 @@ test('渲染层：关闭路径不调用 submit，两条路径都由 routeOf 分�
 });
 
 test('主进程：交办仍然复用 companion:submit，没有新增任务创建通道', () => {
-  const main = fs.readFileSync(path.join(root, 'desktop/main.cjs'), 'utf8');
+  const main = read('desktop/main.cjs');
   // 渲染层的交办走既有的 companion:submit → submitCompanionTask → createWriteRequest。
   assert.match(main, /ipcMain\.handle\('companion:submit'/u);
   assert.match(main, /const submitCompanionTask = async \(\{ text, projectId \}\)/u);
@@ -81,4 +88,35 @@ test('主进程：交办仍然复用 companion:submit，没有新增任务创建
   // 没有为对话开关新开一条「直接建任务」的 IPC。
   assert.equal(/companion:chat-handoff/u.test(main), false);
   assert.equal(/companion:handoff-submit/u.test(main), false);
+});
+
+test('P0-3 交办的问题与结果都写进会话库（与普通提问一致）', () => {
+  const panel = read('desktop/panel.js');
+  const main = read('desktop/main.cjs');
+  const preload = read('desktop/preload.cjs');
+  // 先存问题，再存成功/失败/只回答三种结果。
+  assert.match(panel, /await persist\('user', text\);/u);
+  assert.match(panel, /await persist\('assistant', reply, status\);/u);
+  assert.match(panel, /window\.companion\.chat\.sessions\.append\(\{ id: session\.id, role, text: body, status \}\)/u);
+  // 文案不再声称「不占这段会话」。
+  assert.equal(panel.includes('不占这段会话'), false);
+  // 落库走专门的 append IPC，渲染层不能直接拿会话库对象。
+  assert.match(main, /ipcMain\.handle\('companion:chat-session-append'/u);
+  assert.match(preload, /append: \(input\) => invoke\('companion:chat-session-append'/u);
+});
+
+test('P0-2 新建会话默认空选项，没选项目不能创建', () => {
+  const panel = read('desktop/panel.js');
+  const start = panel.indexOf('const openNewChatSession = ({ draft = \'\' } = {}) => {');
+  assert.notEqual(start, -1);
+  const stop = panel.indexOf('\n  };', start);
+  const block = panel.slice(start, stop);
+  // 默认是「请选择项目」，不再静默预选第一个，也不读 config.projectId。
+  assert.match(block, /请选择项目/u);
+  assert.equal(/view\?\.config\?\.projectId/u.test(block), false);
+  assert.equal(/select\.value = projects\[0\]/u.test(block), false);
+  // 未选时「创建」禁用，只有显式 change 后才可用。
+  assert.match(block, /create\.disabled = true;/u);
+  assert.match(block, /select\.onchange = \(\) => \{ create\.disabled = !select\.value; \};/u);
+  assert.match(block, /if \(!select\.value\) return;/u);
 });

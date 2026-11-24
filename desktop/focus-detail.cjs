@@ -6,10 +6,16 @@
 // 双份导出：浏览器当普通脚本加载（挂到 window.OwnerFocusDetail），
 // Node 测试用 require 直接读；.cjs 保证 node 侧不会被当成 ESM。
 (function attach(root, factory) {
-  const api = factory();
+  // 浏览器里由 panel.html 先加载 panel-selection.cjs；Node 测试直接 require。
+  // 顺序不对时立刻失败，避免卡片悄悄退回「自己再写一份选择规则」。
+  const selection = typeof module === 'object' && module.exports
+    ? require('./panel-selection.cjs')
+    : root?.OwnerPanelSelection;
+  if (!selection) throw new Error('focus-detail needs panel-selection.cjs loaded first');
+  const api = factory(selection);
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.OwnerFocusDetail = api;
-})(typeof globalThis === 'undefined' ? null : globalThis, () => {
+})(typeof globalThis === 'undefined' ? null : globalThis, (selection) => {
   // 与 panel.js 里的图谱标签保持一致；这里重复一份是为了让模型自己就能出文案。
   const DIAGRAM_LABELS = {
     dependency: '依赖图',
@@ -49,11 +55,8 @@
   };
   const text = (value) => (typeof value === 'string' ? value : '');
 
-  /** 选中的项目：指定且存在就用它，否则退回第一个；都不存在时为 null。 */
-  const pickProject = (projects, selectedId) => {
-    if (!projects.length) return null;
-    return projects.find((item) => item.id === selectedId) ?? projects[0];
-  };
+  /** 选中的项目：显式选过且存在就用它，否则退回第一个；都不存在时为 null。 */
+  const pickProject = (projects, selectedId) => selection.viewProject(projects, selectedId);
 
   const buildTabs = (projects, selectedId) => projects.map((item) => ({
     id: item.id,

@@ -20,6 +20,41 @@ const SCOPE_LABELS = { project: '项目', domain: '领域共享', personal: '个
 // 接受候选只会得到未验证知识；真正验证是下一步，所以单列一组，避免条目凭空消失。
 const STATUS_LABELS = { unverified: '待验证', needs_reverification: '待重新验证', disputed: '有争议' };
 
+/**
+ * 知识分组定义：分组顺序、标题与空状态文案只在这里写一份。
+ * 加组时改这一处，视图模型与「知识库未初始化」的占位分组会同时跟上。
+ */
+const GROUP_DEFS = [
+  {
+    key: 'candidates',
+    label: '候选',
+    empty: (filtered) => (filtered
+      ? '这个项目还没有待审核候选。'
+      : '还没有待审核候选；提炼经验后会先进入候选。')
+  },
+  {
+    key: 'pending',
+    label: '待验证知识',
+    empty: (filtered) => (filtered
+      ? '这个项目还没有待验证知识。'
+      : '还没有待验证知识；接受候选后会先进入这里。')
+  },
+  {
+    key: 'verified',
+    label: '已验证知识',
+    empty: (filtered) => (filtered
+      ? '这个项目还没有已验证知识。'
+      : '还没有已验证知识；候选确认并附证据后才算已验证。')
+  },
+  {
+    key: 'experiences',
+    label: '经验',
+    empty: (filtered) => (filtered
+      ? '这个项目还没有经验记录。'
+      : '还没有经验记录；完成一次任务并验证后会自动采集。')
+  }
+];
+
 /** 把任意文本压成一行，避免长经验内容把列表撑开。 */
 const oneLine = (value, max = 120) => String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, max);
 
@@ -77,39 +112,28 @@ export function knowledgeBrowseView({
     })
     .sort(newestFirst);
 
-  // 候选被接受后先落成未验证知识；这里单独成组，让审核结果在列表里看得见。
-  const pendingUnits = units
-    .filter((row) => row?.verificationStatus && row.verificationStatus !== 'verified')
-    .map((row) => {
-      const ids = row.scope === 'project' ? projectIdsOf([row.projectId]) : [];
-      const status = row.verificationStatus;
-      return {
-        id: row.id,
-        kind: 'pending',
-        title: oneLine(row.title, 200) || '未命名知识',
-        detail: `${STATUS_LABELS[status] ?? '待验证'} · ${SCOPE_LABELS[row.scope] ?? row.scope ?? '个人'} · ${row.layer ?? 'applied'} 层 · r${row.revision ?? 1}`,
-        projectIds: ids,
-        projectId: ids[0] ?? null,
-        at: row.updatedAt ?? row.updated_at ?? null
-      };
-    })
+  // 候选被接受后先落成未验证知识；已验证与待验证只差一个状态词，
+  // 所以共用一份映射，再按 kind 拆成两组，避免两段几乎相同的代码各自漂移。
+  const mapKnowledgeUnit = (row) => {
+    const ids = row.scope === 'project' ? projectIdsOf([row.projectId]) : [];
+    const status = row.verificationStatus;
+    const verified = status === 'verified';
+    return {
+      id: row.id,
+      kind: verified ? 'verified' : 'pending',
+      title: oneLine(row.title, 200) || '未命名知识',
+      detail: `${verified ? '已验证' : STATUS_LABELS[status] ?? '待验证'} · ${SCOPE_LABELS[row.scope] ?? row.scope ?? '个人'} · ${row.layer ?? 'applied'} 层 · r${row.revision ?? 1}`,
+      projectIds: ids,
+      projectId: ids[0] ?? null,
+      at: row.updatedAt ?? row.updated_at ?? null
+    };
+  };
+  const knowledgeUnits = units
+    .filter((row) => row?.verificationStatus)
+    .map(mapKnowledgeUnit)
     .sort(newestFirst);
-
-  const verified = units
-    .filter((row) => row?.verificationStatus === 'verified')
-    .map((row) => {
-      const ids = row.scope === 'project' ? projectIdsOf([row.projectId]) : [];
-      return {
-        id: row.id,
-        kind: 'verified',
-        title: oneLine(row.title, 200) || '未命名知识',
-        detail: `已验证 · ${SCOPE_LABELS[row.scope] ?? row.scope ?? '个人'} · ${row.layer ?? 'applied'} 层 · r${row.revision ?? 1}`,
-        projectIds: ids,
-        projectId: ids[0] ?? null,
-        at: row.updatedAt ?? row.updated_at ?? null
-      };
-    })
-    .sort(newestFirst);
+  const pendingUnits = knowledgeUnits.filter((item) => item.kind === 'pending');
+  const verified = knowledgeUnits.filter((item) => item.kind === 'verified');
 
   const experienceItems = experiences
     .map((row) => {
@@ -153,24 +177,16 @@ export function knowledgeBrowseView({
     emptyHint
   });
 
-  const groups = [
-    makeGroup(
-      'candidates', '候选', visibleCandidates,
-      filterId ? '这个项目还没有待审核候选。' : '还没有待审核候选；提炼经验后会先进入候选。'
-    ),
-    makeGroup(
-      'pending', '待验证知识', visiblePending,
-      filterId ? '这个项目还没有待验证知识。' : '还没有待验证知识；接受候选后会先进入这里。'
-    ),
-    makeGroup(
-      'verified', '已验证知识', visibleVerified,
-      filterId ? '这个项目还没有已验证知识。' : '还没有已验证知识；候选确认并附证据后才算已验证。'
-    ),
-    makeGroup(
-      'experiences', '经验', visibleExperiences,
-      filterId ? '这个项目还没有经验记录。' : '还没有经验记录；完成一次任务并验证后会自动采集。'
-    )
-  ];
+  const visible = {
+    candidates: visibleCandidates,
+    pending: visiblePending,
+    verified: visibleVerified,
+    experiences: visibleExperiences
+  };
+
+  // 即使全空也保留四组与计数，让「候选 / 已验证 / 经验」的结构始终可见。
+  const groups = GROUP_DEFS.map((def) =>
+    makeGroup(def.key, def.label, visible[def.key], def.empty(Boolean(filterId))));
 
   const totals = {
     candidates: visibleCandidates.length,
@@ -219,24 +235,15 @@ export function knowledgeBrowseFor({ personalStore, projectId = '', limit = DEFA
       projects: [],
       totals: { candidates: 0, pending: 0, verified: 0, experiences: 0, all: 0 },
       overall: { candidates: 0, pending: 0, verified: 0, experiences: 0, all: 0 },
-      groups: [
-        {
-          key: 'candidates', label: '候选', count: 0, shown: 0, truncated: false, items: [],
-          emptyHint: '知识库未初始化，暂时读不到候选。'
-        },
-        {
-          key: 'pending', label: '待验证知识', count: 0, shown: 0, truncated: false, items: [],
-          emptyHint: '知识库未初始化，暂时读不到待验证知识。'
-        },
-        {
-          key: 'verified', label: '已验证知识', count: 0, shown: 0, truncated: false, items: [],
-          emptyHint: '知识库未初始化，暂时读不到已验证知识。'
-        },
-        {
-          key: 'experiences', label: '经验', count: 0, shown: 0, truncated: false, items: [],
-          emptyHint: '知识库未初始化，暂时读不到经验。'
-        }
-      ],
+      groups: GROUP_DEFS.map((def) => ({
+        key: def.key,
+        label: def.label,
+        count: 0,
+        shown: 0,
+        truncated: false,
+        items: [],
+        emptyHint: `知识库未初始化，暂时读不到${def.label}。`
+      })),
       empty: {
         kind: 'unavailable',
         title: '知识库还没有初始化',

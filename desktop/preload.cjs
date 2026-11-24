@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
       list: (input) => invoke('companion:chat-sessions', input),
       get: (input) => invoke('companion:chat-session-get', input),
       create: (input) => invoke('companion:chat-session-create', input),
+      append: (input) => invoke('companion:chat-session-append', input),
       rename: (input) => invoke('companion:chat-session-rename', input),
       remove: (input) => invoke('companion:chat-session-delete', input)
     })

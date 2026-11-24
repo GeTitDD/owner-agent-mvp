@@ -18,15 +18,8 @@
    */
   const routeOf = (armed) => (armed === true ? 'handoff' : 'answer');
 
-  /**
-   * 交办目标沿用 #41 的规则：必须是这次会话显式绑定的项目，而且项目还在。
-   * 会话没绑定项目、项目已被删，都返回 null，由调用方拦下并提示，绝不静默回退到第一个项目。
-   */
-  const targetOf = (projects, session) => {
-    const id = String(session?.projectId ?? '');
-    if (!id) return null;
-    return (Array.isArray(projects) ? projects : []).find((item) => item?.id === id) ?? null;
-  };
+  // 交办目标的解析统一放在 panel-selection.cjs（submitProject）：
+  // 会话只提供「显式绑定的项目 id」，找不到项目就由调用方拦下，不在这里再写一份回退规则。
 
   /** 发送按钮文案：打开时写「交办」，让「这次会建任务」在按下之前就看得见。 */
   const sendLabel = (armed) => (armed === true ? '交办' : '发送');
@@ -50,5 +43,5 @@
     return 'error';
   };
 
-  return { DEFAULT_ARMED, routeOf, targetOf, sendLabel, consume, resultKind };
+  return { DEFAULT_ARMED, routeOf, sendLabel, consume, resultKind };
 });
