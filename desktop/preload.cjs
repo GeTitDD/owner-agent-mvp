@@ -70,6 +70,7 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   hidePanel: () => ipcRenderer.send('companion:hide-panel'),
   hidePet: () => ipcRenderer.send('companion:hide-pet'),
   showPet: () => ipcRenderer.send('companion:show-pet'),
+  bubbleState: (input) => ipcRenderer.send('companion:bubble-state', input),
   quit: () => ipcRenderer.send('companion:quit'),
   dragStart: (input) => ipcRenderer.send('companion:drag-start', input),
   dragEnd: () => ipcRenderer.send('companion:drag-end'),

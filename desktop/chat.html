@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>对话 · Owner Companion</title>
+<link rel="stylesheet" href="./chat.css" />
+</head>
+<body>
+  <header class="head">
+    <div class="who">Owner<span>观察员</span></div>
+    <select id="projectSelect" aria-label="项目"></select>
+  </header>
+
+  <main id="transcript" class="transcript"></main>
+  <section id="decisions" class="decisions"></section>
+
+  <footer class="composer">
+    <textarea id="input" rows="1" maxlength="1200" placeholder="问一句，或者直接交办…"></textarea>
+    <button id="send" class="send" type="button">发送</button>
+  </footer>
+  <script src="./chat.js"></script>
+</body>
+</html>

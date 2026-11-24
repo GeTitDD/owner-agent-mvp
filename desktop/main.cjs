@@ -43,6 +43,8 @@ else app.setPath('userData', path.join(app.getPath('appData'), 'owner-agent-mvp'
 let pet = null;
 let panel = null;
 let fullWindow = null;
+let chatWindow = null;
+let bubbleWindow = null;
 let tray = null;
 let store = null;
 let personalStore = null;
@@ -1792,7 +1794,11 @@ const createPet = () => {
   pet.setAlwaysOnTop(true, 'floating');
   pet.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   pet.loadFile(path.join(__dirname, 'pet.html'));
-  pet.on('closed', () => { pet = null; });
+  pet.on('move', () => { positionBubble(); });
+  pet.on('closed', () => {
+    if (bubbleWindow && !bubbleWindow.isDestroyed()) bubbleWindow.hide();
+    pet = null;
+  });
 };
 
 const createPanel = () => {
@@ -1898,6 +1904,93 @@ const openKnowledgeWorkbench = async () => {
   fullWindow.on('closed', () => { fullWindow = null; });
 };
 
+/** 形态 A：气泡贴在桌宠右上方，跟随桌宠移动。 */
+const positionBubble = () => {
+  if (!pet || !bubbleWindow || bubbleWindow.isDestroyed()) return;
+  const bounds = pet.getBounds();
+  const width = 300;
+  const height = 104;
+  const display = screen.getDisplayMatching(bounds);
+  const area = display.workArea;
+  const x = Math.round(Math.min(Math.max(bounds.x + bounds.width - width, area.x + 8), area.x + area.width - width - 8));
+  const y = Math.round(Math.min(Math.max(bounds.y - height - 6, area.y + 8), area.y + area.height - height - 8));
+  bubbleWindow.setBounds({ x, y, width, height });
+};
+
+const ensureBubble = () => {
+  if (bubbleWindow && !bubbleWindow.isDestroyed()) return bubbleWindow;
+  bubbleWindow = new BrowserWindow({
+    width: 300,
+    height: 104,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    focusable: false,
+    show: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      devTools: false
+    }
+  });
+  safeWindow(bubbleWindow);
+  bubbleWindow.setAlwaysOnTop(true, 'floating');
+  bubbleWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  bubbleWindow.loadFile(path.join(__dirname, 'bubble.html'));
+  bubbleWindow.on('closed', () => { bubbleWindow = null; });
+  positionBubble();
+  return bubbleWindow;
+};
+
+const setBubbleVisible = (visible) => {
+  try {
+    const win = ensureBubble();
+    if (visible) {
+      positionBubble();
+      win.showInactive();
+    } else {
+      win.hide();
+    }
+  } catch {
+    // 气泡是可选装饰，失败不应影响主流程。
+  }
+};
+
+/** 形态 C：独立会话窗口，与面板共用同一套 IPC。 */
+const openChat = async () => {
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.show();
+    chatWindow.focus();
+    return;
+  }
+  chatWindow = new BrowserWindow({
+    width: 560,
+    height: 720,
+    minWidth: 420,
+    minHeight: 480,
+    title: '对话 · Owner Companion',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      devTools: false
+    }
+  });
+  safeWindow(chatWindow);
+  watchWindow(chatWindow, 'chat');
+  chatWindow.loadFile(path.join(__dirname, 'chat.html'));
+  chatWindow.on('closed', () => { chatWindow = null; });
+};
+
 const createTray = () => {
   const image = nativeImage.createFromPath(path.join(__dirname, 'tray.png'));
   tray = new Tray(image);
@@ -1907,6 +2000,7 @@ const createTray = () => {
       { label: '显示桌宠', click: () => { if (pet) { pet.show(); positionPet(); } } },
       { label: '打开面板', click: showPanel },
       { label: '完整工作台', click: () => { void openFull().catch(() => showPanel()); } },
+      { label: '对话', click: () => { void openChat(); } },
       { type: 'separator' },
       { label: '设置', click: () => { showPanel(); panel?.webContents.send('companion:open-settings'); } },
       { type: 'separator' },
@@ -3099,6 +3193,11 @@ const registerIpc = () => {
   });
 
   ipcMain.on('companion:show-panel', (event) => { if (fromCompanion(event)) showPanel(); });
+  // 气泡只报告「要不要显示」，位置由主进程按桌宠坐标计算。
+  ipcMain.on('companion:bubble-state', (event, input) => {
+    if (!fromCompanion(event)) return;
+    setBubbleVisible(input?.visible === true);
+  });
   ipcMain.on('companion:hide-panel', (event) => { if (fromCompanion(event)) hidePanel(); });
   ipcMain.on('companion:hide-pet', (event) => { if (fromCompanion(event)) pet?.hide(); });
   ipcMain.on('companion:show-pet', (event) => {

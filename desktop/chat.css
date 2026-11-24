@@ -1,0 +1,66 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f3f1ec;
+  --panel: #ffffff;
+  --text: #22211e;
+  --muted: #8b877e;
+  --line: #e6e2d9;
+  --accent: #2f5d4a;
+  --accent-fg: #ffffff;
+  --danger: #a5432f;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1a18;
+    --panel: #262522;
+    --text: #ecebe7;
+    --muted: #9a958a;
+    --line: #35332e;
+    --accent: #7fb79d;
+    --accent-fg: #14231c;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+  font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+.head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--line);
+}
+.head .who { font-weight: 650; font-size: 13px; }
+.head .who span { color: var(--muted); font-weight: 400; margin-left: 6px; font-size: 12px; }
+.head select {
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  border-radius: 8px; padding: 4px 8px; font-size: 12px;
+}
+.transcript { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 86%; padding: 10px 13px; border-radius: 14px; line-height: 1.65; white-space: pre-wrap; }
+.msg.me { align-self: flex-end; background: var(--accent); color: var(--accent-fg); border-bottom-right-radius: 4px; }
+.msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.msg.sys { align-self: center; background: transparent; color: var(--muted); font-size: 12px; padding: 0; }
+.msg .meta { display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+.decisions { padding: 0 16px; }
+.card {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+  padding: 12px; margin-bottom: 10px;
+}
+.card .kicker { font-size: 10px; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; }
+.card h3 { margin: 6px 0 4px; font-size: 14px; }
+.card p { margin: 0; color: var(--muted); font-size: 12px; }
+.card .row { display: flex; gap: 8px; margin-top: 10px; }
+.card button { border: 0; border-radius: 8px; padding: 7px 12px; font-size: 12.5px; cursor: pointer; }
+.card .yes { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.card .no { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+.composer { display: flex; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--line); }
+.composer textarea {
+  flex: 1; resize: none; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--panel); color: var(--text); padding: 10px 12px; font: inherit; outline: none;
+}
+.composer .send {
+  border: 0; border-radius: 10px; padding: 0 16px; background: var(--accent);
+  color: var(--accent-fg); font-weight: 600; cursor: pointer;
+}
+.composer .send:disabled { opacity: .5; cursor: default; }
