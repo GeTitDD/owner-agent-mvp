@@ -56,7 +56,10 @@ export class LessonDistiller {
     if (!id) throw new Error('projectId is required');
     const { records, truncated } = this.listRecords({ ownerStore: this.owner, projectId: id, limit });
     // 去重后一条经验可能带多条执行记录的证据，队列要按「来源记录 + 证据所属记录」一起判断。
-    const distilled = new Set(this.personal.distilledRecordIds({ projectId: id }));
+    // #56 起同一现象会跨项目合并：经验行只挂在最早的项目下，证据却可能属于本项目。
+    // 因此这里不能再按 projectId 过滤经验行，否则第二个项目的记录会永远留在待提炼队列里。
+    // 代价是每次队列都读整张经验表；经验是本地几百条的规模，可以接受。
+    const distilled = new Set(this.personal.distilledRecordIds());
     const pending = records.filter((record) => !distilled.has(record.id));
     return { projectId: id, records: pending, total: pending.length, truncated };
   }
@@ -222,7 +225,12 @@ export class LessonDistiller {
         createdAt: this.clock()
       });
       // 同现象同作用域会命中已有经验：只追加证据、累加计数，不新增经验行。
-      stored = this.personal.recordLesson(lesson, {
+      // #56 起写入走 recordReproducedLesson：同一现象在第二个项目出现时合并进最早那条经验、
+      // 登记来源项目并打「已复现」标记，但绝不改 verificationStatus（升为已验证仍由人确认）。
+      const write = typeof this.personal.recordReproducedLesson === 'function'
+        ? this.personal.recordReproducedLesson.bind(this.personal)
+        : this.personal.recordLesson.bind(this.personal);
+      stored = write(lesson, {
         evidence: cited.map((item) => ({ ref: item.ref, recordId: record.id, kind: item.kind, excerpt: item.excerpt }))
       });
     } catch (error) {
