@@ -127,6 +127,23 @@ export class PersonalKnowledgeStore {
         payload TEXT NOT NULL, payload_hash TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS knowledge_eval_runs_project ON knowledge_eval_runs(project_id,created_at DESC);
+      -- 三层沉淀：经验（现象/机制/对策 + 作用域）与它引用的证据。
+      -- 证据行必须指回一条具体的执行记录；执行记录本身不落表，所以不会留下指向已删项目的孤儿经验行。
+      CREATE TABLE IF NOT EXISTS knowledge_lessons (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, source_record_id TEXT NOT NULL,
+        phenomenon TEXT NOT NULL, scope_layer TEXT NOT NULL CHECK(scope_layer IN ('project','domain')),
+        verification_status TEXT NOT NULL CHECK(verification_status IN ('candidate','inferred')),
+        dedupe_key TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS knowledge_lessons_project ON knowledge_lessons(project_id,created_at DESC);
+      CREATE INDEX IF NOT EXISTS knowledge_lessons_source ON knowledge_lessons(source_record_id);
+      CREATE INDEX IF NOT EXISTS knowledge_lessons_dedupe ON knowledge_lessons(dedupe_key);
+      CREATE TABLE IF NOT EXISTS knowledge_lesson_evidence (
+        id TEXT PRIMARY KEY, lesson_id TEXT NOT NULL REFERENCES knowledge_lessons(id), record_id TEXT NOT NULL,
+        ref TEXT NOT NULL, kind TEXT NOT NULL, excerpt TEXT NOT NULL, content_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL, UNIQUE(lesson_id,ref)
+      );
+      CREATE INDEX IF NOT EXISTS knowledge_lesson_evidence_record ON knowledge_lesson_evidence(record_id);
     `);
     // In-place migration for databases created before proposal revision pinning.
     // Legacy proposals with unknown base revision intentionally fail closed on approval.
@@ -438,5 +455,82 @@ export class PersonalKnowledgeStore {
     const rows=this.db.prepare(`SELECT id FROM knowledge_eval_runs ${where.length?`WHERE ${where.join(' AND ')}`:''}
       ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params,Math.min(Math.max(1,limit),1000));
     return rows.map(({id})=>this.getEvalRun(id));
+  }
+
+  // ---- 三层沉淀：经验（Lesson）与证据 ----
+  // 只在本类末尾追加，不改上面已有的方法与建表语句（后续票会继续在同一处追加）。
+  addLesson(lesson,{evidence=[]}={}) {
+    valid(lesson && typeof lesson === 'object' && !Array.isArray(lesson),'Lesson must be an object');
+    valid(Array.isArray(evidence),'Lesson evidence must be an array');
+    const id = typeof lesson.id === 'string' && lesson.id ? lesson.id : `lesson_${randomUUID().replaceAll('-','').slice(0,24)}`;
+    const projectId = safeText(lesson.projectId,90,'lesson project id',true);
+    const sourceRecordId = safeText(lesson.sourceRecordId,200,'lesson source record id',true);
+    const phenomenon = safeText(lesson.phenomenon,200,'lesson phenomenon',true);
+    const scopeLayer = lesson.scope?.layer ?? 'project';
+    valid(['project','domain'].includes(scopeLayer),'Invalid lesson scope layer');
+    const verificationStatus = lesson.verificationStatus ?? 'inferred';
+    valid(['candidate','inferred'].includes(verificationStatus),'Invalid lesson verification status');
+    const evidenceRefs = Array.isArray(lesson.evidenceRefs) ? lesson.evidenceRefs : [];
+    // 追不到证据的结论只能算推断：没有证据行就不可能成为待验证候选。
+    valid(verificationStatus !== 'candidate' || evidenceRefs.length > 0,'Lesson evidence is required before it can be a verification candidate');
+    // 去重键由 contracts.lessonDedupeKey 提供（规范化现象 + 作用域）；缺失时按同一公式回退。
+    const dedupeKey = safeText(
+      lesson.dedupeKey
+        ?? sha256(canonical({contract:'lesson/v1',phenomenon:phenomenon.toLowerCase(),layer:scopeLayer,projectId})),
+      128,'lesson dedupe key',true
+    );
+    const rows = evidence.map((item)=>{
+      valid(item && typeof item === 'object' && !Array.isArray(item),'Lesson evidence must be objects');
+      const ref = safeText(item.ref,500,'lesson evidence reference',true);
+      const excerpt = item.excerpt ?? '';
+      return {
+        id:`le_${randomUUID().replaceAll('-','').slice(0,24)}`,
+        recordId:safeText(item.recordId ?? sourceRecordId,200,'lesson evidence record id',true),
+        ref,
+        kind:safeText(item.kind ?? 'other',40,'lesson evidence kind',true),
+        excerpt:safeText(excerpt,2000,'lesson evidence excerpt'),
+        contentHash:safeText(item.contentHash ?? sha256(String(excerpt)),128,'lesson evidence hash',true)
+      };
+    });
+    valid(new Set(rows.map((row)=>row.ref)).size === rows.length,'Duplicate lesson evidence reference');
+    const stamp = now();
+    const payload = {...lesson,id,projectId,sourceRecordId,phenomenon,dedupeKey,createdAt:lesson.createdAt ?? stamp};
+    const body = canonical(payload);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare(`INSERT INTO knowledge_lessons(id,project_id,source_record_id,phenomenon,scope_layer,verification_status,dedupe_key,created_at,payload,payload_hash)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(id,projectId,sourceRecordId,phenomenon,scopeLayer,verificationStatus,dedupeKey,stamp,body,sha256(body));
+      const insert = this.db.prepare(`INSERT INTO knowledge_lesson_evidence(id,lesson_id,record_id,ref,kind,excerpt,content_hash,created_at)
+        VALUES(?,?,?,?,?,?,?,?)`);
+      for(const row of rows) insert.run(row.id,id,row.recordId,row.ref,row.kind,row.excerpt,row.contentHash,stamp);
+      this.db.exec('COMMIT');
+    } catch(error) { this.db.exec('ROLLBACK'); throw error; }
+    return this.getLesson(id);
+  }
+  getLesson(id) {
+    const row = this.db.prepare('SELECT * FROM knowledge_lessons WHERE id=?').get(id);
+    if(!row) return null;
+    return {...JSON.parse(row.payload),payloadHash:row.payload_hash,dedupeKey:row.dedupe_key,evidence:this.lessonEvidence(row.id)};
+  }
+  lessonEvidence(lessonId) {
+    return this.db.prepare('SELECT * FROM knowledge_lesson_evidence WHERE lesson_id=? ORDER BY ref,id').all(lessonId)
+      .map((row)=>({id:row.id,lessonId:row.lesson_id,recordId:row.record_id,ref:row.ref,kind:row.kind,
+        excerpt:row.excerpt,contentHash:row.content_hash,createdAt:row.created_at}));
+  }
+  listLessons({projectId='',verificationStatus='',sourceRecordId='',limit=100}={}) {
+    const where=[];const params=[];
+    if(projectId){where.push('project_id=?');params.push(projectId);}
+    if(verificationStatus){where.push('verification_status=?');params.push(verificationStatus);}
+    if(sourceRecordId){where.push('source_record_id=?');params.push(sourceRecordId);}
+    const rows=this.db.prepare(`SELECT id FROM knowledge_lessons ${where.length?`WHERE ${where.join(' AND ')}`:''}
+      ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params,Math.min(Math.max(1,limit),1000));
+    return rows.map(({id})=>this.getLesson(id));
+  }
+  /** 已提炼过的执行记录 ID：执行记录不落表，待提炼队列只能靠这张表反推。 */
+  lessonedRecordIds({projectId=''}={}) {
+    const rows = projectId
+      ? this.db.prepare('SELECT DISTINCT source_record_id AS record_id FROM knowledge_lessons WHERE project_id=?').all(projectId)
+      : this.db.prepare('SELECT DISTINCT source_record_id AS record_id FROM knowledge_lessons').all();
+    return rows.map((row)=>row.record_id);
   }
 }
