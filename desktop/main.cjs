@@ -79,6 +79,7 @@ let knowledgeSummaryModule = null;
 let knowledgeBrowseModule = null;
 let skillCatalogModule = null;
 let skillCatalogCache = null;
+let knowledgeReviewModule = null;
 let harvestInFlight = false;
 let mascotModule = null;
 let githubModule = null;
@@ -2796,6 +2797,19 @@ const registerIpc = () => {
     return skillCatalogPayload({ refresh: input?.refresh === true });
   });
 
+  // 知识模式内的候选审核：直接复用 PersonalKnowledgeStore.reviewProposal，
+  // 返回结构化结果，失败时由面板提示原因且不改变当前列表。
+  ipcMain.handle('companion:knowledge-review', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    knowledgeReviewModule = knowledgeReviewModule ?? await importEsm('../src/knowledge/review.mjs');
+    return knowledgeReviewModule.knowledgeReviewFor({
+      personalStore,
+      id: String(input?.id ?? ''),
+      decision: String(input?.decision ?? ''),
+      reviewer: 'local-user'
+    });
+  });
+
   ipcMain.handle('companion:knowledge-ask', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return knowledgeAsk({
@@ -3305,6 +3319,44 @@ async function boot() {
             await new Promise((resolve) => setTimeout(resolve, 900));
             const image = await panel.webContents.capturePage();
             fs.writeFileSync(path.join(screenshotDir, `panel-${mode}.png`), image.toPNG());
+            // 知识审核验收：先保留接受前的 B 模式，再点第一条候选的「接受」补一张。
+            if (mode === 'B') {
+              const reviewProbe = await panel.webContents.executeJavaScript(`(async () => {
+                const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+                let button = null;
+                for (let i = 0; i < 30 && !button; i += 1) {
+                  button = document.querySelector('#kbGroups .kb-candidates .kb-act.accept');
+                  if (!button) await wait(100);
+                }
+                if (!button) return { reviewed: false, reason: 'no-candidate' };
+                const countOf = (key) => {
+                  const node = document.querySelector('#kbGroups .kb-' + key + ' .kb-group-count');
+                  return node ? node.textContent : '';
+                };
+                const before = countOf('candidates');
+                button.click();
+                for (let i = 0; i < 40; i += 1) {
+                  await wait(100);
+                  if (countOf('candidates') !== before) break;
+                }
+                return {
+                  reviewed: true,
+                  before,
+                  candidates: countOf('candidates'),
+                  pending: countOf('pending'),
+                  toast: document.getElementById('toast')?.textContent ?? ''
+                };
+              })()`);
+              fs.writeFileSync(
+                path.join(screenshotDir, 'knowledge-review-probe.json'),
+                JSON.stringify(reviewProbe, null, 2)
+              );
+              const afterImage = await panel.webContents.capturePage();
+              fs.writeFileSync(
+                path.join(screenshotDir, 'panel-B-after-review.png'),
+                afterImage.toPNG()
+              );
+            }
           }
           // 技能目录验收：列表（含插件组）、展开详情、缺失条目详情（#44）。
           await panel.webContents.executeJavaScript(`
