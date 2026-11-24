@@ -171,19 +171,20 @@ test('全空与空项目仍给出三层结构与明确空状态', () => {
   assert.deepEqual(filtered.overall, { candidates: 0, lessons: 0, knowledge: 0, all: 0 });
 });
 
-test('候选可以通过来源经验归属到项目（来源只用于归属，不占经验层）', () => {
+test('候选可以通过来源经验（lesson）归属到项目（来源只用于归属，不占经验层）', () => {
   const view = knowledgeBrowseView({
     proposals: [{
       id: 'c1',
       status: 'pending',
       created_at: '2026-11-20T00:00:00.000Z',
       payload: { title: '共享候选', layer: 'applied', scope: 'domain', projectId: null },
-      meta: { contract: 'knowledge-candidate/v1', sourceExperienceIds: ['e1'] }
+      meta: { contract: 'knowledge-candidate/v1', sourceLessonIds: ['l9'] }
     }],
-    experiences: [{ id: 'e1', projectId: 'p9' }]
+    lessons: [lessonRow({ id: 'l9', projectId: 'p9' })]
   });
   assert.equal(groupsByKey(view).candidates.items[0].projectId, 'p9');
-  assert.equal(groupsByKey(view).lessons.items.length, 0);
+  // 来源 lesson 自己也在「经验」层里，候选归属不会把它藏起来。
+  assert.deepEqual(groupsByKey(view).lessons.items.map((item) => item.id), ['l9']);
   assert.equal(knowledgeBrowseView({
     proposals: [candidateRow({ id: 'c', projectIds: ['p9'] })],
     projectId: 'p9'

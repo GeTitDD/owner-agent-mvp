@@ -156,8 +156,6 @@ export async function createWorkbenchServer({
           packageVersions:staticCatalog.packages.filter(x=>x.id===id).map(x=>x.version),knowledgeCount:allUnits().filter(x=>x.domains.includes(id)).length})));
       }
       if(method==='POST'&&url.pathname==='/api/domains')return json(res,store.createDomain(await body(req)),201);
-      if(method==='GET'&&url.pathname==='/api/knowledge/experiences')
-        return json(res,store.listExperiences({projectId:url.searchParams.get('projectId')??'',outcome:url.searchParams.get('outcome')??'',limit:Math.min(200,Math.max(1,Number(url.searchParams.get('limit')??100)))}));
       if(method==='GET'&&url.pathname==='/api/knowledge/usages')
         return json(res,store.listUsages({targetRunId:url.searchParams.get('targetRunId')??'',projectId:url.searchParams.get('projectId')??'',knowledgeId:url.searchParams.get('knowledgeId')??'',limit:Math.min(200,Math.max(1,Number(url.searchParams.get('limit')??100)))}));
       if(method==='GET'&&url.pathname==='/api/knowledge/feedback')
@@ -167,7 +165,8 @@ export async function createWorkbenchServer({
       if(method==='GET'&&url.pathname==='/api/knowledge/loop-summary') {
         const units=store.list({limit:2000});
         return json(res,{
-          experiences:store.listExperiences({limit:1000}).length,
+          // 旧 experience/v1 已退役（#62）；「经验」口径改读三层沉淀的 lesson/v1。
+          lessons:store.listLessons({limit:1000}).length,
           pendingCandidates:store.proposals('pending').filter(x=>x.meta?.contract==='knowledge-candidate/v1').length,
           approvedKnowledge:units.filter(x=>x.verificationStatus==='verified').length,
           knowledgeAtL2:units.filter(x=>x.layer==='applied').length,

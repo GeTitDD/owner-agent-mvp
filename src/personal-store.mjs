@@ -70,8 +70,9 @@ function rowToItem(row) {
   return {id:row.id,revision:row.revision,createdAt:row.created_at,updatedAt:row.updated_at,...JSON.parse(row.payload)};
 }
 export class PersonalKnowledgeStore {
-  constructor(filename=defaultDbPath()) {
+  constructor(filename=defaultDbPath(),{logger=console}={}) {
     if (filename !== ':memory:') mkdirSync(path.dirname(filename),{recursive:true,mode:0o700});
+    this.logger = logger ?? console;
     this.db = new DatabaseSync(filename);
     this.db.exec(`
       PRAGMA journal_mode=WAL;
@@ -96,12 +97,6 @@ export class PersonalKnowledgeStore {
       );
       CREATE INDEX IF NOT EXISTS personal_revisions_unit ON personal_revisions(unit_id,revision DESC);
       CREATE INDEX IF NOT EXISTS personal_proposals_status ON personal_proposals(status,created_at DESC);
-      CREATE TABLE IF NOT EXISTS knowledge_experiences (
-        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT,
-        source_run_id TEXT NOT NULL, outcome TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE,
-        created_at TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS knowledge_experiences_project ON knowledge_experiences(project_id,created_at DESC);
       CREATE TABLE IF NOT EXISTS knowledge_harvest_runs (
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL, experience_ids TEXT NOT NULL,
         dedupe_key TEXT NOT NULL UNIQUE, model TEXT NOT NULL, status TEXT NOT NULL,
@@ -154,8 +149,49 @@ export class PersonalKnowledgeStore {
     if (!proposalColumns.includes('meta_json')) {
       this.db.exec("ALTER TABLE personal_proposals ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'");
     }
+    // 三层沉淀（ADR-0007 / #62）：旧 experience/v1 表已停写、读路径已摘除。
+    // 这里在建表之后退役旧表，结果留在 lastExperienceRetirement 上，方便调用方与测试核对。
+    this.lastExperienceRetirement = this.retireLegacyExperiences();
   }
   close() { this.db.close(); }
+
+  /**
+   * 退役旧经验表（#62）。旧 experience/v1 记录本质是执行记录性质的旧数据，不是 ADR-0007 的「经验」。
+   *
+   * 只删「表存在且为空」的旧表；非空一律保留并留下明确日志，避免误删仍有数据的历史库。
+   * 删除是不可逆动作，所以这里宁可留表也不猜。反复初始化是幂等的：删掉之后再进来就是
+   * 「不存在」的空操作。检查与删除都包在 try/catch 里：退役失败不应该让知识库打不开。
+   */
+  retireLegacyExperiences() {
+    let table;
+    try {
+      table = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_experiences'").get();
+    } catch (error) {
+      this.logger?.warn?.(`[personal-store] 检查旧经验表失败，本次跳过退役：${error.message}`);
+      return { dropped: false, reason: 'check-failed', rows: 0, error: error.message };
+    }
+    if (!table) return { dropped: false, reason: 'absent', rows: 0 };
+    let rows = 0;
+    try {
+      rows = Number(this.db.prepare('SELECT COUNT(*) AS total FROM knowledge_experiences').get()?.total ?? 0);
+    } catch (error) {
+      this.logger?.warn?.(`[personal-store] 统计旧经验表行数失败，保留不删：${error.message}`);
+      return { dropped: false, reason: 'count-failed', rows: 0, error: error.message };
+    }
+    if (rows > 0) {
+      this.logger?.warn?.(`[personal-store] 旧经验表 knowledge_experiences 仍有 ${rows} 行，已保留不删除；`
+        + '确认不再需要后请先导出存档，再手动删除该表。');
+      return { dropped: false, reason: 'not-empty', rows };
+    }
+    try {
+      this.db.exec('DROP TABLE knowledge_experiences');
+      this.logger?.info?.('[personal-store] 旧经验表 knowledge_experiences 为空，已在初始化时删除（幂等）。');
+      return { dropped: true, reason: 'empty', rows: 0 };
+    } catch (error) {
+      this.logger?.warn?.(`[personal-store] 删除空旧经验表失败，保留原表：${error.message}`);
+      return { dropped: false, reason: 'drop-failed', rows: 0, error: error.message };
+    }
+  }
   list({q='',domain='',layer='',scope='',status='',projectId='',limit=500}={}) {
     const rows = this.db.prepare('SELECT * FROM personal_units ORDER BY updated_at DESC,id LIMIT ?').all(Math.min(Math.max(1,limit),2000));
     const query=q.trim().toLocaleLowerCase();
@@ -280,43 +316,9 @@ export class PersonalKnowledgeStore {
     return this.proposal(id);
   }
 
-  // ---- Knowledge Loop: Experience / Harvest / Usage / Feedback ----
-  addExperience(record,{dedupeKey}={}) {
-    valid(record && typeof record === 'object' && !Array.isArray(record),'Experience must be an object');
-    const id = typeof record.id === 'string' && record.id ? record.id : `exp_${randomUUID().replaceAll('-','').slice(0,24)}`;
-    const stamp = now();
-    const body = canonical({...record,id,createdAt:record.createdAt ?? stamp});
-    const key = dedupeKey ?? sha256(canonical({
-      sourceRunId: record.sourceRunId, projectId: record.projectId,
-      taskId: record.taskId ?? null, outcome: record.observedOutcome?.status ?? 'unknown',
-      evidenceRefs: [...(record.evidenceRefs ?? [])].sort()
-    }));
-    try {
-      this.db.prepare(`INSERT INTO knowledge_experiences(id,project_id,task_id,source_run_id,outcome,dedupe_key,created_at,payload,payload_hash)
-        VALUES(?,?,?,?,?,?,?,?,?)`).run(id,record.projectId,record.taskId ?? null,record.sourceRunId,
-          record.observedOutcome?.status ?? 'unknown',key,stamp,body,sha256(body));
-    } catch (error) {
-      if (/UNIQUE constraint/.test(error.message)) return this.experienceByDedupe(key);
-      throw error;
-    }
-    return this.getExperience(id);
-  }
-  getExperience(id) {
-    const row=this.db.prepare('SELECT * FROM knowledge_experiences WHERE id=?').get(id);
-    return row ? {...JSON.parse(row.payload),payloadHash:row.payload_hash,dedupeKey:row.dedupe_key} : null;
-  }
-  experienceByDedupe(key) {
-    const row=this.db.prepare('SELECT id FROM knowledge_experiences WHERE dedupe_key=?').get(key);
-    return row ? this.getExperience(row.id) : null;
-  }
-  listExperiences({projectId='',outcome='',limit=100}={}) {
-    const where=[];const params=[];
-    if(projectId){where.push('project_id=?');params.push(projectId);}
-    if(outcome){where.push('outcome=?');params.push(outcome);}
-    const rows=this.db.prepare(`SELECT id FROM knowledge_experiences ${where.length?`WHERE ${where.join(' AND ')}`:''}
-      ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params,Math.min(Math.max(1,limit),1000));
-    return rows.map(({id})=>this.getExperience(id));
-  }
+  // ---- Knowledge Loop: Harvest / Usage / Feedback ----
+  // 旧的 experience/v1 读写方法已随 knowledge_experiences 表退役（ADR-0007 / #62）；
+  // 新链路的「经验」是 lesson/v1，写在类末尾的 knowledge_lessons 上。
   addHarvestRun(input) {
     const id = input.id ?? `harvest_${randomUUID().replaceAll('-','').slice(0,24)}`;
     const stamp=now();

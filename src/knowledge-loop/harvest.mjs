@@ -1,7 +1,11 @@
-// Knowledge Harvest：把 Experience + Evidence 提炼成 Knowledge Candidate。
+// Knowledge Harvest（已退役）。
 //
-// 借鉴 pstack 的 EDAE / Reflect / decision-log 纪律，但不修改任何 pstack Skill，
-// 也不自动把单次经验升级成 verified。候选进入现有 personal_proposals 等待 Owner 审核。
+// ADR-0007 的提炼方向是「执行记录 → 经验（lesson/v1）」按需触发；这里从 experience/v1
+// 拼证据再产出候选的旧链路在 #62 停写：旧表 knowledge_experiences 已退役，它的唯一输入
+// 因此消失，运行时的自动 Harvest 也已摘除。新链路见 src/knowledge-loop/lesson.mjs。
+//
+// 文件保留（不删除）供对照与最终代码审查决定去留；harvest() 会直接报「已退役」，
+// 不再读旧经验表、不调模型、不写候选。
 import { randomUUID } from 'node:crypto';
 import { canonical, sha256 } from '../utils.mjs';
 import {

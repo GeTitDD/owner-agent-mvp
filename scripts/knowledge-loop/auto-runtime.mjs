@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// 常驻知识采集宿主：启动一次后按低频扫描已完成 Run。
+// 常驻知识扫描宿主（已退役）。
 //
-// Companion 产品会在自己的 Runtime timer 中调用同一个 KnowledgeLoopRuntime；
-// 本脚本用于无桌面环境或调试。不是第二套调度器。
+// ADR-0007 / #62：旧采集链（扫描已完成 Run → 写经验表）已停用；KnowledgeLoopRuntime 现在
+// 只返回退役状态，不读旧表、不写库。保留脚本只为让既有 npm script 与调试命令仍然可用，
+// 输出里的 retired=true 就是「没有采集」。新链路的提炼入口见 src/knowledge-loop/on-demand.mjs。
 import os from 'node:os';
 import path from 'node:path';
 import { OwnerStore } from '../../src/owner-store.mjs';
@@ -17,12 +18,11 @@ const read = (flag, fallback = '') => {
 const ownerDb = read('--owner-db', process.env.OWNER_AGENT_DB || path.join(os.homedir(), '.owner-agent', 'owner.sqlite'));
 const knowledgeDb = read('--knowledge-db', process.env.OWNER_KNOWLEDGE_DB || process.env.DOMAIN_CONTEXT_DB || path.join(os.homedir(), '.domain-context', 'index.sqlite'));
 const intervalMs = Math.max(5000, Number(read('--interval-ms', '15000')) || 15000);
-const allowHarvest = args.includes('--allow-harvest') || process.env.OWNER_KNOWLEDGE_AUTO_HARVEST === '1';
 const once = args.includes('--once');
 const model = read('--model', process.env.OWNER_MODEL || '');
 const owner = new OwnerStore(ownerDb);
 const personal = new PersonalKnowledgeStore(knowledgeDb);
-const runtime = new KnowledgeLoopRuntime({ ownerStore: owner, personalStore: personal, allowHarvest, model });
+const runtime = new KnowledgeLoopRuntime({ ownerStore: owner, personalStore: personal, model });
 
 const report = (result) => {
   process.stdout.write(`${JSON.stringify(result)}\n`);
