@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   knowledge: Object.freeze({
     summary: (input) => invoke('companion:knowledge-summary', input),
     browse: (input) => invoke('companion:knowledge-browse', input),
+    review: (input) => invoke('companion:knowledge-review', input),
     tidy: (input) => invoke('companion:knowledge-tidy', input),
     harvest: (input) => invoke('companion:knowledge-harvest', input),
     ask: (input) => invoke('companion:knowledge-ask', input),

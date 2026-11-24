@@ -77,6 +77,7 @@ const playbookAborts = new Map();
 const playbookChildren = new Map();
 let knowledgeSummaryModule = null;
 let knowledgeBrowseModule = null;
+let knowledgeReviewModule = null;
 let harvestInFlight = false;
 let mascotModule = null;
 let githubModule = null;
@@ -2767,6 +2768,19 @@ const registerIpc = () => {
     });
   });
 
+  // 知识模式内的候选审核：直接复用 PersonalKnowledgeStore.reviewProposal，
+  // 返回结构化结果，失败时由面板提示原因且不改变当前列表。
+  ipcMain.handle('companion:knowledge-review', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    knowledgeReviewModule = knowledgeReviewModule ?? await importEsm('../src/knowledge/review.mjs');
+    return knowledgeReviewModule.knowledgeReviewFor({
+      personalStore,
+      id: String(input?.id ?? ''),
+      decision: String(input?.decision ?? ''),
+      reviewer: 'local-user'
+    });
+  });
+
   ipcMain.handle('companion:knowledge-ask', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return knowledgeAsk({
@@ -3276,6 +3290,44 @@ async function boot() {
             await new Promise((resolve) => setTimeout(resolve, 900));
             const image = await panel.webContents.capturePage();
             fs.writeFileSync(path.join(screenshotDir, `panel-${mode}.png`), image.toPNG());
+            // 知识审核验收：先保留接受前的 B 模式，再点第一条候选的「接受」补一张。
+            if (mode === 'B') {
+              const reviewProbe = await panel.webContents.executeJavaScript(`(async () => {
+                const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+                let button = null;
+                for (let i = 0; i < 30 && !button; i += 1) {
+                  button = document.querySelector('#kbGroups .kb-candidates .kb-act.accept');
+                  if (!button) await wait(100);
+                }
+                if (!button) return { reviewed: false, reason: 'no-candidate' };
+                const countOf = (key) => {
+                  const node = document.querySelector('#kbGroups .kb-' + key + ' .kb-group-count');
+                  return node ? node.textContent : '';
+                };
+                const before = countOf('candidates');
+                button.click();
+                for (let i = 0; i < 40; i += 1) {
+                  await wait(100);
+                  if (countOf('candidates') !== before) break;
+                }
+                return {
+                  reviewed: true,
+                  before,
+                  candidates: countOf('candidates'),
+                  pending: countOf('pending'),
+                  toast: document.getElementById('toast')?.textContent ?? ''
+                };
+              })()`);
+              fs.writeFileSync(
+                path.join(screenshotDir, 'knowledge-review-probe.json'),
+                JSON.stringify(reviewProbe, null, 2)
+              );
+              const afterImage = await panel.webContents.capturePage();
+              fs.writeFileSync(
+                path.join(screenshotDir, 'panel-B-after-review.png'),
+                afterImage.toPNG()
+              );
+            }
           }
           // 对话模式：没有模型时必须给出明确提示（不能静默失败）。
           // 这里直接走一遍 IPC，顺带验证 preload 暴露的 chat.ask 接线。
