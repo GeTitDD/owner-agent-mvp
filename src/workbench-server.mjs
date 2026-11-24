@@ -9,6 +9,9 @@ import { OwnerAgent } from './owner-agent.mjs';
 import { loadSnapshot } from './loader.mjs';
 import { createDomainEngine } from './engine.mjs';
 import { defaultDbPath } from './storage.mjs';
+import { ObserverStore } from './observer/store.mjs';
+import { BOARD_EVENT_LIMIT, buildBoardViewModel, renderBoardPage } from './observer/board.mjs';
+import { resolveThresholdsFromEnvironment } from './observer/thresholds.mjs';
 
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const WEB=path.join(ROOT,'web','workbench');
@@ -18,6 +21,10 @@ const json=(res,value,status=200)=>{
   res.end(data);
 };
 const notFound=(msg='Not found')=>{const e=new Error(msg);e.status=404;throw e;};
+// 观察台页面自带数据，不允许任何外部资源与脚本，避免只读页面变成攻击面。
+const html=(res,text)=>{res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store',
+  'x-content-type-options':'nosniff','referrer-policy':'no-referrer',
+  'content-security-policy':"default-src 'none'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"});res.end(text);};
 async function body(req) {
   if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']??'')) { const e=new Error('JSON content-type required'); e.status=415;throw e; }
   const buffers=[];let size=0;
@@ -86,6 +93,12 @@ export async function createWorkbenchServer({
 } = {}) {
   if(!['127.0.0.1','::1','localhost'].includes(host)) throw new Error('Workbench must bind to loopback');
   const store=new PersonalKnowledgeStore(personalDbPath),owner=new OwnerStore(ownerDbPath),ownerAgent=new OwnerAgent(owner),staticCatalog=await catalog();
+  // 观察台每次请求现查审计库（ADR-0002），读完即关，页面不会落后于事件表。
+  // 阈值与 CLI 同源（resolveThresholdsFromEnvironment）：改 thresholds.json 后徽章立即同步，
+  // 不再固定按内置 3/10/20 判定。
+  const boardView=()=>{const thresholds=resolveThresholdsFromEnvironment();const observer=new ObserverStore(ownerDbPath);try{
+    return buildBoardViewModel({projects:owner.listProjects(),events:observer.listEvents({limit:BOARD_EVENT_LIMIT}),thresholds});
+  }finally{observer.close();}};
   const allUnits=()=>[...store.list({limit:2000}).map(x=>({...x,readOnly:false})),...staticCatalog.knowledge];
   const handler=async(req,res)=>{
     try {
@@ -100,6 +113,13 @@ export async function createWorkbenchServer({
           'content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
           'referrer-policy':'no-referrer'});res.end(data);return;
       }
+      // 观察台是普通 HTTP 路由：浏览器直接打开即可，不依赖 Electron 是否运行。
+      if(req.method==='GET'&&url.pathname==='/observer'){html(res,renderBoardPage(boardView()));return;}
+      if(req.method==='GET'&&url.pathname==='/observer.css') {
+        const css=await readFile(path.join(ROOT,'web','observer','observer.css'));
+        res.writeHead(200,{'content-type':'text/css; charset=utf-8','cache-control':'no-cache','x-content-type-options':'nosniff'});
+        res.end(css);return;
+      }
       if(!url.pathname.startsWith('/api/'))return notFound();
       if(req.method!=='GET') {
         const origin=req.headers.origin;
@@ -108,6 +128,7 @@ export async function createWorkbenchServer({
       }
       const fragments=url.pathname.split('/').filter(Boolean), method=req.method;
       if(method==='GET'&&url.pathname==='/api/health')return json(res,{ok:true,version:'0.5.0',localOnly:true});
+      if(method==='GET'&&url.pathname==='/api/observer/board')return json(res,boardView());
       if(method==='GET'&&url.pathname==='/api/owner/summary')return json(res,owner.summary());
       if(method==='GET'&&url.pathname==='/api/owner/attention')return json(res,ownerAgent.attention());
       if(method==='GET'&&url.pathname==='/api/owner/events')return json(res,owner.listEvents({projectId:url.searchParams.get('projectId')??'',limit:Math.min(200,Math.max(1,Number(url.searchParams.get('limit')??40)))}));
@@ -219,7 +240,12 @@ export async function createWorkbenchServer({
   const server=http.createServer((req,res)=>{void handler(req,res);});
   return {
     async listen() {await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,resolve);});return server.address();},
-    close() {return new Promise((resolve,reject)=>server.close(e=>{store.close();owner.close();e?reject(e):resolve();}));},
+    close() {return new Promise((resolve,reject)=>{
+      // 先断开空闲的 keep-alive 连接：全局 fetch 的连接池会保留套接字，
+      // 否则 server.close() 在测试里会偶发等待数秒，表现为随机失败。
+      server.close(e=>{store.close();owner.close();e?reject(e):resolve();});
+      server.closeIdleConnections?.();
+    });},
     server,store
   };
 }
