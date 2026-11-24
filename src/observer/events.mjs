@@ -33,11 +33,24 @@ const eventFingerprint = (type, projectId, branchLabel) => sha256(canonical({
 }));
 
 /**
- * 停滞事件指纹：事件类型 + 仓库 + 分支。
- * @param {{projectId:string, branchLabel:string}} input
- * @returns {string} 64 位十六进制
+ * 三类事件共用的信封：类型、指纹、仓库、分支、HEAD 与检测时间只在这里拼一次。
+ * @param {{type:string, snapshot:object, now:Date, evidence?:object}} options
+ * @returns {object}
  */
-export const staleFingerprint = ({ projectId, branchLabel }) => eventFingerprint('stale', projectId, branchLabel);
+const makeEvent = ({ type, snapshot, now, evidence = {} }) => {
+  const branchLabel = branchLabelOf(snapshot);
+  return {
+    type,
+    fingerprint: eventFingerprint(type, snapshot.projectId, branchLabel),
+    projectId: snapshot.projectId,
+    projectName: snapshot.projectName ?? '',
+    branch: snapshot.branch ?? null,
+    branchLabel,
+    head: snapshot.head ?? null,
+    ...evidence,
+    detectedAt: now.toISOString()
+  };
+};
 
 /**
  * 判断快照是否越过了停滞阈值。
@@ -55,27 +68,16 @@ export function detectStaleEvent(snapshot, { now = new Date(), thresholdDays = D
   if (!Number.isFinite(lastCommit)) return null;
   const ageMs = now.getTime() - lastCommit;
   if (ageMs <= thresholdDays * DAY_MS) return null;
-  const branchLabel = branchLabelOf(snapshot);
-  return {
+  return makeEvent({
     type: 'stale',
-    fingerprint: staleFingerprint({ projectId: snapshot.projectId, branchLabel }),
-    projectId: snapshot.projectId,
-    projectName: snapshot.projectName ?? '',
-    branch: snapshot.branch,
-    branchLabel,
-    head: snapshot.head,
-    lastCommitAt: snapshot.lastCommitAt,
-    daysStale: Math.floor(ageMs / DAY_MS),
-    detectedAt: now.toISOString()
-  };
+    snapshot,
+    now,
+    evidence: {
+      lastCommitAt: snapshot.lastCommitAt,
+      daysStale: Math.floor(ageMs / DAY_MS)
+    }
+  });
 }
-
-/**
- * 漂移事件指纹：事件类型 + 仓库 + 分支；落后加深不换指纹，只更新证据字段。
- * @param {{projectId:string, branchLabel:string}} input
- * @returns {string} 64 位十六进制
- */
-export const driftFingerprint = ({ projectId, branchLabel }) => eventFingerprint('drift', projectId, branchLabel);
 
 /**
  * 判断当前分支是否落后主干超过阈值（默认 10 个提交）。
@@ -91,27 +93,16 @@ export function detectDriftEvent(snapshot, { now = new Date(), driftCommits = DE
     ? snapshot.behindTrunk : 0;
   // “超过阈值”是开区间：落后 10 个不报，11 个才报。
   if (behindTrunk <= driftCommits) return null;
-  const branchLabel = branchLabelOf(snapshot);
-  return {
+  return makeEvent({
     type: 'drift',
-    fingerprint: driftFingerprint({ projectId: snapshot.projectId, branchLabel }),
-    projectId: snapshot.projectId,
-    projectName: snapshot.projectName ?? '',
-    branch: snapshot.branch,
-    branchLabel,
-    head: snapshot.head,
-    trunkRef: snapshot.trunkRef,
-    behindTrunk,
-    detectedAt: now.toISOString()
-  };
+    snapshot,
+    now,
+    evidence: {
+      trunkRef: snapshot.trunkRef,
+      behindTrunk
+    }
+  });
 }
-
-/**
- * 积压事件指纹：事件类型 + 仓库 + 分支；文件数变化不换指纹，只更新证据字段。
- * @param {{projectId:string, branchLabel:string}} input
- * @returns {string} 64 位十六进制
- */
-export const backlogFingerprint = ({ projectId, branchLabel }) => eventFingerprint('backlog', projectId, branchLabel);
 
 /**
  * 判断未提交文件是否达到积压阈值（默认 20 个，达到即触发）。
@@ -125,16 +116,10 @@ export function detectBacklogEvent(snapshot, { now = new Date(), backlogFiles = 
   const uncommittedFiles = Number.isSafeInteger(snapshot?.uncommittedFiles) && snapshot.uncommittedFiles >= 0
     ? snapshot.uncommittedFiles : 0;
   if (uncommittedFiles < backlogFiles) return null;
-  const branchLabel = branchLabelOf(snapshot);
-  return {
+  return makeEvent({
     type: 'backlog',
-    fingerprint: backlogFingerprint({ projectId: snapshot.projectId, branchLabel }),
-    projectId: snapshot.projectId,
-    projectName: snapshot.projectName ?? '',
-    branch: snapshot.branch ?? null,
-    branchLabel,
-    head: snapshot.head ?? null,
-    uncommittedFiles,
-    detectedAt: now.toISOString()
-  };
+    snapshot,
+    now,
+    evidence: { uncommittedFiles }
+  });
 }

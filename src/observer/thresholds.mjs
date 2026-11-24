@@ -42,6 +42,21 @@ const assertThreshold = (value, field) => {
   return value;
 };
 
+/**
+ * 合并默认值与调用方覆盖值，并逐字段校验。所有「先合并再判定」的地方都走这里，
+ * 避免三处各写一份 `{...DEFAULT_THRESHOLDS, ...}` 而校验口径不一致。
+ * @param {object} [overrides]
+ * @returns {{staleDays:number, driftCommits:number, backlogFiles:number}}
+ */
+export function mergeThresholds(overrides = {}) {
+  const input = overrides !== null && typeof overrides === 'object' && !Array.isArray(overrides)
+    ? overrides : {};
+  const merged = { ...DEFAULT_THRESHOLDS, ...input };
+  const resolved = {};
+  for (const field of fields) resolved[field] = assertThreshold(merged[field], field);
+  return resolved;
+}
+
 /** 从文件对象与环境变量里各取一次覆盖值。 */
 const readFileOverrides = (configPath) => {
   let parsed;
@@ -75,12 +90,24 @@ const readEnvOverrides = (env) => {
  * @returns {{staleDays:number, driftCommits:number, backlogFiles:number}}
  */
 export function resolveThresholds({ env = process.env, configPath = defaultThresholdsConfigPath() } = {}) {
-  const merged = {
-    ...DEFAULT_THRESHOLDS,
+  return mergeThresholds({
     ...readFileOverrides(configPath),
     ...readEnvOverrides(env)
-  };
-  const resolved = {};
-  for (const field of fields) resolved[field] = assertThreshold(merged[field], field);
-  return resolved;
+  });
+}
+
+/**
+ * 命令行与观察台共用的解析入口：OWNER_OBSERVER_THRESHOLDS 可以指定阈值文件路径，
+ * 其余优先级交给 resolveThresholds。观察台每次请求都调用，改配置文件后徽章立即同步。
+ * @param {{env?:object, configPath?:string}} [options]
+ * @returns {{staleDays:number, driftCommits:number, backlogFiles:number}}
+ */
+export function resolveThresholdsFromEnvironment({ env = process.env, configPath } = {}) {
+  const fromEnvPath = typeof env?.OWNER_OBSERVER_THRESHOLDS === 'string'
+    ? env.OWNER_OBSERVER_THRESHOLDS.trim()
+    : '';
+  const resolvedPath = configPath === undefined ? fromEnvPath : configPath;
+  return resolvedPath
+    ? resolveThresholds({ env, configPath: resolvedPath })
+    : resolveThresholds({ env });
 }

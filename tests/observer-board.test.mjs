@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { rm } from 'node:fs/promises';
 import { OwnerStore } from '../src/owner-store.mjs';
@@ -7,19 +8,26 @@ import { ObserverStore } from '../src/observer/store.mjs';
 import { createWorkbenchServer } from '../src/workbench-server.mjs';
 import { buildBoardViewModel } from '../src/observer/board.mjs';
 import { makeRepo, makeTempDir } from './helpers/observer-fixture.mjs';
+import { request, requestJson } from './helpers/observer-http.mjs';
 
 const DAY_MS = 86_400_000;
 
 // 观察台是纯 HTTP 能力：测试只经 workbench 端口访问，不启动 Electron、不读本机用户数据。
+// 阈值文件显式指向临时目录，避免读到本机 ~/.owner-agent/thresholds.json 造成不确定性。
 const withBoard = async (fn) => {
   const dir = makeTempDir('observer-board-');
   const dbPath = path.join(dir, 'board.sqlite');
+  const thresholdsPath = path.join(dir, 'thresholds.json');
+  const previous = process.env.OWNER_OBSERVER_THRESHOLDS;
+  process.env.OWNER_OBSERVER_THRESHOLDS = thresholdsPath;
   const workbench = await createWorkbenchServer({ port: 0, dbPath });
   const { port } = await workbench.listen();
   try {
-    return await fn({ base: `http://127.0.0.1:${port}`, dbPath, dir });
+    return await fn({ base: `http://127.0.0.1:${port}`, dbPath, dir, thresholdsPath });
   } finally {
     await workbench.close();
+    if (previous === undefined) delete process.env.OWNER_OBSERVER_THRESHOLDS;
+    else process.env.OWNER_OBSERVER_THRESHOLDS = previous;
     await rm(dir, { recursive: true, force: true });
   }
 };
@@ -64,10 +72,10 @@ test('观察台首屏返回全部已登记项目的卡片，每张含最近事�
   ]);
   recordStaleEvent(dbPath);
 
-  const page = await fetch(`${base}/observer`);
+  const page = await request(base, '/observer');
   assert.equal(page.status, 200);
-  assert.match(page.headers.get('content-type'), /text\/html/);
-  const html = await page.text();
+  assert.match(page.headers['content-type'], /text\/html/);
+  const html = page.body;
   // 首屏 HTML 自带卡片，不靠客户端再发一次请求（T5「首屏渲染不含阻塞请求」）。
   assert.match(html, /Alpha 仓库/);
   assert.match(html, /Beta 仓库/);
@@ -76,14 +84,12 @@ test('观察台首屏返回全部已登记项目的卡片，每张含最近事�
   assert.match(html, /未观测/, '没有事件的项目要明确标成未观测而不是假装健康');
   assert.match(html, /今日事件/);
   // 样式与页面分开走静态路由，CSP 不允许内联脚本，页面本身不发外部请求。
-  assert.match(page.headers.get('content-security-policy'), /style-src 'self'/);
-  const css = await fetch(`${base}/observer.css`);
+  assert.match(page.headers['content-security-policy'], /style-src 'self'/);
+  const css = await request(base, '/observer.css');
   assert.equal(css.status, 200);
-  assert.match(css.headers.get('content-type'), /text\/css/);
+  assert.match(css.headers['content-type'], /text\/css/);
 
-  const response = await fetch(`${base}/api/observer/board`);
-  assert.equal(response.status, 200);
-  const board = await response.json();
+  const board = await requestJson(base, '/api/observer/board');
   assert.equal(board.projects.length, 2);
   assert.match(board.date, /^\d{4}-\d{2}-\d{2}$/);
 
@@ -134,7 +140,7 @@ test('事件流按发生时间倒序且只含当天；卡片仍用最近一次�
     daysStale: 12, detectedAt: new Date(now - DAY_MS).toISOString()
   });
 
-  const board = await (await fetch(`${base}/api/observer/board`)).json();
+  const board = await requestJson(base, '/api/observer/board');
   assert.deepEqual(board.events.map((e) => e.daysStale), [9, 5], '当天事件按时间倒序');
   const alpha = board.projects.find((p) => p.id === 'obs-alpha');
   assert.equal(alpha.branch, 'release', '卡片用最近一次事件的分支');
@@ -145,16 +151,14 @@ test('事件流按发生时间倒序且只含当天；卡片仍用最近一次�
 }));
 
 test('空库时观察台给出空状态而不是报错或伪造项目', () => withBoard(async ({ base }) => {
-  const page = await fetch(`${base}/observer`);
+  const page = await request(base, '/observer');
   assert.equal(page.status, 200);
-  const html = await page.text();
+  const html = page.body;
   assert.match(html, /还没有登记项目/);
   assert.match(html, /今日暂无事件/);
   assert.doesNotMatch(html, /<article class="card/);
 
-  const response = await fetch(`${base}/api/observer/board`);
-  assert.equal(response.status, 200);
-  const board = await response.json();
+  const board = await requestJson(base, '/api/observer/board');
   assert.deepEqual(board.projects, []);
   assert.deepEqual(board.events, []);
 }));
@@ -174,14 +178,36 @@ test('风险徽章按阈值对比审计库里的停滞天数，不另做一套�
   assert.throws(() => buildBoardViewModel({ projects, events, thresholdDays: -1 }), /Invalid stale threshold/);
 });
 
+test('观察台阈值与命令行同源：改 thresholds.json 后徽章与页面同步变化', () => withBoard(async ({
+  base, dbPath, dir, thresholdsPath
+}) => {
+  register(dbPath, [{ id: 'obs-alpha', name: 'Alpha 仓库', root: makeRepo({ root: path.join(dir, 'alpha') }) }]);
+  recordStaleEvent(dbPath);
+
+  let board = await requestJson(base, '/api/observer/board');
+  assert.equal(board.projects[0].risk.level, 'stale', '默认阈值 3 天时 4 天算停滞');
+  assert.equal(board.thresholds.staleDays, 3);
+
+  // 配置文件抬高阈值：页面不是固定在 3/10/20，而是与 CLI 读同一份配置。
+  fs.writeFileSync(thresholdsPath, JSON.stringify({ staleDays: 7 }));
+  board = await requestJson(base, '/api/observer/board');
+  assert.equal(board.thresholds.staleDays, 7);
+  assert.equal(board.projects[0].risk.level, 'watch');
+  assert.equal(board.projects[0].risk.label, '关注');
+
+  const html = (await request(base, '/observer')).body;
+  assert.match(html, /阈值 7 天/);
+  assert.match(html, /badge badge-watch/);
+}));
+
 test('登记新项目后重新打开页面就能看到，观察台不缓存结论', () => withBoard(async ({ base, dbPath, dir }) => {
   const firstRoot = makeRepo({ root: path.join(dir, 'first') });
   register(dbPath, [{ id: 'obs-first', name: 'First', root: firstRoot }]);
-  let board = await (await fetch(`${base}/api/observer/board`)).json();
+  let board = await requestJson(base, '/api/observer/board');
   assert.equal(board.projects.length, 1);
 
   const secondRoot = makeRepo({ root: path.join(dir, 'second') });
   register(dbPath, [{ id: 'obs-second', name: 'Second', root: secondRoot }]);
-  board = await (await fetch(`${base}/api/observer/board`)).json();
+  board = await requestJson(base, '/api/observer/board');
   assert.deepEqual(board.projects.map((p) => p.id).sort(), ['obs-first', 'obs-second']);
 }));

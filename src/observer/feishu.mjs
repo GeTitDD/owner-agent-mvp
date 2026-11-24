@@ -3,59 +3,32 @@
 // 只支持自定义机器人 incoming webhook 的文本消息（msg_type=text），
 // 不处理回执、按钮或双向交互。投递失败返回结果对象，不向调用方抛异常：
 // 观察流程不能因为一次网络错误而中断，#30 才负责重试与失败原因上报。
+//
+// 消息格式按事件类型从 event-types.mjs 的注册表取，本模块只负责发送。
+import { EVENT_TYPES, formatEventMessage } from './event-types.mjs';
+
+export { formatEventMessage };
 
 /**
  * 停滞事件的人读消息。
  * @param {object} event detectStaleEvent 的输出
  * @returns {string}
  */
-export const formatStaleMessage = (event) => [
-  `【停滞】${event.projectName || event.projectId} 已停滞 ${event.daysStale} 天`,
-  `项目：${event.projectName || event.projectId}（${event.projectId}）`,
-  `分支：${event.branchLabel}`,
-  `最后提交：${event.lastCommitAt}`
-].join('\n');
+export const formatStaleMessage = (event) => EVENT_TYPES.stale.summary(event);
 
 /**
  * 漂移事件的人读消息。
  * @param {object} event detectDriftEvent 的输出
  * @returns {string}
  */
-export const formatDriftMessage = (event) => [
-  `【漂移】${event.projectName || event.projectId} 落后主干 ${event.behindTrunk} 个提交`,
-  `项目：${event.projectName || event.projectId}（${event.projectId}）`,
-  `分支：${event.branchLabel} → 主干：${event.trunkRef}`,
-  `当前提交：${event.head}`
-].join('\n');
+export const formatDriftMessage = (event) => EVENT_TYPES.drift.summary(event);
 
 /**
  * 积压事件的人读消息。
  * @param {object} event detectBacklogEvent 的输出
  * @returns {string}
  */
-export const formatBacklogMessage = (event) => [
-  `【积压】${event.projectName || event.projectId} 有 ${event.uncommittedFiles} 个未提交文件`,
-  `项目：${event.projectName || event.projectId}（${event.projectId}）`,
-  `分支：${event.branchLabel}`
-].join('\n');
-
-/** 事件类型 → 消息格式；新增事件类型时只改这一处。 */
-const FORMATTERS = {
-  stale: formatStaleMessage,
-  drift: formatDriftMessage,
-  backlog: formatBacklogMessage
-};
-
-/**
- * 按事件类型选择人读消息格式。
- * @param {object} event 任一类观察事件
- * @returns {string}
- */
-export function formatEventMessage(event) {
-  const formatter = FORMATTERS[event?.type];
-  if (!formatter) throw new Error(`Unknown observer event type: ${event?.type}`);
-  return formatter(event);
-}
+export const formatBacklogMessage = (event) => EVENT_TYPES.backlog.summary(event);
 
 /**
  * 发送一条飞书文本消息。

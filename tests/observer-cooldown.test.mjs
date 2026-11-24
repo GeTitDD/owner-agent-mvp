@@ -207,6 +207,35 @@ test('同分支出现新提交且仍然停滞：24 小时内不重复通知', ()
   assert.equal(requests.length, 1);
 }));
 
+// 冷却窗口内证据会变（积压更多文件）：不新增事件、不重复发消息，但审计里的证据要更新，
+// 否则观察台会一直显示第一次测到的 25 个文件，风险排序失真。
+test('冷却窗口内再次命中有新证据：不新增事件、不重复投递，但证据字段更新', () => withWebhook(async ({
+  dir, dbPath, requests, webhookUrl
+}) => {
+  const root = makeBehindRepo({ root: path.join(dir, 'all'), behind: 12, commitAt: FOUR_DAYS_AGO });
+  addUntrackedFiles(root, 25);
+  const project = { id: 'obs-evidence', name: 'Evidence', root };
+
+  await reopen(dbPath, async (store) => {
+    const first = await runProjectCheck({ project, store, webhookUrl, now: NOW });
+    assert.equal(requests.length, 3);
+
+    addUntrackedFiles(root, 5, 'extra');
+    const second = await runProjectCheck({
+      project, store, webhookUrl, now: new Date(NOW.getTime() + HOUR_MS)
+    });
+
+    assert.ok(second.deliveries.every((delivery) => delivery.status === 'skipped'));
+    assert.equal(requests.length, 3, '冷却期内不得再发消息');
+    assert.equal(store.listEvents({ projectId: 'obs-evidence' }).length, 3, '不新增事件行');
+    const backlog = store.listEvents({ projectId: 'obs-evidence' }).find((event) => event.type === 'backlog');
+    assert.equal(backlog.uncommittedFiles, 30, '积压证据刷新为本次观测值');
+    assert.equal(backlog.updatedAt, new Date(NOW.getTime() + HOUR_MS).toISOString());
+    assert.equal(first.events.find((event) => event.type === 'backlog').uncommittedFiles, 25);
+  });
+  assert.equal(requests.length, 3);
+}));
+
 // #28 × #29：三类事件在同一条链路上各自冷却，互不占用对方的窗口。
 test('全量检查的三类事件各自冷却：第二次全部跳过，24 小时后各自再推送', () => withWebhook(async ({ dir, dbPath, requests, webhookUrl }) => {
   const root = makeBehindRepo({ root: path.join(dir, 'all'), behind: 12, commitAt: FOUR_DAYS_AGO });

@@ -5,6 +5,8 @@
 //   - 一律带 `--no-optional-locks` 与 `GIT_OPTIONAL_LOCKS=0`，避免 git status 回写 .git/index；
 //   - 不执行任何写命令（不 fetch / checkout / add / commit），被观察仓库在探针前后保持一致。
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const GIT_TIMEOUT_MS = 15_000;
 
@@ -69,20 +71,58 @@ const resolveTrunkRef = (gitBin, root, branch) => {
   return firstExistingRef(gitBin, root, [...new Set(candidates)]);
 };
 
-// 只统计落后/领先的提交数；两个引用无共同祖先时 rev-list 仍能给出计数，不会抛错。
+// 只统计落后提交数；两个引用无共同祖先时 rev-list 仍能给出计数，不会抛错。
 const countCommits = (gitBin, root, range) => {
   const output = tryGit(gitBin, root, ['rev-list', '--count', range]);
   const count = Number.parseInt(String(output ?? '').trim(), 10);
   return Number.isSafeInteger(count) && count >= 0 ? count : 0;
 };
 
+/** 读不到或不是合法 package.json 时的空摘要；探针不能因为缺文件而失败。 */
+const EMPTY_MANIFEST = Object.freeze({
+  packageName: null,
+  isWorkspace: false,
+  dependencyCount: 0,
+  scriptNames: []
+});
+
+/**
+ * 读取仓库根的 Manifest 摘要（package.json）。
+ * 只读一个文件、不做任何解析之外的推断：读不到就返回空值。
+ * @param {string} root
+ * @returns {{packageName:string|null, isWorkspace:boolean, dependencyCount:number,
+ *   scriptNames:string[]}}
+ */
+const readManifest = (root) => {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  } catch {
+    return { ...EMPTY_MANIFEST, scriptNames: [] };
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ...EMPTY_MANIFEST, scriptNames: [] };
+  }
+  const dependencyCount = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']
+    .reduce((count, key) => count + (parsed[key] && typeof parsed[key] === 'object'
+      && !Array.isArray(parsed[key]) ? Object.keys(parsed[key]).length : 0), 0);
+  return {
+    packageName: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : null,
+    isWorkspace: parsed.workspaces !== undefined && parsed.workspaces !== null,
+    dependencyCount,
+    scriptNames: parsed.scripts && typeof parsed.scripts === 'object' && !Array.isArray(parsed.scripts)
+      ? Object.keys(parsed.scripts).sort() : []
+  };
+};
+
 /**
  * 采集单个项目的只读快照。
  * @param {{projectId:string, projectName?:string, root:string, gitBin?:string}} options
  * @returns {{projectId:string, projectName:string, root:string, branch:string|null,
- *   detached:boolean, head:string|null, hasCommits:boolean, lastCommitAt:string|null,
- *   uncommittedFiles:number, hasRemote:boolean, trunkRef:string|null,
- *   behindTrunk:number, aheadTrunk:number}}
+ *   head:string|null, hasCommits:boolean, lastCommitAt:string|null,
+ *   uncommittedFiles:number, trunkRef:string|null, behindTrunk:number,
+ *   manifest:{packageName:string|null, isWorkspace:boolean, dependencyCount:number,
+ *   scriptNames:string[]}}}
  */
 export function probeProject({ projectId, projectName = '', root, gitBin = 'git' } = {}) {
   if (typeof projectId !== 'string' || !projectId.trim()) throw new ObserverProbeError('Invalid project id');
@@ -97,24 +137,20 @@ export function probeProject({ projectId, projectName = '', root, gitBin = 'git'
   const lastCommitAt = head ? tryGit(gitBin, root, ['log', '-1', '--format=%cI', 'HEAD'])?.trim() || null : null;
   const status = tryGit(gitBin, root, ['status', '--porcelain=v1', '--untracked-files=all']) ?? '';
   const uncommittedFiles = status.split(/\r?\n/).filter(Boolean).length;
-  const remotes = tryGit(gitBin, root, ['remote']) ?? '';
   const trunkRef = head ? resolveTrunkRef(gitBin, root, branch) : null;
   const behindTrunk = trunkRef ? countCommits(gitBin, root, `HEAD..${trunkRef}`) : 0;
-  const aheadTrunk = trunkRef ? countCommits(gitBin, root, `${trunkRef}..HEAD`) : 0;
 
   return {
     projectId: projectId.trim(),
     projectName: String(projectName),
     root,
     branch,
-    detached: !branch,
     head,
     hasCommits: Boolean(head),
     lastCommitAt,
     uncommittedFiles,
-    hasRemote: remotes.split(/\r?\n/).some(Boolean),
     trunkRef,
     behindTrunk,
-    aheadTrunk
+    manifest: readManifest(root)
   };
 }

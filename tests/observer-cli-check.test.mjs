@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { rm } from 'node:fs/promises';
 import { OwnerStore } from '../src/owner-store.mjs';
+import { ObserverStore } from '../src/observer/store.mjs';
 import {
   addUntrackedFiles,
   makeBehindRepo,
@@ -70,6 +71,7 @@ test('命令行 check 一次产出三类事件，被观察仓库保持不变', (
     '--db', dbPath,
     '--config', path.join(dir, 'missing-feishu.json'),
     '--webhook', webhookUrl,
+    '--send',
     '--json'
   ], { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath, dir) });
   const summary = JSON.parse(output);
@@ -99,10 +101,56 @@ test('命令行阈值文件改变事件判定：抬高漂移阈值后不再报�
     '--config', path.join(dir, 'missing-feishu.json'),
     '--thresholds', thresholdsPath,
     '--webhook', webhookUrl,
+    '--send',
     '--json'
   ], { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath, dir) });
   const summary = JSON.parse(output);
 
   assert.deepEqual(summary.events.map((event) => event.type), ['stale']);
   assert.equal(requests.length, 1);
+}));
+
+// #4 修复：check 默认只写事件并打印「本应发送什么」，不会和 digest 重复投递。
+test('命令行 check 默认只预览：事件入库、打印本应发送的内容、不发请求', () => withContext(async ({
+  dir, requests, webhookUrl
+}) => {
+  const dbPath = path.join(dir, 'observer.sqlite');
+  const root = makeBehindRepo({ root: path.join(dir, 'preview'), behind: 12, commitAt: FOUR_DAYS_AGO });
+  addUntrackedFiles(root, 25);
+  registerProject(dbPath, root, 'obs-cli-preview', 'CLI Preview');
+
+  const { stdout: output } = await runCli(process.execPath, [
+    CLI, 'check',
+    '--project', 'obs-cli-preview',
+    '--db', dbPath,
+    '--config', path.join(dir, 'missing-feishu.json'),
+    '--webhook', webhookUrl,
+    '--json'
+  ], { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath, dir) });
+  const summary = JSON.parse(output);
+
+  assert.equal(summary.preview, true);
+  assert.ok(summary.deliveries.every((delivery) => delivery === null));
+  assert.deepEqual(summary.events.map((event) => event.type).sort(), ['backlog', 'drift', 'stale']);
+  assert.equal(requests.length, 0, '预览模式不得调用 webhook');
+
+  // 事件照样入库，但没有任何投递记录。
+  const db = new ObserverStore(dbPath);
+  try {
+    assert.equal(db.listEvents({ projectId: 'obs-cli-preview' }).length, 3);
+    assert.deepEqual(db.listDeliveries({ limit: 10 }), []);
+  } finally { db.close(); }
+
+  // 人类可读输出明确说明「预览」而不是让人以为已经发过。
+  const { stdout: text } = await runCli(process.execPath, [
+    CLI, 'check',
+    '--project', 'obs-cli-preview',
+    '--db', dbPath,
+    '--config', path.join(dir, 'missing-feishu.json'),
+    '--webhook', webhookUrl
+  ], { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath, dir) });
+  assert.match(text, /【停滞】/);
+  assert.match(text, /预览：未投递/);
+  assert.match(text, /--send/);
+  assert.equal(requests.length, 0);
 }));
