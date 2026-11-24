@@ -14,6 +14,7 @@ Owner is the durable principal. The owner-centred Resident Runtime owns a projec
 - OwnerAgent deterministic read-only answers with source IDs; an **explicitly invoked** optional Pi SDK `noTools: true` one-shot cognitive adapter.
 - Resident monitor runs on a low-frequency local timer without any automatic LLM calls, dedupes new events/attention. Native notifications opt-in.
 - Web owner view and a small corner companion in the same Workbench; an optional Electron always-on-top desktop companion, system tray and full Workbench window.
+- Conversation mode binds each read-only Pi chat session to one registered project and persists it locally (`owner_chat_sessions` / `owner_chat_messages`: project, title, timestamps, message text, citations and status only). Sessions can be created, switched, renamed and deleted without touching project data.
 - Previous v0.4 Personal Knowledge Workbench, L1/L2/L3 and Pi context adapters preserved.
 
 ## Data isolation

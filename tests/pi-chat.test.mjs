@@ -247,3 +247,45 @@ test('没有项目或问题为空时给出可执行提示', async () => {
   const empty = await service.ask({ project, question: '   ', model: 'fake/model' });
   assert.equal(empty.category, 'empty-question');
 });
+
+test('历史只作为续聊上下文进入提示词，不伪装成新问题', () => {
+  const prompt = buildChatPrompt({
+    project: { id: 'demo', root: 'D:\\demo' },
+    question: '那第二处呢？',
+    history: [
+      { role: 'user', text: '这个项目为什么卡住' },
+      { role: 'assistant', text: '重试循环少跑了一次' }
+    ]
+  });
+  assert.match(prompt, /本会话之前的对话/u);
+  assert.match(prompt, /Owner：这个项目为什么卡住/u);
+  assert.match(prompt, /你：重试循环少跑了一次/u);
+  assert.match(prompt, /Owner 的问题：那第二处呢/u);
+});
+
+test('不同会话各自持有进程内 Pi 会话，同一会话继续复用', async () => {
+  const project = makeProject();
+  const { service, state } = fakeService(() => makeAdapter({ answer: 'ok' }));
+  await service.ask({ project, question: '第一问', model: 'fake/model', sessionId: 'chat_a' });
+  await service.ask({ project, question: '继续问', model: 'fake/model', sessionId: 'chat_a' });
+  assert.equal(state.created, 1);
+  await service.ask({ project, question: '另一个会话', model: 'fake/model', sessionId: 'chat_b' });
+  assert.equal(state.created, 2);
+  service.disposeAll();
+});
+
+test('只有新建的 Pi 会话才注入落库历史，活会话不重复带上下文', async () => {
+  const project = makeProject();
+  const prompts = [];
+  const { service } = fakeService(() => makeAdapter({
+    answer: 'ok',
+    promptHook: (value) => prompts.push(value),
+    state: {}
+  }));
+  const history = [{ role: 'user', text: '更早的问题' }];
+  await service.ask({ project, question: '第一问', model: 'fake/model', sessionId: 'chat_h', history });
+  assert.match(prompts[0], /更早的问题/u);
+  await service.ask({ project, question: '第二问', model: 'fake/model', sessionId: 'chat_h', history });
+  assert.doesNotMatch(prompts[1], /更早的问题/u);
+  service.disposeAll();
+});

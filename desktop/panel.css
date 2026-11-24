@@ -1540,3 +1540,23 @@ pre.diff, pre.logs {
 .c-composer textarea { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); padding: 8px 10px; font: inherit; font-size: 12.5px; outline: none; }
 .c-composer button { border: 0; border-radius: 10px; padding: 0 14px; background: var(--accent); color: var(--accent-fg); font-weight: 600; cursor: pointer; }
 .c-composer button:disabled { opacity: .5; }
+/* 会话栏：列表按项目分组，展开时不挤掉输入框（列表自己滚动）。 */
+.c-sessionbar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); flex: none; }
+.c-session-toggle { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 11.5px; cursor: pointer; }
+.c-session-toggle[aria-expanded="true"] { border-color: rgba(59, 130, 246, .45); }
+.c-session-current { flex: 1; min-width: 0; font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-session-new { border: 0; border-radius: 8px; padding: 5px 10px; font-size: 11.5px; font-weight: 600; background: var(--accent); color: var(--accent-fg); cursor: pointer; }
+.c-session-list { flex: none; max-height: 40%; overflow-y: auto; border-bottom: 1px solid var(--line); padding: 6px 10px 10px; background: var(--bg); }
+.c-session-group { margin-top: 6px; }
+.c-session-group-head { display: flex; justify-content: space-between; gap: 8px; font-size: 10px; color: var(--muted); letter-spacing: .5px; padding: 4px; }
+.c-session-item { display: flex; align-items: center; gap: 6px; border-radius: 8px; padding: 5px 6px; }
+.c-session-item.on { background: var(--panel, var(--bg)); border: 1px solid var(--line); }
+.c-session-open { flex: 1; min-width: 0; text-align: left; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-session-meta { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.c-session-action { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 10.5px; cursor: pointer; padding: 2px 3px; }
+.c-session-action:hover { color: var(--text); }
+.c-session-empty { padding: 12px 4px; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+.c-msg.error { border-color: rgba(234, 107, 23, .45); }
+.c-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; font-size: 11.5px; color: var(--muted); }
+.c-field select, .c-field input { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); padding: 7px 9px; font: inherit; font-size: 12.5px; }
+.c-field-note { font-size: 11px; color: var(--muted); line-height: 1.55; }

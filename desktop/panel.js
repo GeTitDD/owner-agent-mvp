@@ -2841,7 +2841,8 @@
     if (mode === 'A') renderModeA();
     if (mode === 'B') void loadKnowledgeBrowse();
     if (mode === 'C') {
-      greetChatOnce();
+      // 会话列表来自本地库：切换到对话模式时恢复上次会话。
+      void ensureChatSession();
       renderChatCards();
     }
   };
@@ -2874,27 +2875,291 @@
     }
   };
 
+  // ---- 对话：会话持久化（按项目分组、切换、重命名、删除） ----
+  const CHAT_SESSION_KEY = 'owner-chat-session';
+  // 与主进程 chat-sessions.mjs 的默认标题保持一致，仅用于判断是否需要「新建」提示。
+  const CHAT_DEFAULT_TITLE = '新会话';
   const chatLog = [];
   let chatGreeted = false;
   let chatBusy = false;
+  let chatSessions = [];
+  let activeChatSessionId = '';
+  let chatSessionsBound = false;
+  // 只有真正把消息画进 transcript 后，才认为会话已打开；否则重启后只会恢复标题却空着。
+  let chatSessionOpened = '';
 
-  const chatAppend = (role, text) => {
+  const chatProjectName = (projectId) =>
+    view?.projects?.find((item) => item.id === projectId)?.name || projectId || '未绑定项目';
+  const activeChatSession = () =>
+    chatSessions.find((item) => item.id === activeChatSessionId) ?? null;
+  // 列表时间：当天只显示时分，跨天补上月/日，避免旧会话看起来像刚发生。
+  const chatWhen = (value) => {
+    const at = new Date(String(value ?? ''));
+    if (Number.isNaN(at.getTime())) return '';
+    const today = new Date();
+    const sameDay = at.toDateString() === today.toDateString();
+    return sameDay
+      ? fmtTime(value)
+      : `${at.getMonth() + 1}/${at.getDate()}`;
+  };
+
+  const chatAppend = (role, text, { status = 'ok', citations = null } = {}) => {
     chatLog.push({ role, text });
-    const node = el('div', `c-msg ${role}`, text);
+    const node = el('div', `c-msg ${role}${status === 'error' ? ' error' : ''}`, text);
     $('cTranscript').append(node);
+    // 已核对的引用单独一行展示，避免把模型猜的路径当成事实。
+    if (Array.isArray(citations) && citations.length) {
+      const row = el('div', 'c-cites');
+      for (const cite of citations.slice(0, 8)) {
+        row.append(el('span', 'c-cite', cite.line ? `${cite.path}:${cite.line}` : cite.path));
+      }
+      $('cTranscript').append(row);
+    }
     $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
     return node;
   };
 
-  // 已核对的引用单独一行展示，避免把模型猜的路径当成事实。
-  const chatAppendCitations = (citations) => {
-    if (!Array.isArray(citations) || citations.length === 0) return;
-    const row = el('div', 'c-cites');
-    for (const cite of citations.slice(0, 8)) {
-      row.append(el('span', 'c-cite', cite.line ? `${cite.path}:${cite.line}` : cite.path));
+  const renderChatMessages = (messages) => {
+    $('cTranscript').replaceChildren();
+    chatLog.length = 0;
+    for (const message of messages ?? []) {
+      chatAppend(message.role === 'user' ? 'me' : 'bot', message.text, {
+        status: message.status,
+        citations: message.citations
+      });
     }
-    $('cTranscript').append(row);
-    $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
+  };
+
+  /** 列表分组：项目顺序跟随专注模式，组内按最近更新排。 */
+  const renderChatSessionList = () => {
+    const holder = $('cSessionList');
+    holder.replaceChildren();
+    $('cSessionCount').textContent = String(chatSessions.length);
+    const current = activeChatSession();
+    $('cSessionTitle').textContent = current
+      ? `${chatProjectName(current.projectId)} · ${current.title}`
+      : '还没有会话';
+    if (!chatSessions.length) {
+      holder.append(el(
+        'div',
+        'c-session-empty',
+        '还没有会话。点右上角「新建」先选项目再开始；每个会话只属于一个项目，删除会话不影响项目数据。'
+      ));
+      return;
+    }
+    const groups = new Map();
+    for (const session of chatSessions) {
+      if (!groups.has(session.projectId)) groups.set(session.projectId, []);
+      groups.get(session.projectId).push(session);
+    }
+    const order = (view?.projects ?? []).map((item) => item.id);
+    for (const projectId of groups.keys()) {
+      if (!order.includes(projectId)) order.push(projectId);
+    }
+    for (const projectId of order) {
+      const items = groups.get(projectId);
+      if (!items?.length) continue;
+      const group = el('div', 'c-session-group');
+      const head = el('div', 'c-session-group-head');
+      head.append(el('span', undefined, chatProjectName(projectId)));
+      head.append(el('span', undefined, `${items.length} 个会话`));
+      group.append(head);
+      for (const session of items) {
+        const row = el('div', `c-session-item${session.id === activeChatSessionId ? ' on' : ''}`);
+        row.dataset.sessionId = session.id;
+        const open = el('button', 'c-session-open', session.title);
+        open.title = `切换到这个会话（${session.messageCount} 条消息）`;
+        open.onclick = () => { void openChatSession(session.id); };
+        const meta = el('span', 'c-session-meta',
+          `${session.messageCount} 条 · ${chatWhen(session.updatedAt)}`);
+        const rename = el('button', 'c-session-action', '改名');
+        rename.onclick = () => openRenameChatSession(session);
+        const remove = el('button', 'c-session-action', '删除');
+        remove.onclick = () => openDeleteChatSession(session);
+        row.append(open, meta, rename, remove);
+        group.append(row);
+      }
+      holder.append(group);
+    }
+  };
+
+  const loadChatSessions = async () => {
+    try {
+      const result = await window.companion.chat.sessions.list();
+      chatSessions = Array.isArray(result?.items) ? result.items : [];
+    } catch (error) {
+      chatSessions = [];
+      toast(`会话列表读取失败：${String(error?.message ?? error)}`, 5000);
+    }
+    renderChatSessionList();
+  };
+
+  const openChatSession = async (id, { silent = false } = {}) => {
+    try {
+      const session = await window.companion.chat.sessions.get({ id });
+      activeChatSessionId = session.id;
+      chatSessionOpened = session.id;
+      chatGreeted = true;
+      try { localStorage.setItem(CHAT_SESSION_KEY, session.id); } catch { /* 本地记忆失败不影响会话 */ }
+      renderChatMessages(session.messages);
+      if (!(session.messages ?? []).length) {
+        chatAppend(
+          'bot',
+          session.title === CHAT_DEFAULT_TITLE
+            ? `这是新建的会话，绑定 ${chatProjectName(session.projectId)}。直接问就行。`
+            : `这是「${session.title}」，绑定 ${chatProjectName(session.projectId)}。直接问就行。`
+        );
+      }
+      renderChatSessionList();
+      $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
+      return session;
+    } catch (error) {
+      if (!silent) toast(String(error?.message ?? error), 5000);
+      return null;
+    }
+  };
+
+  /** 进入对话模式时恢复上次会话；没有历史就落到最近一次创建。 */
+  const ensureChatSession = async () => {
+    if (!chatSessionsBound) {
+      chatSessionsBound = true;
+      try {
+        activeChatSessionId = localStorage.getItem(CHAT_SESSION_KEY) ?? '';
+      } catch { activeChatSessionId = ''; }
+    }
+    await loadChatSessions();
+    const current = activeChatSession();
+    // 只有 transcript 已经画过这个会话才提前返回；否则重启后会只剩标题、正文空白。
+    if (current && chatSessionOpened === current.id) return;
+    if (!chatSessions.length) {
+      activeChatSessionId = '';
+      chatSessionOpened = '';
+      if (!chatLog.length) {
+        chatGreeted = false;
+        greetChatOnce();
+      }
+      return;
+    }
+    await openChatSession((current ?? chatSessions[0]).id, { silent: true });
+  };
+
+  const openNewChatSession = ({ draft = '' } = {}) => {
+    const projects = view?.projects ?? [];
+    if (!projects.length) {
+      toast('先添加一个项目：会话必须绑定项目。', 5000);
+      return;
+    }
+    const select = el('select');
+    for (const project of projects) {
+      const option = el('option', undefined, project.name || project.id);
+      option.value = project.id;
+      select.append(option);
+    }
+    select.value = view?.config?.projectId || projects[0].id;
+    const title = el('input');
+    title.maxLength = 60;
+    title.placeholder = '留空则用第一个问题自动命名';
+    const projectField = el('label', 'c-field');
+    projectField.append(el('span', undefined, '绑定项目'), select);
+    const titleField = el('label', 'c-field');
+    titleField.append(el('span', undefined, '标题（可选）'), title);
+    const note = el('p', 'c-field-note',
+      '会话只保存消息文本与时间，不改动项目数据；删除会话也不会影响项目。');
+    const cancel = el('button', 'ghost', '取消');
+    cancel.onclick = closeModal;
+    const create = el('button', 'primary', '新建会话');
+    create.onclick = async () => {
+      create.disabled = true;
+      try {
+        const session = await window.companion.chat.sessions.create({
+          projectId: select.value,
+          title: title.value
+        });
+        closeModal();
+        chatSessionsBound = true;
+        await loadChatSessions();
+        await openChatSession(session.id);
+        $('cSessionList').hidden = true;
+        $('cSessionsToggle').setAttribute('aria-expanded', 'false');
+        if (draft) {
+          $('cInput').value = draft;
+          void sendChat();
+        } else {
+          $('cInput').focus();
+        }
+      } catch (error) {
+        create.disabled = false;
+        toast(String(error?.message ?? error), 6000);
+      }
+    };
+    openModal('新建会话', [projectField, titleField, note], [cancel, create]);
+    title.focus();
+  };
+
+  const openRenameChatSession = (session) => {
+    const input = el('input');
+    input.maxLength = 60;
+    input.value = session.title;
+    const field = el('label', 'c-field');
+    field.append(el('span', undefined, '标题'), input);
+    const cancel = el('button', 'ghost', '取消');
+    cancel.onclick = closeModal;
+    const save = el('button', 'primary', '保存');
+    save.onclick = async () => {
+      const value = input.value.trim();
+      if (!value) { toast('标题不能为空。'); return; }
+      save.disabled = true;
+      try {
+        await window.companion.chat.sessions.rename({ id: session.id, title: value });
+        closeModal();
+        await loadChatSessions();
+        toast('已重命名');
+      } catch (error) {
+        save.disabled = false;
+        toast(String(error?.message ?? error), 5000);
+      }
+    };
+    openModal('重命名会话', [field], [cancel, save]);
+    input.focus();
+    input.select();
+  };
+
+  const openDeleteChatSession = (session) => {
+    const wasActive = session.id === activeChatSessionId;
+    const text = el('p', 'c-field-note',
+      `只删除「${session.title}」这段对话（${session.messageCount} 条消息），不会删除项目，也不会改动项目数据。`);
+    const cancel = el('button', 'ghost', '取消');
+    cancel.onclick = closeModal;
+    const remove = el('button', 'primary', '删除会话');
+    remove.onclick = async () => {
+      remove.disabled = true;
+      try {
+        await window.companion.chat.sessions.remove({ id: session.id });
+        closeModal();
+        if (wasActive) {
+          activeChatSessionId = '';
+          chatSessionOpened = '';
+          try { localStorage.removeItem(CHAT_SESSION_KEY); } catch { /* ignore */ }
+        }
+        await loadChatSessions();
+        if (!wasActive) {
+          toast('已删除这段会话，项目数据未受影响');
+          return;
+        }
+        const next = chatSessions[0];
+        if (next) await openChatSession(next.id, { silent: true });
+        else {
+          renderChatMessages([]);
+          chatGreeted = false;
+          greetChatOnce();
+        }
+        toast('已删除这段会话，项目数据未受影响');
+      } catch (error) {
+        remove.disabled = false;
+        toast(String(error?.message ?? error), 5000);
+      }
+    };
+    openModal('删除会话', [text], [cancel, remove]);
   };
 
   const greetChatOnce = () => {
@@ -2908,6 +3173,7 @@
     }
     const lines = [`我在看 ${project.name || project.id}。`];
     lines.push('这里只能读文件：可以查代码和配置来回答，但不会改任何东西；要改请去「交办」走审批。');
+    lines.push('会话会保存在本地：左上角「会话」按项目列出，可新建、切换、改名或删除。');
     const model = String(view?.config?.model ?? '').trim();
     if (!model) {
       // 没有模型时不假装能回答：直接说明缺什么、去哪里补。
@@ -2922,7 +3188,7 @@
       return;
     }
     lines.push(pending > 0 ? `现在有 ${pending} 件事等你决定，列在下面。` : '现在没有需要你决定的事。');
-    lines.push('可以直接问，比如「这个项目为什么卡住」。');
+    lines.push('直接点「新建」开一个会话，或用左上角切到已有的会话。');
     chatAppend('bot', lines.join('\n'));
   };
 
@@ -2963,6 +3229,12 @@
   const sendChat = async () => {
     const text = $('cInput').value.trim();
     if (!text || chatBusy) return;
+    const session = activeChatSession();
+    if (!session) {
+      // 没有会话时不偷偷落到某个项目：先让 Owner 明确选项目。
+      openNewChatSession({ draft: text });
+      return;
+    }
     chatBusy = true;
     $('cSend').disabled = true;
     $('cInput').value = '';
@@ -2971,28 +3243,40 @@
     $('cTranscript').append(thinking);
     $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
     try {
-      // 对话模式走只读 Pi 会话；不再复用「交办」的写请求链路。
+      // 对话模式走只读 Pi 会话；消息由主进程写进本地会话库。
       const result = await window.companion.chat.ask({
+        sessionId: session.id,
         question: text,
-        projectId: view?.config?.projectId || view?.activeProjectId || ''
+        projectId: session.projectId
       });
       thinking.remove();
       if (result?.status === 'ok') {
-        chatAppend('bot', result.answer || '没有结论。');
-        chatAppendCitations(result.citations);
+        chatAppend('bot', result.answer || '没有结论。', { citations: result.citations });
       } else {
         // no-model / auth-error 等都由主进程给出可执行提示，这里原样展示。
-        chatAppend('bot', result?.advice || '这次没跑通，可以再说一次。');
+        chatAppend('bot', result?.advice || '这次没跑通，可以再说一次。', { status: 'error' });
       }
+      // 首个问题会自动命名，列表需要同步刷新。
+      await loadChatSessions();
     } catch (error) {
       thinking.remove();
-      chatAppend('bot', `失败：${String(error?.message ?? error)}`);
+      chatAppend('bot', `失败：${String(error?.message ?? error)}`, { status: 'error' });
     } finally {
       chatBusy = false;
       $('cSend').disabled = false;
       $('cInput').focus();
     }
   };
+
+  $('cSessionsToggle').onclick = () => {
+    const list = $('cSessionList');
+    const next = list.hidden;
+    list.hidden = !next;
+    $('cSessionsToggle').setAttribute('aria-expanded', String(next));
+    if (next) void loadChatSessions();
+  };
+  $('cSessionNew').onclick = () => openNewChatSession();
+
 
   for (const button of document.querySelectorAll('#modeBar button')) {
     button.onclick = () => setMode(button.dataset.mode);
