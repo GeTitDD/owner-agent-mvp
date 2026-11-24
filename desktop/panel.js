@@ -79,8 +79,7 @@
       ? '运行中'
       : (totalSteps > 0 ? '最近任务' : '运行中');
     const hasProjects = (view?.projects?.length ?? 0) > 0;
-    // 没有项目时自动展开工作区，否则添加项目的入口会被折叠在下面。
-    if (!hasProjects && $('workspaceToggle')) $('workspaceToggle').open = true;
+    // 工作区从 #69 起常驻展开，不再有「没项目就自动展开」这回事。
     $('setup').hidden = hasProjects;
     $('composeSection').hidden = !hasProjects || panelMode !== 'focus';
     $('submitTask').disabled = composerBusy || !hasProjects;
@@ -2835,9 +2834,7 @@
     // 目标小节以后可能被并到别的模式里；找不到就退回该模式顶部，不留死跳转。
     const node = $(sectionId) ?? $(MODE_VIEW[mode]);
     if (!node) return;
-    // 目标在折叠的工作区里（测试 / 运行）时先展开，否则会把用户带到折叠的标题上。
-    const workspace = $('workspaceToggle');
-    if (workspace && workspace.contains(node)) workspace.open = true;
+    // 工作区从 #69 起常驻展开，跳转只负责滚到目标，不再需要先展开折叠条。
     window.setTimeout(() => node.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
   };
 
@@ -3012,6 +3009,53 @@
     return wrap;
   };
 
+  /**
+   * 工作区顶部：项目名 + 项目切换（#69 从详情卡搬到区头下面）。
+   *
+   * 「工作区永远是某个项目」：项目名总是写出来。项目只有一个时不显示切换控件——
+   * 没有第二个可切，多一个按钮只会让人以为能换。
+   * 切换沿用卡片时代的那套标签与 selectViewProject：只改视图项目，
+   * 交办目标 handoffProjectId 仍由「交办到 …」菜单独占（ADR-0006）。
+   */
+  const renderWorkProjectBar = (model) => {
+    const bar = $('workProjectBar');
+    const name = $('workProjectName');
+    const tabs = $('fdTabs');
+    if (!bar || !name || !tabs) return;
+    // 没有项目：工作区只剩添加项目的引导，不写一个假的项目名。
+    if (!model?.hasProjects) {
+      bar.hidden = true;
+      tabs.replaceChildren();
+      focusTabsKey = '';
+      return;
+    }
+    bar.hidden = false;
+    name.textContent = model.projectName;
+    // 只有一个项目：只留名字，不生成任何切换按钮（没有第二个可切）。
+    if (model.tabs.length < 2) {
+      tabs.hidden = true;
+      tabs.replaceChildren();
+      focusTabsKey = '';
+      return;
+    }
+    tabs.hidden = false;
+    // 项目列表很短，直接平铺；只在项目 / 选中项 / 待办数变化时重建，避免轮询闪烁。
+    const tabsKey = JSON.stringify(model.tabs);
+    if (tabsKey === focusTabsKey) return;
+    focusTabsKey = tabsKey;
+    tabs.replaceChildren(...model.tabs.map((tab) => {
+      const button = el('button', `fd-tab${tab.selected ? ' on' : ''}`, tab.name);
+      button.type = 'button';
+      button.dataset.project = tab.id;
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', tab.selected ? 'true' : 'false');
+      button.title = tab.pending > 0 ? `${tab.name} · ${tab.pending} 件待办` : tab.name;
+      if (tab.pending > 0) button.append(el('span', 'fd-tab-count', String(tab.pending)));
+      button.onclick = () => selectFocusProject(tab.id);
+      return button;
+    }));
+  };
+
   /** 画整张卡：数据没变就不重建，避免每 2 秒把图重新渲染一遍。 */
   const renderFocusDetail = () => {
     const card = $('focusDetail');
@@ -3030,9 +3074,10 @@
     // 没有项目：只给添加项目的引导，别画一个空壳卡片。
     if (!model.hasProjects) {
       card.hidden = false;
+      // 工作区顶部的项目名 / 切换也跟着收起，不留一个 0 项目的空条。
+      renderWorkProjectBar(model);
       if (focusRenderedKey === 'guide') return;
       focusRenderedKey = 'guide';
-      $('fdTabs').replaceChildren();
       $('fdHint').textContent = '';
       const body = $('fdBody');
       body.replaceChildren();
@@ -3053,23 +3098,8 @@
     if (project && stale && !focusDetailLoading) void loadFocusDetail();
 
     card.hidden = false;
-    // 项目列表很短，直接平铺；多了也只在卡片内横向换行，不影响别的模式。
-    // 只在项目/选中项/待办数变化时重建，避免轮询把按钮闪烁一遍。
-    const tabsKey = JSON.stringify(model.tabs);
-    if (tabsKey !== focusTabsKey) {
-      focusTabsKey = tabsKey;
-      $('fdTabs').replaceChildren(...model.tabs.map((tab) => {
-        const button = el('button', `fd-tab${tab.selected ? ' on' : ''}`, tab.name);
-        button.type = 'button';
-        button.dataset.project = tab.id;
-        button.setAttribute('role', 'tab');
-        button.setAttribute('aria-selected', tab.selected ? 'true' : 'false');
-        button.title = tab.pending > 0 ? `${tab.name} · ${tab.pending} 件待办` : tab.name;
-        if (tab.pending > 0) button.append(el('span', 'fd-tab-count', String(tab.pending)));
-        button.onclick = () => selectFocusProject(tab.id);
-        return button;
-      }));
-    }
+    // 工作区顶部的项目名与切换：只有多项目时才有按钮，切换只改视图项目。
+    renderWorkProjectBar(model);
     $('fdHint').textContent = model.detailReady ? '' : '正在读取…';
 
     const key = JSON.stringify(model);

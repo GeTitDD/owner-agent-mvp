@@ -65,12 +65,20 @@
           </div>
         </section>
 
-        <!-- 下半区 · 工作区：所选项目的详情与旧折叠面板。
-             #69 才会把工作区改成常驻、#72 才会删详情卡；这一张保持原样。 -->
+        <!-- 下半区 · 工作区：永远是某个项目的详情与操作面（#69 起常驻展开）。
+             #72 才会删详情卡。 -->
         <section id="workZone" class="focus-zone work-zone">
           <div class="zone-head focus-zone-head work-zone-head">
             <strong>工作区</strong>
             <span>这个项目现在是什么样</span>
+          </div>
+
+          <!-- 工作区永远是某个项目：项目名常显；只有项目不止一个时才出现切换按钮。
+               切换沿用 #fdTabs 那套标签与 selectViewProject，只改视图项目，
+               不碰交办目标（ADR-0006），也不另存一份状态。 -->
+          <div id="workProjectBar" class="work-project-bar" hidden>
+            <span id="workProjectName" class="work-project-name"></span>
+            <div id="fdTabs" class="fd-tabs" role="tablist" aria-label="切换工作区项目" hidden></div>
           </div>
 
         <!-- 专注的详情卡：所选项目的只读详情（视图项目，与交办目标互不影响）。 -->
@@ -80,12 +88,12 @@
               <span class="fd-title">项目详情</span>
               <span id="fdHint" class="fd-hint"></span>
             </div>
-            <div id="fdTabs" class="fd-tabs" role="tablist" aria-label="选择项目"></div>
           </div>
           <div id="fdBody" class="fd-body"></div>
         </section>
-        <details class="workspace" id="workspaceToggle">
-          <summary class="workspace-summary">展开 · 项目 / 图谱 / 想法 / 知识 / Playbook</summary>
+        <!-- 工作区内容常驻展开：原来包在外面的 details 折叠条已经去掉，
+             这里只留容器，项目 / 通用两段直接铺开。 -->
+        <section class="workspace" id="workWorkspace">
         <section class="zone project-zone">
           <div class="zone-head">
             <strong>所选项目</strong>
@@ -230,7 +238,7 @@
             <div id="resultCard" class="result-card"></div>
           </section>
         </section>
-        </details>
+        </section>
         </section>
       </div>
     </section>
