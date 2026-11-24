@@ -1238,7 +1238,7 @@
           ['状态', data.item.status],
           ['置信度', String(data.item.meta?.confidence ?? 'unknown')]
         ]));
-        nodes.push(el('p', 'pending-summary', '候选需要人工审阅；请打开完整知识库。'));
+        nodes.push(el('p', 'pending-summary', '候选需要人工审阅；关闭详情后可在列表里直接接受或拒绝。'));
       }
       const close = el('button', 'ghost', '关闭');
       close.onclick = closeModal;
@@ -2708,6 +2708,56 @@
   let knowledgeBrowseToken = 0;
   let knowledgeBrowseSignature = '';
 
+  // 候选条目带审核动作；其余条目仍是整行按钮，点开看详情。
+  const knowledgeItemRow = (item) => {
+    const row = el('div', 'kb-item');
+    const main = el('button', 'kb-item-main');
+    main.type = 'button';
+    main.dataset.id = item.id;
+    main.append(el('span', 'kb-item-title', item.title));
+    const meta = el('span', 'kb-item-meta', item.detail);
+    // 「全部」视图下补项目名，避免同名条目看不出属于哪个项目。
+    if (!knowledgeBrowseProject && item.projectId) {
+      meta.textContent += ` · ${projectLabel(item.projectId)}`;
+    }
+    main.append(meta);
+    main.onclick = () => { void openKnowledgeDetail(item.id); };
+    row.append(main);
+
+    if (item.kind === 'candidate') {
+      const actions = el('div', 'kb-item-actions');
+      const accept = el('button', 'kb-act accept', '接受');
+      const reject = el('button', 'kb-act reject', '拒绝');
+      accept.type = 'button';
+      reject.type = 'button';
+      // 不做乐观更新：只有 IPC 成功后才重新读库；失败时按钮恢复、条目留在原分组。
+      const decide = async (decision) => {
+        accept.disabled = true;
+        reject.disabled = true;
+        try {
+          const result = await window.companion.knowledge.review({ id: item.id, decision });
+          if (!result?.ok) {
+            toast(result?.reason ?? '审核失败，请稍后再试。', 6000);
+            accept.disabled = false;
+            reject.disabled = false;
+            return;
+          }
+          toast(decision === 'approved' ? '已接受候选，移到待验证知识' : '已拒绝候选', 4000);
+          await loadKnowledgeBrowse();
+        } catch (error) {
+          toast(String(error?.message ?? error), 6000);
+          accept.disabled = false;
+          reject.disabled = false;
+        }
+      };
+      accept.onclick = () => { void decide('approved'); };
+      reject.onclick = () => { void decide('rejected'); };
+      actions.append(accept, reject);
+      row.append(actions);
+    }
+    return row;
+  };
+
   // 把纯视图模型渲染成卡片；这里只做 DOM 与项目显示名，不重新计算归属。
   const knowledgeGroupCard = (group) => {
     const card = el('section', `kb-group kb-${group.key}`);
@@ -2720,20 +2770,7 @@
       return card;
     }
     const list = el('div', 'kb-list');
-    for (const item of group.items) {
-      const row = el('button', 'kb-item');
-      row.type = 'button';
-      row.dataset.id = item.id;
-      row.append(el('span', 'kb-item-title', item.title));
-      const meta = el('span', 'kb-item-meta', item.detail);
-      // 「全部」视图下补项目名，避免同名条目看不出属于哪个项目。
-      if (!knowledgeBrowseProject && item.projectId) {
-        meta.textContent += ` · ${projectLabel(item.projectId)}`;
-      }
-      row.append(meta);
-      row.onclick = () => { void openKnowledgeDetail(item.id); };
-      list.append(row);
-    }
+    for (const item of group.items) list.append(knowledgeItemRow(item));
     card.append(list);
     if (group.truncated) {
       card.append(el('p', 'kb-group-more', `共 ${group.count} 条，只显示最近 ${group.shown} 条。`));

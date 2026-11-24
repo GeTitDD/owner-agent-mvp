@@ -29,17 +29,20 @@ const experienceRow = ({ id, projectId = 'p1', createdAt = '2026-11-21T00:00:00.
 
 const groupsByKey = (view) => Object.fromEntries(view.groups.map((group) => [group.key, group]));
 
-test('三组分别返回计数与条目', () => {
+test('分组分别返回计数与条目', () => {
   const view = knowledgeBrowseView({
     units: [unit({ id: 'u1' }), unit({ id: 'u2', title: '未验证', status: 'unverified' })],
     proposals: [candidateRow({ id: 'c1' }), { ...candidateRow({ id: 'c2' }), status: 'approved' }],
     experiences: [experienceRow({ id: 'e1' })]
   });
   const groups = groupsByKey(view);
-  assert.deepEqual(view.totals, { candidates: 1, verified: 1, experiences: 1, all: 3 });
+  assert.deepEqual(view.totals, { candidates: 1, pending: 1, verified: 1, experiences: 1, all: 4 });
   assert.equal(groups.candidates.label, '候选');
   assert.equal(groups.candidates.items[0].title, 'c1');
   assert.match(groups.candidates.items[0].detail, /待审核/u);
+  assert.equal(groups.pending.label, '待验证知识');
+  assert.deepEqual(groups.pending.items.map((item) => item.id), ['u2']);
+  assert.match(groups.pending.items[0].detail, /待验证/u);
   assert.equal(groups.verified.label, '已验证知识');
   assert.deepEqual(groups.verified.items.map((item) => item.id), ['u1']);
   assert.equal(groups.experiences.items[0].id, 'e1');
@@ -62,7 +65,7 @@ test('项目筛选生效，切回全部恢复', () => {
   assert.deepEqual(all.projects.map((item) => item.id).sort(), ['p1', 'p2']);
 
   const p1 = knowledgeBrowseView({ ...input, projectId: 'p1' });
-  assert.deepEqual(p1.totals, { candidates: 1, verified: 1, experiences: 1, all: 3 });
+  assert.deepEqual(p1.totals, { candidates: 1, pending: 0, verified: 1, experiences: 1, all: 3 });
   // 「全部」按钮要知道切回全部能看到多少条，所以 overall 不受筛选影响。
   assert.deepEqual(p1.overall, all.totals);
   assert.deepEqual(groupsByKey(p1).verified.items.map((item) => item.id), ['u1']);
@@ -79,7 +82,7 @@ test('空库与空项目给出明确空状态', () => {
   assert.equal(empty.totals.all, 0);
   assert.equal(empty.empty.kind, 'no-data');
   assert.match(empty.empty.title, /还没有内容/u);
-  assert.equal(empty.groups.length, 3);
+  assert.equal(empty.groups.length, 4);
   for (const group of empty.groups) {
     assert.equal(group.count, 0);
     assert.equal(group.items.length, 0);
@@ -120,7 +123,7 @@ test('条目超过上限时保留全量计数，只截断渲染', () => {
   assert.equal(verified.truncated, true);
 });
 
-test('从个人知识库读出的三组数据与筛选一致', () => {
+test('从个人知识库读出的分组数据与筛选一致', () => {
   const store = new PersonalKnowledgeStore(':memory:');
   try {
     const verified = store.create({
@@ -151,14 +154,14 @@ test('从个人知识库读出的三组数据与筛选一致', () => {
 
     const view = knowledgeBrowseFor({ personalStore: store, projectId: 'p1' });
     assert.equal(view.available, true);
-    assert.deepEqual(view.totals, { candidates: 1, verified: 1, experiences: 1, all: 3 });
+    assert.deepEqual(view.totals, { candidates: 1, pending: 1, verified: 1, experiences: 1, all: 4 });
     assert.equal(groupsByKey(view).verified.items[0].title, 'Retry loop bound');
     assert.equal(groupsByKey(view).verified.items[0].projectId, 'p1');
     assert.equal(groupsByKey(view).verified.items[0].id, verified.id);
 
     const other = knowledgeBrowseFor({ personalStore: store, projectId: 'p2' });
     assert.equal(other.totals.all, 0);
-    assert.equal(other.overall.all, 3);
+    assert.equal(other.overall.all, 4);
     assert.equal(other.empty.kind, 'no-project-data');
 
     const missing = knowledgeBrowseFor({ personalStore: null });
