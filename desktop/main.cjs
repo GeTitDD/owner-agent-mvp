@@ -1300,11 +1300,13 @@ const knowledgeDetail = ({ id } = {}) => {
   };
 
 
-const buildView = async () => {
+const buildView = async (requestedProjectId = '') => {
   const projects = await api('/owner/v1/projects');
   const projectList = projects.items ?? [];
-  const activeProjectId = config.projectId && projectList.some((item) => item.id === config.projectId)
-    ? config.projectId
+  // 调用方可以指定要看哪个项目；不指定时沿用配置里的项目，再退回第一个。
+  const wanted = String(requestedProjectId || config.projectId || '');
+  const activeProjectId = wanted && projectList.some((item) => item.id === wanted)
+    ? wanted
     : projectList[0]?.id ?? '';
   const activeProject = projectList.find((item) => item.id === activeProjectId) ?? null;
   const [summary, workerState, jobs, patches, sandboxes, repairs] = await Promise.all([
@@ -2317,9 +2319,9 @@ const registerIpc = () => {
   const fromCompanion = (event) =>
     [pet?.webContents, panel?.webContents].filter(Boolean).includes(event.sender);
 
-  ipcMain.handle('companion:snapshot', async (event) => {
+  ipcMain.handle('companion:snapshot', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    const view = await buildView();
+    const view = await buildView(input?.projectId);
     notifyIfNeeded(view);
     return view;
   });
@@ -3222,6 +3224,20 @@ async function boot() {
             const image = await panel.webContents.capturePage();
             fs.writeFileSync(path.join(screenshotDir, `panel-${mode}.png`), image.toPNG());
           }
+          // 顺手记录按项目取数的结果，验证预重构没有破坏默认行为。
+          const probe = [];
+          for (const projectId of ['companion-demo', 'cultivation-agent']) {
+            const result = await panel.webContents.executeJavaScript(
+              `window.companion.snapshot({ projectId: '${projectId}' }).then((v) => ({
+                 requested: '${projectId}',
+                 active: v?.config?.projectId ?? null,
+                 chainKeys: Object.keys(v?.chain ?? {}), chainJobTitle: v?.chain?.job?.title ?? null,
+                 projectCount: v?.projects?.length ?? 0
+               })).catch((e) => ({ requested: '${projectId}', error: String(e) }))`
+            );
+            probe.push(result);
+          }
+          fs.writeFileSync(path.join(screenshotDir, 'snapshot-probe.json'), JSON.stringify(probe, null, 2));
         }
         console.log(`screenshots written to ${screenshotDir}`);
       } catch (error) {
