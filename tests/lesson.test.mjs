@@ -1,4 +1,4 @@
-// 经验（Lesson）：把一条执行记录提炼成「现象 → 机制 → 对策」，并保留能追回该记录的证据引用。
+﻿// 经验（Lesson）：把一条执行记录提炼成「现象 → 机制 → 对策」，并保留能追回该记录的证据引用。
 // 这里只断言外部行为：给定 owner store 里有什么、提炼器返回什么，库里就应该出现什么。
 // 提炼器一律用假的，不联网、不调真实模型。
 import test from 'node:test';
@@ -120,7 +120,7 @@ test('给定执行记录与假提炼器，提炼出一条字段齐全的经验',
     assert.equal(lesson.projectId, 'p1');
     assert.equal(lesson.sourceRecordId, 'sandbox:run1');
     assert.deepEqual(lesson.scope, { layer: 'project', projectId: 'p1', domainIds: ['software-engineering'] });
-    assert.equal(lesson.verificationStatus, 'candidate');
+    assert.equal(lesson.verificationStatus, 'unverified');
     assert.equal(lesson.createdAt, '2026-02-02T00:00:00.000Z');
     assert.ok(lesson.dedupeKey, '经验需要「现象 + 作用域」派生的去重键');
     assert.equal(personal.listLessons({ projectId: 'p1' }).length, 1);
@@ -178,7 +178,7 @@ test('追不到证据的结论标为推断，不进入待验证候选', async ()
     assert.deepEqual(lesson.evidenceRefs, []);
     assert.deepEqual(lesson.untraceableRefs.sort(), ['patch:ghost', 'sandbox:run-other-project']);
     assert.equal(personal.lessonEvidence(lesson.id).length, 0);
-    assert.equal(personal.listLessons({ projectId: 'p1', verificationStatus: 'candidate' }).length, 0);
+    assert.equal(personal.listLessons({ projectId: 'p1', verificationStatus: 'unverified' }).length, 0);
     assert.equal(personal.listLessons({ projectId: 'p1', verificationStatus: 'inferred' }).length, 1);
 
     // 模型干脆不写证据时同样只算推断，系统不会替它补来源。
@@ -252,7 +252,7 @@ test('真实 owner store 的 stdout、diff 摘要与测试退出码进入提炼�
     assert.equal(result.lessons.length, 1, '真实库里的一条流水线应提炼出一条经验');
     const lesson = result.lessons[0];
     assert.equal(lesson.sourceRecordId, `sandbox:${seeded.runId}`);
-    assert.equal(lesson.verificationStatus, 'candidate');
+    assert.equal(lesson.verificationStatus, 'unverified');
     const stdout = seenEvidence.find((item) => item.ref === `evidence:${seeded.runId}:stdout`);
     assert.match(stdout?.excerpt ?? '', /ok 1 - withRetry uses all attempts/u);
     const runSummary = seenEvidence.find((item) => item.ref === `sandbox:${seeded.runId}`);

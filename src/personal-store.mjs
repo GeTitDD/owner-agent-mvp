@@ -132,7 +132,7 @@ export class PersonalKnowledgeStore {
       CREATE TABLE IF NOT EXISTS knowledge_lessons (
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL, source_record_id TEXT NOT NULL,
         phenomenon TEXT NOT NULL, scope_layer TEXT NOT NULL CHECK(scope_layer IN ('project','domain')),
-        verification_status TEXT NOT NULL CHECK(verification_status IN ('candidate','inferred')),
+        verification_status TEXT NOT NULL CHECK(verification_status IN ('unverified','inferred')),
         dedupe_key TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS knowledge_lessons_project ON knowledge_lessons(project_id,created_at DESC);
@@ -469,10 +469,10 @@ export class PersonalKnowledgeStore {
     const scopeLayer = lesson.scope?.layer ?? 'project';
     valid(['project','domain'].includes(scopeLayer),'Invalid lesson scope layer');
     const verificationStatus = lesson.verificationStatus ?? 'inferred';
-    valid(['candidate','inferred'].includes(verificationStatus),'Invalid lesson verification status');
+    valid(['unverified','inferred'].includes(verificationStatus),'Invalid lesson verification status');
     const evidenceRefs = Array.isArray(lesson.evidenceRefs) ? lesson.evidenceRefs : [];
-    // 追不到证据的结论只能算推断：没有证据行就不可能成为待验证候选。
-    valid(verificationStatus !== 'candidate' || evidenceRefs.length > 0,'Lesson evidence is required before it can be a verification candidate');
+    // 追不到证据的结论只能算推断：没有证据行就不可能成为待验证。
+    valid(verificationStatus !== 'unverified' || evidenceRefs.length > 0,'Lesson evidence is required before it can be marked unverified');
     // 去重键由 contracts.lessonDedupeKey 提供（规范化现象 + 作用域）；缺失时按同一公式回退。
     const dedupeKey = safeText(
       lesson.dedupeKey

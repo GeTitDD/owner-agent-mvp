@@ -87,7 +87,7 @@ export function normalizeExperience(input) {
 
 // ---- 经验（Lesson）：执行记录 → 现象 / 机制 / 对策 + 证据引用 ----
 
-const LESSON_VERIFICATION = new Set(['candidate', 'inferred']);
+const LESSON_VERIFICATION = new Set(['unverified', 'inferred']);
 
 /**
  * 现象短句规范化：压平空白、去掉首尾引号与句尾标点。
@@ -148,8 +148,8 @@ export function normalizeLesson(input) {
   const verificationStatus = input.verificationStatus ?? 'inferred';
   if (!LESSON_VERIFICATION.has(verificationStatus)) throw new Error('Invalid lesson verification status');
   const evidenceRefs = strings(input.evidenceRefs ?? [], 'lesson evidenceRefs', 40, 500);
-  if (verificationStatus === 'candidate' && evidenceRefs.length === 0) {
-    throw new Error('Lesson evidence is required before it can be a verification candidate');
+  if (verificationStatus === 'unverified' && evidenceRefs.length === 0) {
+    throw new Error('Lesson evidence is required before it can be marked unverified');
   }
   const projectId = input.projectId == null ? null : id(input.projectId, 'lesson projectId');
   const scopedProjectId = scope.projectId == null ? null : id(scope.projectId, 'lesson scope projectId');

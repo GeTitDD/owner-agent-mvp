@@ -193,7 +193,7 @@ export class LessonDistiller {
     const traceable = new Set(evidence.map((item) => item.ref));
     const evidenceRefs = draft.evidenceRefs.filter((ref) => traceable.has(ref));
     const untraceableRefs = draft.evidenceRefs.filter((ref) => !traceable.has(ref));
-    const verificationStatus = evidenceRefs.length ? 'candidate' : 'inferred';
+    const verificationStatus = evidenceRefs.length ? 'unverified' : 'inferred';
     const cited = evidence.filter((item) => evidenceRefs.includes(item.ref));
     let stored;
     try {
