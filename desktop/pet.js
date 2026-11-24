@@ -28,6 +28,7 @@
   let frameIndex = 0;
   let lastFrameAt = 0;
   let hintTimer = null;
+  let statusLine = 'Owner';
   let basePhase = 'idle';
   let transient = null;
   let dragging = false;
@@ -41,7 +42,7 @@
   const flashHint = (text) => {
     if (hintTimer) clearTimeout(hintTimer);
     hint.textContent = text;
-    hintTimer = setTimeout(() => { hint.textContent = pet.dataset.stage ?? 'Owner'; }, 1800);
+    hintTimer = setTimeout(() => { hint.textContent = statusLine; }, 1800);
   };
 
   const layoutSprite = () => {
@@ -205,7 +206,20 @@
     badge.hidden = pending <= 0;
     if (pending > 0) badge.textContent = pending > 9 ? '9+' : String(pending);
     phaseDot.dataset.phase = phase;
-    hint.textContent = pet.dataset.stage;
+    // A 形态：桌宠只承载一件事——待办优先，其次下一步建议。
+    const clip = (text, max) => {
+      const value = String(text ?? '').replace(/\s+/g, ' ').trim();
+      return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+    };
+    const top = Array.isArray(view?.pending) ? view.pending[0] : null;
+    const next = view?.nextAction;
+    statusLine = pending > 0 && top?.title
+      ? `待你：${clip(top.title, 9)}`
+      : next?.title
+        ? clip(next.title, 11)
+        : (pet.dataset.stage || 'Owner');
+    hint.textContent = statusLine;
+    hint.title = statusLine;
     pet.title = `${view?.mascot?.label ?? 'Owner Companion'} · ${pet.dataset.stage}`;
     pet.setAttribute('aria-label', `Owner Companion · ${pet.dataset.stage}`);
   };
