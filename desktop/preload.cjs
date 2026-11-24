@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
 contextBridge.exposeInMainWorld('companion', Object.freeze({
-  snapshot: () => invoke('companion:snapshot'),
+  snapshot: (input) => invoke('companion:snapshot', input),
   submit: (input) => invoke('companion:submit', input),
   createJob: (input) => invoke('companion:create-job', input),
   decide: (input) => invoke('companion:decide', input),
