@@ -5,6 +5,17 @@ const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 contextBridge.exposeInMainWorld('companion', Object.freeze({
   snapshot: (input) => invoke('companion:snapshot', input),
   submit: (input) => invoke('companion:submit', input),
+  chat: Object.freeze({
+    ask: (input) => invoke('companion:chat-ask', input),
+    sessions: Object.freeze({
+      list: (input) => invoke('companion:chat-sessions', input),
+      get: (input) => invoke('companion:chat-session-get', input),
+      create: (input) => invoke('companion:chat-session-create', input),
+      append: (input) => invoke('companion:chat-session-append', input),
+      rename: (input) => invoke('companion:chat-session-rename', input),
+      remove: (input) => invoke('companion:chat-session-delete', input)
+    })
+  }),
   createJob: (input) => invoke('companion:create-job', input),
   decide: (input) => invoke('companion:decide', input),
   patchDetail: (input) => invoke('companion:patch-detail', input),
@@ -32,11 +43,16 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   createSandbox: (input) => invoke('companion:create-sandbox', input),
   knowledge: Object.freeze({
     summary: (input) => invoke('companion:knowledge-summary', input),
+    browse: (input) => invoke('companion:knowledge-browse', input),
+    review: (input) => invoke('companion:knowledge-review', input),
     tidy: (input) => invoke('companion:knowledge-tidy', input),
     harvest: (input) => invoke('companion:knowledge-harvest', input),
     ask: (input) => invoke('companion:knowledge-ask', input),
     detail: (input) => invoke('companion:knowledge-detail', input),
     open: () => invoke('companion:knowledge-open')
+  }),
+  skills: Object.freeze({
+    catalog: (input) => invoke('companion:skill-catalog', input)
   }),
   playbooks: Object.freeze({
     list: (input) => invoke('companion:playbooks', input),
