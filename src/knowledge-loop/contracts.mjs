@@ -8,6 +8,9 @@ export const EXPERIENCE_CONTRACT = 'experience/v1';
 export const CANDIDATE_CONTRACT = 'knowledge-candidate/v1';
 export const USAGE_CONTRACT = 'knowledge-usage/v1';
 export const FEEDBACK_CONTRACT = 'knowledge-feedback/v1';
+// 经验（Lesson）是执行记录与知识之间的中间层：现象 → 机制 → 对策，带可追的证据引用。
+// 不复用 experience/v1：那一层记录的是「一次执行发生了什么」，去重键也绑在 sourceRunId 上。
+export const LESSON_CONTRACT = 'lesson/v1';
 export const COLLECTOR_VERSION = '1.0.0';
 
 const OUTCOMES = new Set(['succeeded', 'failed', 'repaired', 'cancelled', 'rejected', 'unknown']);
@@ -80,6 +83,110 @@ export function normalizeExperience(input) {
   };
   record.dedupeKey = experienceDedupeKey(record);
   return record;
+}
+
+// ---- 经验（Lesson）：执行记录 → 现象 / 机制 / 对策 + 证据引用 ----
+
+const LESSON_VERIFICATION = new Set(['candidate', 'inferred']);
+
+/**
+ * 现象短句规范化：压平空白、去掉首尾引号与句尾标点。
+ * 展示与去重共用这一次规范化，避免「同一现象两种写法」各自成条。
+ */
+export function normalizePhenomenon(value) {
+  const flat = String(value ?? '').replace(/\s+/gu, ' ').trim();
+  return flat
+    .replace(/^["'“”‘’「」『』]+/u, '')
+    .replace(/["'“”‘’「」『』。．.，,；;：:、]+$/u, '')
+    .trim()
+    .slice(0, 160);
+}
+
+/**
+ * 去重键取「规范化现象短句 + 作用域」，而不是整段文本的哈希。
+ * 本票只产出项目级经验；真正合并证据与升域留给后续票，这里先把键固定下来。
+ */
+export function lessonDedupeKey(lesson) {
+  return sha256(canonical({
+    contract: LESSON_CONTRACT,
+    phenomenon: normalizePhenomenon(lesson?.phenomenon).toLowerCase(),
+    layer: lesson?.scope?.layer ?? 'project',
+    projectId: lesson?.scope?.projectId ?? null
+  }));
+}
+
+/** 提炼器的原始产出：三个必填字段 + 它认为能支撑结论的证据引用。 */
+export function normalizeLessonDraft(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Lesson draft must be an object');
+  const phenomenon = normalizePhenomenon(text(input.phenomenon ?? input.observedProblem, 'lesson phenomenon', 400, true));
+  if (!phenomenon) throw new Error('Invalid lesson phenomenon');
+  const layer = input.scope?.layer ?? input.scopeLayer ?? 'project';
+  if (!LAYERS.has(layer)) throw new Error('Invalid lesson scope layer');
+  return {
+    phenomenon,
+    mechanism: text(input.mechanism ?? input.cause, 'lesson mechanism', 1000, true),
+    countermeasure: text(input.countermeasure ?? input.action, 'lesson countermeasure', 1000, true),
+    layer,
+    domainIds: idList(input.domainIds ?? [], 'lesson domainIds', 20),
+    evidenceRefs: strings(input.evidenceRefs ?? [], 'lesson evidenceRefs', 40, 500),
+    facts: strings(input.facts ?? [], 'lesson facts', 40, 500),
+    inferences: strings(input.inferences ?? [], 'lesson inferences', 40, 500),
+    unknowns: strings(input.unknowns ?? [], 'lesson unknowns', 40, 500)
+  };
+}
+
+/**
+ * 落库前的完整经验记录。规则来自 ADR-0007：
+ * - 追不到证据的只能算「推断」（inferred），永远不进入待验证候选（candidate）；
+ * - 系统不会自动把经验标成已验证，人的确认留在后续票里。
+ */
+export function normalizeLesson(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Lesson must be an object');
+  const scope = input.scope ?? {};
+  const layer = scope.layer ?? 'project';
+  if (!LAYERS.has(layer)) throw new Error('Invalid lesson scope layer');
+  const verificationStatus = input.verificationStatus ?? 'inferred';
+  if (!LESSON_VERIFICATION.has(verificationStatus)) throw new Error('Invalid lesson verification status');
+  const evidenceRefs = strings(input.evidenceRefs ?? [], 'lesson evidenceRefs', 40, 500);
+  if (verificationStatus === 'candidate' && evidenceRefs.length === 0) {
+    throw new Error('Lesson evidence is required before it can be a verification candidate');
+  }
+  const projectId = input.projectId == null ? null : id(input.projectId, 'lesson projectId');
+  const scopedProjectId = scope.projectId == null ? null : id(scope.projectId, 'lesson scope projectId');
+  if (layer === 'project' && !scopedProjectId) throw new Error('Project lessons require a project scope');
+  if (layer === 'domain' && scopedProjectId !== null) throw new Error('Domain lessons cannot belong to one project');
+  if (projectId !== null && scopedProjectId !== null && projectId !== scopedProjectId) {
+    throw new Error('Lesson scope must match its project');
+  }
+  const phenomenon = normalizePhenomenon(text(input.phenomenon, 'lesson phenomenon', 400, true));
+  if (!phenomenon) throw new Error('Invalid lesson phenomenon');
+  const lesson = {
+    contract: LESSON_CONTRACT,
+    id: input.id ?? null,
+    projectId,
+    sourceRecordId: text(input.sourceRecordId, 'lesson sourceRecordId', 200, true),
+    phenomenon,
+    mechanism: text(input.mechanism, 'lesson mechanism', 1000, true),
+    countermeasure: text(input.countermeasure, 'lesson countermeasure', 1000, true),
+    scope: { layer, projectId: scopedProjectId, domainIds: idList(scope.domainIds ?? [], 'lesson scope domainIds', 20) },
+    verificationStatus,
+    evidenceRefs,
+    // 模型给了但追不到执行记录的引用，留档审计，不当作证据。
+    untraceableRefs: strings(input.untraceableRefs ?? [], 'lesson untraceableRefs', 40, 500),
+    facts: strings(input.facts ?? [], 'lesson facts', 40, 500),
+    inferences: strings(input.inferences ?? [], 'lesson inferences', 40, 500),
+    unknowns: strings(input.unknowns ?? [], 'lesson unknowns', 40, 500),
+    sourceRecord: {
+      status: input.sourceRecord?.status ?? null,
+      testStatus: input.sourceRecord?.testStatus ?? null,
+      occurredAt: input.sourceRecord?.occurredAt ?? null,
+      taskTitle: input.sourceRecord?.taskTitle ?? null
+    },
+    extractor: typeof input.extractor === 'string' ? text(input.extractor, 'lesson extractor', 120) : null,
+    createdAt: input.createdAt ?? new Date().toISOString()
+  };
+  lesson.dedupeKey = lessonDedupeKey(lesson);
+  return lesson;
 }
 
 export function normalizeCandidateDraft(input) {
