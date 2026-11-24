@@ -3213,8 +3213,15 @@ async function boot() {
           fs.writeFileSync(path.join(screenshotDir, 'pet.png'), image.toPNG());
         }
         if (panel) {
-          const image = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'panel.png'), image.toPNG());
+          // 三种模式各截一张：直接点顶部的模式按钮，避免 reload 的竞态。
+          for (const mode of ['A', 'B', 'C']) {
+            await panel.webContents.executeJavaScript(
+              `document.querySelector('#modeBar button[data-mode="${mode}"]')?.click();`
+            );
+            await new Promise((resolve) => setTimeout(resolve, 900));
+            const image = await panel.webContents.capturePage();
+            fs.writeFileSync(path.join(screenshotDir, `panel-${mode}.png`), image.toPNG());
+          }
         }
         console.log(`screenshots written to ${screenshotDir}`);
       } catch (error) {
