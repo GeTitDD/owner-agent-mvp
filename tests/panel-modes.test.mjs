@@ -35,7 +35,8 @@ test('P0-5 四个入口指向真实位置，找不到时退回模式顶部', () 
   const expected = [
     ['knowledge', 'knowledge', 'knowledgeBrowse'],
     ['tests', 'focus', 'runningSection'],
-    ['patches', 'focus', 'needsSection'],
+    // #72：补丁去操作区（待办块没有待办时会整段收起，指到块上会落到空处）。
+    ['patches', 'focus', 'opsZone'],
     ['runs', 'focus', 'runningSection']
   ];
   for (const [key, mode, sectionId] of expected) {
@@ -45,8 +46,31 @@ test('P0-5 四个入口指向真实位置，找不到时退回模式顶部', () 
   // 工作区从 #69 起常驻展开：跳转不再需要先展开折叠条，只负责滚到目标。
   assert.equal(panel.includes('workspaceToggle'), false);
   assert.match(panel, /node\.scrollIntoView\(\{ block: 'start', behavior: 'smooth' \}\)/u);
-  // 目标被移走时退回该模式顶部，不留死跳转。
-  assert.match(panel, /const node = \$\(sectionId\) \?\? \$\(MODE_VIEW\[mode\]\)/u);
+  // 目标被移走时退回该模式顶部，不留死跳转（退回的是模式自己的滚动容器）。
+  assert.match(panel, /const top = container\?\.querySelector\('\.a-wrap, \.scroll'\) \?\? container \?\? null;/u);
+  assert.match(panel, /top\.scrollTo\(\{ top: 0, behavior: 'smooth' \}\)/u);
+});
+
+test('#72 详情卡删除后，四个计数留在工作区', () => {
+  const html = read('desktop/panel.html');
+  const panel = read('desktop/panel.js');
+  const focus = html.slice(html.indexOf('id="modeA"'), html.indexOf('id="modeB"'));
+  // 卡片本体、正文容器与脚本标签都不在了（漏删 script 会 404，界面却看起来正常）。
+  assert.equal(focus.includes('id="focusDetail"'), false);
+  assert.equal(focus.includes('id="fdBody"'), false);
+  assert.equal(html.includes('focus-detail.cjs'), false);
+  assert.equal(panel.includes('buildFocusDetail'), false);
+  // 四个入口留工作区里，按其原始位置跳转（行为不变）。
+  assert.match(focus, /<div id="workEntries"[^>]*>/u);
+  for (const key of ['knowledge', 'tests', 'patches', 'runs']) {
+    assert.match(focus, new RegExp(`data-entry="${key}"`, 'u'));
+  }
+  // 计数渲染在工作区里，数据直接来自快照（不再为卡片单独取一份）。
+  assert.match(panel, /const renderWorkEntries = \(\) =>/u);
+  assert.match(panel, /const workEntryRows = \(\) =>/u);
+  assert.equal(/FOCUS_DETAIL_TTL/u.test(panel), false);
+  // 项目切换仍只改视图项目。
+  assert.match(panel, /const renderWorkProjectBar = \(\) =>/u);
 });
 
 test('P0-4 写路径不再静默回退第一个项目', () => {
