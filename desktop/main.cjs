@@ -2988,9 +2988,13 @@ const registerIpc = () => {
 
   // #58 提议信号：按项目统计「还没提炼成经验的执行记录」，达到阈值才返回。
   // 只读、只提示——这里不会调用任何提炼，也不会写库。
+  // #71 操作区跨项目：显式 allProjects 时统计全部项目（空 projectId 会被
+  // listDistillProposals 读成「先列项目再逐个查」）；不带这个标记时沿用
+  // 「传入项目 → 配置项目」的老口径，知识页的行为不变。
   ipcMain.handle('companion:knowledge-distill-proposals', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    const projectId = String(input?.projectId ?? '') || config.projectId || '';
+    const allProjects = input?.allProjects === true;
+    const projectId = allProjects ? '' : (String(input?.projectId ?? '') || config.projectId || '');
     const distiller = await knowledgeDistiller();
     if (!distiller) return { projectId, proposals: [], threshold: null };
     onDemandModule = onDemandModule ?? await importEsm('../src/knowledge-loop/on-demand.mjs');
