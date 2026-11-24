@@ -128,6 +128,38 @@ test('#30 三个项目同时命中：一次扫描每个项目一条聚合，同�
   }
 }));
 
+test('#30 零事件项目不入聚合、不发消息；其余项目照常聚合', () => withContext(async ({
+  dir, store, requests, webhookUrl
+}) => {
+  const now = at(2026, 11, 24, 10);
+  const freshRoot = makeRepo({ root: path.join(dir, 'fresh'), commitAt: '2026-11-24T09:00:00+08:00' });
+  const staleRoot = makeRepo({ root: path.join(dir, 'stale'), commitAt: FOUR_DAYS_AGO });
+  const projects = [
+    { id: 'dig-fresh', name: 'Fresh', root: freshRoot },
+    { id: 'dig-stale', name: 'Stale', root: staleRoot }
+  ];
+
+  const first = await runDigestScan({ projects, store, webhookUrl, now });
+
+  assert.equal(requests.length, 1, '只有真正有事件的项目才发消息');
+  const text = JSON.parse(requests[0]).content.text;
+  assert.match(text, /dig-stale/);
+  assert.doesNotMatch(text, /dig-fresh/);
+  assert.deepEqual(store.listDigests({ day: '2026-11-24' }).map((digest) => digest.projectId), ['dig-stale']);
+  assert.deepEqual(store.listDigests({ projectId: 'dig-fresh' }), [], '零事件项目不建空聚合');
+
+  const fresh = first.projects.find((item) => item.projectId === 'dig-fresh');
+  assert.deepEqual(fresh.events, []);
+  assert.equal(fresh.hasEvents, false);
+  assert.equal(fresh.digestId, null);
+
+  // 第二天 fresh 仍然没有事件：依然不发；stale 继续按当日额度发一条。
+  const next = await runDigestScan({ projects, store, webhookUrl, now: at(2026, 11, 25, 10) });
+  assert.equal(requests.length, 2);
+  assert.deepEqual(store.listDigests({ projectId: 'dig-fresh' }), []);
+  assert.equal(next.projects.find((item) => item.projectId === 'dig-fresh').digestId, null);
+}));
+
 test('#30 聚合消息含三类事件计数与最严重 3 条摘要', () => withContext(async ({
   dir, store, requests, webhookUrl
 }) => {

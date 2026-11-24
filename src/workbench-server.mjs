@@ -11,6 +11,7 @@ import { createDomainEngine } from './engine.mjs';
 import { defaultDbPath } from './storage.mjs';
 import { ObserverStore } from './observer/store.mjs';
 import { BOARD_EVENT_LIMIT, buildBoardViewModel, renderBoardPage } from './observer/board.mjs';
+import { resolveThresholdsFromEnvironment } from './observer/thresholds.mjs';
 
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const WEB=path.join(ROOT,'web','workbench');
@@ -93,8 +94,10 @@ export async function createWorkbenchServer({
   if(!['127.0.0.1','::1','localhost'].includes(host)) throw new Error('Workbench must bind to loopback');
   const store=new PersonalKnowledgeStore(personalDbPath),owner=new OwnerStore(ownerDbPath),ownerAgent=new OwnerAgent(owner),staticCatalog=await catalog();
   // 观察台每次请求现查审计库（ADR-0002），读完即关，页面不会落后于事件表。
-  const boardView=()=>{const observer=new ObserverStore(ownerDbPath);try{
-    return buildBoardViewModel({projects:owner.listProjects(),events:observer.listEvents({limit:BOARD_EVENT_LIMIT})});
+  // 阈值与 CLI 同源（resolveThresholdsFromEnvironment）：改 thresholds.json 后徽章立即同步，
+  // 不再固定按内置 3/10/20 判定。
+  const boardView=()=>{const thresholds=resolveThresholdsFromEnvironment();const observer=new ObserverStore(ownerDbPath);try{
+    return buildBoardViewModel({projects:owner.listProjects(),events:observer.listEvents({limit:BOARD_EVENT_LIMIT}),thresholds});
   }finally{observer.close();}};
   const allUnits=()=>[...store.list({limit:2000}).map(x=>({...x,readOnly:false})),...staticCatalog.knowledge];
   const handler=async(req,res)=>{
@@ -237,7 +240,12 @@ export async function createWorkbenchServer({
   const server=http.createServer((req,res)=>{void handler(req,res);});
   return {
     async listen() {await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,resolve);});return server.address();},
-    close() {return new Promise((resolve,reject)=>server.close(e=>{store.close();owner.close();e?reject(e):resolve();}));},
+    close() {return new Promise((resolve,reject)=>{
+      // 先断开空闲的 keep-alive 连接：全局 fetch 的连接池会保留套接字，
+      // 否则 server.close() 在测试里会偶发等待数秒，表现为随机失败。
+      server.close(e=>{store.close();owner.close();e?reject(e):resolve();});
+      server.closeIdleConnections?.();
+    });},
     server,store
   };
 }

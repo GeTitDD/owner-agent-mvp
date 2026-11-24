@@ -5,54 +5,33 @@
 // ADR-0003 / T5：`GET /observer` 由服务端直接渲染卡片与事件流，
 // 页面不发起阻塞式客户端请求，所以 Electron 未启动也能用浏览器打开。
 // #32：三类事件各自成徽章，卡片按风险分排序，页面顶部直接指出最该看的项目。
-import { DEFAULT_THRESHOLDS } from './thresholds.mjs';
+import { mergeThresholds } from './thresholds.mjs';
+import {
+  EVENT_TYPES,
+  EVENT_TYPE_LIST,
+  EVENT_TYPE_NAMES,
+  eventTypeLabel
+} from './event-types.mjs';
+import { formatLocalDateTime, localDayKey } from './time.mjs';
 
 /** 单页最多展示多少条当天事件；审计表可以无限长，页面不跟着膨胀。 */
 export const BOARD_EVENT_LIMIT = 200;
 
-/** 事件类型的中文标签；未知类型原样显示，新增事件类型时页面不会崩。 */
-const EVENT_TYPE_LABELS = { stale: '停滞', drift: '漂移', backlog: '积压' };
-
-/**
- * 每类事件的风险度量：看哪个字段、什么单位、对比哪个阈值，以及「越线」的区间。
- * 越线区间与 events.mjs 的判定保持一致：停滞 / 积压达到阈值即算，漂移必须超过阈值。
- */
-const SIGNALS = {
-  stale: {
-    field: 'daysStale',
-    unit: '天',
-    threshold: 'staleDays',
-    reaches: (value, limit) => value >= limit,
-    phrase: (value) => `停滞 ${value} 天`
-  },
-  drift: {
-    field: 'behindTrunk',
-    unit: '提交',
-    threshold: 'driftCommits',
-    reaches: (value, limit) => value > limit,
-    phrase: (value) => `落后主干 ${value} 个提交`
-  },
-  backlog: {
-    field: 'uncommittedFiles',
-    unit: '文件',
-    threshold: 'backlogFiles',
-    reaches: (value, limit) => value >= limit,
-    phrase: (value) => `积压 ${value} 个未提交文件`
-  }
-};
-
-/** 风险等级的中文标签：多重风险 > 单类越线 > 关注（有观测但未越线）> 未观测。 */
+/** 非事件类型的风险等级文案；事件类型的中文标签从注册表补齐。 */
 const LEVEL_LABELS = {
   critical: '多重风险',
-  stale: '停滞',
-  drift: '漂移',
-  backlog: '积压',
   watch: '关注',
   unknown: '未观测'
 };
+for (const spec of EVENT_TYPE_LIST) LEVEL_LABELS[spec.riskLevel] = spec.label;
 
-/** 同分时的稳定次序：越靠前越危险。 */
-const LEVEL_ORDER = { critical: 0, stale: 1, drift: 2, backlog: 3, watch: 4, unknown: 5 };
+/** 同分时的稳定次序：多重风险最先，事件类型按注册表次序，最后是关注/未观测。 */
+const LEVEL_ORDER = {
+  critical: 0,
+  ...Object.fromEntries(EVENT_TYPE_LIST.map((spec) => [spec.riskLevel, spec.order + 1])),
+  watch: EVENT_TYPE_LIST.length + 1,
+  unknown: EVENT_TYPE_LIST.length + 2
+};
 
 /** 卡片排序：风险分高的在前，再看等级、停滞天数，最后按名字稳定排序。 */
 const compareCards = (a, b) => b.risk.score - a.risk.score
@@ -60,23 +39,9 @@ const compareCards = (a, b) => b.risk.score - a.risk.score
   || (b.daysStale ?? -1) - (a.daysStale ?? -1)
   || a.name.localeCompare(b.name);
 
-const pad = (value) => String(value).padStart(2, '0');
 const parseTime = (value) => {
   const ms = Date.parse(value ?? '');
   return Number.isFinite(ms) ? ms : 0;
-};
-
-/** 本地日期 YYYY-MM-DD；「当天事件流」按用户本地日历判断，而不是 UTC。 */
-const localDay = (value) => {
-  const date = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(date.getTime())) return '';
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-};
-
-const formatDateTime = (value) => {
-  const date = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(date.getTime())) return '—';
-  return `${localDay(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
 const escapeHtml = (value) => String(value ?? '')
@@ -86,11 +51,9 @@ const escapeHtml = (value) => String(value ?? '')
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#39;');
 
-const eventTypeLabel = (type) => EVENT_TYPE_LABELS[type] ?? String(type ?? '');
-
 /** 事件的度量文本：停滞看天数，漂移看落后提交，积压看未提交文件。 */
 const eventMeasure = (event) => {
-  const spec = SIGNALS[event?.type];
+  const spec = EVENT_TYPES[event?.type];
   if (!spec) return '—';
   const value = Number.isFinite(event[spec.field]) ? event[spec.field] : 0;
   return `${value} ${spec.unit}`;
@@ -98,7 +61,7 @@ const eventMeasure = (event) => {
 
 /** 把某类事件的最近一条观测折成一条风险信号；越线与否只跟阈值比，不重做判定。 */
 const toSignal = (type, event, limits) => {
-  const spec = SIGNALS[type];
+  const spec = EVENT_TYPES[type];
   const value = Number.isFinite(event[spec.field]) ? event[spec.field] : 0;
   const threshold = limits[spec.threshold];
   return {
@@ -108,7 +71,7 @@ const toSignal = (type, event, limits) => {
     unit: spec.unit,
     threshold,
     crossing: spec.reaches(value, threshold),
-    badge: `${eventTypeLabel(type)} ${value} ${spec.unit}`,
+    badge: spec.badge(value),
     phrase: spec.phrase(value),
     detectedAt: event.detectedAt
   };
@@ -155,7 +118,8 @@ const summarizeEvent = (event) => ({
   branchLabel: event.branchLabel || event.branch || '',
   daysStale: event.daysStale ?? null,
   measure: eventMeasure(event),
-  detectedAt: event.detectedAt
+  detectedAt: event.detectedAt,
+  updatedAt: event.updatedAt ?? event.detectedAt
 });
 
 /**
@@ -203,18 +167,16 @@ export function buildBoardViewModel({
   thresholds = {}
 } = {}) {
   // thresholdDays 是 #31 的旧入口，等价于 thresholds.staleDays。
-  const limits = {
-    ...DEFAULT_THRESHOLDS,
-    ...thresholds,
+  const limits = mergeThresholds({
+    ...(thresholds ?? {}),
     ...(thresholdDays === undefined ? {} : { staleDays: thresholdDays })
-  };
-  if (!Number.isFinite(limits.staleDays) || limits.staleDays < 0) throw new Error('Invalid stale threshold');
-  if (!Number.isFinite(limits.driftCommits) || limits.driftCommits < 0) throw new Error('Invalid drift threshold');
-  if (!Number.isFinite(limits.backlogFiles) || limits.backlogFiles < 0) throw new Error('Invalid backlog threshold');
+  });
 
-  const today = localDay(now);
+  const today = localDayKey(now);
   // 审计库按字符串倒序返回；这里再按真实时间排一次，带时区偏移的时间戳不会被字典序排错。
-  const ordered = [...events].sort((a, b) => (parseTime(b.detectedAt) - parseTime(a.detectedAt))
+  // 证据刷新时间（updatedAt）也算「更近」：冷却窗口内重复命中的事件不会被旧行遮住。
+  const ordered = [...events].sort((a, b) => (parseTime(b.updatedAt ?? b.detectedAt)
+    - parseTime(a.updatedAt ?? a.detectedAt))
     || String(a.id).localeCompare(String(b.id)));
 
   // 每个项目、每类事件各取最近一条：停滞与积压可以同时存在，不能只留最近那一条。
@@ -235,7 +197,7 @@ export function buildBoardViewModel({
     const id = String(project.id);
     const lastEvent = latestByProject.get(id) ?? null;
     const byType = latestByType.get(id) ?? new Map();
-    const signals = Object.keys(SIGNALS)
+    const signals = EVENT_TYPE_NAMES
       .filter((type) => byType.has(type))
       .map((type) => toSignal(type, byType.get(type), limits));
     const risk = scoreRisk(signals);
@@ -261,7 +223,7 @@ export function buildBoardViewModel({
     riskCount: cards.filter((card) => card.risk.score > 0).length,
     unknownCount: cards.filter((card) => card.risk.level === 'unknown').length,
     projects: cards,
-    events: ordered.filter((event) => localDay(event.detectedAt) === today).map(summarizeEvent)
+    events: ordered.filter((event) => localDayKey(event.detectedAt) === today).map(summarizeEvent)
   };
 }
 
@@ -282,18 +244,18 @@ const renderCard = (card) => `<article class="card risk-${card.risk.level}">
   <dl class="card-meta">
     <div><dt>仓库</dt><dd class="path">${escapeHtml(card.root || '—')}</dd></div>
     <div><dt>分支</dt><dd>${escapeHtml(card.branch || '未采集')}</dd></div>
-    <div><dt>最后提交</dt><dd>${escapeHtml(card.lastCommitAt ? formatDateTime(card.lastCommitAt) : '—')}</dd></div>
+    <div><dt>最后提交</dt><dd>${escapeHtml(card.lastCommitAt ? formatLocalDateTime(card.lastCommitAt) : '—')}</dd></div>
     <div><dt>风险信号</dt><dd>${card.risk.signals.length ? signalLines(card.risk.signals) : '从未观测'}</dd></div>
     <div><dt>最近事件</dt><dd>${card.lastEvent
-      ? `${escapeHtml(card.lastEvent.typeLabel)} · ${escapeHtml(formatDateTime(card.lastEvent.detectedAt))}`
+      ? `${escapeHtml(card.lastEvent.typeLabel)} · ${escapeHtml(formatLocalDateTime(card.lastEvent.detectedAt))}`
       : '从未观测'}</dd></div>
   </dl>
 </article>`;
 
 const renderEventRow = (event) => `<tr>
-  <td class="when">${escapeHtml(formatDateTime(event.detectedAt))}</td>
+  <td class="when">${escapeHtml(formatLocalDateTime(event.detectedAt))}</td>
   <td><span class="who">${escapeHtml(event.projectName)}</span> <span class="card-id">${escapeHtml(event.projectId)}</span></td>
-  <td><span class="badge badge-${SIGNALS[event.type] ? event.type : 'unknown'}">${escapeHtml(event.typeLabel)}</span></td>
+  <td><span class="badge badge-${EVENT_TYPES[event.type] ? event.type : 'unknown'}">${escapeHtml(event.typeLabel)}</span></td>
   <td>${escapeHtml(event.branchLabel || '—')}</td>
   <td>${escapeHtml(event.measure)}</td>
 </tr>`;
@@ -345,7 +307,7 @@ export function renderBoardPage(view) {
     <p class="sub">已登记 ${view.projects.length} 个项目 · 风险 ${view.riskCount} · 未观测 ${view.unknownCount} · 阈值 ${view.thresholds.staleDays} 天 / ${view.thresholds.driftCommits} 提交 / ${view.thresholds.backlogFiles} 文件</p>
   </div>
   <div class="head-actions">
-    <p class="stamp">生成于 ${escapeHtml(formatDateTime(view.generatedAt))}</p>
+    <p class="stamp">生成于 ${escapeHtml(formatLocalDateTime(view.generatedAt))}</p>
     <a class="refresh" href="/observer">重新读取</a>
   </div>
 </header>

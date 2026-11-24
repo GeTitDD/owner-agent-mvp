@@ -14,7 +14,7 @@ import {
   detectBacklogEvent,
   DEFAULT_STALE_THRESHOLD_DAYS
 } from './events.mjs';
-import { DEFAULT_THRESHOLDS } from './thresholds.mjs';
+import { DEFAULT_THRESHOLDS, mergeThresholds } from './thresholds.mjs';
 import { deliverFeishu, formatEventMessage } from './feishu.mjs';
 import { evaluateCooldown, DEFAULT_COOLDOWN_MS } from './cooldown.mjs';
 import {
@@ -40,11 +40,12 @@ const DETAIL_MAX = 1000;
 /**
  * 单条事件的统一出口：记录事件 → 判断冷却 → 投递（或跳过）→ 记录投递。
  *
- * 冷却期内不发消息，但仍然写一条 status='skipped' 的投递记录：
- * 这样才能查清「为什么这次没收到」。只有 status='sent' 会占用窗口（见 cooldown.mjs）。
+ * send=false 是 `observerctl check/stale` 的默认行为：只写事件与冷却判断，
+ * 不真正投递、也不写投递记录；定时投递唯一入口是 digest。
  * @param {{event:object, store:object, webhookUrl?:string, now:Date, cooldownMs?:number,
- *   channel?:string, fetchImpl?:Function}} options
- * @returns {Promise<{eventId:string, duplicate:boolean, delivery:object, cooldown:object, text:string}>}
+ *   channel?:string, fetchImpl?:Function, send?:boolean}} options
+ * @returns {Promise<{eventId:string, duplicate:boolean, delivery:object|null, cooldown:object,
+ *   text:string, preview:boolean}>}
  */
 async function deliverEvent({
   event,
@@ -53,7 +54,8 @@ async function deliverEvent({
   now,
   cooldownMs = DEFAULT_COOLDOWN_MS,
   channel = 'feishu',
-  fetchImpl
+  fetchImpl,
+  send = true
 }) {
   const saved = store.recordEvent(event);
   const text = formatEventMessage(event);
@@ -62,6 +64,9 @@ async function deliverEvent({
     now,
     cooldownMs
   });
+  if (!send) {
+    return { eventId: saved.id, duplicate: saved.duplicate, delivery: null, cooldown, text, preview: true };
+  }
   const delivery = cooldown.coolingDown
     ? { status: 'skipped', detail: `cooldown active until ${cooldown.resumesAt}` }
     : await deliverFeishu({ webhookUrl, text, fetchImpl });
@@ -74,7 +79,7 @@ async function deliverEvent({
     detail: delivery.detail,
     at: now.toISOString()
   });
-  return { eventId: saved.id, duplicate: saved.duplicate, delivery, cooldown, text };
+  return { eventId: saved.id, duplicate: saved.duplicate, delivery, cooldown, text, preview: false };
 }
 
 const assertProject = (project) => {
@@ -91,7 +96,7 @@ const assertProject = (project) => {
  * @returns {{snapshot:object, events:object[], limits:object}}
  */
 function detectProjectEvents({ project, now, thresholds = DEFAULT_THRESHOLDS, gitBin = 'git' }) {
-  const limits = { ...DEFAULT_THRESHOLDS, ...thresholds };
+  const limits = mergeThresholds(thresholds);
   const snapshot = probeProject({
     projectId: project.id,
     projectName: project.name ?? '',
@@ -109,11 +114,12 @@ function detectProjectEvents({ project, now, thresholds = DEFAULT_THRESHOLDS, gi
 
 /**
  * 对一个已登记项目执行一次停滞检查（#27 的窄路径，保持原有返回结构）。
+ * 复用 detectProjectEvents，避免这里另起一份探针或阈值合并逻辑。
  * @param {{project:{id:string,name?:string,root:string}, store:object, webhookUrl?:string,
  *   now?:Date, thresholdDays?:number, cooldownMs?:number, channel?:string,
- *   fetchImpl?:Function, gitBin?:string}} options
+ *   fetchImpl?:Function, gitBin?:string, send?:boolean}} options
  * @returns {Promise<{snapshot:object, event:object|null, eventId?:string, duplicate?:boolean,
- *   delivery:object|null, cooldown?:object, text?:string}>}
+ *   delivery:object|null, cooldown?:object, text?:string, preview?:boolean}>}
  */
 export async function runStaleCheck({
   project,
@@ -124,29 +130,32 @@ export async function runStaleCheck({
   cooldownMs = DEFAULT_COOLDOWN_MS,
   channel = 'feishu',
   fetchImpl,
-  gitBin = 'git'
+  gitBin = 'git',
+  send = true
 } = {}) {
   assertProject(project);
-  const snapshot = probeProject({
-    projectId: project.id,
-    projectName: project.name ?? '',
-    root: project.root,
+  const { snapshot, events } = detectProjectEvents({
+    project,
+    now,
+    thresholds: { staleDays: thresholdDays },
     gitBin
   });
-  const event = detectStaleEvent(snapshot, { now, thresholdDays });
-  if (!event) return { snapshot, event: null, delivery: null };
+  const event = events.find((item) => item.type === 'stale') ?? null;
+  if (!event) return { snapshot, event: null, delivery: null, text: null };
 
-  // 停滞消息由 formatEventMessage 按类型选中（与 #27 的格式一致）。
-  const delivered = await deliverEvent({ event, store, webhookUrl, now, cooldownMs, channel, fetchImpl });
+  const delivered = await deliverEvent({
+    event, store, webhookUrl, now, cooldownMs, channel, fetchImpl, send
+  });
   return { snapshot, event, ...delivered };
 }
 
 /**
  * 对一个已登记项目执行一次全量检查：停滞、漂移、积压共用同一份阈值与同一条投递链路。
  * 每条事件各自先落审计库、各自判断冷却；单条投递失败不影响其余事件。
+ * send=false 时只写事件并返回预览文案（`observerctl check` 的默认行为）。
  * @param {{project:{id:string,name?:string,root:string}, store:object, webhookUrl?:string,
  *   now?:Date, thresholds?:object, cooldownMs?:number, channel?:string,
- *   fetchImpl?:Function, gitBin?:string}} options
+ *   fetchImpl?:Function, gitBin?:string, send?:boolean}} options
  * @returns {Promise<{snapshot:object, events:object[], results:object[], deliveries:object[]}>}
  */
 export async function runProjectCheck({
@@ -158,14 +167,17 @@ export async function runProjectCheck({
   cooldownMs = DEFAULT_COOLDOWN_MS,
   channel = 'feishu',
   fetchImpl,
-  gitBin = 'git'
+  gitBin = 'git',
+  send = true
 } = {}) {
   assertProject(project);
   const { snapshot, events } = detectProjectEvents({ project, now, thresholds, gitBin });
 
   const results = [];
   for (const event of events) {
-    const delivered = await deliverEvent({ event, store, webhookUrl, now, cooldownMs, channel, fetchImpl });
+    const delivered = await deliverEvent({
+      event, store, webhookUrl, now, cooldownMs, channel, fetchImpl, send
+    });
     results.push({ event, ...delivered });
   }
   return {
@@ -200,6 +212,13 @@ async function deliverDigest({
   }
 
   const events = store.listDigestEvents(digest.id);
+  if (!events.length) {
+    // 当天没有任何事件就不发消息（缺陷修复：空聚合不该打扰人）。
+    // 退回 pending 并释放租约：当天稍后真的出现事件时仍能正常发送。
+    const detail = 'no events; nothing to send';
+    store.finishDigest({ id: digest.id, status: 'pending', detail, now });
+    return { ...base, status: 'empty', detail, text: '', attempts: [] };
+  }
   const text = formatDigestMessage({
     projectId: digest.projectId,
     projectName: events[0]?.projectName || digest.projectId,
@@ -275,7 +294,7 @@ export async function runDigestScan({
   const quietWindow = normalizeQuietHours(quietHours);
   const summaries = Number.isSafeInteger(maxSummaries) && maxSummaries >= 1
     ? maxSummaries : DEFAULT_DIGEST_SUMMARIES;
-  const limits = { ...DEFAULT_THRESHOLDS, ...thresholds };
+  const limits = mergeThresholds(thresholds);
 
   const today = localDayKey(now);
   const quiet = inQuietHours(now, quietWindow);
@@ -299,6 +318,7 @@ export async function runDigestScan({
         snapshot: null,
         events: [],
         digestId: null,
+        hasEvents: false,
         skipped: false,
         error: error?.message ?? String(error)
       });
@@ -310,7 +330,14 @@ export async function runDigestScan({
     const existing = store.listDigests({ projectId: project.id, day: targetDay, limit: 1 })[0] ?? null;
     const terminal = existing && (existing.status === 'sent' || existing.status === 'failed');
     let digestId = existing?.id ?? null;
-    if (!terminal) {
+    if (!terminal && existing) {
+      // 已有待发聚合：只补挂事件，不重复建聚合。
+      digestId = existing.id;
+      if (saved.length) {
+        store.addDigestEvents({ digestId: existing.id, eventIds: saved.map((item) => item.id), now });
+      }
+    } else if (!terminal && saved.length) {
+      // 只有当天确实有事件才建聚合；零事件的项目不入聚合、不发消息。
       const digest = store.ensureDigest({
         projectId: project.id,
         day: targetDay,
@@ -318,7 +345,7 @@ export async function runDigestScan({
         now
       });
       digestId = digest.id;
-      if (saved.length) store.addDigestEvents({ digestId: digest.id, eventIds: saved.map((item) => item.id), now });
+      store.addDigestEvents({ digestId: digest.id, eventIds: saved.map((item) => item.id), now });
     }
     scanned.push({
       projectId: project.id,
@@ -326,6 +353,7 @@ export async function runDigestScan({
       snapshot,
       events,
       digestId,
+      hasEvents: saved.length > 0,
       skipped: Boolean(terminal),
       error: null
     });

@@ -9,30 +9,22 @@
 // 也不改事件指纹与冷却语义（#28 / #29）。
 import { canonical, sha256 } from '../utils.mjs';
 import { DEFAULT_THRESHOLDS } from './thresholds.mjs';
+import {
+  EVENT_TYPES,
+  countEventTypes,
+  eventTypeLabel,
+  eventTypeOrder,
+  formatEventCounts
+} from './event-types.mjs';
+import { localDayKey, nextLocalDayKey } from './time.mjs';
+
+export { countEventTypes, localDayKey, nextLocalDayKey };
 
 /** 默认静默窗口：22:00（含）到次日 08:00（不含）。 */
 export const DEFAULT_QUIET_HOURS = Object.freeze({ startHour: 22, endHour: 8 });
 
 /** 聚合消息里默认保留几条最严重的事件摘要。 */
 export const DEFAULT_DIGEST_SUMMARIES = 3;
-
-/** 事件类型的中文标签；未知类型原样显示，避免新增类型时崩溃。 */
-const TYPE_LABELS = { stale: '停滞', drift: '漂移', backlog: '积压' };
-
-/** 同分时的稳定次序，与观察台的风险等级一致：停滞 > 漂移 > 积压。 */
-const TYPE_ORDER = { stale: 0, drift: 1, backlog: 2 };
-
-/**
- * 三类事件的度量口径：看哪个字段、跟哪个阈值比、单位与一句话摘要。
- * 越线判断在 events.mjs，这里只复用字段与阈值名，用于「谁最严重」排序。
- */
-const SEVERITY_FIELDS = {
-  stale: { field: 'daysStale', threshold: 'staleDays', unit: '天', phrase: (value) => `停滞 ${value} 天` },
-  drift: { field: 'behindTrunk', threshold: 'driftCommits', unit: '提交', phrase: (value) => `落后主干 ${value} 个提交` },
-  backlog: { field: 'uncommittedFiles', threshold: 'backlogFiles', unit: '文件', phrase: (value) => `积压 ${value} 个未提交文件` }
-};
-
-const pad = (value) => String(value).padStart(2, '0');
 
 const toDate = (value, label) => {
   const date = value instanceof Date ? value : new Date(value);
@@ -54,26 +46,6 @@ export function normalizeQuietHours(quietHours = DEFAULT_QUIET_HOURS) {
   // 起止相同意味着「全天静默」或「从不静默」，两种解释都危险，直接拒绝。
   if (startHour === endHour) throw new Error('Invalid quiet hours: start and end must differ');
   return { startHour, endHour };
-}
-
-/**
- * 本地日历日 YYYY-MM-DD。用本地时间而不是 UTC，否则 22:00 静默在时区边界会错位。
- * @param {Date|string} [value]
- * @returns {string}
- */
-export function localDayKey(value = new Date()) {
-  const date = toDate(value, 'day clock');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-/**
- * 下一个本地日历日。用本地构造函数加一天，跨月、跨年与夏令时都交给 Date 处理。
- * @param {Date|string} [value]
- * @returns {string}
- */
-export function nextLocalDayKey(value = new Date()) {
-  const date = toDate(value, 'day clock');
-  return localDayKey(new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1));
 }
 
 /**
@@ -109,14 +81,14 @@ export const digestFingerprint = ({ projectId, day }) => sha256(canonical({
  * @returns {{ratio:number, value:number, threshold:number, typeRank:number, label:string, phrase:string}}
  */
 export function eventSeverity(event, thresholds = DEFAULT_THRESHOLDS) {
-  const spec = SEVERITY_FIELDS[event?.type];
-  const label = TYPE_LABELS[event?.type] ?? String(event?.type ?? '');
-  if (!spec) return { ratio: 0, value: 0, threshold: 0, typeRank: 9, label, phrase: label };
+  const spec = EVENT_TYPES[event?.type];
+  const label = eventTypeLabel(event?.type);
+  if (!spec) return { ratio: 0, value: 0, threshold: 0, typeRank: 99, label, phrase: label };
   const value = Number.isFinite(event[spec.field]) ? event[spec.field] : 0;
   const rawThreshold = thresholds?.[spec.threshold];
   const threshold = Number.isFinite(rawThreshold) && rawThreshold > 0 ? rawThreshold : 0;
   const ratio = threshold > 0 ? value / threshold : (value > 0 ? Number.POSITIVE_INFINITY : 0);
-  return { ratio, value, threshold, typeRank: TYPE_ORDER[event.type] ?? 9, label, phrase: spec.phrase(value) };
+  return { ratio, value, threshold, typeRank: eventTypeOrder(event.type), label, phrase: spec.phrase(value) };
 }
 
 const detectedMs = (event) => {
@@ -141,15 +113,6 @@ export function rankDigestEvents(events = [], { thresholds = DEFAULT_THRESHOLDS,
       || String(a.event.id ?? '').localeCompare(String(b.event.id ?? '')))
     .slice(0, max)
     .map((item) => item.event);
-}
-
-/** 三类事件的计数，始终返回三个键（含 0），页面与消息都不需要判空。 */
-export function countEventTypes(events = []) {
-  const counts = { stale: 0, drift: 0, backlog: 0 };
-  for (const event of events) {
-    if (Object.hasOwn(counts, event?.type)) counts[event.type] += 1;
-  }
-  return counts;
 }
 
 const summarize = (event, thresholds) => {
@@ -177,7 +140,7 @@ export function formatDigestMessage({
   const top = rankDigestEvents(events, { thresholds, limit: maxSummaries });
   const lines = [
     `【每日聚合】${name}（${projectId}） · ${day}`,
-    `停滞 ${counts.stale} · 漂移 ${counts.drift} · 积压 ${counts.backlog}`
+    formatEventCounts(counts)
   ];
   if (top.length) {
     lines.push(`最严重 ${top.length} 条：`);

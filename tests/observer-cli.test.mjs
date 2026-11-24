@@ -75,6 +75,7 @@ test('命令行单项目停滞检查：不启动 Electron，飞书收到通知�
     '--db', dbPath,
     '--config', path.join(dir, 'missing-feishu.json'),
     '--webhook', webhookUrl,
+    '--send',
     '--json'
   ], { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath) });
   const summary = JSON.parse(output);
@@ -110,6 +111,7 @@ test('未配置 webhook 时命令行正常退出，事件入审计库且投递�
     '--project', 'obs-cli-skip',
     '--db', dbPath,
     '--config', path.join(dir, 'missing-feishu.json'),
+    '--send',
     '--json'
   ], { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath) });
   const summary = JSON.parse(output);
@@ -144,6 +146,7 @@ test('冷却：进程重启后再跑一次，同一停滞事件不重复推送',
     '--db', dbPath,
     '--config', path.join(dir, 'missing-feishu.json'),
     '--webhook', webhookUrl,
+    '--send',
     '--json'
   ];
   const first = JSON.parse((await runCli(process.execPath, args, { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath) })).stdout);
@@ -193,11 +196,40 @@ test('冷却：上次成功投递已超过 24 小时，命令行再次推送同�
     '--db', dbPath,
     '--config', path.join(dir, 'missing-feishu.json'),
     '--webhook', webhookUrl,
+    '--send',
     '--json'
   ], { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath) })).stdout);
 
   assert.equal(summary.delivery.status, 'sent');
   assert.equal(requests.length, 1);
+}));
+
+// #4 修复：stale 默认只预览，避免与 digest 重复投递。
+test('命令行 stale 默认只预览：事件入库、打印本应发送的内容、不发请求', () => withContext(async ({
+  dir, requests, webhookUrl
+}) => {
+  const dbPath = path.join(dir, 'observer.sqlite');
+  const root = makeRepo({ root: path.join(dir, 'stale'), commitAt: FOUR_DAYS_AGO });
+  registerProject(dbPath, root, 'obs-cli-preview-stale', 'CLI Preview Stale');
+
+  const args = [
+    CLI, 'stale',
+    '--project', 'obs-cli-preview-stale',
+    '--db', dbPath,
+    '--config', path.join(dir, 'missing-feishu.json'),
+    '--webhook', webhookUrl
+  ];
+  const { stdout } = await runCli(process.execPath, args, { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath) });
+
+  assert.match(stdout, /【停滞】/);
+  assert.match(stdout, /预览：未投递/);
+  assert.equal(requests.length, 0);
+
+  const store = new ObserverStore(dbPath);
+  try {
+    assert.equal(store.listEvents({ projectId: 'obs-cli-preview-stale' }).length, 1);
+    assert.deepEqual(store.listDeliveries({ limit: 10 }), []);
+  } finally { store.close(); }
 }));
 
 // #28 × #29：全量检查的三类事件也走冷却，重启进程后不重复推送。
@@ -214,6 +246,7 @@ test('冷却作用于全量检查：check 连跑两次，三类事件都不重�
     '--config', path.join(dir, 'missing-feishu.json'),
     '--thresholds', path.join(dir, 'missing-thresholds.json'),
     '--webhook', webhookUrl,
+    '--send',
     '--json'
   ];
   const first = JSON.parse((await runCli(process.execPath, args, { cwd: ROOT, encoding: 'utf8', env: childEnv(dbPath) })).stdout);

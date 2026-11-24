@@ -56,6 +56,33 @@ test('同一指纹重复写入不产生新行，跨进程重开数据库仍然�
   } finally { reopened.close(); }
 }));
 
+test('同一指纹再次命中：不新增行，但更新证据字段与 updated_at', () => withDb(async (dbPath) => {
+  const store = new ObserverStore(dbPath);
+  try {
+    const first = store.recordEvent(event({ daysStale: 4, detectedAt: '2026-11-24T01:00:00.000Z' }));
+    // 冷却窗口内再次命中：落后更深、积压更多，但指纹不变。
+    const second = store.recordEvent(event({
+      daysStale: 9,
+      behindTrunk: 12,
+      trunkRef: 'main',
+      uncommittedFiles: 25,
+      detectedAt: '2026-11-24T05:00:00.000Z'
+    }));
+
+    assert.equal(first.duplicate, false);
+    assert.equal(second.duplicate, true);
+    assert.equal(second.id, first.id);
+
+    const events = store.listEvents({ projectId: 'obs-a' });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].daysStale, 9);
+    assert.equal(events[0].behindTrunk, 12);
+    assert.equal(events[0].uncommittedFiles, 25);
+    assert.equal(events[0].detectedAt, '2026-11-24T01:00:00.000Z', '首次发生时间保留');
+    assert.equal(events[0].updatedAt, '2026-11-24T05:00:00.000Z', '证据刷新时间更新');
+  } finally { store.close(); }
+}));
+
 test('投递结果写入审计库：sent / failed / skipped 都留痕', () => withDb(async (dbPath) => {
   const store = new ObserverStore(dbPath);
   try {

@@ -7,6 +7,7 @@ import { ObserverStore } from '../src/observer/store.mjs';
 import { OwnerStore } from '../src/owner-store.mjs';
 import { createWorkbenchServer } from '../src/workbench-server.mjs';
 import { makeRepo, makeTempDir } from './helpers/observer-fixture.mjs';
+import { request, requestJson } from './helpers/observer-http.mjs';
 
 const DETECTED = '2026-11-24T09:30:00+08:00';
 const DAY_MS = 86_400_000;
@@ -33,12 +34,16 @@ const event = (overrides = {}) => ({
 const withBoard = async (fn) => {
   const dir = makeTempDir('observer-risk-');
   const dbPath = path.join(dir, 'board.sqlite');
+  const previous = process.env.OWNER_OBSERVER_THRESHOLDS;
+  process.env.OWNER_OBSERVER_THRESHOLDS = path.join(dir, 'thresholds.json');
   const workbench = await createWorkbenchServer({ port: 0, dbPath });
   const { port } = await workbench.listen();
   try {
     return await fn({ base: `http://127.0.0.1:${port}`, dbPath, dir });
   } finally {
     await workbench.close();
+    if (previous === undefined) delete process.env.OWNER_OBSERVER_THRESHOLDS;
+    else process.env.OWNER_OBSERVER_THRESHOLDS = previous;
     await rm(dir, { recursive: true, force: true });
   }
 };
@@ -243,7 +248,7 @@ test('刷新观察台：同时停滞与积压的项目排第一位，顶部直�
     }
   ]);
 
-  const board = await (await fetch(`${base}/api/observer/board`)).json();
+  const board = await requestJson(base, '/api/observer/board');
   assert.deepEqual(board.projects.map((project) => project.id), ['p-both', 'p-stale', 'p-clean']);
   assert.deepEqual(board.projects[0].risk.signals.map((signal) => signal.type), ['stale', 'backlog']);
   assert.equal(board.headline.projectName, '双信号项目');
@@ -251,7 +256,7 @@ test('刷新观察台：同时停滞与积压的项目排第一位，顶部直�
   assert.match(board.headline.reason, /积压 25 个未提交文件/);
 
   // 刷新一次仍然是同一个结论：观察台不缓存结论，也不靠客户端再排一次序。
-  const html = await (await fetch(`${base}/observer`)).text();
+  const html = (await request(base, '/observer')).body;
   assert.match(html, /<p class="attention-name">双信号项目<\/p>/);
   assert.match(html, /同时停滞 4 天、积压 25 个未提交文件/);
   assert.ok(html.indexOf('双信号项目') < html.indexOf('单停滞项目'), '最危险的项目排在其他项目前面');

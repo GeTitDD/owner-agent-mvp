@@ -14,8 +14,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { defaultDbPath } from '../storage.mjs';
 import { digestFingerprint } from './digest.mjs';
+import { EVENT_TYPE_NAMES } from './event-types.mjs';
 
-const EVENT_TYPES = new Set(['stale', 'drift', 'backlog']);
+const EVENT_TYPES = new Set(EVENT_TYPE_NAMES);
 const DELIVERY_STATUSES = new Set(['sent', 'failed', 'skipped']);
 const DIGEST_STATUSES = new Set(['pending', 'sending', 'sent', 'failed', 'merged']);
 const DIGEST_ATTEMPT_STATUSES = new Set(['sent', 'failed', 'skipped']);
@@ -25,6 +26,12 @@ const text = (value, label, max = 500) => {
   check(typeof value === 'string' && value.length > 0 && value.length <= max, `Invalid ${label}`);
   check(!/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value), `Invalid ${label}`);
   return value;
+};
+// 指纹校验只写一次：记录事件、记录投递、冷却查询、聚合幂等键都共用。
+const fingerprintOf = (value) => {
+  const fingerprint = text(value, 'fingerprint', 64);
+  check(/^[0-9a-f]{64}$/.test(fingerprint), 'Invalid fingerprint');
+  return fingerprint;
 };
 const optionalText = (value, label, max = 500) => {
   if (value === null || value === undefined || value === '') return '';
@@ -50,7 +57,8 @@ const eventRow = (row) => row && {
   trunkRef: row.trunk_ref ?? null,
   behindTrunk: row.behind_trunk ?? 0,
   uncommittedFiles: row.uncommitted_files ?? 0,
-  detectedAt: row.detected_at
+  detectedAt: row.detected_at,
+  updatedAt: row.updated_at ?? row.detected_at
 };
 const deliveryRow = (row) => row && {
   seq: row.seq,
@@ -104,7 +112,8 @@ export class ObserverStore {
         trunk_ref TEXT,
         behind_trunk INTEGER NOT NULL DEFAULT 0,
         uncommitted_files INTEGER NOT NULL DEFAULT 0,
-        detected_at TEXT NOT NULL
+        detected_at TEXT NOT NULL,
+        updated_at TEXT
       );
       CREATE INDEX IF NOT EXISTS observer_events_project ON observer_events(project_id,detected_at DESC);
       CREATE TABLE IF NOT EXISTS observer_deliveries(
@@ -156,7 +165,8 @@ export class ObserverStore {
     const added = [
       ['trunk_ref', 'TEXT'],
       ['behind_trunk', 'INTEGER NOT NULL DEFAULT 0'],
-      ['uncommitted_files', 'INTEGER NOT NULL DEFAULT 0']
+      ['uncommitted_files', 'INTEGER NOT NULL DEFAULT 0'],
+      ['updated_at', 'TEXT']
     ];
     for (const [column, ddl] of added) {
       if (!columns.includes(column)) this.db.exec(`ALTER TABLE observer_events ADD COLUMN ${column} ${ddl}`);
@@ -166,13 +176,15 @@ export class ObserverStore {
   close() { this.db.close(); }
 
   /**
-   * 写入一条观察事件。指纹唯一：同一事件重复写入返回已有行，不新增。
-   * @param {object} event detectStaleEvent 的输出
+   * 写入一条观察事件。指纹唯一：同一事件重复命中有冷却窗口保护，不新增行；
+   * 但仍用本次观测刷新证据字段与 updated_at，否则 daysStale / behindTrunk /
+   * uncommittedFiles 会停在第一次测到的值上，风险排序随之失真。
+   * detected_at 保留首次发生时间，updated_at 表示证据最后一次刷新时间。
+   * @param {object} event detect*Event 的输出
    * @returns {{id:string, duplicate:boolean}}
    */
   recordEvent(event = {}) {
-    const fingerprint = text(event.fingerprint, 'fingerprint', 64);
-    check(/^[0-9a-f]{64}$/.test(fingerprint), 'Invalid fingerprint');
+    const fingerprint = fingerprintOf(event.fingerprint);
     check(EVENT_TYPES.has(event.type), 'Invalid event type');
     const projectId = text(event.projectId, 'project id', 90);
     const projectName = optionalText(event.projectName, 'project name', 200);
@@ -189,15 +201,24 @@ export class ObserverStore {
     const detectedAt = iso(event.detectedAt, 'detected time');
 
     const existing = this.db.prepare('SELECT id FROM observer_events WHERE fingerprint=?').get(fingerprint);
-    if (existing) return { id: existing.id, duplicate: true };
+    if (existing) {
+      this.db.prepare(`UPDATE observer_events SET
+        project_name=?, branch=?, branch_label=?, last_commit_sha=?, last_commit_at=?,
+        days_stale=?, trunk_ref=?, behind_trunk=?, uncommitted_files=?, updated_at=?
+        WHERE id=?`).run(
+        projectName, branch, branchLabel, head, lastCommitAt,
+        daysStale, trunkRef, behindTrunk, uncommittedFiles, detectedAt, existing.id
+      );
+      return { id: existing.id, duplicate: true };
+    }
 
     const id = randomUUID();
     this.db.prepare(`INSERT INTO observer_events(
       id,fingerprint,type,project_id,project_name,branch,branch_label,
-      last_commit_sha,last_commit_at,days_stale,trunk_ref,behind_trunk,uncommitted_files,detected_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      last_commit_sha,last_commit_at,days_stale,trunk_ref,behind_trunk,uncommitted_files,detected_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id, fingerprint, event.type, projectId, projectName, branch, branchLabel,
-      head, lastCommitAt, daysStale, trunkRef, behindTrunk, uncommittedFiles, detectedAt
+      head, lastCommitAt, daysStale, trunkRef, behindTrunk, uncommittedFiles, detectedAt, detectedAt
     );
     return { id, duplicate: false };
   }
@@ -212,9 +233,12 @@ export class ObserverStore {
 
   listEvents({ projectId = '', limit = 50 } = {}) {
     check(Number.isSafeInteger(limit) && limit >= 1 && limit <= 500, 'Invalid limit');
+    // 证据刷新也算「更近」：冷却窗口内重复命中的事件按 updated_at 排到前面。
     const rows = projectId
-      ? this.db.prepare('SELECT * FROM observer_events WHERE project_id=? ORDER BY detected_at DESC,id DESC LIMIT ?').all(projectId, limit)
-      : this.db.prepare('SELECT * FROM observer_events ORDER BY detected_at DESC,id DESC LIMIT ?').all(limit);
+      ? this.db.prepare(`SELECT * FROM observer_events WHERE project_id=?
+        ORDER BY COALESCE(updated_at,detected_at) DESC,id DESC LIMIT ?`).all(projectId, limit)
+      : this.db.prepare(`SELECT * FROM observer_events
+        ORDER BY COALESCE(updated_at,detected_at) DESC,id DESC LIMIT ?`).all(limit);
     return rows.map(eventRow);
   }
 
@@ -226,8 +250,7 @@ export class ObserverStore {
     const id = text(eventId, 'event id', 90);
     const event = this.getEvent(id);
     check(!!event, 'Unknown observer event');
-    const fp = text(fingerprint, 'fingerprint', 64);
-    check(/^[0-9a-f]{64}$/.test(fp), 'Invalid fingerprint');
+    const fp = fingerprintOf(fingerprint);
     check(event.fingerprint === fp, 'Fingerprint does not match event');
     check(DELIVERY_STATUSES.has(status), 'Invalid delivery status');
     const result = this.db.prepare(`INSERT INTO observer_deliveries(event_id,fingerprint,channel,status,detail,at)
@@ -244,8 +267,7 @@ export class ObserverStore {
    * @returns {string|null} ISO 时间
    */
   lastSentAt({ fingerprint, channel = 'feishu' } = {}) {
-    const fp = text(fingerprint, 'fingerprint', 64);
-    check(/^[0-9a-f]{64}$/.test(fp), 'Invalid fingerprint');
+    const fp = fingerprintOf(fingerprint);
     const row = this.db.prepare(`SELECT at FROM observer_deliveries
       WHERE fingerprint=? AND channel=? AND status='sent' ORDER BY seq DESC LIMIT 1`)
       .get(fp, text(channel, 'channel', 40));
@@ -274,8 +296,7 @@ export class ObserverStore {
     const pid = text(projectId, 'project id', 90);
     const d = text(day, 'digest day', 10);
     check(/^\d{4}-\d{2}-\d{2}$/.test(d), 'Invalid digest day');
-    const fp = text(fingerprint, 'fingerprint', 64);
-    check(/^[0-9a-f]{64}$/.test(fp), 'Invalid fingerprint');
+    const fp = fingerprintOf(fingerprint);
     const at = atIso(now, 'digest time');
     this.db.prepare(`INSERT OR IGNORE INTO observer_digests(
       id,project_id,day,fingerprint,status,created_at,updated_at
@@ -322,7 +343,7 @@ export class ObserverStore {
   listDigestEvents(digestId) {
     const rows = this.db.prepare(`SELECT e.* FROM observer_digest_items i
       JOIN observer_events e ON e.id=i.event_id
-      WHERE i.digest_id=? ORDER BY e.detected_at DESC,e.id DESC`).all(String(digestId));
+      WHERE i.digest_id=? ORDER BY COALESCE(e.updated_at,e.detected_at) DESC,e.id DESC`).all(String(digestId));
     return rows.map(eventRow);
   }
 
