@@ -16,7 +16,7 @@ import { READONLY_TOOLS, FORBIDDEN_TOOLS } from './pstack/playbooks.mjs';
 /** 对话模式允许使用的工具：与 Playbook 只读会话共用同一份白名单。 */
 export const CHAT_TOOLS = Object.freeze([...READONLY_TOOLS]);
 
-const MAX_QUESTION = 1200;
+export const MAX_QUESTION = 1200;
 const MAX_ANSWER = 8000;
 const MAX_CITATIONS = 12;
 
@@ -39,13 +39,26 @@ export const CHAT_FAILURE_ADVICE = Object.freeze({
   'session-error': '模型会话异常：重试一次；持续失败时换模型或缩小问题范围。'
 });
 
-/** 组装对话提示词：只读边界 + 路径引用格式。 */
-export function buildChatPrompt({ project, question }) {
+/** 组装对话提示词：只读边界 + 路径引用格式 + 本会话最近几轮上下文。 */
+export function buildChatPrompt({ project, question, history = [] }) {
   const root = String(project?.root ?? '');
   const id = String(project?.id ?? '');
   const value = String(question ?? '').trim().slice(0, MAX_QUESTION);
+  // 上次进程里的 Pi 会话可能已经释放（重启、切模型）：用落库的历史补上下文。
+  const turns = (Array.isArray(history) ? history : [])
+    .slice(-8)
+    .map((item) => {
+      const role = item?.role === 'assistant' ? '你' : 'Owner';
+      const text = String(item?.text ?? '').trim().slice(0, 600);
+      return text ? `${role}：${text}` : '';
+    })
+    .filter(Boolean);
+  const context = turns.length
+    ? ['', '本会话之前的对话（仅供理解上下文，不要复述）：', ...turns]
+    : [];
   return [
     `你正在只读查看项目 ${id}（根目录 ${root}）。`,
+    ...context,
     `Owner 的问题：${value}`,
     '',
     '回答要求：',
@@ -318,7 +331,7 @@ export class PiChatService {
     };
   }
 
-  async ask({ project = null, question = '', model = this.model, signal } = {}) {
+  async ask({ project = null, question = '', model = this.model, signal, sessionId = '', history = [] } = {}) {
     const began = Date.now();
     const projectId = String(project?.id ?? '');
     const text = String(question ?? '').trim();
@@ -333,11 +346,17 @@ export class PiChatService {
     if (resolvedModel !== this.model) this.setModel(resolvedModel);
 
     const root = path.resolve(project.root);
-    const key = `${projectId}::${root}::${resolvedModel}`;
+    // 每个持久化会话一个进程内 Pi 会话；同一个会话切换回来后仍能连续追问。
+    const chatKey = String(sessionId ?? '').trim();
+    const key = chatKey
+      ? `${chatKey}::${projectId}::${root}::${resolvedModel}`
+      : `${projectId}::${root}::${resolvedModel}`;
     const existing = this.sessions.get(key) ?? null;
     if (existing?.busy) return this.failure({ projectId, category: 'busy', began, model: resolvedModel });
 
     let session = existing?.session ?? null;
+    // 只有新建的 Pi 会话才需要落库历史补上下文；活会话已经带着自己的消息。
+    let freshSession = false;
     let timer = null;
     let cancelListener = null;
     const stopSession = () => {
@@ -369,6 +388,7 @@ export class PiChatService {
           throw error;
         }
         session = created;
+        freshSession = true;
         this.keep(key, session, tools);
       }
       const entry = this.sessions.get(key);
@@ -393,7 +413,11 @@ export class PiChatService {
       });
 
       await Promise.race([
-        session.prompt(buildChatPrompt({ project: { id: projectId, root }, question: text })),
+        session.prompt(buildChatPrompt({
+          project: { id: projectId, root },
+          question: text,
+          history: freshSession ? history : []
+        })),
         timedOut,
         canceled
       ]);

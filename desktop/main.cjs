@@ -89,6 +89,7 @@ let diagramModule = null;
 let ideaCaptureModule = null;
 let chatModule = null;
 let chatService = null;
+let chatSessionStore = null;
 const githubCache = new Map();
 const githubActivityCache = new Map();
 const briefCache = new Map();
@@ -223,6 +224,14 @@ async function startServices() {
   const file = dbPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   store = new OwnerStore(file);
+  // 对话会话持久化：复用同一条连接，只新增会话/消息两张表。
+  try {
+    const { ChatSessionStore } = await importEsm('../src/chat-sessions.mjs');
+    chatSessionStore = new ChatSessionStore({ db: store.db });
+  } catch (error) {
+    console.error('chat session store unavailable:', error.message);
+    chatSessionStore = null;
+  }
   try {
     const { PersonalKnowledgeStore } = await importEsm('../src/personal-store.mjs');
     const knowledgeFile = knowledgeDbPath();
@@ -2338,6 +2347,22 @@ const getChatService = async () => {
   return chatService;
 };
 
+/** 会话存储不可用时明确报错，不返回一个空列表假装「没有历史」。 */
+const requireChatSessions = () => {
+  if (!chatSessionStore) throw new Error('会话存储不可用：本地数据库打不开，请重启客户端。');
+  return chatSessionStore;
+};
+
+/** 新建会话只接受已登记项目，不做「找不到就退回第一个」的静默兜底。 */
+const registeredProject = async (projectId) => {
+  const id = String(projectId ?? '').trim();
+  if (!id) throw new Error('新建会话要选择一个项目。');
+  const items = (await api('/owner/v1/projects')).items ?? [];
+  const project = items.find((item) => item.id === id);
+  if (!project) throw new Error(`项目不存在：${id}`);
+  return project;
+};
+
 const registerIpc = () => {
   const fromCompanion = (event) =>
     [pet?.webContents, panel?.webContents].filter(Boolean).includes(event.sender);
@@ -2369,10 +2394,45 @@ const registerIpc = () => {
     });
   });
 
+  // 对话会话：新建时必须绑定已登记项目，列表按项目分组由渲染层完成。
+  ipcMain.handle('companion:chat-sessions', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return { items: requireChatSessions().listSessions({ projectId: String(input?.projectId ?? '') }) };
+  });
+
+  ipcMain.handle('companion:chat-session-get', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().getSession(String(input?.id ?? ''));
+  });
+
+  ipcMain.handle('companion:chat-session-create', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const project = await registeredProject(input?.projectId);
+    return requireChatSessions().createSession({
+      projectId: project.id,
+      title: String(input?.title ?? '')
+    });
+  });
+
+  ipcMain.handle('companion:chat-session-rename', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().renameSession(
+      String(input?.id ?? ''),
+      String(input?.title ?? '')
+    );
+  });
+
+  ipcMain.handle('companion:chat-session-delete', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().deleteSession(String(input?.id ?? ''));
+  });
+
   // 对话模式：只读 Pi SDK 会话（read/grep/find/ls），不能写文件。
+  // 会话消息落本地库：模型失败也保留问题，重启后能接着看。
   ipcMain.handle('companion:chat-ask', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const service = await getChatService();
+    const question = String(input?.question ?? '');
     let project = null;
     try {
       project = await resolveProject(String(input?.projectId ?? ''));
@@ -2380,7 +2440,30 @@ const registerIpc = () => {
       // 还没有项目时交给服务返回 no-project，而不是让 IPC 抛裸错误。
       project = null;
     }
-    return service.ask({
+    const sessionId = String(input?.sessionId ?? '').trim();
+    let session = null;
+    if (sessionId) {
+      session = requireChatSessions().getSession(sessionId);
+      // 会话绑定哪个项目就只读哪个项目，避免在 A 会话里问到 B 项目。
+      if (!project || project.id !== session.projectId) {
+        const items = (await api('/owner/v1/projects')).items ?? [];
+        project = items.find((item) => item.id === session.projectId) ?? null;
+      }
+    }
+    // 续聊上下文在写入本次问题之前取，避免把问句重复塞进历史。
+    const history = session ? requireChatSessions().historyForPrompt(session.id) : [];
+    const text = question.trim();
+    const willPersist = Boolean(
+      session && text && text.length <= (chatModule?.MAX_QUESTION ?? 1200)
+    );
+    if (willPersist) {
+      requireChatSessions().appendMessage({
+        sessionId: session.id,
+        role: 'user',
+        text
+      });
+    }
+    const result = await service.ask({
       project: project
         ? {
           id: project.id,
@@ -2388,9 +2471,25 @@ const registerIpc = () => {
           domain: project.primary_domain ?? project.primaryDomain ?? ''
         }
         : null,
-      question: String(input?.question ?? ''),
-      model: config.model || ''
+      question,
+      model: config.model || '',
+      sessionId: session?.id ?? '',
+      history
     });
+    if (willPersist) {
+      requireChatSessions().appendMessage({
+        sessionId: session.id,
+        role: 'assistant',
+        text: String(result?.answer ?? result?.advice ?? '这次没有结论。'),
+        status: result?.status === 'ok' ? 'ok' : 'error',
+        citations: result?.citations ?? []
+      });
+    }
+    return {
+      ...result,
+      sessionId: session?.id ?? '',
+      sessionTitle: session ? requireChatSessions().getSession(session.id).title : ''
+    };
   });
 
   ipcMain.handle('companion:queue-add', async (event, input) => {
@@ -3352,6 +3451,138 @@ async function boot() {
             path.join(screenshotDir, 'chat-probe.json'),
             JSON.stringify(chatProbe, null, 2)
           );
+          // 多会话验收：首次运行新建两个会话（分别绑定两个项目）、提一个问题并让问题落库；
+          // 第二次运行同一个 user-data-dir 时，同一段脚本只读回会话与历史，证明重启后仍在。
+          const chatSessionProbe = await panel.webContents.executeJavaScript(`
+            (async () => {
+              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+              const list = async () => (await window.companion.chat.sessions.list()).items ?? [];
+              const before = await list();
+              const view = await window.companion.snapshot();
+              const projects = view?.projects ?? [];
+              if (!before.length && projects.length) {
+                await window.companion.chat.sessions.create({ projectId: projects[0].id });
+                await window.companion.chat.sessions.create({
+                  projectId: (projects[1] ?? projects[0]).id,
+                  title: '重启后还在的会话'
+                });
+                document.querySelector('#modeBar button[data-mode="A"]')?.click();
+                await wait(400);
+                document.querySelector('#modeBar button[data-mode="C"]')?.click();
+                await wait(900);
+                const fresh = (await list()).find((s) => s.title === '新会话') ?? (await list())[0];
+                document.querySelector('[data-session-id="' + fresh.id + '"] .c-session-open')?.click();
+                await wait(500);
+                const input = document.querySelector('#cInput');
+                input.value = '这个项目为什么会卡住？';
+                document.querySelector('#cSend')?.click();
+                await wait(2200);
+                const listNode = document.querySelector('#cSessionList');
+                if (listNode) listNode.hidden = false;
+                document.querySelector('#cSessionsToggle')?.setAttribute('aria-expanded', 'true');
+                await wait(400);
+                return {
+                  hadSessions: false,
+                  projects: projects.map((p) => p.id),
+                  sessions: await list(),
+                  activeId: localStorage.getItem('owner-chat-session')
+                };
+              }
+              document.querySelector('#modeBar button[data-mode="C"]')?.click();
+              await wait(900);
+              const sessions = await list();
+              const activeId = localStorage.getItem('owner-chat-session');
+              const active = sessions.find((s) => s.id === activeId) ?? sessions[0];
+              const detail = active ? await window.companion.chat.sessions.get({ id: active.id }) : null;
+              const listNode = document.querySelector('#cSessionList');
+              if (listNode) listNode.hidden = false;
+              document.querySelector('#cSessionsToggle')?.setAttribute('aria-expanded', 'true');
+              await wait(400);
+              return {
+                hadSessions: true,
+                projects: projects.map((p) => p.id),
+                sessions,
+                activeId,
+                activeTitle: detail?.title ?? '',
+                messages: (detail?.messages ?? []).map((m) => ({
+                  role: m.role,
+                  status: m.status,
+                  text: String(m.text ?? '').slice(0, 120)
+                }))
+              };
+            })()
+          `);
+          fs.writeFileSync(
+            path.join(screenshotDir, 'chat-sessions-probe.json'),
+            JSON.stringify(chatSessionProbe, null, 2)
+          );
+          const sessionShot = chatSessionProbe?.hadSessions
+            ? 'panel-C-restored.png'
+            : 'panel-C-sessions.png';
+          let sessionImage = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, sessionShot), sessionImage.toPNG());
+
+          // 重命名：只在第一次运行（还没有改过名）时做，随后重开列表截图。
+          const renameProbe = await panel.webContents.executeJavaScript(`
+            (async () => {
+              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+              const items = (await window.companion.chat.sessions.list()).items ?? [];
+              const target = items.find((s) => s.title === '重启后还在的会话');
+              if (!target) return { renamed: false };
+              const renamed = await window.companion.chat.sessions.rename({
+                id: target.id,
+                title: '重启后还在的会话（已改名）'
+              });
+              document.querySelector('#modeBar button[data-mode="A"]')?.click();
+              await wait(400);
+              document.querySelector('#modeBar button[data-mode="C"]')?.click();
+              await wait(900);
+              const listNode = document.querySelector('#cSessionList');
+              if (listNode) listNode.hidden = false;
+              document.querySelector('#cSessionsToggle')?.setAttribute('aria-expanded', 'true');
+              await wait(500);
+              return { renamed: true, id: renamed.id, title: renamed.title };
+            })()
+          `);
+          fs.writeFileSync(
+            path.join(screenshotDir, 'chat-sessions-rename.json'),
+            JSON.stringify(renameProbe, null, 2)
+          );
+          if (renameProbe?.renamed) {
+            sessionImage = await panel.webContents.capturePage();
+            fs.writeFileSync(path.join(screenshotDir, 'panel-C-renamed.png'), sessionImage.toPNG());
+            // 切换验收：点开另一个项目的会话，截图后切回有历史的会话，保证重启截图仍能看到历史。
+            const activeId = String(chatSessionProbe?.activeId ?? '');
+            const switched = await panel.webContents.executeJavaScript(`
+              (async () => {
+                const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+                const row = [...document.querySelectorAll('.c-session-item')]
+                  .find((item) => !item.classList.contains('on'));
+                row?.querySelector('.c-session-open')?.click();
+                await wait(700);
+                return {
+                  title: document.querySelector('#cSessionTitle')?.textContent ?? '',
+                  messages: document.querySelectorAll('#cTranscript .c-msg').length
+                };
+              })()
+            `);
+            fs.writeFileSync(
+              path.join(screenshotDir, 'chat-sessions-switch.json'),
+              JSON.stringify(switched, null, 2)
+            );
+            sessionImage = await panel.webContents.capturePage();
+            fs.writeFileSync(path.join(screenshotDir, 'panel-C-switch.png'), sessionImage.toPNG());
+            if (activeId) {
+              await panel.webContents.executeJavaScript(`
+                (async () => {
+                  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+                  const row = document.querySelector('[data-session-id="${activeId}"]');
+                  row?.querySelector('.c-session-open')?.click();
+                  await wait(700);
+                })()
+              `);
+            }
+          }
           // 顺手记录按项目取数的结果，验证预重构没有破坏默认行为。
           const probe = [];
           for (const projectId of ['companion-demo', 'cultivation-agent']) {
