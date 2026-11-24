@@ -225,11 +225,15 @@ export class LessonDistiller {
         createdAt: this.clock()
       });
       // 同现象同作用域会命中已有经验：只追加证据、累加计数，不新增经验行。
-      // #56 起写入走 recordReproducedLesson：同一现象在第二个项目出现时合并进最早那条经验、
-      // 登记来源项目并打「已复现」标记，但绝不改 verificationStatus（升为已验证仍由人确认）。
-      const write = typeof this.personal.recordReproducedLesson === 'function'
-        ? this.personal.recordReproducedLesson.bind(this.personal)
-        : this.personal.recordLesson.bind(this.personal);
+      // #57 起写入优先走 recordLessonOrDispute：同现象同作用域但对策不同时另起一行、
+      // 两条都标争议等裁决，不让后来的对策被静默并进第一条。
+      // 同对策时它内部仍走 #56 的复现合并（登记来源项目、打「已复现」标记），
+      // 并且绝不改 verificationStatus（升为已验证仍由人确认）。
+      const write = typeof this.personal.recordLessonOrDispute === 'function'
+        ? this.personal.recordLessonOrDispute.bind(this.personal)
+        : typeof this.personal.recordReproducedLesson === 'function'
+          ? this.personal.recordReproducedLesson.bind(this.personal)
+          : this.personal.recordLesson.bind(this.personal);
       stored = write(lesson, {
         evidence: cited.map((item) => ({ ref: item.ref, recordId: record.id, kind: item.kind, excerpt: item.excerpt }))
       });
