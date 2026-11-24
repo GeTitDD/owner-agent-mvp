@@ -3,6 +3,9 @@
 //
 // 默认使用确定性 Sandbox fixture 与注入式 Harvest，不产生模型费用。
 // 加 --allow-model 才调用真实 Pi；真实运行证据写入 --root 下的 JSON/TSV。
+//
+// 注意（ADR-0007 / #62）：experience/v1 采集链已退役，采集入口现在会直接报「已退役」。
+// 本脚本保留供对照与最终代码审查决定去留；新链路见 src/knowledge-loop/lesson.mjs。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

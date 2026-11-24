@@ -1,8 +1,16 @@
-// Experience Collector：把 Owner Store 中已登记的 Run/Job 结果转成结构化经验。
+// Experience Collector（已退役）。
 //
-// 只读取持久化事实，不推断模型自报的成功；原始 prompt / 工具输出 / 密钥不进入记录。
+// ADR-0007 把「执行记录 / 经验 / 知识」拆成三层：一次执行的事实属于执行记录（owner store 的
+// 只读投影，不落表），可复用的教训才是经验（lesson/v1）。这里采集的 experience/v1 把两者
+// 混在一条记录里，属于旧链路；#62 起停止写入，旧表 knowledge_experiences 也在库初始化时退役。
+// 新链路请用 src/knowledge-loop/lesson.mjs 的 LessonDistiller 从执行记录提炼。
+//
+// 文件保留（不删除）供对照与最终代码审查决定去留；所有采集入口都会直接报「已退役」，
+// 不会静默写库，也不会因为 PersonalKnowledgeStore 不再有 addExperience 而抛 TypeError。
 import { normalizeExperience } from './contracts.mjs';
 import { requireId } from '../utils.mjs';
+
+const RETIRED = 'ExperienceCollector 已退役（ADR-0007 / #62）：请改用 LessonDistiller 从执行记录提炼 lesson/v1。';
 
 const text = (value, max = 1200) => String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, max);
 const TERMINAL_SANDBOX = new Set(['completed', 'failed', 'cancelled', 'rejected']);
@@ -38,8 +46,14 @@ export class ExperienceCollector {
     return this.store.getProject(projectId);
   }
 
+  /** 旧链路已退役：拒绝写入，避免调用方拿到半个结果或 TypeError。 */
+  retired() {
+    throw new Error(RETIRED);
+  }
+
   /** 从一次 Sandbox Run（含修复链）采集经验；重复采集返回已有记录。 */
   collectSandboxRun(runId) {
+    this.retired();
     requireId(runId, 'sandbox run id');
     const run = this.store.getSandboxRun(runId);
     if (!run) throw new Error('Sandbox run not found');
@@ -113,6 +127,7 @@ export class ExperienceCollector {
 
   /** 从 Job 采集失败/取消/拒绝经验；有 Sandbox 的 Job 应优先采集 Sandbox。 */
   collectJob(jobId) {
+    this.retired();
     const job = this.store.getJob(requireId(jobId, 'job id'));
     if (!job) throw new Error('Job not found');
     if (!TERMINAL_JOB.has(job.status)) {
@@ -171,6 +186,7 @@ export class ExperienceCollector {
 
   /** 从持久化 A/B eval run 采集“知识版执行”经验；用于第二项目验证证据。 */
   collectEvalRun(evalRunId) {
+    this.retired();
     const run = this.personal.getEvalRun(requireId(evalRunId, 'eval run id'));
     if (!run) throw new Error('Eval run not found');
     const project = this.projectFor(run.projectId);
@@ -222,6 +238,7 @@ export class ExperienceCollector {
 
   /** 批量采集：先 Sandbox，再没有 Sandbox 的 Job。 */
   collectProject(projectId, { limit = 50 } = {}) {
+    this.retired();
     const allRuns = this.store.listSandboxRuns({ projectId, limit });
     const runs = allRuns.filter((run) => TERMINAL_SANDBOX.has(run.status));
     const jobs = this.store.listJobs({ projectId, limit }).filter((job) => TERMINAL_JOB.has(job.status));

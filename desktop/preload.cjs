@@ -46,7 +46,6 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     browse: (input) => invoke('companion:knowledge-browse', input),
     review: (input) => invoke('companion:knowledge-review', input),
     tidy: (input) => invoke('companion:knowledge-tidy', input),
-    harvest: (input) => invoke('companion:knowledge-harvest', input),
     ask: (input) => invoke('companion:knowledge-ask', input),
     // 对话取经验：按项目再补域，只读；渲染与提示词不在这里改。
     lessons: (input) => invoke('companion:lesson-retrieve', input),

@@ -81,7 +81,6 @@ let skillCatalogModule = null;
 let skillCatalogCache = null;
 let knowledgeReviewModule = null;
 let lessonRetrievalModule = null;
-let harvestInFlight = false;
 let mascotModule = null;
 let githubModule = null;
 let githubPrModule = null;
@@ -111,7 +110,6 @@ const defaults = () => ({
   sandboxMode: 'auto',
   sandboxByProject: {},
   sandboxProjectDirByProject: {},
-  knowledgeAutoHarvest: false,
   panelPinned: false
 });
 let config = defaults();
@@ -247,13 +245,12 @@ async function startServices() {
   if (personalStore) {
     try {
       const { KnowledgeLoopRuntime } = await importEsm('../src/knowledge-loop/runtime.mjs');
+      // 旧的自动采集链已退役（ADR-0007 / #62）：Runtime 只保留 tick/status 形状，不再写库。
+      // 经验改为从执行记录按需提炼（LessonDistiller），因此这里不再传 allowHarvest。
       knowledgeRuntime = new KnowledgeLoopRuntime({
         ownerStore: store,
         personalStore,
-        model: config.model || '',
-        // 自动提炼会调用模型；默认关闭，只自动采集经验并显示待提炼队列。
-        allowHarvest: process.env.OWNER_KNOWLEDGE_AUTO_HARVEST === '1'
-          || config.knowledgeAutoHarvest === true
+        model: config.model || ''
       });
       knowledgeTimer = setInterval(() => {
         knowledgeRuntime.tick().catch((error) => {
@@ -669,15 +666,16 @@ const diagnosticsSnapshot = async () => {
 
 const knowledgeSnapshot = async (projectId = config.projectId) => {
   if (!personalStore) {
-    return { available: false, counts: {}, recentExperiences: [], pendingExperiences: [], candidates: [], auto: {} };
+    return { available: false, counts: {}, recentLessons: [], candidates: [], auto: {} };
   }
   knowledgeSummaryModule = knowledgeSummaryModule ?? await importEsm('../src/knowledge/summary.mjs');
   const summary = knowledgeSummaryModule.knowledgeSummaryFor({ personalStore, projectId });
   return {
     available: true,
     ...summary,
+    // 自动采集/自动提炼随旧链路退役（#62）；保留 last 只为让面板显示最近一次空 tick。
     auto: {
-      allowHarvest: Boolean(knowledgeRuntime?.allowHarvest),
+      retired: true,
       last: knowledgeRuntime?.last ?? null
     }
   };
@@ -710,44 +708,47 @@ const skillCatalogPayload = async ({ refresh = false } = {}) => {
 };
 
 const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) => {
-  if (!personalStore) return { answer: '知识库尚未建立；任务完成后会自动采集经验。', items: [], basis: [] };
+  if (!personalStore) return { answer: '知识库尚未建立；完成任务并提炼执行记录后会出现在这里。', items: [], basis: [] };
   const units = personalStore.list({ limit: 2000 });
-  const allExperiences = personalStore.listExperiences({ limit: 1000 });
-  const experiences = kind === 'project'
-    ? allExperiences.filter((row) => !projectId || row.projectId === projectId)
-    : allExperiences;
+  // 旧 experience/v1 已退役（#62）：问答只读三层沉淀的 lesson/v1。
+  const allLessons = personalStore.listLessons({ limit: 1000 });
+  // 跨项目合并后的经验只挂在最早项目下，第二个项目靠来源台账反查。
+  const inProject = (row) => !projectId || row.projectId === projectId
+    || (row.supportedByProjects ?? []).includes(projectId);
+  const lessons = kind === 'project' ? allLessons.filter(inProject) : allLessons;
   const item = (type, row, extra = {}) => ({
     type, id: row.id,
-    title: type === 'experience' ? row.observedProblem : row.title,
-    status: type === 'experience' ? row.observedOutcome?.status : row.verificationStatus,
-    layer: row.layer ?? null, revision: row.revision ?? null,
+    title: type === 'lesson' ? row.phenomenon : row.title,
+    status: type === 'lesson' ? (row.verificationStatus ?? 'inferred') : row.verificationStatus,
+    layer: type === 'lesson' ? (row.scope?.layer ?? row.layer ?? null) : (row.layer ?? null),
+    revision: row.revision ?? null,
     projectId: row.projectId ?? row.project_id ?? null,
     ...extra
   });
   if (kind === 'today') {
-    const recent = experiences.filter((row) => Date.now() - Date.parse(row.createdAt) < 24 * 60 * 60 * 1000);
+    const recent = lessons.filter((row) => Date.now() - Date.parse(row.lastMergedAt ?? row.createdAt) < 24 * 60 * 60 * 1000);
     const fresh = units.filter((row) => Date.now() - Date.parse(row.updatedAt) < 24 * 60 * 60 * 1000);
     return {
       answer: recent.length || fresh.length
-        ? `最近 24 小时采集了 ${recent.length} 条经验，知识库更新 ${fresh.length} 条。`
+        ? `最近 24 小时沉淀了 ${recent.length} 条经验，知识库更新 ${fresh.length} 条。`
         : '最近 24 小时没有新的经验或知识更新。',
-      items: [...recent.map((row) => item('experience', row)), ...fresh.map((row) => item('knowledge', row))],
-      basis: [...recent.map((row) => `experience:${row.id}`), ...fresh.map((row) => `knowledge:${row.id}`)]
+      items: [...recent.map((row) => item('lesson', row)), ...fresh.map((row) => item('knowledge', row))],
+      basis: [...recent.map((row) => `lesson:${row.id}`), ...fresh.map((row) => `knowledge:${row.id}`)]
     };
   }
   if (kind === 'similar') {
-    const latest = experiences[0]?.observedProblem;
+    const latest = lessons[0]?.phenomenon;
     const q = query || latest || '';
     const matched = personalStore.list({ q, limit: 10 });
-    const exp = experiences.filter((row) =>
-      `${row.observedProblem} ${row.actionSummary}`.toLowerCase().includes(q.toLowerCase())
+    const found = lessons.filter((row) =>
+      `${row.phenomenon} ${row.mechanism} ${row.countermeasure}`.toLowerCase().includes(q.toLowerCase())
     ).slice(0, 10);
     return {
       answer: q
-        ? `${query ? '' : `以最近经验“${latest}”为检索词；`}找到 ${matched.length} 条知识、${exp.length} 条相似经验。`
-        : '还没有可用于相似检索的历史问题。',
-      items: [...matched.map((row) => item('knowledge', row)), ...exp.map((row) => item('experience', row))],
-      basis: [...matched.map((row) => `knowledge:${row.id}`), ...exp.map((row) => `experience:${row.id}`)]
+        ? `${query ? '' : `以最近经验“${latest}”为检索词；`}找到 ${matched.length} 条知识、${found.length} 条相似经验。`
+        : '还没有可用于相似检索的历史经验。',
+      items: [...matched.map((row) => item('knowledge', row)), ...found.map((row) => item('lesson', row))],
+      basis: [...matched.map((row) => `knowledge:${row.id}`), ...found.map((row) => `lesson:${row.id}`)]
     };
   }
   if (kind === 'verified') {
@@ -775,12 +776,12 @@ const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) =>
       ? row.projectId === projectId
       : Boolean(domain) && row.domains.includes(domain)
   );
-  const projectExperiences = experiences.filter((row) => !projectId || row.projectId === projectId);
+  const projectLessons = lessons.filter(inProject);
   return {
-    answer: `${projectId || '当前项目'}：${projectExperiences.length} 条经验，${projectKnowledge.length} 条相关知识。`,
-    items: [...projectExperiences.slice(0, 10).map((row) => item('experience', row)),
+    answer: `${projectId || '当前项目'}：${projectLessons.length} 条经验，${projectKnowledge.length} 条相关知识。`,
+    items: [...projectLessons.slice(0, 10).map((row) => item('lesson', row)),
       ...projectKnowledge.slice(0, 10).map((row) => item('knowledge', row))],
-    basis: [...projectExperiences.map((row) => `experience:${row.id}`),
+    basis: [...projectLessons.map((row) => `lesson:${row.id}`),
       ...projectKnowledge.map((row) => `knowledge:${row.id}`)]
   };
 };
@@ -794,17 +795,12 @@ const knowledgeDetail = ({ id } = {}) => {
     const feedback = usages.map((usage) => personalStore.feedbackForUsage(usage.id)).filter(Boolean);
     return { kind: 'knowledge', item: unit, revisions, usages, feedback };
   }
-  const experience = personalStore.getExperience(id);
-  if (experience) {
-    const linked = experience.evidenceRefs
-      .filter((ref) => ref.startsWith('experience:'))
-      .map((ref) => personalStore.getExperience(ref.slice('experience:'.length)))
-      .filter(Boolean);
-    return { kind: 'experience', item: experience, linkedExperiences: linked };
-  }
+  // 旧 experience/v1 已退役（#62）：详情只认知识、经验（lesson）与候选。
+  const lesson = personalStore.getLesson(id);
+  if (lesson) return { kind: 'lesson', item: lesson, evidence: lesson.evidence ?? [] };
   const proposal = personalStore.proposal(id);
   if (proposal) return { kind: 'candidate', item: proposal };
-  throw new Error('未找到该知识或经验');
+  throw new Error('未找到该知识、经验或候选');
 };
 
   const loadGithub = async () => (githubModule ??= await importEsm('../src/github.mjs'));
@@ -2897,7 +2893,7 @@ const registerIpc = () => {
     return knowledgeSnapshot(String(input?.projectId ?? '') || config.projectId);
   });
 
-  // 显式人工动作：只对当前项目的待提炼经验调用 Harvest，产出 pending 候选。
+  // 整理项目知识：只做重复/需复核/冲突/未验证的只读扫描，不写库。
   ipcMain.handle('companion:knowledge-tidy', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const projectId = String(input?.projectId ?? '') || config.projectId;
@@ -2912,29 +2908,9 @@ const registerIpc = () => {
     return mod.knowledgeTidyFor({ personalStore, projectId });
   });
 
-  ipcMain.handle('companion:knowledge-harvest', async (event, input) => {
-    if (!fromCompanion(event)) throw new Error('Unauthorized');
-    if (!personalStore) throw new Error('知识库尚未初始化。');
-    if (harvestInFlight) throw new Error('正在提炼，请稍候。');
-    const projectId = String(input?.projectId ?? '') || config.projectId;
-    if (!projectId) throw new Error('先选择一个项目。');
-    const projects = (await api('/owner/v1/projects')).items ?? [];
-    const project = projects.find((item) => item.id === projectId);
-    const domainId = project?.primary_domain ?? project?.primaryDomain ?? 'software-engineering';
-    harvestInFlight = true;
-    try {
-      knowledgeSummaryModule = knowledgeSummaryModule ?? await importEsm('../src/knowledge/summary.mjs');
-      return await knowledgeSummaryModule.harvestProjectNow({
-        personalStore,
-        ownerStore: store,
-        model: config.model || '',
-        projectId,
-        domainId
-      });
-    } finally {
-      harvestInFlight = false;
-    }
-  });
+  // 旧的手动提炼（experience/v1 → 候选）已随旧经验表退役（ADR-0007 / #62）：
+  // 执行记录 → 经验（lesson）的提炼改由 on-demand.mjs 的 distillOnDemand 承担，
+  // 面板不再暴露这个入口，这里也不再保留一条读旧表的 IPC。
 
   // 知识模式浏览：只读一次本地 SQLite，按项目筛选后由视图模型分组返回。
   ipcMain.handle('companion:knowledge-browse', async (event, input) => {
@@ -3341,10 +3317,9 @@ const registerIpc = () => {
       }
     }
     if (typeof input?.knowledgeAutoHarvest === 'boolean') {
-      config.knowledgeAutoHarvest = input.knowledgeAutoHarvest;
-      knowledgeRuntime?.setAutoHarvest(input.knowledgeAutoHarvest, { model: config.model });
-    } else if (knowledgeRuntime && config.knowledgeAutoHarvest) {
-      knowledgeRuntime.setAutoHarvest(true, { model: config.model });
+      // 旧「自动提炼」设置已随旧链路退役（#62）：接受旧配置里带过来的字段但不做任何事，
+      // 免得旧客户端保存设置时报错；保存后这个键也不再写回。
+      delete config.knowledgeAutoHarvest;
     }
     saveConfig();
     serviceCache = { at: 0, value: null };

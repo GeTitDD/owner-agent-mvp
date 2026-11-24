@@ -72,7 +72,6 @@ const projectIdsOf = (value) => [...new Set((value ?? []).filter(Boolean))];
  * @param {object[]} [input.units] personal_units 行（进「知识」层）
  * @param {object[]} [input.proposals] personal_proposals 行（待审核候选，进「候选」层）
  * @param {object[]} [input.lessons] knowledge_lessons 行（lesson/v1，进「经验」层）
- * @param {object[]} [input.experiences] 旧 experience/v1 行，只用于把候选归属回项目，不进任何层
  * @param {number} [input.limit] 每层最多渲染多少条（计数仍按全量）
  * @returns {object} 供面板直接渲染的只读视图模型
  */
@@ -81,21 +80,16 @@ export function knowledgeBrowseView({
   units = [],
   proposals = [],
   lessons = [],
-  experiences = [],
   limit = DEFAULT_LIMIT
 } = {}) {
   const filterId = String(projectId ?? '');
   const cap = Math.max(1, Number.isSafeInteger(limit) ? limit : DEFAULT_LIMIT);
 
   // 候选被提炼出来时只带来源 id：先建索引，才能把候选归属回项目。
-  // 经验本身按 lesson 记录进「经验」层，旧的 experience/v1 行只当归属线索。
+  // 来源只认 lesson/v1（#60 起的新链路）；旧的 experience/v1 表已退役（#62），不再读取。
   const sourceProject = new Map();
   for (const row of lessons) {
     const ids = projectIdsOf([row.scope?.projectId ?? row.projectId ?? null]);
-    if (ids.length) sourceProject.set(row.id, ids[0]);
-  }
-  for (const row of experiences) {
-    const ids = projectIdsOf([row.projectId ?? row.project_id ?? null]);
     if (ids.length) sourceProject.set(row.id, ids[0]);
   }
 
@@ -105,7 +99,6 @@ export function knowledgeBrowseView({
       const payload = row.payload ?? {};
       const ids = projectIdsOf([
         payload.projectId ?? null,
-        ...(row.meta?.sourceExperienceIds ?? []).map((id) => sourceProject.get(id)),
         ...(row.meta?.sourceLessonIds ?? []).map((id) => sourceProject.get(id))
       ]);
       const layer = payload.layer ?? row.meta?.proposedLayer ?? 'project';
@@ -272,10 +265,8 @@ export function knowledgeBrowseFor({ personalStore, projectId = '', limit = DEFA
   const units = personalStore.list({ limit: 2000 });
   const proposals = personalStore.proposals('pending');
   const lessons = personalStore.listLessons({ limit: 1000 });
-  // 旧 experience/v1 行不再进任何层，只把候选的来源 id 归属回项目。
-  const experiences = personalStore.listExperiences({ limit: 1000 });
   return {
     available: true,
-    ...knowledgeBrowseView({ projectId, units, proposals, lessons, experiences, limit })
+    ...knowledgeBrowseView({ projectId, units, proposals, lessons, limit })
   };
 }

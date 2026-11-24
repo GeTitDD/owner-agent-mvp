@@ -8,8 +8,8 @@ import os from 'node:os';
 import { OwnerStore } from '../src/owner-store.mjs';
 import { PersonalKnowledgeStore } from '../src/personal-store.mjs';
 import { createDomainEngine } from '../src/engine.mjs';
-import { ExperienceCollector } from '../src/knowledge-loop/experience.mjs';
-import { KnowledgeHarvester } from '../src/knowledge-loop/harvest.mjs';
+// 旧的 `collect` / `experiences` / `harvest` 子命令随 experience/v1 一并退役（ADR-0007 / #62）：
+// 执行记录 → 经验（lesson）的按需提炼见 src/knowledge-loop/on-demand.mjs 与 lesson.mjs。
 import { KnowledgeReuse } from '../src/knowledge-loop/reuse.mjs';
 import { KnowledgeFeedback } from '../src/knowledge-loop/feedback.mjs';
 
@@ -42,63 +42,7 @@ function close({ owner, personal }) {
   personal?.close();
 }
 
-function requireProject(store) {
-  const projectId = read('--project');
-  if (!projectId) throw new Error('--project is required');
-  if (!store.getProject(projectId)) throw new Error(`Unknown project: ${projectId}`);
-  return projectId;
-}
-
 async function main() {
-  if (command === 'collect') {
-    const stores = open();
-    try {
-      const projectId = requireProject(stores.owner);
-      const collector = new ExperienceCollector(stores.owner, stores.personal);
-      const output = collector.collectProject(projectId, { limit: Number(read('--limit', '50')) || 50 });
-      const out = read('--out');
-      if (out) fs.writeFileSync(path.resolve(out), `${JSON.stringify(output, null, 2)}\n`, 'utf8');
-      json(output);
-    } finally { close(stores); }
-    return;
-  }
-  if (command === 'experiences') {
-    const stores = open();
-    try {
-      json(stores.personal.listExperiences({
-        projectId: read('--project'),
-        outcome: read('--outcome'),
-        limit: Number(read('--limit', '100')) || 100
-      }));
-    } finally { close(stores); }
-    return;
-  }
-  if (command === 'harvest') {
-    const stores = open();
-    try {
-      const experienceIds = all('--experience');
-      if (!experienceIds.length) throw new Error('At least one --experience is required');
-      const projectId = requireProject(stores.owner);
-      const harvester = new KnowledgeHarvester({
-        ownerStore: stores.owner,
-        personalStore: stores.personal,
-        model: read('--model', process.env.OWNER_MODEL || ''),
-        pstackDir: read('--pstack-dir', process.env.PSTACK_DIR || ''),
-        allowModel: args.includes('--allow-model')
-      });
-      const result = await harvester.harvest({
-        experienceIds,
-        projectId,
-        domainId: read('--domain', 'software-engineering'),
-        allowModel: args.includes('--allow-model'),
-        model: read('--model', process.env.OWNER_MODEL || '')
-      });
-      const out = read('--out');
-      if (out) fs.writeFileSync(path.resolve(out), `${JSON.stringify(result, null, 2)}\n`, 'utf8');
-      json(result);
-    } finally { close(stores); }
-    return;
-  }
   if (command === 'candidates') {
     const stores = open();
     try {
