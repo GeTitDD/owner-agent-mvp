@@ -35,26 +35,27 @@
 
     <section id="modeA" class="mode" hidden>
       <div class="a-wrap">
-        <div class="a-top">
-          <span id="aProject">项目</span>
-          <span id="aChip" class="a-chip" hidden></span>
-        </div>
-        <h2 id="aTitle">现在没有需要你决定的事</h2>
-        <p id="aDetail" class="a-detail"></p>
-        <div id="aCard" class="a-card" hidden>
-          <div class="a-kicker" id="aKicker">待你决定</div>
-          <div class="a-sum" id="aSummary"></div>
-        </div>
-        <button id="aPrimary" class="a-primary" type="button">去处理</button>
-        <button id="aSecondary" class="a-secondary" type="button">问问它</button>
-        <!-- 待办从知识模式挪回专注：知识只负责浏览，处理决定留在专注。 -->
-        <section id="needsSection" class="inbox-section a-pending" hidden>
+        <!-- 专注第一张卡：待办（知识模式只管浏览，处理决定留在这里）。
+             没有待办时卡片仍在，只留一句空状态，避免整页只剩详情。 -->
+        <section id="needsSection" class="inbox-section a-pending">
           <div class="inbox-head">
             <h3>待你决定</h3>
             <span id="pendingBadge" class="count">0</span>
           </div>
           <p id="needsHint" class="inbox-hint">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
           <div id="pendingList" class="pending-list"></div>
+        </section>
+
+        <!-- 专注第二张卡：所选项目的只读详情；项目选择只影响这张卡。 -->
+        <section id="focusDetail" class="focus-detail" hidden>
+          <div class="fd-head">
+            <div class="fd-head-text">
+              <span class="fd-title">项目详情</span>
+              <span id="fdHint" class="fd-hint"></span>
+            </div>
+            <div id="fdTabs" class="fd-tabs" role="tablist" aria-label="选择项目"></div>
+          </div>
+          <div id="fdBody" class="fd-body"></div>
         </section>
       </div>
     </section>
@@ -67,7 +68,7 @@
           <span id="kbTotal" class="count">0</span>
           <button id="kbRefresh" class="ghost small" type="button" title="重新读取本地知识库">刷新</button>
         </div>
-        <p class="kb-hint">候选、已验证知识与经验都来自本地 SQLite；这里只读浏览，点开条目看详情。</p>
+        <p class="kb-hint">候选、待验证/已验证知识与经验都来自本地 SQLite；候选可直接接受或拒绝，其余点开看详情。</p>
         <div id="kbFilters" class="kb-filters" role="group" aria-label="按项目筛选"></div>
         <div id="kbGroups" class="kb-groups" aria-live="polite"></div>
       </section>
@@ -355,6 +356,7 @@
 
   <div id="toast" class="toast" hidden></div>
   <script src="./composer-list.js"></script>
+  <script src="./focus-detail.cjs"></script>
   <script src="../node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="./panel.js"></script>
 </body>

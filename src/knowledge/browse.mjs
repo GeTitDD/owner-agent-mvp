@@ -1,8 +1,9 @@
-// 知识模式：只读浏览本地 SQLite 里的候选、已验证知识与经验。
+// 知识模式：只读浏览本地 SQLite 里的候选、待验证/已验证知识与经验。
 //
-// 这里只做组装，不写库、不审核候选（审核见 #43）。数据来源只有本地 SQLite
-// （personal_units / personal_proposals / knowledge_experiences），不读 owner.json
-// 里的项目知识，避免同屏出现两套不同步的内容（ADR-0002 / ADR-0006）。
+// 这里只做组装，不写库；候选审核见 review.mjs，#43 复用既有 reviewProposal。
+// 数据来源只有本地 SQLite（personal_units / personal_proposals /
+// knowledge_experiences），不读 owner.json 里的项目知识，避免同屏出现两套不同步
+// 的内容（ADR-0002 / ADR-0006）。
 
 const CANDIDATE_CONTRACT = 'knowledge-candidate/v1';
 const DEFAULT_LIMIT = 50;
@@ -16,6 +17,8 @@ const OUTCOME_LABELS = {
   unknown: '结果未知'
 };
 const SCOPE_LABELS = { project: '项目', domain: '领域共享', personal: '个人' };
+// 接受候选只会得到未验证知识；真正验证是下一步，所以单列一组，避免条目凭空消失。
+const STATUS_LABELS = { unverified: '待验证', needs_reverification: '待重新验证', disputed: '有争议' };
 
 /** 把任意文本压成一行，避免长经验内容把列表撑开。 */
 const oneLine = (value, max = 120) => String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, max);
@@ -74,6 +77,24 @@ export function knowledgeBrowseView({
     })
     .sort(newestFirst);
 
+  // 候选被接受后先落成未验证知识；这里单独成组，让审核结果在列表里看得见。
+  const pendingUnits = units
+    .filter((row) => row?.verificationStatus && row.verificationStatus !== 'verified')
+    .map((row) => {
+      const ids = row.scope === 'project' ? projectIdsOf([row.projectId]) : [];
+      const status = row.verificationStatus;
+      return {
+        id: row.id,
+        kind: 'pending',
+        title: oneLine(row.title, 200) || '未命名知识',
+        detail: `${STATUS_LABELS[status] ?? '待验证'} · ${SCOPE_LABELS[row.scope] ?? row.scope ?? '个人'} · ${row.layer ?? 'applied'} 层 · r${row.revision ?? 1}`,
+        projectIds: ids,
+        projectId: ids[0] ?? null,
+        at: row.updatedAt ?? row.updated_at ?? null
+      };
+    })
+    .sort(newestFirst);
+
   const verified = units
     .filter((row) => row?.verificationStatus === 'verified')
     .map((row) => {
@@ -109,12 +130,13 @@ export function knowledgeBrowseView({
   // 项目筛选：条目可能同时归属多个项目（候选由多条经验提炼而来），命中原样保留。
   const matches = (item) => !filterId || item.projectIds.includes(filterId);
   const visibleCandidates = candidates.filter(matches);
+  const visiblePending = pendingUnits.filter(matches);
   const visibleVerified = verified.filter(matches);
   const visibleExperiences = experienceItems.filter(matches);
 
-  // 项目筛选下拉的数据同样只来自这三组条目，不引入 owner.json 的项目表。
+  // 项目筛选下拉的数据同样只来自这些组条目，不引入 owner.json 的项目表。
   const projectCounts = new Map();
-  for (const item of [...candidates, ...verified, ...experienceItems]) {
+  for (const item of [...candidates, ...pendingUnits, ...verified, ...experienceItems]) {
     for (const id of item.projectIds) projectCounts.set(id, (projectCounts.get(id) ?? 0) + 1);
   }
   const projects = [...projectCounts.entries()]
@@ -137,6 +159,10 @@ export function knowledgeBrowseView({
       filterId ? '这个项目还没有待审核候选。' : '还没有待审核候选；提炼经验后会先进入候选。'
     ),
     makeGroup(
+      'pending', '待验证知识', visiblePending,
+      filterId ? '这个项目还没有待验证知识。' : '还没有待验证知识；接受候选后会先进入这里。'
+    ),
+    makeGroup(
       'verified', '已验证知识', visibleVerified,
       filterId ? '这个项目还没有已验证知识。' : '还没有已验证知识；候选确认并附证据后才算已验证。'
     ),
@@ -148,17 +174,19 @@ export function knowledgeBrowseView({
 
   const totals = {
     candidates: visibleCandidates.length,
+    pending: visiblePending.length,
     verified: visibleVerified.length,
     experiences: visibleExperiences.length
   };
-  totals.all = totals.candidates + totals.verified + totals.experiences;
+  totals.all = totals.candidates + totals.pending + totals.verified + totals.experiences;
   // overall 是筛选前的总量：「全部」筛选按钮用它显示回到全部后能看到多少条。
   const overall = {
     candidates: candidates.length,
+    pending: pendingUnits.length,
     verified: verified.length,
     experiences: experienceItems.length
   };
-  overall.all = overall.candidates + overall.verified + overall.experiences;
+  overall.all = overall.candidates + overall.pending + overall.verified + overall.experiences;
 
   // 全空时给出「为什么空」，而不是留一片空白列表。
   let empty = null;
@@ -167,12 +195,12 @@ export function knowledgeBrowseView({
       ? {
           kind: 'no-project-data',
           title: '这个项目还没有知识条目',
-          detail: '候选、已验证知识和经验都会记录所属项目；切回「全部」还能看到其他项目和共享知识。'
+          detail: '候选、待验证知识、已验证知识和经验都会记录所属项目；切回「全部」还能看到其他项目和共享知识。'
         }
       : {
           kind: 'no-data',
           title: '本地知识库还没有内容',
-          detail: '经验来自完成并验证过的任务；提炼经验会产出候选，确认候选后才成为已验证知识。'
+          detail: '经验来自完成并验证过的任务；提炼经验会产出候选，确认候选后先进入待验证知识。'
         };
   }
 
@@ -189,12 +217,16 @@ export function knowledgeBrowseFor({ personalStore, projectId = '', limit = DEFA
       available: false,
       filter: { projectId: String(projectId ?? '') },
       projects: [],
-      totals: { candidates: 0, verified: 0, experiences: 0, all: 0 },
-      overall: { candidates: 0, verified: 0, experiences: 0, all: 0 },
+      totals: { candidates: 0, pending: 0, verified: 0, experiences: 0, all: 0 },
+      overall: { candidates: 0, pending: 0, verified: 0, experiences: 0, all: 0 },
       groups: [
         {
           key: 'candidates', label: '候选', count: 0, shown: 0, truncated: false, items: [],
           emptyHint: '知识库未初始化，暂时读不到候选。'
+        },
+        {
+          key: 'pending', label: '待验证知识', count: 0, shown: 0, truncated: false, items: [],
+          emptyHint: '知识库未初始化，暂时读不到待验证知识。'
         },
         {
           key: 'verified', label: '已验证知识', count: 0, shown: 0, truncated: false, items: [],
