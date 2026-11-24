@@ -1,4 +1,5 @@
-// 知识模式候选审核：复用既有 reviewProposal，接受后进入待验证组。
+// 知识模式候选审核：复用既有 reviewProposal。
+// 接受候选后条目从「候选」层进入「知识」层，状态是条目上的「待验证」徽章，不是另一个分组。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PersonalKnowledgeStore } from '../src/personal-store.mjs';
@@ -28,19 +29,19 @@ const addCandidate = (store, title = '候选知识') => store.submitProposal({
 const browse = (store) => knowledgeBrowseView({
   units: store.list(),
   proposals: store.proposals('pending'),
-  experiences: store.listExperiences()
+  lessons: store.listLessons()
 });
 
 const groupOf = (view, key) => view.groups.find((group) => group.key === key);
 
-test('接受候选后从候选组移到待验证知识组', () => {
+test('接受候选后从候选层移到知识层，并带上待验证徽章', () => {
   const store = new PersonalKnowledgeStore(':memory:');
   try {
     const proposal = addCandidate(store);
     const before = browse(store);
     assert.equal(before.totals.candidates, 1);
-    assert.equal(before.totals.pending, 0);
-    assert.equal(before.totals.verified, 0);
+    assert.equal(before.totals.knowledge, 0);
+    assert.equal(before.totals.lessons, 0);
 
     const result = knowledgeReviewFor({
       personalStore: store, id: proposal.id, decision: 'approved'
@@ -51,17 +52,21 @@ test('接受候选后从候选组移到待验证知识组', () => {
 
     const after = browse(store);
     assert.equal(after.totals.candidates, 0);
-    assert.equal(after.totals.pending, 1);
-    assert.equal(after.totals.verified, 0);
-    // 接受不等于已验证：条目留在待验证组，等工作台附证据后再晋升。
-    assert.deepEqual(groupOf(after, 'pending').items.map((item) => item.id), [result.appliedId]);
-    assert.equal(groupOf(after, 'verified').items.length, 0);
+    assert.equal(after.totals.knowledge, 1);
+    // 接受不等于已验证：条目留在知识层，靠「待验证」徽章区分，等工作台附证据后再晋升。
+    const items = groupOf(after, 'knowledge').items;
+    assert.deepEqual(items.map((item) => item.id), [result.appliedId]);
+    assert.equal(items[0].status, 'unverified');
+    assert.equal(items[0].badge, '待验证');
+    assert.equal(groupOf(after, 'lessons').items.length, 0);
+    // 候选层被清空，经验层本来就没有内容，只有知识层有这一条。
+    assert.deepEqual(after.emptyLayers, ['candidates', 'lessons']);
   } finally {
     store.close();
   }
 });
 
-test('拒绝候选后条目离开候选组，不写入知识', () => {
+test('拒绝候选后条目离开候选层，不写入知识', () => {
   const store = new PersonalKnowledgeStore(':memory:');
   try {
     const proposal = addCandidate(store);
@@ -74,8 +79,9 @@ test('拒绝候选后条目离开候选组，不写入知识', () => {
 
     const after = browse(store);
     assert.equal(after.totals.candidates, 0);
-    assert.equal(after.totals.pending, 0);
+    assert.equal(after.totals.knowledge, 0);
     assert.equal(store.list().length, 0);
+    assert.deepEqual(after.emptyLayers, ['candidates', 'lessons', 'knowledge']);
   } finally {
     store.close();
   }
@@ -103,7 +109,7 @@ test('目标知识已被改过时失败，候选保持原状态', () => {
     });
     assert.equal(result.ok, false);
     assert.match(result.reason, /已经被改过/u);
-    // 失败不吞候选：仍待审核，列表条目数不变。
+    // 失败不吞候选：仍待审核，候选层条数不变。
     assert.equal(store.proposal(proposal.id).status, 'pending');
     assert.equal(browse(store).totals.candidates, before.totals.candidates);
     assert.equal(store.list().length, 1);
