@@ -8,14 +8,16 @@
     error: '遇到异常'
   };
   let view = null;
-  let panelMode = 'B';
+  let panelMode = 'knowledge';
   let refreshing = false;
   let refreshPending = false;
   let composerBusy = false;
   let toastTimer = null;
-  // 内存里的项目选择：不落配置、重启即忘。空字符串＝还没选，视图默认第一个，
-  // 但交办必须用户显式选过才放行。
-  let selectedProjectId = '';
+  // 两个互不影响的显式状态（ADR-0006：显示 A 不等于改 B）：
+  // - 视图项目：详情卡/概览看哪个项目；空＝看第一个，刷新不记忆。
+  // - 交办目标：只能由「交办到 …」菜单设置；空＝未选，发送被拦。
+  let viewProjectId = '';
+  let handoffProjectId = '';
 
   const toast = (text, ms = 2600) => {
     const node = $('toast');
@@ -87,7 +89,7 @@
     // 没有项目时自动展开工作区，否则添加项目的入口会被折叠在下面。
     if (!hasProjects && $('workspaceToggle')) $('workspaceToggle').open = true;
     $('setup').hidden = hasProjects;
-    $('composeSection').hidden = !hasProjects || panelMode !== 'A';
+    $('composeSection').hidden = !hasProjects || panelMode !== 'focus';
     $('submitTask').disabled = composerBusy || !hasProjects;
     $('queueSection').hidden = !hasProjects;
     if (!hasProjects) renderServiceGrid($('setupServices'), view?.services);
@@ -169,8 +171,10 @@
 
   const renderProjects = () => {
     const projects = view?.projects ?? [];
-    const selected = view?.config?.projectId ?? projects[0]?.id ?? '';
-    // 交办按钮上的项目名跟选择同步（选择只存在内存里，不进配置）。
+    // 高亮跟随视图项目（没选就是第一个），与交办目标无关。
+    const selected = window.OwnerPanelSelection?.viewProject(projects, viewProjectId)?.id
+      ?? projects[0]?.id ?? '';
+    // 交办按钮上的项目名跟显式交办目标同步（选择只存在内存里，不进配置）。
     renderComposerTarget();
 
     // 顶部按来源主机分组：组头是主机，组内是项目（最近进展 + 时间）。
@@ -234,7 +238,7 @@
           progress.dataset.tone = project.progressTone ?? 'muted';
           main.append(top, progress);
           row.append(dot, main);
-          row.onclick = () => { void selectProject(project.id); };
+          row.onclick = () => { void selectViewProject(project.id); };
           wrapper.append(row);
           if (project.github) {
             const gh = el('button', 'project-gh', project.github.available ? 'GH' : 'GH?');
@@ -1953,28 +1957,19 @@
     const pending = view?.pending ?? [];
     if (pending.length === 0) return;
 
-    // 按项目分组；只有一个项目时退化成普通列表，不显示多余的分组标题。
-    const groups = new Map();
-    for (const item of pending) {
-      const key = String(item.projectId || '');
-      if (!groups.has(key)) {
-        groups.set(key, { name: item.projectName || key || '未命名项目', items: [] });
-      }
-      groups.get(key).items.push(item);
-    }
-
-    if (groups.size === 1) {
-      for (const group of groups.values()) {
+    // 分组与首组展开是纯函数（pending-groups.cjs）；首组 = 第一条待办所属项目。
+    const model = window.OwnerPendingGroups?.groupPending(pending);
+    if (!model) return;
+    if (model.single) {
+      for (const group of model.groups) {
         for (const item of group.items) list.append(pendingCard(item));
       }
       return;
     }
 
-    let first = true;
-    for (const group of groups.values()) {
+    for (const group of model.groups) {
       const details = el('details', 'pending-group');
-      details.open = first;
-      first = false;
+      details.open = group.open;
       const summary = el('summary', 'pending-group-head');
       summary.append(el('span', 'pending-group-name', group.name));
       summary.append(el('span', 'pending-group-count', `${group.items.length} 件`));
@@ -2156,16 +2151,21 @@
     if (refreshing) { refreshPending = true; return; }
     refreshing = true;
     try {
-      // 把内存里的选择传给快照；没选时主进程默认第一个项目（不读配置里的旧值）。
-      view = await window.companion.snapshot({ projectId: selectedProjectId });
-      // 选中的项目被删掉后清空选择，回到「视图默认第一个、交办仍需重选」。
-      if (selectedProjectId && !(view?.projects ?? []).some((item) => item.id === selectedProjectId)) {
-        selectedProjectId = '';
+      // 只把「视图项目」传给快照；交办目标不参与取数，也不读配置里的旧值。
+      view = await window.companion.snapshot({ projectId: viewProjectId });
+      const projects = view?.projects ?? [];
+      // 视图项目被删：回到默认第一个；交办目标被删：回到未选（发送需要重选）。
+      if (viewProjectId && !window.OwnerPanelSelection?.findProject(projects, viewProjectId)) {
+        viewProjectId = '';
+      }
+      if (handoffProjectId && !window.OwnerPanelSelection?.findProject(projects, handoffProjectId)) {
+        handoffProjectId = '';
+        renderComposerTarget();
       }
       if (view?.knowledge?.projectId) knowledgeCache.set(view.knowledge.projectId, view.knowledge);
       // 知识数量变了就重读一次浏览列表，避免用户在别处提炼/确认后看到旧列表。
       const knowledgeSignature = JSON.stringify(view?.knowledge?.counts ?? {});
-      if (panelMode === 'B' && knowledgeBrowseData && knowledgeSignature !== knowledgeBrowseSignature) {
+      if (panelMode === 'knowledge' && knowledgeBrowseData && knowledgeSignature !== knowledgeBrowseSignature) {
         void loadKnowledgeBrowse();
       }
       knowledgeBrowseSignature = knowledgeSignature;
@@ -2182,8 +2182,8 @@
       renderPending();
       renderRunning();
       renderResult();
-      if (panelMode === 'A') renderModeA();
-      if (panelMode === 'C') renderChatCards();
+      if (panelMode === 'focus') renderFocusMode();
+      if (panelMode === 'chat') renderChatCards();
     } catch (error) {
       $('stateDot').className = 'state-dot error';
       $('stateText').textContent = '连接异常';
@@ -2277,17 +2277,21 @@
   };
 
   // ---- 交办目标：显式选择，不写回配置 ----
-  const composerProjects = () => (view?.projects ?? []);
-  // 只有显式选过且项目还在，才算有可发送的目标；否则返回 null 由发送处拦下。
-  const submitTarget = () => window.OwnerPanelSelection
-    ?.submitProject(composerProjects(), selectedProjectId) ?? null;
+  const handoffProjects = () => (view?.projects ?? []);
+  /**
+   * 交办目标：唯一解析处。不同入口只是传入不同的显式项目 id——
+   * 专注输入框传 handoffProjectId，对话传会话绑定的 projectId。
+   * 没选、项目已删都返回 null，调用方必须就地拦下，不回退第一个。
+   */
+  const handoffTarget = (projectId = handoffProjectId) => window.OwnerPanelSelection
+    ?.submitProject(handoffProjects(), projectId) ?? null;
 
   /** 画交办按钮：没选时明确写「未选项目」，不假装已经选了第一个。 */
   const renderComposerTarget = () => {
-    const button = $('composerProject');
-    const nameNode = $('composerProjectName');
+    const button = $('handoffTarget');
+    const nameNode = $('handoffTargetName');
     if (!button || !nameNode) return;
-    const target = submitTarget();
+    const target = handoffTarget();
     nameNode.textContent = window.OwnerPanelSelection?.targetLabel(target)
       ?? (target?.name || '未选项目');
     button.dataset.projectId = target?.id ?? '';
@@ -2297,21 +2301,21 @@
       : '先选择这次交办到哪个项目（选择不会写回配置）';
   };
 
-  const closeProjectMenu = () => {
-    const menu = $('composerProjectMenu');
+  const closeHandoffMenu = () => {
+    const menu = $('handoffTargetMenu');
     if (!menu) return;
     menu.hidden = true;
     menu.replaceChildren();
-    $('composerProject')?.setAttribute('aria-expanded', 'false');
+    $('handoffTarget')?.setAttribute('aria-expanded', 'false');
   };
 
   /** 展开项目菜单：列表来自快照，点哪条就把这条显式设成交办目标。 */
-  const openComposerProjectMenu = () => {
-    const menu = $('composerProjectMenu');
-    const button = $('composerProject');
+  const openHandoffMenu = () => {
+    const menu = $('handoffTargetMenu');
+    const button = $('handoffTarget');
     if (!menu || !button) return;
-    if (!menu.hidden) { closeProjectMenu(); return; }
-    const projects = composerProjects();
+    if (!menu.hidden) { closeHandoffMenu(); return; }
+    const projects = handoffProjects();
     menu.replaceChildren();
     if (!projects.length) {
       menu.append(el('p', 'composer-project-empty', '还没有项目；先到设置里添加一个。'));
@@ -2321,13 +2325,14 @@
       item.type = 'button';
       item.dataset.project = project.id;
       item.setAttribute('role', 'option');
-      const selected = project.id === selectedProjectId;
+      // 选中标记只看「交办目标」，与详情卡正在看哪个项目无关。
+      const selected = project.id === handoffProjectId;
       item.setAttribute('aria-selected', selected ? 'true' : 'false');
       item.classList.toggle('on', selected);
       if (project.pending > 0) {
         item.append(el('span', 'composer-project-count', String(project.pending)));
       }
-      item.onclick = () => { void selectProject(project.id); };
+      item.onclick = () => selectHandoffProject(project.id);
       menu.append(item);
     }
     menu.hidden = false;
@@ -2338,7 +2343,7 @@
     const text = String(rawText ?? '').trim();
     if (!text) { toast('先写点什么。'); return null; }
     // 交办必须显式选项目：没选就地拦下，不悄悄回退到第一个。
-    const target = submitTarget();
+    const target = handoffTarget();
     if (!target) {
       renderComposerTarget();
       toast('先选择这次要交办的项目。');
@@ -2393,16 +2398,16 @@
   };
 
   $('submitTask').onclick = () => { void sendMessage(taskInput.value); };
-  $('composerProject').onclick = (event) => {
+  $('handoffTarget').onclick = (event) => {
     event.stopPropagation();
-    openComposerProjectMenu();
+    openHandoffMenu();
   };
   // 点击菜单外部收起，避免浮层挡着输入框。
   document.addEventListener('click', (event) => {
-    const menu = $('composerProjectMenu');
+    const menu = $('handoffTargetMenu');
     if (!menu || menu.hidden) return;
-    if (menu.contains(event.target) || $('composerProject')?.contains(event.target)) return;
-    closeProjectMenu();
+    if (menu.contains(event.target) || $('handoffTarget')?.contains(event.target)) return;
+    closeHandoffMenu();
   });
 
   taskInput.addEventListener('input', () => {
@@ -2448,30 +2453,38 @@
   autoGrow();
 
   /**
-   * 选项目：只改内存里的选择，不写配置。
-   * 同一个选择同时决定专注卡看哪个项目、概览/任务链跟哪个项目、以及交办发到哪个项目。
+   * 切换视图项目：只影响详情卡/概览看哪个项目，不碰交办目标，也不写配置。
    */
-  const selectProject = async (projectId) => {
+  const selectViewProject = async (projectId) => {
     const id = String(projectId ?? '');
     if (!id) return;
-    closeProjectMenu();
-    if (id !== selectedProjectId) {
-      selectedProjectId = id;
-      // 换项目后旧结论不再适用，先清空再按新项目重新加载。
-      playbookCurrent = null;
-      playbookProjectId = id;
-      renderPlaybookResult();
-      lastAnswer = null;
-      renderAnswer(null);
-      // 详情卡缓存同样作废，避免把 A 的内容画在 B 名下。
-      focusDetail = null;
-      focusDetailAt = 0;
-      focusRenderedKey = '';
-      focusMoreOpen = false;
-    }
-    renderComposerTarget();
+    if (id === viewProjectId) return;
+    viewProjectId = id;
+    // 换项目后旧结论不再适用，先清空再按新项目重新加载。
+    playbookCurrent = null;
+    playbookProjectId = id;
+    renderPlaybookResult();
+    lastAnswer = null;
+    renderAnswer(null);
+    // 详情卡缓存同样作废，避免把 A 的内容画在 B 名下。
+    focusDetail = null;
+    focusDetailAt = 0;
+    focusRenderedKey = '';
+    focusMoreOpen = false;
     await refresh();
     void loadPlaybooks();
+  };
+
+  /**
+   * 设置交办目标：只影响「交办到 …」，不影响详情卡正在看的项目。
+   * 这是交办目标唯一的写入点；选择只存在内存里，不写 companion.json。
+   */
+  const selectHandoffProject = (projectId) => {
+    const id = String(projectId ?? '');
+    if (!id) return;
+    closeHandoffMenu();
+    handoffProjectId = id;
+    renderComposerTarget();
   };
 
   $('projectSearch').oninput = () => { renderProjects(); };
@@ -2803,13 +2816,13 @@
 
   // 详情卡的取数节奏：卡片内容变化慢，没必要跟着 2 秒轮询。
   const FOCUS_DETAIL_TTL = 15000;
-  // 入口跳转：知识去知识模式（B）的浏览页；补丁回专注的待办卡；
-  // 测试与运行在知识模式里折叠的工作区。目标找不到就退回该模式顶部。
+  // 入口跳转：知识去知识模式的浏览页；补丁回专注的待办卡；
+  // 测试与运行在专注模式折叠的工作区里。目标找不到就退回该模式顶部。
   const FOCUS_JUMP = {
-    knowledge: ['B', 'knowledgeBrowse'],
-    tests: ['B', 'runningSection'],
-    patches: ['A', 'needsSection'],
-    runs: ['B', 'runningSection']
+    knowledge: ['knowledge', 'knowledgeBrowse'],
+    tests: ['focus', 'runningSection'],
+    patches: ['focus', 'needsSection'],
+    runs: ['focus', 'runningSection']
   };
 
   // 这张卡自己的快照：只用来画详情，不参与全局 view、也不改配置。
@@ -2829,12 +2842,12 @@
 
   /** 当前展示的项目：没选过、或选中的项目没了，都回到第一个（只是展示默认）。 */
   const focusProject = () => window.OwnerPanelSelection
-    ? window.OwnerPanelSelection.viewProject(focusProjects(), selectedProjectId)
+    ? window.OwnerPanelSelection.viewProject(focusProjects(), viewProjectId)
     : focusProjects()[0] ?? null;
 
-  /** 点卡片里的项目标签：与全局选择同一个项目，不写回配置。 */
+  /** 点卡片里的项目标签：只切视图项目，绝不影响交办目标。 */
   const selectFocusProject = (projectId) => {
-    void selectProject(projectId);
+    void selectViewProject(projectId);
   };
 
   const loadFocusDetail = async () => {
@@ -2880,9 +2893,9 @@
     const [mode, sectionId] = target;
     setMode(mode);
     // 目标小节以后可能被并到别的模式里；找不到就退回该模式顶部，不留死跳转。
-    const node = $(sectionId) ?? $(`mode${mode}`);
+    const node = $(sectionId) ?? $(MODE_VIEW[mode]);
     if (!node) return;
-    // 只有目标在折叠的工作区里时才需要先展开，否则会把用户带到无关的区域。
+    // 目标在折叠的工作区里（测试 / 运行）时先展开，否则会把用户带到折叠的标题上。
     const workspace = $('workspaceToggle');
     if (workspace && workspace.contains(node)) workspace.open = true;
     window.setTimeout(() => node.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
@@ -2968,6 +2981,7 @@
     for (const entry of entries) {
       const row = el('button', 'fd-entry');
       row.type = 'button';
+      row.dataset.entry = entry.key;
       row.title = `跳到${entry.label}${entry.note ? ` · ${entry.note}` : ''}`;
       row.append(el('span', 'fd-entry-label', entry.label));
       row.append(el('span', 'fd-entry-count', String(entry.count)));
@@ -3065,8 +3079,8 @@
     const project = focusProject();
     const model = window.OwnerFocusDetail?.buildFocusDetail({
       projects: focusProjects(),
-      // 用快照解析出的项目（没选时就是第一个）；选中状态与概览、交办保持一致。
-      selectedId: view?.config?.projectId ?? '',
+      // 详情只看「视图项目」；交办目标存在别的变量里，两者互不影响。
+      selectedId: viewProjectId,
       detail: focusDetail,
       playbook: focusPlaybook,
       github: project ? githubActivityCache.get(project.id) ?? null : null
@@ -3315,7 +3329,10 @@
         return;
       }
       renderKnowledgeBrowse();
-      $('knowledgeBrowse').dataset.renderMs = String(Math.round(performance.now() - started));
+      const elapsed = Math.round(performance.now() - started);
+      // #42 AC4：一屏知识列表要在 1 秒内渲染完。超时留下痕迹，e2e 直接读这两个属性。
+      $('knowledgeBrowse').dataset.renderMs = String(elapsed);
+      $('knowledgeBrowse').dataset.renderBudget = elapsed <= 1000 ? 'ok' : 'over';
     } catch (error) {
       if (token !== knowledgeBrowseToken) return;
       knowledgeBrowseData = null;
@@ -3374,7 +3391,12 @@
         const summary = el('summary', 'skill-summary');
         summary.append(el('span', 'skill-name', item.name));
         summary.append(el('span', 'skill-source', item.sourceLabel));
-        if (item.missing) summary.append(el('span', 'skill-badge-missing', '缺失'));
+        // playbook 本来就没有 skill 目录（面板按钮直接生成），如实标注，不当成缺失报警。
+        if (item.playbookOnly) {
+          summary.append(el('span', 'skill-badge-playbook', 'playbook · 无 skill 目录'));
+        } else if (item.missing) {
+          summary.append(el('span', 'skill-badge-missing', '缺失'));
+        }
         row.append(summary);
         const detail = el('div', 'skill-detail');
         const rows = el('dl', 'detail-rows');
@@ -3384,8 +3406,16 @@
         };
         addRow('来源',
           item.origin && item.origin !== item.sourceLabel ? `${item.sourceLabel} · ${item.origin}` : item.sourceLabel);
-        addRow('路径', item.path || '（没有可指向的路径）', 'skill-path');
-        addRow('描述', item.description || (item.missing ? '（技能缺失，没有描述）' : '（SKILL.md 没有写描述）'), 'skill-desc');
+        addRow('路径',
+          item.playbookOnly
+            ? '（playbook · 无 skill 目录）'
+            : (item.path || '（没有可指向的路径）'),
+          'skill-path');
+        addRow('描述',
+          item.description || (item.playbookOnly
+            ? '由面板按钮直接生成，不读 SKILL.md。'
+            : (item.missing ? '（技能缺失，没有描述）' : '（SKILL.md 没有写描述）')),
+          'skill-desc');
         detail.append(rows);
         if (item.missing) detail.append(el('p', 'skill-missing-reason', `缺失原因：${item.reason}`));
         row.append(detail);
@@ -3420,17 +3450,17 @@
     }
   };
 
-  // ---- 三种视图模式：专注（A） / 知识（B） / 对话（C） ----
+  // ---- 三种视图模式：专注 / 知识 / 对话（与 ADR-0006 同名，不用再猜 A/B/C） ----
 
-  const MODE_IDS = { A: 'modeA', B: 'modeB', C: 'modeC' };
+  const MODE_VIEW = { focus: 'modeA', knowledge: 'modeB', chat: 'modeC' };
 
   const setMode = (next, { persist = true } = {}) => {
-    const mode = MODE_IDS[next] ? next : 'B';
+    const mode = MODE_VIEW[next] ? next : 'knowledge';
     panelMode = mode;
     if (persist) {
       try { localStorage.setItem('panelMode', mode); } catch { /* ignore */ }
     }
-    for (const [key, id] of Object.entries(MODE_IDS)) {
+    for (const [key, id] of Object.entries(MODE_VIEW)) {
       const node = $(id);
       if (node) node.hidden = key !== mode;
     }
@@ -3439,14 +3469,14 @@
     }
     const hasProjects = (view?.projects?.length ?? 0) > 0;
     // 交办输入框只属于专注；对话模式用自己的输入，知识模式只读。
-    $('composeSection').hidden = !hasProjects || mode !== 'A';
-    if (mode === 'A') renderModeA();
-    if (mode === 'B') {
+    $('composeSection').hidden = !hasProjects || mode !== 'focus';
+    if (mode === 'focus') renderFocusMode();
+    if (mode === 'knowledge') {
       void loadKnowledgeBrowse();
       // 主进程缓存一分钟；这里每次进入知识模式都读一次，顺便把上一次扫描结果带回来。
       void loadSkillCatalog();
     }
-    if (mode === 'C') {
+    if (mode === 'chat') {
       // 会话列表来自本地库：切换到对话模式时恢复上次会话。
       void ensureChatSession();
       renderChatCards();
@@ -3454,9 +3484,9 @@
     }
   };
 
-  // 专注页两张卡：第一张待办（列表由 renderPending 画），第二张所选项目的只读详情。
-  // 旧的「单一下一步」首卡已被待办卡取代，这里不再重建。
-  const renderModeA = () => {
+  // 专注页两张卡：第一张待办（列表由 renderPending 画），第二张所选项目的只读详情；
+  // 详情之后是默认折叠的工作区（项目 / 图谱 / 想法 / 知识 / Playbook）。
+  const renderFocusMode = () => {
     renderFocusDetail();
   };
 
@@ -3480,9 +3510,7 @@
   const activeChatSession = () =>
     chatSessions.find((item) => item.id === activeChatSessionId) ?? null;
 
-  /** 交办目标：只认这次会话显式绑定的项目；没绑定或项目已删就返回 null（不是回退第一个）。 */
-  const chatHandoffTarget = () =>
-    window.OwnerChatHandoff?.targetOf(view?.projects ?? [], activeChatSession()) ?? null;
+  /** 对话的交办目标 = 会话显式绑定项目的交办目标；没绑定或项目已删时为 null。 */
 
   /**
    * 画「交办」开关：默认关闭；打开时把目标项目与「这次发送会建任务」写在输入框旁。
@@ -3492,7 +3520,7 @@
     const button = $('cHandoff');
     if (!button) return;
     const api = window.OwnerChatHandoff;
-    const target = chatHandoffTarget();
+    const target = handoffTarget(activeChatSession()?.projectId);
     button.setAttribute('aria-pressed', chatHandoffArmed ? 'true' : 'false');
     button.title = chatHandoffArmed
       ? '这次发送会生成一条待批准任务（走审批）；发送后开关自动关闭'
@@ -3672,13 +3700,19 @@
       toast('先添加一个项目：会话必须绑定项目。', 5000);
       return;
     }
+    // ADR-0006：新建会话必须多一次显式选择。默认空选项，不做静默预选。
     const select = el('select');
+    const placeholder = el('option', undefined, '请选择项目');
+    placeholder.value = '';
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    select.append(placeholder);
     for (const project of projects) {
       const option = el('option', undefined, project.name || project.id);
       option.value = project.id;
       select.append(option);
     }
-    select.value = view?.config?.projectId || projects[0].id;
+    select.value = '';
     const title = el('input');
     title.maxLength = 60;
     title.placeholder = '留空则用第一个问题自动命名';
@@ -3691,7 +3725,11 @@
     const cancel = el('button', 'ghost', '取消');
     cancel.onclick = closeModal;
     const create = el('button', 'primary', '新建会话');
+    // 没选项目就不能创建：按钮的禁用状态只由这一个显式选择决定。
+    create.disabled = true;
+    select.onchange = () => { create.disabled = !select.value; };
     create.onclick = async () => {
+      if (!select.value) return;
       create.disabled = true;
       try {
         const session = await window.companion.chat.sessions.create({
@@ -3716,7 +3754,8 @@
       }
     };
     openModal('新建会话', [projectField, titleField, note], [cancel, create]);
-    title.focus();
+    // 焦点落在项目选择上：先选项目，再（可选）填标题。
+    select.focus();
   };
 
   const openRenameChatSession = (session) => {
@@ -3855,7 +3894,7 @@
    * 这里既不新建任务类型，也不绕过批准——只是把「要不要建任务」的决定权从模型挪到人手上。
    */
   const handoffChat = async (session, text) => {
-    const target = chatHandoffTarget();
+    const target = handoffTarget(session?.projectId);
     if (!target) {
       // 沿用 #41：没选项目就拦下，不静默落到第一个项目。
       renderChatHandoff();
@@ -3866,11 +3905,15 @@
     $('cSend').disabled = true;
     $('cInput').value = '';
     chatAppend('me', text);
+    // 交办与普通提问一样落会话库：先存问题，重启后至少能看见自己问过什么。
+    const persist = (role, body, status = 'ok') =>
+      window.companion.chat.sessions.append({ id: session.id, role, text: body, status });
     const thinking = el('div', 'c-msg bot',
       `正在交办到 ${target.name || target.id}：先只读分析，再生成待批准任务…`);
-    $('cTranscript').append(thinking);
-    $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
     try {
+      await persist('user', text);
+      $('cTranscript').append(thinking);
+      $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
       // captureIdea: false —— 交办是明确的动作，不该再被当成一条「想法」重复收集。
       const result = await window.companion.submit({
         text,
@@ -3879,28 +3922,38 @@
       });
       thinking.remove();
       const kind = window.OwnerChatHandoff?.resultKind(result) ?? 'error';
+      let reply = '';
+      let status = 'ok';
       if (kind === 'task') {
-        chatAppend('bot',
-          `已生成待批准任务「${result.intent || text.slice(0, 40)}」（${result.jobId}）。\n`
+        reply = `已生成待批准任务「${result.intent || text.slice(0, 40)}」（${result.jobId}）。\n`
           + '它在「专注」的待办里等你批准，批准之前不会改动任何文件；'
-          + '交办记录留在待办里，不占这段会话。');
+          + '这次交办和结果都保存在本会话里，重启后仍能看到。';
         toast('已生成待批准任务；到专注页待办里批准后才会动手', 6000);
         // 立刻刷新快照，专注页待办能马上看到这条任务，而不是等下一次轮询。
         await refresh();
       } else if (kind === 'answer') {
-        chatAppend('bot',
-          `这次分诊判断不需要改文件，只回答、没有生成任务：\n${result?.summary || '（没有结论）'}`);
+        reply = `这次分诊判断不需要改文件，只回答、没有生成任务：\n${result?.summary || '（没有结论）'}`;
       } else {
-        chatAppend('bot',
-          `交办没跑通，没有生成任务：${result?.advice || result?.summary || '请检查模型配置后重试。'}`,
-          { status: 'error' });
+        reply = `交办没跑通，没有生成任务：${result?.advice || result?.summary || '请检查模型配置后重试。'}`;
+        status = 'error';
+      }
+      chatAppend('bot', reply, { status });
+      try {
+        await persist('assistant', reply, status);
+      } catch (error) {
+        toast(`会话记录写入失败：${String(error?.message ?? error)}`, 6000);
       }
       await loadChatSessions();
     } catch (error) {
       thinking.remove();
       // 失败时把内容放回输入框，别让人重写。
       if (!$('cInput').value.trim()) $('cInput').value = text;
-      chatAppend('bot', `交办失败，没有生成任务：${String(error?.message ?? error)}`, { status: 'error' });
+      const reply = `交办失败，没有生成任务：${String(error?.message ?? error)}`;
+      chatAppend('bot', reply, { status: 'error' });
+      // 答不上模型时也要把「失败」写进去，避免历史里只剩一条孤零零的提问。
+      try {
+        await persist('assistant', reply, 'error');
+      } catch { /* 存储不可用时已经在正文里说明失败原因 */ }
     } finally {
       chatBusy = false;
       $('cSend').disabled = false;
@@ -3977,7 +4030,7 @@
   $('cHandoff').onclick = () => {
     chatHandoffArmed = !chatHandoffArmed;
     renderChatHandoff();
-    if (chatHandoffArmed && !chatHandoffTarget()) {
+    if (chatHandoffArmed && !handoffTarget(activeChatSession()?.projectId)) {
       toast('这个会话还没绑定可用项目；先新建会话并选项目。', 5000);
     }
     $('cInput').focus();
@@ -3994,8 +4047,8 @@
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       // 交办项目菜单打开时，Esc 只收起菜单，别把整个面板一起藏掉。
-      const menu = $('composerProjectMenu');
-      if (menu && !menu.hidden) { closeProjectMenu(); return; }
+      const menu = $('handoffTargetMenu');
+      if (menu && !menu.hidden) { closeHandoffMenu(); return; }
       if (!$('modal').hidden) closeModal();
       else if (!$('settings').hidden) $('settings').hidden = true;
       else window.companion.hidePanel();
@@ -4003,7 +4056,7 @@
   });
 
   void refresh().then(() => {
-    try { setMode(localStorage.getItem('panelMode') || 'B', { persist: false }); } catch { setMode('B', { persist: false }); }
+    try { setMode(localStorage.getItem('panelMode') || 'knowledge', { persist: false }); } catch { setMode('knowledge', { persist: false }); }
     void loadPlaybooks();
   });
   window.setInterval(refresh, 2000);

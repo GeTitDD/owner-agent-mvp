@@ -51,7 +51,8 @@ test('视图模型按来源分组、统计缺失，缺失排在最前', () => {
   assert.equal(domain.missing, 1);
   assert.equal(pstack.count, 1);
   assert.equal(plugin.missing, 1);
-  assert.deepEqual(view.totals, { all: 4, missing: 2, present: 2, domain: 2, pstack: 1, plugin: 1 });
+  assert.deepEqual(view.totals,
+    { all: 4, missing: 2, playbookOnly: 0, present: 2, domain: 2, pstack: 1, plugin: 1 });
   assert.equal(view.empty, null);
   assert.equal(view.scannedAt, '2026-11-24T00:00:00.000Z');
 });
@@ -166,6 +167,29 @@ test('pstack 扫描：目录解析不到时按已知 id 全部标缺失', () => 
   assert.equal(items.every((item) => item.missing), true);
   assert.match(items[0].reason, /PSTACK_DIR/u);
   assert.equal(items[0].sourceLabel, 'pstack');
+});
+
+test('P1-7 图谱 playbook 没有 skill 目录：标 playbookOnly，不计入缺失', () => {
+  const items = scanPstackSkills({
+    skillsDir: '',
+    expectedIds: [
+      { id: 'how', playbookLabel: '结构走读' },
+      { id: 'diagram-control', playbookLabel: '控制流', noSkillDir: true }
+    ]
+  });
+  const byId = Object.fromEntries(items.map((entry) => [entry.id, entry]));
+  // 真正的 skill 缺目录仍然报警。
+  assert.equal(byId['pstack:how'].missing, true);
+  // playbook 是设计如此：不是缺失，也不产生「缺失原因」。
+  assert.equal(byId['pstack:diagram-control'].missing, false);
+  assert.equal(byId['pstack:diagram-control'].playbookOnly, true);
+  assert.equal(byId['pstack:diagram-control'].reason, '');
+  assert.match(byId['pstack:diagram-control'].name, /控制流/u);
+  const view = skillCatalogView({ items });
+  assert.equal(view.totals.missing, 1);
+  // 展开详情时能告诉用户「没有目录是正常的」，而不是缺失原因。
+  assert.equal(view.groups.find((group) => group.key === 'pstack').items
+    .find((entry) => entry.playbookOnly).playbookOnly, true);
 });
 
 test('skillCatalogFor 合并三处来源；某处坏掉不影响其他两组', (t) => {

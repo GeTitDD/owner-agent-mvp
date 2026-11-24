@@ -1585,6 +1585,12 @@ pre.diff, pre.logs {
   background: rgba(196, 84, 40, .12); color: #a2461f;
   font-size: 10px; line-height: 16px; white-space: nowrap;
 }
+/* playbook 没有 skill 目录是设计如此：中性标注，不用缺失的告警色。 */
+.skill-badge-playbook {
+  padding: 0 6px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--muted);
+  font-size: 10px; line-height: 16px; white-space: nowrap;
+}
 .skill-item.is-missing .skill-name { color: var(--muted); }
 .skill-detail { padding: 4px 6px 8px 18px; }
 /* 路径可以按分隔符断开，描述必须按词换行，否则英文会被切得很难读。 */

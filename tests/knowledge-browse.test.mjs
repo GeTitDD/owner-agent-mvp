@@ -163,12 +163,46 @@ test('从个人知识库读出的分组数据与筛选一致', () => {
     assert.equal(other.totals.all, 0);
     assert.equal(other.overall.all, 4);
     assert.equal(other.empty.kind, 'no-project-data');
-
-    const missing = knowledgeBrowseFor({ personalStore: null });
-    assert.equal(missing.available, false);
-    assert.equal(missing.empty.kind, 'unavailable');
-    assert.equal(missing.overall.all, 0);
   } finally {
     store.close();
   }
 });
+
+test('P1-3 知识库不可用时也走同一份分组定义（四组、同一顺序）', () => {
+  const missing = knowledgeBrowseFor({ personalStore: null });
+  assert.deepEqual(missing.groups.map((group) => group.key),
+    ['candidates', 'pending', 'verified', 'experiences']);
+  assert.deepEqual(missing.groups.map((group) => group.label),
+    ['候选', '待验证知识', '已验证知识', '经验']);
+  for (const group of missing.groups) {
+    assert.equal(group.count, 0);
+    assert.match(group.emptyHint, /知识库未初始化/u);
+  }
+});
+
+test('#42 AC4 渲染预算：一屏知识数据 1 秒内组装完视图模型', () => {
+  const units = Array.from({ length: 1200 }, (_, index) => unit({
+    id: `u${String(index).padStart(4, '0')}`,
+    status: index % 5 === 0 ? 'unverified' : 'verified'
+  }));
+  const proposals = Array.from({ length: 300 }, (_, index) => ({
+    id: `c${index}`,
+    status: 'pending',
+    createdAt: '2026-11-24T00:00:00.000Z',
+    payload: { title: `candidate ${index}`, projectId: 'p1', layer: 'project' },
+    meta: { contract: 'knowledge-candidate/v1', confidence: 0.8 }
+  }));
+  const experiences = Array.from({ length: 800 }, (_, index) => ({
+    id: `e${index}`,
+    observedProblem: `problem ${index}`,
+    projectId: 'p1',
+    createdAt: '2026-11-24T00:00:00.000Z'
+  }));
+  const started = performance.now();
+  const view = knowledgeBrowseView({ units, proposals, experiences });
+  const elapsed = performance.now() - started;
+  assert.equal(view.groups.length, 4);
+  assert.equal(view.totals.all > 1500, true);
+  assert.ok(elapsed < 1000, `视图模型组装超过 1 秒：${Math.round(elapsed)}ms`);
+});
+

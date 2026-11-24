@@ -110,15 +110,19 @@ function readSkillFile(file, fallbackName = '') {
   }
 }
 
-const makeEntry = ({ key, id, name, skillPath, description, missing, reason, origin }) => ({
+const makeEntry = ({
+  key, id, name, skillPath, description, missing, reason, origin, playbookOnly = false
+}) => ({
   id,
   source: key,
   sourceLabel: sourceLabel(key),
   name: name || '未命名技能',
   path: skillPath || '',
   description: description || '',
-  missing: Boolean(missing),
-  reason: missing ? String(reason || '缺失') : '',
+  // playbook 类条目本来就没有 SKILL.md：不标 missing，避免被当成缺失技能报警。
+  missing: Boolean(missing) && !playbookOnly,
+  playbookOnly: Boolean(playbookOnly),
+  reason: missing && !playbookOnly ? String(reason || '缺失') : '',
   origin: origin || ''
 });
 
@@ -188,18 +192,45 @@ export function scanDomainSkills({ domainRoot } = {}) {
 }
 
 /**
- * pstack 技能：扫描外部 skills 目录里的子目录；目录解析不到时按已知 playbook id
- * 逐个标「缺失」，让来源仍然出现在列表里。
+ * pstack 技能：扫描外部 skills 目录里的子目录。
+ * expectedIds 可以是 id 字符串，也可以是 { id, playbookLabel, noSkillDir }：
+ * 图谱 playbook 由面板按钮直接生成，本来就没有 skill 目录，标成「playbook · 无 skill 目录」，
+ * 而不是当成缺失技能报警。目录解析不到时，真正的 skill 仍逐个标「缺失」。
  */
 export function scanPstackSkills({ skillsDir, expectedIds = [] } = {}) {
   const items = [];
-  const ids = [...new Set(expectedIds.filter((id) => typeof id === 'string' && id))];
+  const refs = [...new Map(expectedIds
+    .map((entry) => (typeof entry === 'string' ? { id: entry } : entry))
+    .filter((entry) => typeof entry?.id === 'string' && entry.id)
+    .map((entry) => [entry.id, entry])).values()];
+  const refOf = new Map(refs.map((ref) => [ref.id, ref]));
+
+  /** 没有 skill 目录的 playbook：如实标注，不计入缺失。 */
+  const playbookEntry = (ref) => makeEntry({
+    key: 'pstack',
+    id: `pstack:${ref.id}`,
+    name: ref.playbookLabel ? `${ref.playbookLabel}（playbook）` : ref.id,
+    skillPath: '',
+    description: '由面板按钮直接生成，不读 SKILL.md。',
+    playbookOnly: true,
+    origin: 'playbook'
+  });
+  /** 声明了 skill 但磁盘上没有：保持「缺失」提醒。 */
+  const missingEntry = (id, reason, skillPath = '') => makeEntry({
+    key: 'pstack',
+    id: `pstack:${id}`,
+    name: id,
+    skillPath,
+    missing: true,
+    reason,
+    origin: 'pstack'
+  });
+
   if (!exists(skillsDir)) {
-    for (const id of ids) {
-      items.push(makeEntry({
-        key: 'pstack', id: `pstack:${id}`, name: id, skillPath: '',
-        missing: true, reason: '未找到 pstack skills 目录；设置 PSTACK_DIR 后刷新', origin: 'pstack'
-      }));
+    for (const ref of refs) {
+      items.push(ref.noSkillDir
+        ? playbookEntry(ref)
+        : missingEntry(ref.id, '未找到 pstack skills 目录；设置 PSTACK_DIR 后刷新'));
     }
     return items;
   }
@@ -214,13 +245,11 @@ export function scanPstackSkills({ skillsDir, expectedIds = [] } = {}) {
     }));
   }
   // 面板按钮认识、磁盘上没有的 skill 也要列出来，否则用户看不出哪一颗缺了。
-  for (const id of ids) {
-    if (found.has(id)) continue;
-    items.push(makeEntry({
-      key: 'pstack', id: `pstack:${id}`, name: id,
-      skillPath: path.join(skillsDir, id, 'SKILL.md'),
-      missing: true, reason: 'SKILL.md 缺失', origin: 'pstack'
-    }));
+  for (const ref of refs) {
+    if (found.has(ref.id)) continue;
+    items.push(ref.noSkillDir
+      ? playbookEntry(ref)
+      : missingEntry(ref.id, 'SKILL.md 缺失', path.join(skillsDir, ref.id, 'SKILL.md')));
   }
   return items;
 }
@@ -299,9 +328,11 @@ export function skillCatalogView({ items = [], scannedAt = null, limit = DEFAULT
     };
   });
   const missing = items.filter((item) => item.missing).length;
+  const playbookOnly = items.filter((item) => item.playbookOnly).length;
   const totals = {
     all: items.length,
     missing,
+    playbookOnly,
     present: items.length - missing,
     domain: groups.find((group) => group.key === 'domain')?.count ?? 0,
     pstack: groups.find((group) => group.key === 'pstack')?.count ?? 0,

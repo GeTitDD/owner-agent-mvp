@@ -132,12 +132,19 @@ export function readLastMessage(session) {
 
 /**
  * 二次核对工具面：白名单之外出现任何工具、或缺 read，都直接失败。
- * 失败时顺便释放 SDK 会话，避免带着越权工具继续跑。
+ * 传入的可以是 SDK 会话（getActiveToolNames）或工厂返回的句柄（activeTools）；
+ * 失败时顺便释放会话，避免带着越权工具继续跑。
  */
 export function assertChatToolSurface(session, allowed = CHAT_TOOLS) {
-  const active = typeof session?.getActiveToolNames === 'function'
-    ? [...session.getActiveToolNames()]
-    : null;
+  let names = null;
+  try {
+    names = typeof session?.getActiveToolNames === 'function'
+      ? session.getActiveToolNames()
+      : (typeof session?.activeTools === 'function' ? session.activeTools() : null);
+  } catch {
+    names = null;
+  }
+  const active = Array.isArray(names) ? [...names] : null;
   const fail = (message) => {
     try { session?.dispose?.(); } catch { /* 释放失败也要抛出 */ }
     throw Object.assign(new Error(message), { category: 'readonly-violation' });
@@ -367,26 +374,9 @@ export class PiChatService {
       if (!session) {
         const created = await this.sessionFactory.create({ cwd: root, model: resolvedModel });
         let tools = null;
-        try {
-          // 二次核对：注入的工厂也要过同一道关，不能只靠工厂自己声明。
-          tools = typeof created?.activeTools === 'function' ? created.activeTools() : null;
-          if (!Array.isArray(tools)) {
-            throw Object.assign(new Error('chat-tools-unverified'), { category: 'readonly-violation' });
-          }
-          const unexpected = tools.filter((name) => !CHAT_TOOLS.includes(name));
-          if (unexpected.length) {
-            throw Object.assign(
-              new Error(`chat-tools-violation: ${unexpected.join(',')}`),
-              { category: 'readonly-violation' }
-            );
-          }
-          if (!tools.includes('read')) {
-            throw Object.assign(new Error('chat-tools-missing: read'), { category: 'readonly-violation' });
-          }
-        } catch (error) {
-          try { created?.dispose?.(); } catch { /* ignore */ }
-          throw error;
-        }
+        // 二次核对：注入的工厂也要过同一道关，不能只靠工厂自己声明。
+        // 校验失败时 assertChatToolSurface 自己会释放会话。
+        tools = assertChatToolSurface(created);
         session = created;
         freshSession = true;
         this.keep(key, session, tools);
