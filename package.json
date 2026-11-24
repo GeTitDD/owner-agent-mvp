@@ -16,6 +16,7 @@
     "demo:evolution": "node examples/evolution-demo.mjs",
     "demo:layered": "node examples/layered-demo.mjs",
     "workbench": "node bin/workbench.mjs",
+    "prototype:ux": "node scripts/prototype-server.mjs",
     "owner": "node bin/ownerctl.mjs",
     "knowledge": "node bin/knowledgectl.mjs",
     "knowledge:demo": "node scripts/knowledge-loop/demo.mjs",

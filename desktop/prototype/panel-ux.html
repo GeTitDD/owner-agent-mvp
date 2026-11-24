@@ -1,0 +1,344 @@
+<!doctype html>
+<!--
+  原型：Owner Companion 客户端交互方案，三个结构性不同的变体。
+  用 ?variant=A|B|C 切换，底部浮条或左右方向键翻页。这是丢弃型代码，不是产品界面。
+  数据是写死的样例，不读数据库、不发请求。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE · 客户端交互方案</title>
+<style>
+  :root {
+    --stage-bg: #d9d6d0;
+    --ink: #1b1b1a;
+    --muted: #6b6a66;
+    --bar-bg: #16171a;
+    --bar-ink: #f2f2f0;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background:
+      radial-gradient(circle at 30% 20%, #e7e4de 0%, transparent 45%),
+      radial-gradient(circle at 70% 80%, #cfcbc4 0%, transparent 50%),
+      var(--stage-bg);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--ink);
+  }
+  .stage { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .proto-tag {
+    font: 600 10px/1 Consolas, monospace; letter-spacing: 1.6px;
+    color: #7a7772; text-transform: uppercase;
+  }
+  .frame {
+    width: 440px; height: 640px; border-radius: 18px; overflow: hidden;
+    background: #fff; box-shadow: 0 24px 60px rgba(0,0,0,.22), 0 2px 0 rgba(255,255,255,.6) inset;
+    display: flex; flex-direction: column;
+  }
+  .switcher {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 14px;
+    background: var(--bar-bg); color: var(--bar-ink);
+    padding: 8px 10px 8px 8px; border-radius: 999px;
+    box-shadow: 0 12px 30px rgba(0,0,0,.3);
+    font-size: 13px; user-select: none;
+  }
+  .switcher button {
+    all: unset; cursor: pointer; width: 28px; height: 28px; border-radius: 50%;
+    display: grid; place-items: center; color: #c9c9c6;
+  }
+  .switcher button:hover { background: #2a2b2f; color: #fff; }
+  .switcher .label { min-width: 190px; text-align: center; letter-spacing: .2px; }
+  .switcher .label b { font-weight: 700; }
+  .switcher .label span { color: #8b8b88; margin-left: 6px; }
+  .switcher .dots { display: flex; gap: 5px; padding-right: 4px; }
+  .switcher .dot { width: 6px; height: 6px; border-radius: 50%; background: #3a3b40; }
+  .switcher .dot.on { background: #f2f2f0; }
+
+  /* ---------- 变体 A：今日一条线（浅色、留白、单一主动作） ---------- */
+  .a { background: #fbfaf8; color: #1c1b19; display: flex; flex-direction: column; height: 100%; }
+  .a-top { padding: 18px 20px 0; display: flex; justify-content: space-between; align-items: baseline; }
+  .a-proj { font-size: 12px; letter-spacing: .4px; color: #8a877f; }
+  .a-state { font-size: 11px; color: #b4462f; background: #f6e6e1; padding: 3px 8px; border-radius: 999px; }
+  .a-title { padding: 10px 20px 0; font-size: 24px; line-height: 1.25; font-weight: 700; letter-spacing: -.3px; }
+  .a-sub { padding: 8px 20px 0; font-size: 13px; color: #6f6c65; line-height: 1.6; }
+  .a-card { margin: 18px 20px 0; background: #fff; border: 1px solid #e6e2da; border-radius: 14px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+  .a-card .kicker { font-size: 10.5px; letter-spacing: 1.2px; color: #a09c93; text-transform: uppercase; }
+  .a-card h2 { margin: 8px 0 6px; font-size: 16px; line-height: 1.4; }
+  .a-card p { margin: 0; font-size: 12.5px; color: #6f6c65; line-height: 1.6; }
+  .a-diff { margin-top: 12px; font: 11.5px/1.7 Consolas, monospace; background: #f6f4f0; border-radius: 8px; padding: 8px 10px; color: #4a4842; }
+  .a-diff .add { color: #2f6f4e; }
+  .a-diff .del { color: #a5432f; }
+  .a-primary { margin: 14px 20px 0; width: calc(100% - 40px); height: 46px; border: 0; border-radius: 12px; background: #1f5d43; color: #fff; font-size: 14.5px; font-weight: 600; cursor: pointer; }
+  .a-secondary { margin: 8px 20px 0; width: calc(100% - 40px); height: 40px; border: 1px solid #e2ded6; border-radius: 12px; background: #fff; color: #55524b; font-size: 13px; cursor: pointer; }
+  .a-feed { margin: 20px 20px 0; flex: 1; overflow: hidden; }
+  .a-feed .h { font-size: 11px; letter-spacing: .6px; color: #a09c93; margin-bottom: 10px; }
+  .a-row { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px dashed #ece8e0; }
+  .a-row .dot { width: 6px; height: 6px; border-radius: 50%; margin-top: 6px; background: #c9c4ba; flex: none; }
+  .a-row .dot.red { background: #b4462f; }
+  .a-row p { margin: 0; font-size: 12.5px; line-height: 1.55; color: #4a4842; }
+  .a-row span { color: #a09c93; font-size: 11px; margin-left: 6px; }
+  .a-foot { padding: 12px 20px 18px; display: flex; gap: 16px; border-top: 1px solid #efece6; }
+  .a-foot button { all: unset; font-size: 12px; color: #6f6c65; cursor: pointer; }
+  .a-foot button:hover { color: #1c1b19; }
+
+  /* ---------- 变体 B：收件箱（深色、密集、逐条处理） ---------- */
+  .b { background: #0f1115; color: #e9e9e7; display: flex; flex-direction: column; height: 100%; }
+  .b-head { padding: 18px 18px 12px; border-bottom: 1px solid #1e2127; }
+  .b-head .row { display: flex; align-items: baseline; justify-content: space-between; }
+  .b-head h1 { margin: 0; font-size: 18px; letter-spacing: -.2px; }
+  .b-head .count { font: 12px/1 Consolas, monospace; color: #9aa0aa; }
+  .b-chips { display: flex; gap: 6px; margin-top: 12px; }
+  .b-chip { font-size: 11px; padding: 4px 9px; border-radius: 999px; border: 1px solid #262a31; color: #9aa0aa; cursor: pointer; }
+  .b-chip.on { background: #f0b45a; border-color: #f0b45a; color: #1a1206; font-weight: 600; }
+  .b-list { flex: 1; overflow: hidden; }
+  .b-item { padding: 13px 18px; border-bottom: 1px solid #171a1f; display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+  .b-item .type { font: 9.5px/1 Consolas, monospace; letter-spacing: 1.1px; color: #7d838d; text-transform: uppercase; }
+  .b-item .type.approve { color: #f0b45a; }
+  .b-item .type.risk { color: #e56a54; }
+  .b-item h3 { margin: 6px 0 4px; font-size: 13.5px; font-weight: 600; line-height: 1.4; }
+  .b-item .meta { font: 10.5px/1.4 Consolas, monospace; color: #6f757f; }
+  .b-actions { display: flex; flex-direction: column; gap: 6px; align-self: center; }
+  .b-act { all: unset; cursor: pointer; font-size: 11px; padding: 5px 10px; border-radius: 6px; text-align: center; }
+  .b-act.primary { background: #f0b45a; color: #1a1206; font-weight: 600; }
+  .b-act.ghost { border: 1px solid #2a2e36; color: #9aa0aa; }
+  .b-foot { padding: 10px 14px 14px; border-top: 1px solid #1e2127; }
+  .b-input { display: flex; align-items: center; gap: 8px; background: #15181d; border: 1px solid #262a31; border-radius: 10px; padding: 9px 12px; }
+  .b-input input { all: unset; flex: 1; font-size: 12.5px; color: #e9e9e7; }
+  .b-input input::placeholder { color: #5f646d; }
+  .b-input .kbd { font: 10px/1 Consolas, monospace; color: #6f757f; border: 1px solid #2a2e36; border-radius: 4px; padding: 2px 5px; }
+  .b-empty { padding: 60px 24px; text-align: center; color: #6f757f; font-size: 12.5px; line-height: 1.8; }
+
+  /* ---------- 变体 C：对话即界面（暖灰、消息流、内联卡片） ---------- */
+  .c { background: #f3f1ec; color: #22211e; display: flex; flex-direction: column; height: 100%; }
+  .c-head { padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e4e0d7; }
+  .c-head .who { font-size: 12.5px; font-weight: 600; }
+  .c-head .who span { font-weight: 400; color: #8b877e; margin-left: 6px; }
+  .c-head .ghost { font-size: 11px; color: #8b877e; cursor: pointer; }
+  .c-body { flex: 1; padding: 16px; overflow: hidden; display: flex; flex-direction: column; gap: 12px; }
+  .c-me { align-self: flex-end; max-width: 78%; background: #2f5d4a; color: #fff; padding: 9px 13px; border-radius: 14px 14px 4px 14px; font-size: 13px; line-height: 1.55; }
+  .c-bot { align-self: flex-start; max-width: 86%; background: #fff; border: 1px solid #e6e2d9; padding: 12px 14px; border-radius: 14px 14px 14px 4px; font-size: 13px; line-height: 1.65; }
+  .c-bot .time { display: block; font: 10px/1 Consolas, monospace; color: #a8a399; margin-bottom: 7px; }
+  .c-bot ul { margin: 8px 0 0; padding-left: 16px; }
+  .c-bot li { margin: 3px 0; color: #4c4a44; }
+  .c-approve { border: 1px solid #e6e2d9; border-radius: 10px; padding: 10px; margin-top: 10px; background: #faf9f6; }
+  .c-approve .t { font-size: 12.5px; font-weight: 600; }
+  .c-approve .d { font: 10.5px/1.6 Consolas, monospace; color: #7b776d; margin-top: 4px; }
+  .c-approve .btnrow { display: flex; gap: 8px; margin-top: 10px; }
+  .c-approve button { all: unset; cursor: pointer; font-size: 12px; padding: 7px 12px; border-radius: 8px; text-align: center; }
+  .c-approve .yes { background: #2f5d4a; color: #fff; font-weight: 600; }
+  .c-approve .no { border: 1px solid #ddd8cd; color: #6d695f; }
+  .c-chips { display: flex; gap: 6px; padding: 0 16px 10px; flex-wrap: wrap; }
+  .c-chip { font-size: 11.5px; padding: 6px 11px; border-radius: 999px; background: #fff; border: 1px solid #e2ddd2; color: #55524b; cursor: pointer; }
+  .c-input { margin: 0 14px 14px; display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid #e2ddd2; border-radius: 12px; padding: 10px 12px; }
+  .c-input input { all: unset; flex: 1; font-size: 13px; }
+  .c-input input::placeholder { color: #a8a399; }
+  .c-input .send { width: 26px; height: 26px; border-radius: 8px; background: #2f5d4a; color: #fff; display: grid; place-items: center; font-size: 13px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="proto-tag">PROTOTYPE · 丢弃型代码 · 不是产品界面</div>
+  <div class="frame" id="frame"></div>
+</div>
+
+<div class="switcher" id="switcher">
+  <button id="prev" title="上一个（←）">‹</button>
+  <div class="label" id="label"></div>
+  <div class="dots" id="dots"></div>
+  <button id="next" title="下一个（→）">›</button>
+</div>
+
+<script>
+const VARIANTS = {
+  A: { name: '今日一条线', render: renderA },
+  B: { name: '待办收件箱', render: renderB },
+  C: { name: '对话即界面', render: renderC },
+};
+
+const frame = document.getElementById('frame');
+const label = document.getElementById('label');
+const dots = document.getElementById('dots');
+const keys = Object.keys(VARIANTS);
+
+function currentVariant() {
+  const v = new URLSearchParams(location.search).get('variant');
+  return VARIANTS[v] ? v : 'A';
+}
+
+function paint() {
+  const key = currentVariant();
+  frame.innerHTML = VARIANTS[key].render();
+  label.innerHTML = `<b>${key}</b><span>${VARIANTS[key].name}</span>`;
+  dots.innerHTML = keys.map((k) => `<i class="dot ${k === key ? 'on' : ''}"></i>`).join('');
+}
+
+function go(step) {
+  const index = keys.indexOf(currentVariant());
+  const next = keys[(index + step + keys.length) % keys.length];
+  const url = new URL(location.href);
+  url.searchParams.set('variant', next);
+  history.replaceState(null, '', url);
+  paint();
+}
+
+document.getElementById('prev').onclick = () => go(-1);
+document.getElementById('next').onclick = () => go(1);
+window.addEventListener('keydown', (e) => {
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
+  if (e.key === 'ArrowLeft') go(-1);
+  if (e.key === 'ArrowRight') go(1);
+});
+window.addEventListener('popstate', paint);
+paint();
+
+/* ---------------- A ---------------- */
+function renderA() {
+  return `
+  <div class="a">
+    <div class="a-top">
+      <div class="a-proj">CULTIVATION-AGENT · MAIN</div>
+      <div class="a-state">停滞 42 天</div>
+    </div>
+    <div class="a-title">现在只差你点一下</div>
+    <div class="a-sub">这条补丁已经通过沙箱复测，等你确认后写入工作区。</div>
+
+    <div class="a-card">
+      <div class="kicker">待你审批 · 补丁</div>
+      <h2>修复 retry 退避上限</h2>
+      <p>沙箱复测通过（14 项，2.1s）。改动 1 个文件，+12 −4。</p>
+      <div class="a-diff">
+        <div class="del">- const delay = Math.min(30000, base * 2 ** n);</div>
+        <div class="add">+ const delay = Math.min(60000, base * 2 ** n);</div>
+      </div>
+    </div>
+
+    <button class="a-primary">查看并批准</button>
+    <button class="a-secondary">先放着，看别的</button>
+
+    <div class="a-feed">
+      <div class="h">今天</div>
+      <div class="a-row"><i class="dot red"></i><p>沙箱复测通过<span>09:12</span></p></div>
+      <div class="a-row"><i class="dot"></i><p>新增 2 条知识候选<span>08:40</span></p></div>
+      <div class="a-row"><i class="dot red"></i><p>主干领先本地 12 个提交<span>08:02</span></p></div>
+    </div>
+
+    <div class="a-foot">
+      <button>观察台</button><button>知识</button><button>图谱</button><button>设置</button>
+    </div>
+  </div>`;
+}
+
+/* ---------------- B ---------------- */
+function renderB() {
+  return `
+  <div class="b">
+    <div class="b-head">
+      <div class="row"><h1>待处理 4 件</h1><div class="count">17:42</div></div>
+      <div class="b-chips">
+        <div class="b-chip on">全部</div><div class="b-chip">审批 1</div>
+        <div class="b-chip">知识 2</div><div class="b-chip">风险 1</div>
+      </div>
+    </div>
+    <div class="b-list">
+      <div class="b-item">
+        <div>
+          <div class="type approve">APPROVE · PATCH</div>
+          <h3>修复 retry 退避上限</h3>
+          <div class="meta">1 file · +12 −4 · 沙箱通过</div>
+        </div>
+        <div class="b-actions">
+          <button class="b-act primary">批准</button>
+          <button class="b-act ghost">拒绝</button>
+        </div>
+      </div>
+      <div class="b-item">
+        <div>
+          <div class="type risk">RISK · STALE</div>
+          <h3>cultivation-agent 停滞 42 天</h3>
+          <div class="meta">main · 最后提交 10-13</div>
+        </div>
+        <div class="b-actions"><button class="b-act ghost">查看</button></div>
+      </div>
+      <div class="b-item">
+        <div>
+          <div class="type">KNOWLEDGE · CANDIDATE</div>
+          <h3>重试应放在队列层，而不是调用点</h3>
+          <div class="meta">来自 2 次失败复盘 · 未验证</div>
+        </div>
+        <div class="b-actions">
+          <button class="b-act primary">接受</button>
+          <button class="b-act ghost">拒绝</button>
+        </div>
+      </div>
+      <div class="b-item">
+        <div>
+          <div class="type">KNOWLEDGE · CANDIDATE</div>
+          <h3>跨项目共享前先确认环境版本</h3>
+          <div class="meta">来自 1 次修复 · 未验证</div>
+        </div>
+        <div class="b-actions">
+          <button class="b-act primary">接受</button>
+          <button class="b-act ghost">拒绝</button>
+        </div>
+      </div>
+    </div>
+    <div class="b-foot">
+      <div class="b-input">
+        <input placeholder="交办一句话…" />
+        <span class="kbd">↵</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ---------------- C ---------------- */
+function renderC() {
+  return `
+  <div class="c">
+    <div class="c-head">
+      <div class="who">Owner<span>观察员</span></div>
+      <div class="ghost">清空</div>
+    </div>
+    <div class="c-body">
+      <div class="c-me">cultivation-agent 现在什么情况？</div>
+      <div class="c-bot">
+        <span class="time">17:41</span>
+        停滞 42 天，落后主干 12 个提交。有三件事值得看：
+        <ul>
+          <li>一条补丁等你批准（沙箱已通过）</li>
+          <li>2 条知识候选未审</li>
+          <li>昨天有一次沙箱失败，已自动生成修复提案</li>
+        </ul>
+        <div class="c-approve">
+          <div class="t">修复 retry 退避上限</div>
+          <div class="d">src/retry.js · +12 −4 · 沙箱 14 项通过</div>
+          <div class="btnrow">
+            <button class="yes">批准并应用</button>
+            <button class="no">先看 diff</button>
+          </div>
+        </div>
+      </div>
+      <div class="c-me">先看 diff</div>
+      <div class="c-bot">
+        <span class="time">17:42</span>
+        改动只有一行：退避上限从 30s 提到 60s。已通过沙箱，不影响其他调用点。
+      </div>
+    </div>
+    <div class="c-chips">
+      <div class="c-chip">看观察台</div><div class="c-chip">审知识</div>
+      <div class="c-chip">跑测试</div><div class="c-chip">换项目</div>
+    </div>
+    <div class="c-input">
+      <input placeholder="说点什么，或直接交办…" />
+      <div class="send">↑</div>
+    </div>
+  </div>`;
+}
+</script>
+</body>
+</html>
