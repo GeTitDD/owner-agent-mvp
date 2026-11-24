@@ -1581,6 +1581,14 @@ const buildView = async (requestedProjectId = '') => {
     stage,
     activity,
     timeline,
+    // 专注卡片的四个入口只显示计数；这里给按项目过滤后的条数
+    // （受上面 limit=20 的取数窗口限制，超出部分不计入）。
+    counts: {
+      jobs: jobsInProject.length,
+      patches: patchesInProject.length,
+      tests: sandboxesInProject.length,
+      cycles: repairsInProject.length
+    },
     chain: chainView,
     playbook: activePlaybook
       ? {
