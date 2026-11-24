@@ -1895,7 +1895,75 @@
   //
   // 组装一律走 src/focus-ops.mjs 的 focusOpsView（由 focus-ops-host.mjs 挂到
   // window.OwnerFocusOps）：三段块、固定顺序、空态文案都在模型里，渲染层只画。
-  // #68 只接「待办」块；运行中与待提炼先传空数组，由 #70 / #71 再补数据。
+  // 运行中由 #70 接；#71 接待提炼：数据来自 #58 的既有 IPC，阈值判定仍只在
+  // src/knowledge-loop/on-demand.mjs，面板不重算。
+  //
+  // 提议攒得慢（要 ≥3 条未提炼执行记录），没必要跟 2 秒轮询：给一个取数窗口，
+  // 过期才再读一次；读失败保留上一次结果，不挡待办与运行中。
+  const OPS_PROPOSAL_TTL = 15000;
+  let opsProposals = [];
+  let opsProposalAt = 0;
+  let opsProposalLoading = false;
+
+  const loadOpsProposals = async () => {
+    if (opsProposalLoading) return;
+    if (Date.now() - opsProposalAt < OPS_PROPOSAL_TTL) return;
+    opsProposalLoading = true;
+    try {
+      // 操作区跨项目：要显式 allProjects 拿全部项目的提议（不带项目筛选）。
+      const data = await window.companion.knowledge.distillProposals({ allProjects: true });
+      opsProposals = Array.isArray(data?.proposals) ? data.proposals : [];
+    } catch {
+      // 提议只是提示：读不到就沿用上一次的结果。
+    } finally {
+      opsProposalLoading = false;
+      opsProposalAt = Date.now();
+      if (panelMode === 'focus') renderOps();
+    }
+  };
+
+  // 「去提炼」只跳转，不写库、不触发提炼：复用现有的模式切换与知识页刷新，
+  // 把知识页的项目筛选定位到这条提议的项目上。
+  const jumpToKnowledgeProposals = (projectId) => {
+    const id = String(projectId ?? '');
+    // 知识页的项目筛选就是「定位到项目」：先选中，再交给 setMode 触发的刷新画出来。
+    if (id) knowledgeBrowseProject = id;
+    setMode('knowledge');
+    const node = $('knowledgeBrowse') ?? $('modeB');
+    if (node) window.setTimeout(() => node.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
+  };
+
+  // 一条提议：项目 + 条数 + 「去提炼」。条数与文案来自模型，这里只补项目显示名。
+  const proposalRow = (item) => {
+    const row = el('div', 'proposal-card');
+    const body = el('div', 'proposal-text');
+    body.append(el('div', 'proposal-title',
+      `${projectLabel(item.projectId)} · 已积 ${item.count} 条未提炼`));
+    body.append(el('p', 'proposal-hint', '只提示，不会自动提炼。去知识页看看要不要提炼。'));
+    row.append(body);
+    const go = el('button', 'proposal-go', '去提炼');
+    go.type = 'button';
+    go.dataset.project = item.projectId;
+    go.onclick = () => jumpToKnowledgeProposals(item.projectId);
+    row.append(go);
+    return row;
+  };
+
+  // 待提炼块：每个达到阈值的项目一行；没有提议时整段消失，不留占位。
+  const renderOpsProposing = (block) => {
+    const section = $('proposeSection');
+    const list = $('proposeList');
+    if (!section || !list) return;
+    const items = block?.items ?? [];
+    section.hidden = items.length === 0;
+    list.replaceChildren();
+    if (!items.length) return;
+    $('opsProposeTitle').textContent = block.title;
+    $('proposeBadge').textContent = String(block.count);
+    $('proposeBadge').hidden = block.count === 0;
+    for (const item of items) list.append(proposalRow(item));
+  };
+
   const renderOps = () => {
     const zone = $('opsZone');
     const body = $('opsBody');
@@ -1908,7 +1976,7 @@
       projectId: viewProjectId,
       pending: view?.pending ?? [],
       executions: [],
-      proposals: []
+      proposals: opsProposals
     });
     // 三类块全空时压成一行：文案来自模型，卡片外框由 .ops-empty 去掉。
     zone.classList.toggle('ops-empty', model.empty);
@@ -1916,11 +1984,15 @@
     emptyLine.textContent = model.empty ? model.emptyText : '';
     body.hidden = model.empty;
     const pendingBlock = model.blocks.find((block) => block.key === 'pending');
-    if (!pendingBlock) return;
-    // 标题与计数也读模型：以后块里加内容时不会出现「标题写死、数字另算」。
-    $('opsPendingTitle').textContent = pendingBlock.title;
-    $('pendingBadge').textContent = String(pendingBlock.count);
-    $('pendingBadge').hidden = pendingBlock.count === 0;
+    if (pendingBlock) {
+      // 标题与计数也读模型：以后块里加内容时不会出现「标题写死、数字另算」。
+      $('opsPendingTitle').textContent = pendingBlock.title;
+      $('pendingBadge').textContent = String(pendingBlock.count);
+      $('pendingBadge').hidden = pendingBlock.count === 0;
+    }
+    renderOpsProposing(model.blocks.find((block) => block.key === 'proposing'));
+    // 数据过期时补读一次；只在专注页、且快照已到（要拿项目显示名）时取。
+    if (panelMode === 'focus' && view) void loadOpsProposals();
   };
 
   const renderActivity = () => {
@@ -3314,6 +3386,12 @@
     for (const project of data.projects ?? []) {
       filters.append(chip(project.id, projectLabel(project.id), project.count));
     }
+    // 从操作区「去提炼」跳进来的项目可能还没有任何知识条目（只有未提炼的执行记录）：
+    // 补一个 0 条的筛选按钮，否则「定位到项目」看起来像没生效。
+    if (knowledgeBrowseProject
+      && !(data.projects ?? []).some((project) => project.id === knowledgeBrowseProject)) {
+      filters.append(chip(knowledgeBrowseProject, projectLabel(knowledgeBrowseProject), 0));
+    }
 
     if (!data.available) {
       const empty = el('div', 'kb-empty');
@@ -3349,8 +3427,11 @@
       knowledgeProposals = Array.isArray(proposals?.proposals) ? proposals.proposals : [];
       knowledgeProposalThreshold = Number(proposals?.threshold ?? 0) || 0;
       knowledgeLessonCount = Array.isArray(lessons?.lessons) ? lessons.lessons.length : null;
-      // 所选项目在新数据里已经不存在（例如知识被清空）时退回「全部」。
-      if (knowledgeBrowseProject && !(data.projects ?? []).some((item) => item.id === knowledgeBrowseProject)) {
+      // 所选项目在新数据里已经不存在时才退回「全部」。项目还在、只是还没有
+      // 知识条目时保留筛选：从操作区「去提炼」跳过来时，那个项目很可能正是空的。
+      const projectExists = (data.projects ?? []).some((item) => item.id === knowledgeBrowseProject)
+        || (view?.projects ?? []).some((item) => item.id === knowledgeBrowseProject);
+      if (knowledgeBrowseProject && !projectExists) {
         knowledgeBrowseProject = '';
         void loadKnowledgeBrowse();
         return;

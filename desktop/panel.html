@@ -42,8 +42,8 @@
       <div class="a-wrap">
         <!-- 上半区 · 操作区：现在要你处理什么。
              内容由 src/focus-ops.mjs 的视图模型（focusOpsView）给出，这里只负责画；
-             三段块的顺序与空态文案都不在渲染里另写。本张票只接「待办」块，
-             运行中与待提炼由 #70 / #71 再接进来。 -->
+             三段块的顺序与空态文案都不在渲染里另写。当前已接「待办」与「待提炼」，
+             运行中由 #70 再接进来。 -->
         <section id="opsZone" class="focus-zone ops-zone">
           <div class="zone-head focus-zone-head ops-zone-head">
             <strong>操作区</strong>
@@ -61,6 +61,16 @@
               </div>
               <p id="needsHint" class="inbox-hint">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
               <div id="pendingList" class="pending-list"></div>
+            </section>
+            <!-- 待提炼块：某项目已积够阈值的未提炼执行记录，只提示、不自动提炼。
+                 阈值由 src/knowledge-loop/on-demand.mjs 判定；没有提议时整段 hidden。 -->
+            <section id="proposeSection" class="inbox-section a-proposing" hidden>
+              <div class="inbox-head">
+                <h3 id="opsProposeTitle">待提炼</h3>
+                <span id="proposeBadge" class="count">0</span>
+              </div>
+              <p id="proposeHint" class="inbox-hint">执行记录攒够了才会出现在这里；点「去提炼」去知识页决定，这里不会写库。</p>
+              <div id="proposeList" class="propose-list"></div>
             </section>
           </div>
         </section>
