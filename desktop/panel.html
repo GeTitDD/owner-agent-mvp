@@ -29,7 +29,7 @@
 
     <nav class="mode-bar" id="modeBar" aria-label="视图模式">
       <button type="button" data-mode="A">专注</button>
-      <button type="button" data-mode="B" class="on">待办</button>
+      <button type="button" data-mode="B" class="on">知识</button>
       <button type="button" data-mode="C">对话</button>
     </nav>
 
@@ -47,24 +47,29 @@
         </div>
         <button id="aPrimary" class="a-primary" type="button">去处理</button>
         <button id="aSecondary" class="a-secondary" type="button">问问它</button>
-        <div id="aFeed" class="a-feed"></div>
+        <!-- 待办从知识模式挪回专注：知识只负责浏览，处理决定留在专注。 -->
+        <section id="needsSection" class="inbox-section a-pending" hidden>
+          <div class="inbox-head">
+            <h3>待你决定</h3>
+            <span id="pendingBadge" class="count">0</span>
+          </div>
+          <p id="needsHint" class="inbox-hint">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
+          <div id="pendingList" class="pending-list"></div>
+        </section>
       </div>
     </section>
 
     <section id="modeB" class="mode">
     <div class="scroll">
-      <section id="needsSection" class="inbox-section">
-        <div class="inbox-head">
-          <h3>待你决定</h3>
-          <span id="pendingBadge" class="count">0</span>
+      <section id="knowledgeBrowse" class="knowledge-browse">
+        <div class="kb-head">
+          <h3>知识</h3>
+          <span id="kbTotal" class="count">0</span>
+          <button id="kbRefresh" class="ghost small" type="button" title="重新读取本地知识库">刷新</button>
         </div>
-        <p id="needsHint" class="inbox-hint">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
-        <div id="pendingList" class="pending-list"></div>
-        <div id="inboxEmpty" class="inbox-empty" hidden>
-          <div class="inbox-empty-title">现在没有需要你决定的事</div>
-          <div id="inboxNextText" class="inbox-empty-sub">可以展开工作区看看项目状态。</div>
-          <button id="inboxNextBtn" class="primary" type="button">看看项目</button>
-        </div>
+        <p class="kb-hint">候选、已验证知识与经验都来自本地 SQLite；这里只读浏览，点开条目看详情。</p>
+        <div id="kbFilters" class="kb-filters" role="group" aria-label="按项目筛选"></div>
+        <div id="kbGroups" class="kb-groups" aria-live="polite"></div>
       </section>
 
       <details class="workspace" id="workspaceToggle">
