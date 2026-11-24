@@ -92,6 +92,7 @@ let projectBriefModule = null;
 let nextActionModule = null;
 let knowledgeTidyModule = null;
 let diagramModule = null;
+let executionStatusModule = null;
 let ideaCaptureModule = null;
 let chatModule = null;
 let chatService = null;
@@ -966,6 +967,8 @@ const knowledgeDetail = ({ id } = {}) => {
   const loadGithubPr = async () => (githubPrModule ??= await importEsm('../src/github-pr.mjs'));
   const loadProjectBrief = async () => (projectBriefModule ??= await importEsm('../src/project-brief.mjs'));
   const loadNextAction = async () => (nextActionModule ??= await importEsm('../src/next-action.mjs'));
+  // 执行状态只有一份判定（src/execution-status.mjs）：跨项目「还在场内」的列表也从这里出。
+  const loadExecutionStatus = async () => (executionStatusModule ??= await importEsm('../src/execution-status.mjs'));
   const loadKnowledgeTidy = async () => (knowledgeTidyModule ??= await importEsm('../src/knowledge/tidy.mjs'));
   const loadDiagrams = async () => (diagramModule ??= await importEsm('../src/project-diagrams.mjs'));
   const projectHeadCache = new Map();
@@ -1385,6 +1388,17 @@ const buildView = async (requestedProjectId = '') => {
     sandboxes: allSandboxes,
     repairs: allRepairs
   }, projectNames);
+  // 跨项目的「还在场内」执行：view.chain 只装当前项目、每类最多一条
+  // （activeJob ?? jobsInProject[0]），回答不了「别的项目是不是还活着」。
+  // 这里从同一批 limit=20 的四张表摊平，终态与审批态由 execution-status.mjs 滤掉；
+  // 已知限制：超出最近 20 条的旧执行不会出现，只影响很忙的大项目。
+  const { listInFlightExecutions } = await loadExecutionStatus();
+  const executions = listInFlightExecutions({
+    jobs: allJobs,
+    patches: allPatches,
+    sandboxes: allSandboxes,
+    repairs: allRepairs
+  }, { projectNames });
   // 任务链只关联当前选中的项目，避免把不同项目的 Job/Patch/Run/Cycle 拼成假进度。
   const inProject = (item) => projectIdOf(item) === activeProjectId;
   const jobsInProject = allJobs.filter(inProject);
@@ -1631,6 +1645,8 @@ const buildView = async (requestedProjectId = '') => {
     version: COMPANION_VERSION,
     state,
     pending,
+    // 跨项目非终态执行（操作区「运行中」块的唯一数据源）；终态与审批态已在主进程滤掉。
+    executions,
     stage,
     activity,
     timeline,

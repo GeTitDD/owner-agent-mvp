@@ -62,7 +62,18 @@
               <p id="needsHint" class="inbox-hint">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
               <div id="pendingList" class="pending-list"></div>
             </section>
-            <!-- 待提炼块：某项目已积够阈值的未提炼执行记录，只提示、不自动提炼。
+            <!-- 运行中块（#70）：非终态执行（排队 / 执行中 / 卡住）跨项目出现在这里。
+                 没有执行时整段 hidden，不占位；卡住与执行中靠相位标签与左侧色条区分。 -->
+            <section id="opsRunning" class="ops-running" hidden>
+              <div class="ops-block-head">
+                <h3 id="opsRunningTitle">运行中</h3>
+                <span id="opsRunningBadge" class="count">0</span>
+              </div>
+              <p class="ops-hint">卡住表示租约过期或需要核对，系统不会自己重试。</p>
+              <div id="opsRunningList" class="ops-run-list"></div>
+            </section>
+
+            <!-- 待提炼块（#71）：某项目已积够阈值的未提炼执行记录，只提示、不自动提炼。
                  阈值由 src/knowledge-loop/on-demand.mjs 判定；没有提议时整段 hidden。 -->
             <section id="proposeSection" class="inbox-section a-proposing" hidden>
               <div class="inbox-head">

@@ -15,6 +15,11 @@
 // all 是「全部项目几条」。与知识页的差别只有一个：操作区本身跨项目，
 // 所以条目不做项目过滤（过滤掉就不是跨项目了），当前项目口径只用来显示「其中本项目几条」，
 // 因此 block.count === block.items.length === block.counts.all 恒成立。
+//
+// 终态 / 审批态 / 相位（卡住、运行中、排队）的判定统一在 src/execution-status.mjs，
+// 这里不再维护第二份状态集：同一批执行在提炼与操作区必须叫同一个名字。
+
+import { executionPhase, isInFlight as inFlightStatus } from './execution-status.mjs';
 
 /** 执行主体：面板与 owner store 两处叫法不同，这里统一成四个键。 */
 const KIND_ALIASES = new Map(Object.entries({
@@ -34,29 +39,8 @@ const KIND_ALIASES = new Map(Object.entries({
   'repair-cycle': 'cycle'
 }));
 
-// 终态判定与 src/knowledge-loop/execution-records.mjs 的分表一致：那里决定「哪些能提炼」，
-// 这里决定「哪些已经不用管」。两处必须对同一批状态叫同一个名字，否则同一件事会在
-// 执行记录里算已终态、在操作区里还在跑。
-const TERMINAL = {
-  job: new Set(['succeeded', 'failed', 'cancelled', 'rejected']),
-  patch: new Set(['applied', 'rejected', 'apply_failed']),
-  sandbox: new Set(['completed', 'failed', 'cancelled', 'rejected']),
-  cycle: new Set(['tested_pass', 'tested_fail', 'failed', 'cancelled', 'rejected'])
-};
-
-// 「等你点头」的状态属于待办，不属于运行中：job 的 pending_approval、补丁的 proposed/approved、
-// 沙箱与修复周期的 pending_approval / proposal_ready。调用方即使把全部执行都递进来，
-// 这里也不会把同一件事画两遍。
-const WAITING_APPROVAL = {
-  job: new Set(['pending_approval']),
-  patch: new Set(['proposed', 'approved']),
-  sandbox: new Set(['pending_approval']),
-  cycle: new Set(['pending_approval', 'proposal_ready'])
-};
-
-const union = (sets) => new Set(Object.values(sets).flatMap((set) => [...set]));
-const ALL_TERMINAL = union(TERMINAL);
-const ALL_WAITING = union(WAITING_APPROVAL);
+// 终态判定与 src/execution-status.mjs 共用同一份状态集：那里同时服务执行记录、
+// 跨项目快照与本模型，避免同一件事在三个地方各有一种说法。
 
 /**
  * 三段块的定义只在写一份：顺序、标题、空态说明都从这里出。
@@ -104,26 +88,29 @@ const kindOf = (item) => {
  * - 终态的不进操作区（ADR-0007：已终态的才成为执行记录与提炼原料）；
  * - 等你批准的属于待办，不在运行中重复出现；
  * - 没有状态的一律不猜：无法判定终态就不画，宁可少一行也不画错一行。
+ * 判定本身在 execution-status.mjs，这里只按条目取 kind/status。
  */
-const isInFlight = (item) => {
-  const kind = kindOf(item);
-  const status = statusOf(item);
-  if (!status) return false;
-  const terminal = TERMINAL[kind] ?? ALL_TERMINAL;
-  const waiting = WAITING_APPROVAL[kind] ?? ALL_WAITING;
-  return !terminal.has(status) && !waiting.has(status);
-};
+const isInFlight = (item) => inFlightStatus(kindOf(item), statusOf(item));
 
-/** 运行中的条目：只补齐渲染要用的字段，不动状态词（文案映射留在面板）。 */
-const runningItem = (item) => {
+/** 运行中的条目：只补齐渲染要用的字段，不动状态词与相位文案（文案映射留在面板）。 */
+const runningItem = (item, now) => {
   const id = String(item.id ?? '');
+  const kind = kindOf(item) || 'execution';
+  const status = text(item.status);
+  const leaseUntil = text(item.leaseUntil) || text(item.lease_until);
   return {
     id,
-    kind: kindOf(item) || 'execution',
+    kind,
     projectId: projectIdOf(item),
     projectName: text(item.projectName) || text(item.project_name),
     title: text(item.title) || text(item.taskTitle) || id,
-    status: text(item.status),
+    detail: text(item.detail),
+    status,
+    // 相位是模型给出的语义（stuck / stopping / queued / running），
+    // 面板只负责把相位映射成中文与颜色，不自己判断状态。
+    // 租约过期但状态还没被 reconcile 的执行，同样算卡住。
+    phase: executionPhase(kind, status, { leaseUntil, now }),
+    leaseUntil,
     at: text(item.occurredAt) || text(item.updated_at) || text(item.updatedAt) || text(item.created_at)
   };
 };
@@ -157,6 +144,7 @@ const scopeCounts = (items, filterId) => ({
  * @param {object[]} [input.pending] 待办条目（快照里的 pending，已按紧急度排好，原样透传）
  * @param {object[]} [input.executions] 执行（job / patch / sandbox / cycle 的任意并集）
  * @param {object[]} [input.proposals] 提炼提议（listDistillProposals 的返回：{projectId, count}）
+ * @param {number} [input.now] 判断租约是否过期用的时间（测试可注入）
  * @returns {object} 供面板直接渲染的只读视图模型
  */
 export function focusOpsView(input = {}) {
@@ -164,14 +152,16 @@ export function focusOpsView(input = {}) {
     projectId = '',
     pending = [],
     executions = [],
-    proposals = []
+    proposals = [],
+    now = Date.now()
   } = input ?? {};
   const filterId = String(projectId ?? '');
 
   // 待办原样透传（分组与排序是既有视图模型的事），只把 projectId 归一化，
   // 让下面两个口径与运行中、提议用同一种读法。
   const pendingItems = objectList(pending).map((item) => ({ ...item, projectId: projectIdOf(item) }));
-  const runningItems = objectList(executions).filter(isInFlight).map(runningItem);
+  const runningItems = objectList(executions).filter(isInFlight)
+    .map((item) => runningItem(item, now));
   // count 为 0 的提议不是提议：阈值由 on-demand.mjs 判定，这里只接住「够阈值」的那些。
   const proposalItems = objectList(proposals).map(proposalItem).filter((item) => item.count > 0);
 

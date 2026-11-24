@@ -1550,6 +1550,40 @@ pre.diff, pre.logs {
 .ops-zone.ops-empty .ops-zone-head { display: none; }
 .ops-empty-line { margin: 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
 
+/* #70 运行中块：只画非终态执行（排队 / 执行中 / 卡住），没有时整段 hidden 不占位。
+   卡住与执行中靠左侧色条 + 相位标签两处区分，不只靠颜色（色弱也读得出字）。 */
+.ops-running {
+  margin: 8px 0 4px; padding: 12px 12px 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.ops-running[hidden] { display: none; }
+.ops-block-head { display: flex; align-items: center; gap: 8px; }
+.ops-block-head h3 { margin: 0; font-size: 13px; letter-spacing: -.01em; }
+.ops-block-head .count { margin-left: auto; }
+.ops-hint { margin: 4px 0 8px; font-size: 11.5px; line-height: 1.6; color: var(--muted); }
+.ops-run-list { display: grid; gap: 6px; }
+.ops-run {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center; gap: 8px;
+  padding: 8px 10px; background: var(--bg);
+  border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 8px;
+}
+.ops-run.tone-running { border-left-color: #16a34a; }
+.ops-run.tone-queued { border-left-color: #3b82f6; }
+.ops-run.tone-stopping { border-left-color: var(--warn); }
+.ops-run.tone-stuck { border-left-color: var(--danger); background: var(--warn-soft); }
+.ops-run-body { min-width: 0; }
+.ops-run-title { display: block; font-size: 12.5px; font-weight: 650; line-height: 1.5; overflow-wrap: anywhere; }
+.ops-run-meta { font-size: 11px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.ops-run-phase {
+  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line);
+  font-size: 11px; line-height: 1.6; white-space: nowrap;
+}
+.ops-run-phase.running { color: #15803d; border-color: rgba(22, 163, 74, .45); }
+.ops-run-phase.queued { color: #2563eb; border-color: rgba(59, 130, 246, .45); }
+.ops-run-phase.stopping { color: var(--warn); border-color: rgba(234, 107, 23, .45); }
+.ops-run-phase.stuck { color: var(--danger); border-color: rgba(220, 38, 38, .5); font-weight: 700; }
+
 /* B：知识（只读浏览 + 项目筛选） */
 .knowledge-browse {
   margin: 10px 12px 4px;
