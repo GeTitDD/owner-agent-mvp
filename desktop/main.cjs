@@ -77,6 +77,8 @@ const playbookAborts = new Map();
 const playbookChildren = new Map();
 let knowledgeSummaryModule = null;
 let knowledgeBrowseModule = null;
+let skillCatalogModule = null;
+let skillCatalogCache = null;
 let knowledgeReviewModule = null;
 let harvestInFlight = false;
 let mascotModule = null;
@@ -678,6 +680,27 @@ const knowledgeSnapshot = async (projectId = config.projectId) => {
       last: knowledgeRuntime?.last ?? null
     }
   };
+};
+
+// ---- 技能目录（只读） ----
+// 域包、pstack、插件三处技能合并成一份列表；扫描结果缓存一分钟，
+// 面板重复渲染不重复读盘，只有点「刷新」才强制重扫。
+const skillCatalogPayload = async ({ refresh = false } = {}) => {
+  skillCatalogModule ??= await importEsm('../src/knowledge/skills.mjs');
+  if (!skillCatalogCache) {
+    // pstack 目录解析与 Playbook 共用同一套规则，避免两处对「技能在哪」给出不同答案。
+    const registry = await loadPlaybookRegistry();
+    const { resolvePstackSkillsDir } = await importEsm('../src/pstack/readonly-session.mjs');
+    skillCatalogCache = skillCatalogModule.createSkillCatalogCache({
+      scan: () => skillCatalogModule.skillCatalogFor({
+        domainRoot: path.join(__dirname, '..', 'domains'),
+        pluginsDir: path.join(__dirname, '..', 'plugins'),
+        pstackSkillsDir: resolvePstackSkillsDir(),
+        pstackSkillIds: registry.PLAYBOOKS.map((item) => item.id)
+      })
+    });
+  }
+  return skillCatalogCache.read({ refresh: Boolean(refresh) });
 };
 
 const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) => {
@@ -2890,6 +2913,12 @@ const registerIpc = () => {
     });
   });
 
+  // 技能目录：只读合并域包 / pstack / 插件三处技能，refresh 才重扫。
+  ipcMain.handle('companion:skill-catalog', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return skillCatalogPayload({ refresh: input?.refresh === true });
+  });
+
   // 知识模式内的候选审核：直接复用 PersonalKnowledgeStore.reviewProposal，
   // 返回结构化结果，失败时由面板提示原因且不改变当前列表。
   ipcMain.handle('companion:knowledge-review', async (event, input) => {
@@ -3562,6 +3591,54 @@ async function boot() {
             focusImage = await panel.webContents.capturePage();
             fs.writeFileSync(path.join(screenshotDir, 'panel-A-picked.png'), focusImage.toPNG());
           }
+          // 技能目录验收：列表（含插件组）、展开详情、缺失条目详情（#44）。
+          await panel.webContents.executeJavaScript(`
+            document.querySelector('#modeBar button[data-mode="B"]')?.click();
+            document.getElementById('skillCatalog')?.scrollIntoView({ block: 'start' });
+          `);
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          const skillShots = [
+            ['panel-B-skills.png', '#skillCatalog', ''],
+            ['panel-B-skills-plugin.png', '#skillGroups > section:last-child', ''],
+            ['panel-B-skill-detail.png', '#skillGroups .skill-item', '#skillGroups .skill-item'],
+            ['panel-B-skill-missing.png', '#skillGroups .skill-item.is-missing', '#skillGroups .skill-item.is-missing']
+          ];
+          for (const [file, scrollTo, expand] of skillShots) {
+            const ready = await panel.webContents.executeJavaScript(`
+              (() => {
+                const expandSelector = '${expand}';
+                const row = expandSelector ? document.querySelector(expandSelector) : null;
+                if (row) row.open = true;
+                const target = document.querySelector('${scrollTo}');
+                target?.scrollIntoView({ block: '${expand ? 'center' : 'start'}' });
+                return Boolean(target);
+              })()
+            `);
+            if (!ready) continue;
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            const image = await panel.webContents.capturePage();
+            fs.writeFileSync(path.join(screenshotDir, file), image.toPNG());
+          }
+          // 技能目录的接线探针：三处来源计数、缓存复用与强制刷新各走一次 IPC。
+          const skillsProbe = await panel.webContents.executeJavaScript(`
+            (async () => {
+              const first = await window.companion.skills.catalog({});
+              const second = await window.companion.skills.catalog({});
+              const forced = await window.companion.skills.catalog({ refresh: true });
+              return {
+                totals: first.totals,
+                sources: (first.groups ?? []).map((group) => ({
+                  key: group.key, label: group.label, count: group.count, missing: group.missing
+                })),
+                sample: (first.groups ?? []).map((group) => (group.items?.[0] ? {
+                  source: group.key, name: group.items[0].name, path: group.items[0].path,
+                  missing: group.items[0].missing, reason: group.items[0].reason
+                } : null)),
+                cachedFlags: [first.cached, second.cached, forced.cached]
+              };
+            })()
+          `);
+          fs.writeFileSync(path.join(screenshotDir, 'skills-probe.json'), JSON.stringify(skillsProbe, null, 2));
           // 对话模式：没有模型时必须给出明确提示（不能静默失败）。
           // 这里直接走一遍 IPC，顺带验证 preload 暴露的 chat.ask 接线。
           const chatProbe = await panel.webContents.executeJavaScript(
