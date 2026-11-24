@@ -48,6 +48,18 @@
         <button id="aPrimary" class="a-primary" type="button">去处理</button>
         <button id="aSecondary" class="a-secondary" type="button">问问它</button>
         <div id="aFeed" class="a-feed"></div>
+
+        <!-- 专注第二张卡：所选项目的只读详情；项目选择只影响这张卡。 -->
+        <section id="focusDetail" class="focus-detail" hidden>
+          <div class="fd-head">
+            <div class="fd-head-text">
+              <span class="fd-title">项目详情</span>
+              <span id="fdHint" class="fd-hint"></span>
+            </div>
+            <div id="fdTabs" class="fd-tabs" role="tablist" aria-label="选择项目"></div>
+          </div>
+          <div id="fdBody" class="fd-body"></div>
+        </section>
       </div>
     </section>
 
@@ -341,6 +353,7 @@
 
   <div id="toast" class="toast" hidden></div>
   <script src="./composer-list.js"></script>
+  <script src="./focus-detail.cjs"></script>
   <script src="../node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="./panel.js"></script>
 </body>
