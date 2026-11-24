@@ -3703,8 +3703,8 @@ async function boot() {
                 };
               };
               const settings = await window.companion.settings.get();
-              // 截图前把详情卡滚到眼前，并清掉自动生成图谱的报错提示，别挡住选择证据。
-              document.getElementById('focusDetail')?.scrollIntoView({ block: 'start' });
+              // 截图前把工作区滚到眼前（详情卡已在 #72 删除），并清掉自动生成图谱的报错提示。
+              document.getElementById('workZone')?.scrollIntoView({ block: 'start' });
               await wait(400);
               document.getElementById('toast').hidden = true;
               return {
@@ -4124,7 +4124,7 @@ async function boot() {
             const handoffOf = () => ({ id: chip?.dataset.projectId ?? '', label: name?.textContent?.trim() ?? '' });
             if (projects.length < 2) return { skipped: 'need-two-projects', count: projects.length };
             const initial = { view: tabOf(), handoff: handoffOf() };
-            // 点详情卡的项目标签看另一个项目：只应换视图，交办仍是「未选项目」。
+            // 点工作区的项目切换标签看另一个项目：只应换视图，交办仍是「未选项目」。
             const other = projects[1];
             const tab = [...document.querySelectorAll('#fdTabs .fd-tab')]
               .find((node) => node.dataset.project === other.id);
@@ -4134,8 +4134,8 @@ async function boot() {
               if (tabOf() === other.id) break;
             }
             await wait(600);
-            // 截图要同时看到详情卡标签（视图项目）与底部「交办到 …」（交办目标）。
-            document.getElementById('focusDetail')?.scrollIntoView({ block: 'start' });
+            // 截图要同时看到工作区的项目切换（视图项目）与底部「交办到 …」（交办目标）。
+            document.getElementById('workZone')?.scrollIntoView({ block: 'start' });
             await wait(500);
             document.getElementById('toast').hidden = true;
             return {
@@ -4225,14 +4225,15 @@ async function boot() {
             await wait(400);
             const modeB = document.getElementById('modeB');
             const modeA = document.getElementById('modeA');
-            const workspace = document.getElementById('workspaceToggle');
+            const workspace = document.getElementById('workWorkspace');
             const browse = document.getElementById('knowledgeBrowse');
             return {
               blocks: [...modeB.querySelectorAll(':scope > .scroll > section')]
                 .map((node) => ({ id: node.id, className: node.className })),
               hasWorkspaceInKnowledge: modeB.contains(workspace),
               workspaceInFocus: modeA.contains(workspace),
-              workspaceOpen: workspace?.open === true,
+              // 工作区从 #69 起是常驻展开的 <section>（不再是 <details>）：只看它有没有被隐藏。
+              workspaceOpen: workspace?.hidden !== true,
               renderMs: browse?.dataset.renderMs ?? '',
               renderBudget: browse?.dataset.renderBudget ?? ''
             };
@@ -4246,7 +4247,7 @@ async function boot() {
           const jumpTargets = {
             knowledge: 'knowledgeBrowse',
             tests: 'runningSection',
-            patches: 'needsSection',
+            patches: 'opsZone',
             runs: 'runningSection'
           };
           const jumpResults = [];
@@ -4255,7 +4256,7 @@ async function boot() {
               const wait = (ms) => new Promise((r) => setTimeout(r, ms));
               document.querySelector('#modeBar button[data-mode="focus"]')?.click();
               await wait(900);
-              const entry = document.querySelector('#fdBody .fd-entry[data-entry="${key}"]');
+              const entry = document.querySelector('#workEntries .work-entry[data-entry="${key}"]');
               if (!entry) return { key: '${key}', error: 'entry-not-rendered' };
               entry.click();
               await wait(1200);
@@ -4263,14 +4264,14 @@ async function boot() {
               const visible = Object.entries(views)
                 .find(([, id]) => !document.getElementById(id).hidden)?.[0] ?? '';
               const node = document.getElementById('${jumpTargets[key]}');
-              const workspace = document.getElementById('workspaceToggle');
+              const workspace = document.getElementById('workWorkspace');
               const rect = node?.getBoundingClientRect();
               return {
                 key: '${key}',
                 visible,
                 target: '${jumpTargets[key]}',
                 inWorkspace: Boolean(workspace && node && workspace.contains(node)),
-                workspaceOpen: workspace?.open === true,
+                workspaceOpen: workspace?.hidden !== true,
                 top: rect ? Math.round(rect.top) : null
               };
             })()`);
@@ -4286,7 +4287,7 @@ async function boot() {
             const node = document.getElementById('runningSection');
             const saved = node.id;
             node.id = 'runningSection-detached';
-            document.querySelector('#fdBody .fd-entry[data-entry="runs"]')?.click();
+            document.querySelector('#workEntries .work-entry[data-entry="runs"]')?.click();
             await wait(900);
             node.id = saved;
             const wrap = document.querySelector('#modeA .a-wrap');

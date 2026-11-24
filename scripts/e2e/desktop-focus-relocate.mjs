@@ -219,7 +219,7 @@ const run = async () => {
   const { panel } = app;
   try {
     await waitFor(panel, "document.querySelector('#modeBar button[data-mode=\"focus\"]')");
-    await waitFor(panel, "window.OwnerFocusOps && window.OwnerFocusDetail");
+    await waitFor(panel, "window.OwnerFocusOps && window.OwnerPanelSelection");
     await panel.evaluate("document.querySelector('#modeBar button[data-mode=\"focus\"]').click()");
     await waitFor(panel, "!document.getElementById('modeA').hidden");
     // 等快照到齐（项目切换标签出现）再截图，否则截到的是还没取到数的空壳。

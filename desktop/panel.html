@@ -118,7 +118,7 @@
         </section>
 
         <!-- 下半区 · 工作区：永远是某个项目的详情与操作面（#69 起常驻展开）。
-             #72 才会删详情卡。 -->
+             只读详情卡已在 #72 删除，这里就是唯一看到项目的地方。 -->
         <section id="workZone" class="focus-zone work-zone">
           <div class="zone-head focus-zone-head work-zone-head">
             <strong>工作区</strong>
@@ -137,16 +137,32 @@
               title="选择一个本地 Git 仓库目录，添加为项目">添加项目</button>
           </div>
 
-        <!-- 专注的详情卡：所选项目的只读详情（视图项目，与交办目标互不影响）。 -->
-        <section id="focusDetail" class="focus-detail" hidden>
-          <div class="fd-head">
-            <div class="fd-head-text">
-              <span class="fd-title">项目详情</span>
-              <span id="fdHint" class="fd-hint"></span>
-            </div>
-          </div>
-          <div id="fdBody" class="fd-body"></div>
-        </section>
+        <!-- 四个入口（知识 / 测试 / 补丁 / 运行）：原只读详情卡的计数搬到这里（#72）。
+             工作区现在是唯一看到项目的地方，四条入口留在工作区里：点哪一项就跳到
+             它原来的位置，目标不存在时退回模式顶部（见 panel.js 的 renderWorkEntries）。
+             计数由 renderWorkEntries 直接读快照填，静态结构只写一次，避免轮询重建。 -->
+        <div id="workEntries" class="work-entries" role="group" aria-label="项目入口" hidden>
+          <button class="work-entry" type="button" data-entry="knowledge">
+            <span class="work-entry-label">知识</span>
+            <span class="work-entry-count">0</span>
+            <span class="work-entry-note"></span>
+          </button>
+          <button class="work-entry" type="button" data-entry="tests">
+            <span class="work-entry-label">测试</span>
+            <span class="work-entry-count">0</span>
+            <span class="work-entry-note"></span>
+          </button>
+          <button class="work-entry" type="button" data-entry="patches">
+            <span class="work-entry-label">补丁</span>
+            <span class="work-entry-count">0</span>
+            <span class="work-entry-note"></span>
+          </button>
+          <button class="work-entry" type="button" data-entry="runs">
+            <span class="work-entry-label">运行</span>
+            <span class="work-entry-count">0</span>
+            <span class="work-entry-note"></span>
+          </button>
+        </div>
         <!-- 工作区内容常驻展开：原来包在外面的 details 折叠条已经去掉，
              这里只留容器；#73 之后只剩「所选项目」一段，全局块都搬走了。 -->
         <section class="workspace" id="workWorkspace">
@@ -440,7 +456,6 @@
 
   <script src="./composer-list.js"></script>
   <script src="./panel-selection.cjs"></script>
-  <script src="./focus-detail.cjs"></script>
   <script src="./pending-groups.cjs"></script>
   <!-- 操作区视图模型是 ESM（src/focus-ops.mjs）；模块脚本会被推迟到解析完再执行，
        panel.js 只在真正渲染操作区时读 window.OwnerFocusOps，读不到就等 next tick。 -->
