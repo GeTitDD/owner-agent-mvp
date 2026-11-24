@@ -79,12 +79,10 @@
       ? '运行中'
       : (totalSteps > 0 ? '最近任务' : '运行中');
     const hasProjects = (view?.projects?.length ?? 0) > 0;
-    // 工作区从 #69 起常驻展开，不再有「没项目就自动展开」这回事。
-    $('setup').hidden = hasProjects;
+    // 设置向导随 #73 搬进设置面板，不再占工作区；它现在总能打开，不跟「有没有项目」联动。
     $('composeSection').hidden = !hasProjects || panelMode !== 'focus';
     $('submitTask').disabled = composerBusy || !hasProjects;
     $('queueSection').hidden = !hasProjects;
-    if (!hasProjects) renderServiceGrid($('setupServices'), view?.services);
     $('playbookSection').hidden = !hasProjects;
     const testConfig = view?.testConfig;
     const missing = testConfig?.missing ?? [];
@@ -152,107 +150,10 @@
     }
   };
 
-  const collapsedHosts = new Set();
-
-  const renderProjects = () => {
-    const projects = view?.projects ?? [];
-    // 高亮跟随视图项目（没选就是第一个），与交办目标无关。
-    const selected = window.OwnerPanelSelection?.viewProject(projects, viewProjectId)?.id
-      ?? projects[0]?.id ?? '';
-    // 交办按钮上的项目名跟显式交办目标同步（选择只存在内存里，不进配置）。
-    renderComposerTarget();
-
-    // 顶部按来源主机分组：组头是主机，组内是项目（最近进展 + 时间）。
-    const list = $('projectList');
-    if (!list) return;
-    const query = ($('projectSearch')?.value ?? '').trim().toLowerCase();
-    const visible = projects.filter((project) => !query
-      || `${project.name} ${project.root} ${project.progress}`.toLowerCase().includes(query));
-    const groups = new Map();
-    for (const project of visible) {
-      const key = project.hostLabel || project.host || '其它来源';
-      if (!groups.has(key)) groups.set(key, { local: project.hostLocal === true, rows: [] });
-      groups.get(key).rows.push(project);
-    }
-    const ordered = [...groups.entries()].sort((a, b) =>
-      Number(b[1].local) - Number(a[1].local) || a[0].localeCompare(b[0]));
-    list.replaceChildren();
-    if (!visible.length) {
-      list.append(el('p', 'section-sub',
-        projects.length ? '没有匹配的项目。' : '还没有项目；添加一个本地 Git 仓库后就能在这里切换。'));
-    }
-    for (const [host, group] of ordered) {
-      group.rows.sort((a, b) => String(b.lastEventAt).localeCompare(String(a.lastEventAt)));
-      const wrap = el('div', 'project-group');
-      const head = el('button', 'project-group-head');
-      head.type = 'button';
-      head.dataset.host = host;
-      head.setAttribute('aria-expanded', String(!collapsedHosts.has(host)));
-      head.append(
-        el('span', 'group-caret', collapsedHosts.has(host) ? '▸' : '▾'),
-        el('span', 'group-name', host),
-        el('span', 'group-count', String(group.rows.length))
-      );
-      head.onclick = () => {
-        if (collapsedHosts.has(host)) collapsedHosts.delete(host);
-        else collapsedHosts.add(host);
-        renderProjects();
-      };
-      wrap.append(head);
-      if (!collapsedHosts.has(host)) {
-        const body = el('div', 'project-rows');
-        for (const project of group.rows) {
-          const wrapper = el('div', 'project-row-wrap');
-          const row = el('button', 'project-row');
-          row.type = 'button';
-          row.dataset.project = project.id;
-          row.title = project.root || project.name;
-          if (project.id === selected) row.classList.add('selected');
-          const dot = el('span', 'project-dot');
-          dot.dataset.tone = project.pending > 0 ? 'warn' : (project.progressTone ?? 'muted');
-          const main = el('span', 'row-main');
-          const top = el('span', 'row-top');
-          top.append(el('span', 'row-name', project.name));
-          if (project.pending > 0) top.append(el('span', 'row-badge warn', `${project.pending} 待你`));
-          else if (project.progressTone === 'active') top.append(el('span', 'row-badge active', '进行中'));
-          const time = el('span', 'row-time', formatRelative(project.lastEventAt) || '暂无时间');
-          time.title = project.lastEventAt
-            ? new Date(project.lastEventAt).toLocaleString('zh-CN') : '';
-          top.append(time);
-          const progress = el('span', 'row-progress', project.progress || '还没有任务记录');
-          progress.dataset.tone = project.progressTone ?? 'muted';
-          main.append(top, progress);
-          row.append(dot, main);
-          row.onclick = () => { void selectViewProject(project.id); };
-          wrapper.append(row);
-          if (project.github) {
-            const gh = el('button', 'project-gh', project.github.available ? 'GH' : 'GH?');
-            gh.type = 'button';
-            gh.dataset.state = project.github.available ? 'ok' : 'unknown';
-            gh.title = project.github.available
-              ? `${project.github.nameWithOwner} · ${project.github.private ? '私有' : '公开'}`
-                + `${project.github.defaultBranch ? ` · 默认分支 ${project.github.defaultBranch}` : ''}`
-                + `${Number.isFinite(project.github.stars) ? ` · ★ ${project.github.stars}` : ''}`
-                + `${project.github.lastCommit ? `\n${project.github.lastCommit}` : ''}`
-                + '\n点击打开 GitHub'
-              : `${project.github.nameWithOwner}\n${project.github.error || 'gh 暂时无法读取状态'}`
-                + '\n点击打开 GitHub';
-            gh.onclick = (event) => {
-              event.stopPropagation();
-              void window.companion.openExternal(project.github.url)
-                .catch((error) => toast(String(error?.message ?? error)));
-            };
-            wrapper.append(gh);
-          }
-          body.append(wrapper);
-        }
-        wrap.append(body);
-      }
-      list.append(wrap);
-    }
-    const badge = $('projectBadge');
-    if (badge) badge.textContent = String(projects.length);
-  };
+  // 选项目只剩工作区顶部一处（#73）：旧的「搜索 + 按来源主机分组列表 + 添加」段已删除，
+  // 切换标签由 renderFocusDetail → renderWorkProjectBar 画。
+  // 这里只负责把底部「交办到 …」的项目名跟快照同步（项目被删时回到「未选项目」）。
+  const renderProjects = () => { renderComposerTarget(); };
 
   /** 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前 / 月-日。 */
   const formatRelative = (value) => {
@@ -2012,6 +1913,40 @@
     return row;
   };
 
+  // 操作区是否「三类块全空」：由 renderOps 从视图模型写入。
+  // 结果下钻也算操作区的内容，所以这两处一起决定要不要把整区压成一行。
+  let opsBodyEmpty = true;
+
+  /**
+   * 操作区空态：三类块全空且没有结果下钻时才压成一行（区头与外框一起收掉）。
+   * 有结果时保留区头——否则「操作结果」会孤零零挂在一句空态下面。
+   */
+  const applyOpsEmptyState = () => {
+    const zone = $('opsZone');
+    const body = $('opsBody');
+    const emptyLine = $('opsEmpty');
+    const drill = $('opsDrill');
+    if (!zone || !body || !emptyLine) return;
+    const drillShown = Boolean(drill && !drill.hidden);
+    const collapse = opsBodyEmpty && !drillShown;
+    zone.classList.toggle('ops-empty', collapse);
+    body.hidden = opsBodyEmpty;
+    emptyLine.hidden = !opsBodyEmpty;
+  };
+
+  /**
+   * 结果下钻区（#73）：答案卡 / 会话 / 最近结果三者都有各自的 hidden，
+   * 三者都空时整段不出现；有任何一个就露出区头，并把操作区的空态重新算一遍。
+   */
+  const updateOpsDrill = () => {
+    const drill = $('opsDrill');
+    if (!drill) return;
+    const shown = ['answerSection', 'timelineSection', 'resultSection']
+      .some((id) => $(id)?.hidden === false);
+    drill.hidden = !shown;
+    applyOpsEmptyState();
+  };
+
   const renderOps = () => {
     const zone = $('opsZone');
     const body = $('opsBody');
@@ -2029,10 +1964,10 @@
       proposals: opsProposals
     });
     // 三类块全空时压成一行：文案来自模型，卡片外框由 .ops-empty 去掉。
-    zone.classList.toggle('ops-empty', model.empty);
-    emptyLine.hidden = !model.empty;
+    // 但「结果下钻」也算操作区的内容，有结果时保留区头（见 applyOpsEmptyState）。
+    opsBodyEmpty = model.empty;
     emptyLine.textContent = model.empty ? model.emptyText : '';
-    body.hidden = model.empty;
+    applyOpsEmptyState();
     const blockOf = (key) => model.blocks.find((block) => block.key === key);
     const pendingBlock = blockOf('pending');
     if (pendingBlock) {
@@ -2117,6 +2052,8 @@
     list.replaceChildren();
     section.hidden = items.length === 0;
     $('timelineCount').textContent = String(items.length);
+    // 会话是操作留下的记录：有记录才出现，而且放在操作区的下钻位置（#73）。
+    updateOpsDrill();
     const toolLabel = { job: '任务', patch: '补丁', test: '测试', repair: '修复' };
     for (const item of items) {
       if (item.kind === 'user') {
@@ -2210,9 +2147,11 @@
     card.replaceChildren();
     if (!view?.result) {
       section.hidden = true;
+      updateOpsDrill();
       return;
     }
     section.hidden = false;
+    updateOpsDrill();
     card.append(el('span', undefined, view.result.label));
     const button = el('button', undefined, '查看结果');
     button.onclick = () => { void openResult(view.result.cycleId); };
@@ -2288,9 +2227,17 @@
     card.replaceChildren();
     if (!result) {
       section.hidden = true;
+      updateOpsDrill();
       return;
     }
     section.hidden = false;
+    updateOpsDrill();
+    // 答案落在操作区的下钻位置（#73）：在专注页时滚到眼前，避免用户以为「没反应」。
+    if (panelMode === 'focus') {
+      window.setTimeout(() => {
+        $('answerSection')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }, 80);
+    }
     $('answerBadge').textContent = result.mode === 'write-request'
       ? '写请求'
       : result.mode === 'triage-error' ? '失败' : '只读';
@@ -2567,8 +2514,6 @@
     renderComposerTarget();
   };
 
-  $('projectSearch').oninput = () => { renderProjects(); };
-
   const renderMobileInfo = async (refresh = false) => {
     const box = $('mobileInfo');
     if (!box) return;
@@ -2839,7 +2784,6 @@
   };
   $('addProject').onclick = () => { void pickProject(); };
   $('addProjectTop').onclick = () => { void pickProject(); };
-  $('addProjectSettings').onclick = () => { void pickProject(); };
   $('retryServices').onclick = () => { void openSettings(); };
   $('fixTestConfig').onclick = () => { void openSettings(); };
   $('sandboxModeSelect').onchange = async () => {

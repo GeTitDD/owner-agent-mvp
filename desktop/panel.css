@@ -840,127 +840,6 @@ pre.diff, pre.logs {
 .count-chip.warn .chip-dot { background: var(--warn); }
 .section-sub { margin: -2px 0 8px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .project-section { margin-bottom: 14px; }
-.project-section .section-title h3 { color: var(--text); font-size: 13px; }
-.project-section .count { background: var(--accent-soft); color: var(--muted); }
-.section-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
-.project-list { display: grid; gap: 2px; }
-.project-group { display: grid; gap: 1px; }
-.project-group + .project-group { margin-top: 4px; }
-.project-group-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 3px 2px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 10px;
-  text-align: left;
-  cursor: pointer;
-}
-.project-group-head:hover { color: var(--text); }
-.group-caret { width: 10px; font-size: 9px; opacity: 0.8; }
-.group-name {
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.group-count { margin-left: auto; font-size: 9px; opacity: 0.7; }
-.project-rows { display: grid; gap: 1px; }
-.project-row {
-  display: grid;
-  grid-template-columns: 6px 1fr;
-  align-items: start;
-  gap: 7px;
-  width: 100%;
-  padding: 5px 6px;
-  border: 0;
-  border-left: 2px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.project-row:hover { background: var(--accent-soft); }
-.project-row.selected { background: var(--accent-soft); border-left-color: var(--accent); }
-.project-row-wrap { display: flex; align-items: stretch; gap: 3px; }
-.project-row-wrap .project-row { flex: 1; min-width: 0; }
-.project-gh {
-  flex: none;
-  align-self: center;
-  width: 30px;
-  height: 24px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 9px;
-  cursor: pointer;
-}
-.project-gh[data-state='ok'] { color: var(--ok); border-color: rgba(34, 197, 94, 0.35); }
-.project-gh:hover { border-color: var(--accent); color: var(--text); }
-.project-dot {
-  width: 6px;
-  height: 6px;
-  margin-top: 5px;
-  border-radius: 50%;
-  background: var(--muted);
-}
-.project-dot[data-tone='ok'] { background: var(--ok); }
-.project-dot[data-tone='error'] { background: var(--danger); }
-.project-dot[data-tone='warn'] { background: var(--warn); }
-.project-dot[data-tone='active'] { background: #3b82f6; }
-.row-main { display: grid; gap: 1px; min-width: 0; }
-.row-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.row-name {
-  font-size: 12px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.row-time { margin-left: auto; flex: none; font-size: 9px; color: var(--muted); }
-.row-badge {
-  flex: none;
-  padding: 1px 5px;
-  border-radius: 999px;
-  font-size: 9px;
-  line-height: 1.5;
-  border: 1px solid var(--line);
-  color: var(--muted);
-}
-.row-badge.warn { color: var(--warn); border-color: rgba(234, 107, 23, 0.45); background: var(--warn-soft); }
-.row-badge.active { color: #3b82f6; border-color: rgba(59, 130, 246, 0.45); }
-.row-progress {
-  font-size: 10px;
-  line-height: 1.35;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.row-progress[data-tone='ok'] { color: var(--ok); }
-.row-progress[data-tone='error'] { color: var(--danger); }
-.row-progress[data-tone='active'] { color: #3b82f6; }
-.project-search {
-  width: 86px;
-  height: 20px;
-  padding: 0 6px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 10px;
-}
-.project-search:focus { outline: none; border-color: var(--accent); }
 .zone { display: block; }.zone + .zone {
   margin-top: 18px;
   padding-top: 14px;
@@ -1461,6 +1340,8 @@ pre.diff, pre.logs {
 }
 .work-project-bar[hidden] { display: none; }
 .work-project-name { font-size: 12.5px; font-weight: 600; }
+/* #73：「添加项目」挂在切换行尾，独占右侧；只有一个项目时它也在。 */
+.work-project-add { margin-left: auto; }
 .work-project-name::before {
   content: '项目 · ';
   color: var(--muted);
@@ -1583,6 +1464,36 @@ pre.diff, pre.logs {
 .ops-run-phase.queued { color: #2563eb; border-color: rgba(59, 130, 246, .45); }
 .ops-run-phase.stopping { color: var(--warn); border-color: rgba(234, 107, 23, .45); }
 .ops-run-phase.stuck { color: var(--danger); border-color: rgba(220, 38, 38, .5); font-weight: 700; }
+
+/* #73 结果下钻区：答案卡 / 会话 / 最近结果是「某次操作的结果」，落在操作区里。
+   三者都空时整段 hidden（不占位）；会话是历史记录，默认折叠，要看再展开。 */
+.ops-drill {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+.ops-drill-head { margin-bottom: 6px; }
+.ops-drill-hint { font-size: 11px; color: var(--muted); }
+.ops-answer,
+.ops-result {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.ops-answer .section-title,
+.ops-result .section-title { margin-bottom: 0; }
+.ops-timeline { display: block; margin-bottom: 10px; }
+.ops-drill-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.ops-drill-summary .count { margin-left: auto; }
+.ops-timeline .timeline-list { margin-top: 6px; }
 
 /* B：知识（只读浏览 + 项目筛选） */
 .knowledge-browse {
