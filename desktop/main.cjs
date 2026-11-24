@@ -22,7 +22,9 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
   process.exit(0);
 }
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv = []) => {
+  // 重复启动时可用参数直接打开某个窗口：--open-chat。
+  if (argv.includes('--open-chat')) { void openChat(); return; }
   if (pet) { pet.show(); positionPet(); }
   showPanel();
 });
@@ -2369,8 +2371,12 @@ const submitCompanionTask = async ({ text, projectId }) => {
 };
 
 const registerIpc = () => {
-  const fromCompanion = (event) =>
-    [pet?.webContents, panel?.webContents].filter(Boolean).includes(event.sender);
+  const fromCompanion = (event) => {
+    // 桌宠、面板、对话窗口与气泡都属于自家渲染进程。
+    const allowed = [pet?.webContents, panel?.webContents, chatWindow?.webContents, bubbleWindow?.webContents]
+      .filter(Boolean);
+    return allowed.includes(event.sender);
+  };
 
   ipcMain.handle('companion:snapshot', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
