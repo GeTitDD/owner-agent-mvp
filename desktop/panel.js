@@ -7,6 +7,16 @@
     done: '已完成',
     error: '遇到异常'
   };
+  // 「进行中」状态集合：页头计数与工作区「运行」入口共用一份，避免两处各写一套。
+  const ACTIVE_STATUSES = new Set([
+    'running', 'leased', 'provisioning', 'collecting', 'test_pending', 'queued'
+  ]);
+  // 补丁待办：补丁提案与补丁应用都算「待审补丁」（沿用详情卡时代的口径）。
+  const PATCH_ENTRY_KINDS = new Set(['patch', 'patch-apply']);
+  const countOf = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
   let view = null;
   let panelMode = 'knowledge';
   let refreshing = false;
@@ -14,7 +24,7 @@
   let composerBusy = false;
   let toastTimer = null;
   // 两个互不影响的显式状态（ADR-0006：显示 A 不等于改 B）：
-  // - 视图项目：详情卡/概览看哪个项目；空＝看第一个，刷新不记忆。
+  // - 视图项目：工作区看哪个项目；空＝看第一个，刷新不记忆。
   // - 交办目标：只能由「交办到 …」菜单设置；空＝未选，发送被拦。
   let viewProjectId = '';
   let handoffProjectId = '';
@@ -68,8 +78,8 @@
     const playbookRunning = view?.playbook?.running === true;
     const chainItems = [view?.chain?.job, view?.chain?.patch, view?.chain?.sandbox, view?.chain?.cycle]
       .filter(Boolean);
-    const activeStatuses = new Set(['running', 'leased', 'provisioning', 'collecting', 'test_pending', 'queued']);
-    const activeSteps = chainItems.filter((item) => activeStatuses.has(String(item.status ?? '').toLowerCase())).length;
+    const activeSteps = chainItems
+      .filter((item) => ACTIVE_STATUSES.has(String(item.status ?? '').toLowerCase())).length;
     const totalSteps = chainItems.length;
     const activeCount = activeSteps + (playbookRunning ? 1 : 0);
     $('runningBadge').textContent = String(activeCount || totalSteps);
@@ -156,9 +166,8 @@
 
   const renderProjects = () => {
     const projects = view?.projects ?? [];
-    // 高亮跟随视图项目（没选就是第一个），与交办目标无关。
-    const selected = window.OwnerPanelSelection?.viewProject(projects, viewProjectId)?.id
-      ?? projects[0]?.id ?? '';
+    // 高亮跟随工作区正在展示的项目（快照按视图项目取数），与交办目标无关。
+    const selected = workspaceProject()?.id ?? projects[0]?.id ?? '';
     // 交办按钮上的项目名跟显式交办目标同步（选择只存在内存里，不进配置）。
     renderComposerTarget();
 
@@ -2405,7 +2414,7 @@
       item.type = 'button';
       item.dataset.project = project.id;
       item.setAttribute('role', 'option');
-      // 选中标记只看「交办目标」，与详情卡正在看哪个项目无关。
+      // 选中标记只看「交办目标」，与工作区正在看哪个项目无关。
       const selected = project.id === handoffProjectId;
       item.setAttribute('aria-selected', selected ? 'true' : 'false');
       item.classList.toggle('on', selected);
@@ -2533,7 +2542,7 @@
   autoGrow();
 
   /**
-   * 切换视图项目：只影响详情卡/概览看哪个项目，不碰交办目标，也不写配置。
+   * 切换视图项目：只影响工作区看哪个项目，不碰交办目标，也不写配置。
    */
   const selectViewProject = async (projectId) => {
     const id = String(projectId ?? '');
@@ -2546,17 +2555,12 @@
     renderPlaybookResult();
     lastAnswer = null;
     renderAnswer(null);
-    // 详情卡缓存同样作废，避免把 A 的内容画在 B 名下。
-    focusDetail = null;
-    focusDetailAt = 0;
-    focusRenderedKey = '';
-    focusMoreOpen = false;
     await refresh();
     void loadPlaybooks();
   };
 
   /**
-   * 设置交办目标：只影响「交办到 …」，不影响详情卡正在看的项目。
+   * 设置交办目标：只影响「交办到 …」，不影响工作区正在看的项目。
    * 这是交办目标唯一的写入点；选择只存在内存里，不写 companion.json。
    */
   const selectHandoffProject = (projectId) => {
@@ -2883,293 +2887,99 @@
     }
   };
 
-  // ---- 专注：项目详情卡（只读） ----
+  // ---- 专注：工作区（项目名 / 切换 / 四个入口） ----
   //
-  // 专注页第一张卡是待办（列表由 renderPending 画），这张是第二张。
-  // 卡片只影响自己：选中哪个项目不写回配置、不记忆，刷新后回到第一个。
-  // 九块内容里只有画像 / 图谱 / 想法 / Playbook 渲染正文；知识 / 测试 / 补丁 /
-  // 运行只给入口与计数，点击跳到对应模式或小节，避免同屏两份内容。
-
-  // 详情卡的取数节奏：卡片内容变化慢，没必要跟着 2 秒轮询。
-  const FOCUS_DETAIL_TTL = 15000;
-  // 入口跳转：知识去知识模式的浏览页；补丁回专注的待办卡；
-  // 测试与运行在专注模式折叠的工作区里。目标找不到就退回该模式顶部。
+  // 只读详情卡已删除（#72）：工作区是唯一看到项目的地方。卡片原来的四个入口
+  // （知识 / 测试 / 补丁 / 运行）留在工作区顶部，计数直接读当前快照，不再单独取一份。
+  //
+  // 入口跳转：知识去知识模式的浏览页；补丁去操作区的待办（#72：待办块没有待办时整段
+  // 收起，所以指向操作区本身，落到「没有要你处理的事」那行而不是消失的块）；
+  // 测试与运行去工作区的运行账本。目标找不到（或不在屏幕上）就退回该模式顶部。
   const FOCUS_JUMP = {
     knowledge: ['knowledge', 'knowledgeBrowse'],
     tests: ['focus', 'runningSection'],
-    patches: ['focus', 'needsSection'],
+    patches: ['focus', 'opsZone'],
     runs: ['focus', 'runningSection']
   };
 
-  // 这张卡自己的快照：只用来画详情，不参与全局 view、也不改配置。
-  let focusDetail = null;
-  let focusDetailAt = 0;
-  let focusDetailLoading = false;
-  let focusDetailToken = 0;
-  let focusPlaybook = null;
-  let focusPlaybookLoading = '';
-  let focusRenderedKey = '';
+  // 项目切换标签的重建键：只在项目 / 选中项 / 待办数变化时重画，避免轮询闪烁。
   let focusTabsKey = '';
-  let focusMoreOpen = false;
-  const focusDiagramCache = new Map();
-  let focusDiagramToken = 0;
 
   const focusProjects = () => (Array.isArray(view?.projects) ? view.projects : []);
 
-  /** 当前展示的项目：没选过、或选中的项目没了，都回到第一个（只是展示默认）。 */
-  const focusProject = () => window.OwnerPanelSelection
-    ? window.OwnerPanelSelection.viewProject(focusProjects(), viewProjectId)
-    : focusProjects()[0] ?? null;
+  /**
+   * 工作区当前展示的项目。快照是按「视图项目」取的，所以以快照回来的
+   * config.projectId 为准；它对不上时（项目刚被删）再退回内存里的视图项目 / 第一个。
+   * 详情卡删除后，项目名、切换标签与四个计数都用同一个口径，不会出现「标签说 A、数据是 B」。
+   */
+  const workspaceProject = () => {
+    const projects = focusProjects();
+    if (!projects.length) return null;
+    const activeId = String(view?.config?.projectId ?? '');
+    const active = projects.find((item) => item.id === activeId);
+    if (active) return active;
+    return window.OwnerPanelSelection
+      ? window.OwnerPanelSelection.viewProject(projects, viewProjectId)
+      : projects[0] ?? null;
+  };
 
-  /** 点卡片里的项目标签：只切视图项目，绝不影响交办目标。 */
+  /** 点工作区里的项目标签：只切视图项目，绝不影响交办目标。 */
   const selectFocusProject = (projectId) => {
     void selectViewProject(projectId);
   };
 
-  const loadFocusDetail = async () => {
-    const project = focusProject();
-    if (!project) return;
-    const token = ++focusDetailToken;
-    focusDetailLoading = true;
-    try {
-      const snapshot = await window.companion.snapshot({ projectId: project.id });
-      // 迟到的响应可能已经换了项目，直接丢掉。
-      if (token !== focusDetailToken) return;
-      focusDetail = snapshot;
-      focusDetailAt = Date.now();
-    } catch {
-      // 单张卡取数失败不打断整个面板；记个时间，过几秒再试。
-      if (token === focusDetailToken) focusDetailAt = Date.now();
-    } finally {
-      if (token === focusDetailToken) {
-        focusDetailLoading = false;
-        renderFocusDetail();
-      }
-    }
-  };
-
-  const loadFocusPlaybook = async (projectId) => {
-    if (!projectId || focusPlaybookLoading === projectId) return;
-    focusPlaybookLoading = projectId;
-    try {
-      const catalog = await window.companion.playbooks.list({ projectId });
-      focusPlaybook = { projectId, catalog };
-    } catch {
-      focusPlaybook = { projectId, catalog: null };
-    } finally {
-      focusPlaybookLoading = '';
-      renderFocusDetail();
-    }
-  };
-
-  /** 入口点击：跳到「待办」里对应的位置，不在卡片里重画第二份。 */
+  /** 入口点击：跳到它原来的位置，不在工作区里重画第二份内容。 */
   const focusJump = (key) => {
     const target = FOCUS_JUMP[key];
     if (!target) return;
     const [mode, sectionId] = target;
     setMode(mode);
-    // 目标小节以后可能被并到别的模式里；找不到就退回该模式顶部，不留死跳转。
-    const node = $(sectionId) ?? $(MODE_VIEW[mode]);
-    if (!node) return;
-    // 工作区从 #69 起常驻展开，跳转只负责滚到目标，不再需要先展开折叠条。
-    window.setTimeout(() => node.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
-  };
-
-  const fdBlock = (title, badge, body, { open = true, onToggle = null } = {}) => {
-    const box = document.createElement('details');
-    box.className = 'fd-block';
-    box.open = open;
-    const summary = el('summary', 'fd-block-head');
-    summary.append(el('span', 'fd-block-title', title));
-    if (badge) summary.append(el('span', 'fd-block-badge', badge));
-    box.append(summary);
-    const content = el('div', 'fd-block-body');
-    if (body) content.append(body);
-    box.append(content);
-    if (onToggle) box.addEventListener('toggle', () => onToggle(box.open));
-    return box;
-  };
-
-  const fdEmpty = (text) => el('p', 'fd-empty', text);
-
-  const fdChips = (values, className = 'fd-chip') => {
-    const wrap = el('span', 'fd-chips');
-    for (const value of values) wrap.append(el('code', className, value));
-    return wrap;
-  };
-
-  const fdBriefBody = (brief) => {
-    if (brief.state !== 'ready') return fdEmpty(brief.hint);
-    const wrap = el('div', 'fd-brief');
-    if (brief.oneLiner) wrap.append(el('p', 'fd-brief-one', brief.oneLiner));
-    else if (brief.whatItIs) wrap.append(el('p', 'fd-brief-one', brief.whatItIs));
-    const row = (label, content) => {
-      const line = el('div', 'fd-row');
-      line.append(el('span', 'fd-label', label));
-      line.append(content);
-      wrap.append(line);
-    };
-    if (brief.howToRun.length) row('怎么跑', fdChips(brief.howToRun));
-    if (brief.modules.length) {
-      row('关键模块', fdChips(brief.modules.map((module) =>
-        module.role ? `${module.name} · ${module.role}` : module.name), 'fd-chip'));
-    }
-    if (brief.verify.length) row('怎么验收', fdChips(brief.verify));
-    if (brief.risks.length) row('风险', el('span', 'fd-text', brief.risks.join('；')));
-    if (brief.unknowns.length) row('还不确定', el('span', 'fd-text', brief.unknowns.join('；')));
-    return wrap;
-  };
-
-  /** 图谱：复用 mermaid 渲染，按「项目 + 类型 + 源码」缓存，轮询不重画。 */
-  const fdRenderDiagram = (container, diagram, projectId) => {
-    if (diagram.state !== 'ready' || !diagram.mermaid) {
-      container.append(fdEmpty(diagram.hint || '还没有图谱。'));
-      return;
-    }
-    const key = `${projectId}|${diagram.kind}|${diagram.mermaid}`;
-    const cached = focusDiagramCache.get(key);
-    if (cached) {
-      container.innerHTML = cached;
-      return;
-    }
-    const token = ++focusDiagramToken;
-    container.append(el('div', 'fd-empty', '正在渲染图谱…'));
-    void window.mermaid.render(`fd-diagram-${Date.now()}`, diagram.mermaid)
-      .then(({ svg }) => {
-        focusDiagramCache.set(key, svg);
-        // 缓存只留最近几张，避免一直涨。
-        if (focusDiagramCache.size > 12) {
-          focusDiagramCache.delete(focusDiagramCache.keys().next().value);
-        }
-        if (token === focusDiagramToken && container.isConnected) container.innerHTML = svg;
-      })
-      .catch(() => {
-        if (token === focusDiagramToken && container.isConnected) {
-          container.replaceChildren(fdEmpty('图谱渲染失败，可以到待办里重新生成。'));
-        }
-      });
-  };
-
-  const fdEntriesBody = (entries) => {
-    const list = el('div', 'fd-entries');
-    for (const entry of entries) {
-      const row = el('button', 'fd-entry');
-      row.type = 'button';
-      row.dataset.entry = entry.key;
-      row.title = `跳到${entry.label}${entry.note ? ` · ${entry.note}` : ''}`;
-      row.append(el('span', 'fd-entry-label', entry.label));
-      row.append(el('span', 'fd-entry-count', String(entry.count)));
-      row.append(el('span', 'fd-entry-note', entry.note));
-      row.append(el('span', 'fd-entry-go', '›'));
-      row.onclick = () => focusJump(entry.key);
-      list.append(row);
-    }
-    return list;
-  };
-
-  const fdIdeasBody = (ideas) => {
-    if (!ideas.items.length) return fdEmpty(ideas.hint || '还没有想法。');
-    const list = el('div', 'fd-ideas');
-    for (const idea of ideas.items) {
-      const row = el('div', 'fd-idea');
-      row.append(el('span', `fd-idea-status s-${idea.status}`, idea.statusLabel));
-      row.append(el('span', 'fd-idea-title', idea.title));
-      list.append(row);
-    }
-    return list;
-  };
-
-  const fdPlaybookBody = (playbook) => {
-    const wrap = el('div', 'fd-playbook');
-    if (playbook.running) {
-      wrap.append(el('div', 'fd-running', `正在跑：${playbook.runningTitle || 'Playbook'}`));
-    }
-    if (!playbook.available) {
-      wrap.append(fdEmpty(playbook.hint || 'Playbook 不可用。'));
-      return wrap;
-    }
-    if (!playbook.lastRuns.length) {
-      wrap.append(fdEmpty('这个项目还没跑过 Playbook；可以到待办里跑一次。'));
-    }
-    for (const run of playbook.lastRuns) {
-      const row = el('div', 'fd-run');
-      row.append(el('span', `fd-run-status s-${run.status || 'unknown'}`, run.status || '—'));
-      row.append(el('span', 'fd-run-label', run.label));
-      row.append(el('span', 'fd-run-time',
-        formatRelative(run.startedAt) || ''));
-      wrap.append(row);
-    }
-    return wrap;
-  };
-
-  const fdGithubBody = (github) => {
-    if (!github.linked) return fdEmpty(github.hint);
-    const wrap = el('div', 'fd-github');
-    const head = el('div', 'fd-github-head');
-    const repo = el('button', 'fd-github-repo', github.nameWithOwner);
-    repo.type = 'button';
-    repo.title = '在浏览器打开仓库';
-    repo.onclick = () => openGithub(github.url);
-    head.append(repo);
-    if (!github.loading) {
-      head.append(el('span', 'fd-github-count', `Issues ${github.issueCount}`));
-      head.append(el('span', 'fd-github-count', `PR ${github.prCount}`));
-    }
-    wrap.append(head);
-    if (github.loading) wrap.append(fdEmpty(github.hint));
-    else if (github.error) wrap.append(fdEmpty(github.error));
-    else if (!github.items.length) wrap.append(fdEmpty('没有打开的 Issues 或 PR。'));
-    for (const item of github.items) {
-      const row = el('button', 'fd-github-item');
-      row.type = 'button';
-      row.append(el('span', `fd-github-kind k-${item.kind}`,
-        item.kind === 'issue' ? `#${item.number}` : `PR #${item.number}`));
-      row.append(el('span', 'fd-github-title', item.title || '（无标题）'));
-      row.onclick = () => openGithub(item.url);
-      wrap.append(row);
-    }
-    return wrap;
-  };
-
-  const fdTestsBody = (tests) => {
-    const wrap = el('div', 'fd-tests');
-    wrap.append(el('p', 'fd-text',
-      `沙箱测试：${tests.enabled ? (tests.ok ? '可用' : '配置不完整') : '已关闭'}${tests.profile ? ` · ${tests.profile}` : ''}`));
-    if (tests.missing.length) {
-      wrap.append(el('p', 'fd-text warn', `缺：${tests.missing.join('、')}`));
-    }
-    wrap.append(el('p', 'fd-empty', tests.hint));
-    const button = el('button', 'ghost small', '跳到测试配置');
-    button.type = 'button';
-    button.onclick = () => openSettings();
-    wrap.append(button);
-    return wrap;
+    // 目标小节可能被收进别的模式，也可能因为空态被整段 hidden（例如没有待办时的待办块）。
+    // 找不到、或在屏幕上占不到位置，就把该模式自己的滚动容器拉回顶部，不留死跳转：
+    // 专注模式的滚动容器是 .a-wrap，其余模式是 .scroll。
+    const found = $(sectionId);
+    const container = $(MODE_VIEW[mode]);
+    const top = container?.querySelector('.a-wrap, .scroll') ?? container ?? null;
+    window.setTimeout(() => {
+      if (found && found.getClientRects().length > 0) {
+        found.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      } else if (top) {
+        top.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    }, 60);
   };
 
   /**
-   * 工作区顶部：项目名 + 项目切换（#69 从详情卡搬到区头下面）。
+   * 工作区顶部：项目名 + 项目切换。
    *
    * 「工作区永远是某个项目」：项目名总是写出来。项目只有一个时不显示切换控件——
    * 没有第二个可切，多一个按钮只会让人以为能换。
    * 切换沿用卡片时代的那套标签与 selectViewProject：只改视图项目，
    * 交办目标 handoffProjectId 仍由「交办到 …」菜单独占（ADR-0006）。
    */
-  const renderWorkProjectBar = (model) => {
+  const renderWorkProjectBar = () => {
     const bar = $('workProjectBar');
     const name = $('workProjectName');
     const tabs = $('fdTabs');
     if (!bar || !name || !tabs) return;
+    const project = workspaceProject();
     // 没有项目：工作区只剩添加项目的引导，不写一个假的项目名。
-    if (!model?.hasProjects) {
+    if (!project) {
       bar.hidden = true;
       tabs.replaceChildren();
       focusTabsKey = '';
       return;
     }
     bar.hidden = false;
-    name.textContent = model.projectName;
+    name.textContent = project.name || project.id;
+    const tabsModel = focusProjects().map((item) => ({
+      id: item.id,
+      name: item.name || item.id,
+      pending: countOf(item.pending),
+      selected: item.id === project.id
+    }));
     // 只有一个项目：只留名字，不生成任何切换按钮（没有第二个可切）。
-    if (model.tabs.length < 2) {
+    if (tabsModel.length < 2) {
       tabs.hidden = true;
       tabs.replaceChildren();
       focusTabsKey = '';
@@ -3177,10 +2987,10 @@
     }
     tabs.hidden = false;
     // 项目列表很短，直接平铺；只在项目 / 选中项 / 待办数变化时重建，避免轮询闪烁。
-    const tabsKey = JSON.stringify(model.tabs);
+    const tabsKey = JSON.stringify(tabsModel);
     if (tabsKey === focusTabsKey) return;
     focusTabsKey = tabsKey;
-    tabs.replaceChildren(...model.tabs.map((tab) => {
+    tabs.replaceChildren(...tabsModel.map((tab) => {
       const button = el('button', `fd-tab${tab.selected ? ' on' : ''}`, tab.name);
       button.type = 'button';
       button.dataset.project = tab.id;
@@ -3193,95 +3003,83 @@
     }));
   };
 
-  /** 画整张卡：数据没变就不重建，避免每 2 秒把图重新渲染一遍。 */
-  const renderFocusDetail = () => {
-    const card = $('focusDetail');
-    if (!card) return;
-    const project = focusProject();
-    const model = window.OwnerFocusDetail?.buildFocusDetail({
-      projects: focusProjects(),
-      // 详情只看「视图项目」；交办目标存在别的变量里，两者互不影响。
-      selectedId: viewProjectId,
-      detail: focusDetail,
-      playbook: focusPlaybook,
-      github: project ? githubActivityCache.get(project.id) ?? null : null
-    });
-    if (!model) return;
-
-    // 没有项目：只给添加项目的引导，别画一个空壳卡片。
-    if (!model.hasProjects) {
-      card.hidden = false;
-      // 工作区顶部的项目名 / 切换也跟着收起，不留一个 0 项目的空条。
-      renderWorkProjectBar(model);
-      if (focusRenderedKey === 'guide') return;
-      focusRenderedKey = 'guide';
-      $('fdHint').textContent = '';
-      const body = $('fdBody');
-      body.replaceChildren();
-      const guide = el('div', 'fd-guide');
-      guide.append(el('div', 'fd-guide-title', model.guide.title));
-      guide.append(el('p', 'fd-guide-text', model.guide.text));
-      const add = el('button', 'primary small', model.guide.actionLabel);
-      add.type = 'button';
-      add.onclick = () => { void pickProject(); };
-      guide.append(add);
-      body.append(guide);
-      return;
-    }
-
-    // 详情过期，或换过项目但还没取到：发起一次按项目的快照请求。
-    const stale = !focusDetail || focusDetail.config?.projectId !== model.projectId
-      || Date.now() - focusDetailAt > FOCUS_DETAIL_TTL;
-    if (project && stale && !focusDetailLoading) void loadFocusDetail();
-
-    card.hidden = false;
-    // 工作区顶部的项目名与切换：只有多项目时才有按钮，切换只改视图项目。
-    renderWorkProjectBar(model);
-    $('fdHint').textContent = model.detailReady ? '' : '正在读取…';
-
-    const key = JSON.stringify(model);
-    if (key === focusRenderedKey) return;
-    focusRenderedKey = key;
-
-    const body = $('fdBody');
-    body.replaceChildren();
-
-    // 画像 / 图谱 / 想法 / Playbook 默认展开。
-    body.append(fdBlock('画像', model.brief.stale ? '已过期' : '', fdBriefBody(model.brief)));
-
-    const diagramBox = el('div', 'fd-diagram');
-    fdRenderDiagram(diagramBox, model.diagram, model.projectId);
-    body.append(fdBlock('图谱', model.diagram.state === 'ready' ? model.diagram.label : '',
-      diagramBox));
-
-    body.append(fdBlock('想法', model.ideas.total ? String(model.ideas.active || model.ideas.total) : '',
-      fdIdeasBody(model.ideas)));
-
-    body.append(fdBlock('Playbook', model.playbook.running ? '运行中' : '',
-      fdPlaybookBody(model.playbook)));
-
-    // 知识 / 测试 / 补丁 / 运行：只给入口与计数，不重复渲染内容。
-    body.append(el('div', 'fd-section-title', '入口'));
-    body.append(fdEntriesBody(model.entries));
-
-    // GitHub 与测试配置折叠在「更多」里。
-    const more = el('div', 'fd-more');
-    more.append(el('div', 'fd-more-label', 'GitHub'));
-    more.append(fdGithubBody(model.more.github));
-    more.append(el('div', 'fd-more-label', '测试'));
-    more.append(fdTestsBody(model.more.tests));
-    body.append(fdBlock('更多', '', more, {
-      open: focusMoreOpen,
-      onToggle: (open) => {
-        focusMoreOpen = open;
-        if (open) void loadGithubActivity(model.projectId);
+  /**
+   * 四个入口（知识 / 测试 / 补丁 / 运行）的计数与状态句。
+   *
+   * 详情卡删除后这些数字不再由 focus-detail.cjs 算，直接读按视图项目取回的快照 view：
+   * - 知识：view.knowledge.counts（知识优先，没有就退经验；与卡片口径一致）；
+   * - 测试 / 补丁 / 运行：view.counts（主进程按项目过滤，受 limit=20 取数窗口限制）；
+   * - 状态句：view.chain 与 view.pending。
+   * 缺数据（还没有快照 / 还没有项目）时一律给 0 与空态文案，不让面板崩在半路上。
+   */
+  const workEntryRows = () => {
+    const project = workspaceProject();
+    const projectId = project?.id ?? '';
+    const counts = view?.counts ?? {};
+    const knowledge = view?.knowledge?.counts ?? {};
+    const pending = (Array.isArray(view?.pending) ? view.pending : [])
+      .filter((item) => item.projectId === projectId);
+    const chain = view?.chain ?? {};
+    const pendingPatches = pending.filter((item) => PATCH_ENTRY_KINDS.has(item.kind)).length;
+    // chain 在没有进行中项时会退回最近一条，所以必须按状态过滤，不能「有 chain」就当在跑。
+    const activeChain = ['job', 'patch', 'sandbox', 'cycle']
+      .map((key) => chain[key])
+      .filter((item) => item && ACTIVE_STATUSES.has(String(item.status ?? '').toLowerCase()))
+      .length;
+    // 主进程给快照的是 testStatus（camelCase）；仍兼容原始行的 test_status。
+    const testStatus = String(chain?.sandbox?.testStatus ?? chain?.sandbox?.test_status ?? '');
+    const testNote = testStatus === 'pass'
+      ? '最近通过'
+      : testStatus === 'fail'
+        ? '最近未通过'
+        : chain?.sandbox
+          ? '最近未完成'
+          : '还没跑过';
+    const patchStatus = String(chain?.patch?.status ?? '');
+    const patchNote = pendingPatches > 0
+      ? `待审 ${pendingPatches}`
+      : patchStatus === 'applied'
+        ? '最近已应用'
+        : patchStatus
+          ? `最近 ${patchStatus}`
+          : '还没有补丁';
+    return [
+      {
+        key: 'knowledge',
+        label: '知识',
+        count: countOf(knowledge.knowledge) || countOf(knowledge.experiences),
+        note: `候选 ${countOf(knowledge.candidates)} · 已验 ${countOf(knowledge.verified)}`
+      },
+      { key: 'tests', label: '测试', count: countOf(counts.tests), note: testNote },
+      { key: 'patches', label: '补丁', count: countOf(counts.patches), note: patchNote },
+      {
+        key: 'runs',
+        label: '运行',
+        count: countOf(counts.jobs),
+        note: activeChain > 0 ? `进行中 ${activeChain}` : '空闲'
       }
-    }));
-    if (focusMoreOpen) void loadGithubActivity(model.projectId);
+    ];
+  };
 
-    // Playbook 目录按所选项目取；取过就不再重复。
-    if (!focusPlaybook || focusPlaybook.projectId !== model.projectId) {
-      void loadFocusPlaybook(model.projectId);
+  /**
+   * 把四个计数写进工作区里的入口（静态结构写在 panel.html，只在这里填数）：
+   * 没有项目时整段收起，不画一排 0；计数为 0 时照常显示 0 与空态文案。
+   */
+  const renderWorkEntries = () => {
+    const holder = $('workEntries');
+    if (!holder) return;
+    const project = workspaceProject();
+    holder.hidden = !project;
+    if (!project) return;
+    for (const row of workEntryRows()) {
+      const button = holder.querySelector(`.work-entry[data-entry="${row.key}"]`);
+      if (!button) continue;
+      const count = button.querySelector('.work-entry-count');
+      const note = button.querySelector('.work-entry-note');
+      if (count) count.textContent = String(row.count);
+      if (note) note.textContent = row.note;
+      button.title = `${row.label} · ${row.count} · ${row.note}`;
+      button.onclick = () => focusJump(row.key);
     }
   };
 
@@ -3657,11 +3455,12 @@
     }
   };
 
-  // 专注页两区：上半区操作区（待办块 + 后续运行中/待提炼），下半区工作区
-  // （详情卡 + 默认折叠的旧面板）。两区容器写在 panel.html，#68 只把操作区接上模型。
+  // 专注页两区：上半区操作区（待办 / 运行中 / 待提炼），下半区工作区
+  // （项目名 + 切换 + 四个入口 + 项目各段）。容器写在 panel.html。
   const renderFocusMode = () => {
     renderOps();
-    renderFocusDetail();
+    renderWorkProjectBar();
+    renderWorkEntries();
   };
 
   // ---- 对话：会话持久化（按项目分组、切换、重命名、删除） ----
