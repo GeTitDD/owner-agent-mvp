@@ -1885,14 +1885,15 @@
   };
 
 
-  const pendingCard = (item) => {
+  const pendingCard = (item, { grouped = false } = {}) => {
     const tier = tierClass(item.tier);
     const card = el('div', `pending-card tier-${tier}`);
     const head = el('div', 'pending-head');
     head.append(el('div', 'pending-title', item.title));
     head.append(el('span', `tier-badge ${tier}`, tierLabel(item.tier)));
     card.append(head);
-    if (item.projectName) {
+    // 分组展示时项目名已经在组标题上，卡片里不再重复，也不再提「当前项目」。
+    if (item.projectName && !grouped) {
       const current = item.projectId === view?.config?.projectId;
       card.append(el('div', 'pending-project',
         current ? `当前项目 · ${item.projectName}` : `其他项目 · ${item.projectName}`));
@@ -1955,7 +1956,38 @@
     list.replaceChildren();
     const pending = view?.pending ?? [];
     if (pending.length === 0) return;
-    for (const item of pending) list.append(pendingCard(item));
+
+    // 按项目分组；只有一个项目时退化成普通列表，不显示多余的分组标题。
+    const groups = new Map();
+    for (const item of pending) {
+      const key = String(item.projectId || '');
+      if (!groups.has(key)) {
+        groups.set(key, { name: item.projectName || key || '未命名项目', items: [] });
+      }
+      groups.get(key).items.push(item);
+    }
+
+    if (groups.size === 1) {
+      for (const group of groups.values()) {
+        for (const item of group.items) list.append(pendingCard(item));
+      }
+      return;
+    }
+
+    let first = true;
+    for (const group of groups.values()) {
+      const details = el('details', 'pending-group');
+      details.open = first;
+      first = false;
+      const summary = el('summary', 'pending-group-head');
+      summary.append(el('span', 'pending-group-name', group.name));
+      summary.append(el('span', 'pending-group-count', `${group.items.length} 件`));
+      details.append(summary);
+      const body = el('div', 'pending-group-body');
+      for (const item of group.items) body.append(pendingCard(item, { grouped: true }));
+      details.append(body);
+      list.append(details);
+    }
   };
 
   const renderActivity = () => {
