@@ -1347,3 +1347,73 @@ pre.diff, pre.logs {
   background: var(--panel);
 }
 .mobile-actions { display: flex; gap: 6px; margin-top: 6px; }
+
+/* ---- 观察员式收件箱（原型 B 主干 + A 空状态） ---- */
+.inbox-section {
+  margin: 10px 12px 4px;
+  padding: 14px 14px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.inbox-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.inbox-head h3 {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+.inbox-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.inbox-empty {
+  padding: 10px 2px 6px;
+}
+.inbox-empty-title {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin-bottom: 6px;
+}
+.inbox-empty-sub {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+.inbox-empty .primary {
+  width: 100%;
+  height: 42px;
+  border-radius: var(--radius-sm);
+}
+
+.workspace {
+  margin: 6px 12px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+}
+.workspace-summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+}
+.workspace-summary::-webkit-details-marker { display: none; }
+.workspace-summary::before {
+  content: '▸ ';
+  display: inline-block;
+  transform: translateY(-1px);
+}
+.workspace[open] > .workspace-summary::before { content: '▾ '; }
+.workspace[open] > .workspace-summary { border-bottom: 1px solid var(--line); }
+.workspace .zone { margin-top: 0; border: 0; padding-top: 8px; }
