@@ -3446,6 +3446,7 @@
       // 会话列表来自本地库：切换到对话模式时恢复上次会话。
       void ensureChatSession();
       renderChatCards();
+      renderChatHandoff();
     }
   };
 
@@ -3465,6 +3466,8 @@
   let chatSessions = [];
   let activeChatSessionId = '';
   let chatSessionsBound = false;
+  // 「交办」开关：一次性动作，只放内存。关＝只回答；开＝这次发送走审批链路建任务。
+  let chatHandoffArmed = window.OwnerChatHandoff?.DEFAULT_ARMED === true;
   // 只有真正把消息画进 transcript 后，才认为会话已打开；否则重启后只会恢复标题却空着。
   let chatSessionOpened = '';
 
@@ -3472,6 +3475,39 @@
     view?.projects?.find((item) => item.id === projectId)?.name || projectId || '未绑定项目';
   const activeChatSession = () =>
     chatSessions.find((item) => item.id === activeChatSessionId) ?? null;
+
+  /** 交办目标：只认这次会话显式绑定的项目；没绑定或项目已删就返回 null（不是回退第一个）。 */
+  const chatHandoffTarget = () =>
+    window.OwnerChatHandoff?.targetOf(view?.projects ?? [], activeChatSession()) ?? null;
+
+  /**
+   * 画「交办」开关：默认关闭；打开时把目标项目与「这次发送会建任务」写在输入框旁。
+   * 只改 DOM，不写 localStorage / companion.json——重启后必然回到关闭。
+   */
+  const renderChatHandoff = () => {
+    const button = $('cHandoff');
+    if (!button) return;
+    const api = window.OwnerChatHandoff;
+    const target = chatHandoffTarget();
+    button.setAttribute('aria-pressed', chatHandoffArmed ? 'true' : 'false');
+    button.title = chatHandoffArmed
+      ? '这次发送会生成一条待批准任务（走审批）；发送后开关自动关闭'
+      : '打开后这次发送会生成一条待批准任务（走审批）；关掉就只是提问';
+    const label = $('cHandoffTarget');
+    if (label) {
+      label.hidden = !chatHandoffArmed;
+      label.textContent = target
+        ? `交办到 ${target.name || target.id}`
+        : '未选项目：先新建会话并选项目';
+    }
+    const send = $('cSend');
+    if (send) send.textContent = api?.sendLabel(chatHandoffArmed) ?? '发送';
+    const input = $('cInput');
+    if (input) {
+      // 输入框变窄（多了开关和项目名），占位文案压到一行内，避免被截断成两行。
+      input.placeholder = chatHandoffArmed ? '要改什么…' : '问项目里的事，只读回答…';
+    }
+  };
   // 列表时间：当天只显示时分，跨天补上月/日，避免旧会话看起来像刚发生。
   const chatWhen = (value) => {
     const at = new Date(String(value ?? ''));
@@ -3572,6 +3608,7 @@
       toast(`会话列表读取失败：${String(error?.message ?? error)}`, 5000);
     }
     renderChatSessionList();
+    renderChatHandoff();
   };
 
   const openChatSession = async (id, { silent = false } = {}) => {
@@ -3591,6 +3628,7 @@
         );
       }
       renderChatSessionList();
+      renderChatHandoff();
       $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
       return session;
     } catch (error) {
@@ -3614,6 +3652,7 @@
     if (!chatSessions.length) {
       activeChatSessionId = '';
       chatSessionOpened = '';
+      renderChatHandoff();
       if (!chatLog.length) {
         chatGreeted = false;
         greetChatOnce();
@@ -3752,7 +3791,7 @@
       return;
     }
     const lines = [`我在看 ${project.name || project.id}。`];
-    lines.push('这里只能读文件：可以查代码和配置来回答，但不会改任何东西；要改请去「交办」走审批。');
+    lines.push('这里只能读文件：可以查代码和配置来回答，但不会改任何东西；要改请打开输入框左边的「交办」开关，生成待批准任务。');
     lines.push('会话会保存在本地：左上角「会话」按项目列出，可新建、切换、改名或删除。');
     const model = String(view?.config?.model ?? '').trim();
     if (!model) {
@@ -3806,6 +3845,69 @@
     }
   };
 
+  /**
+   * 交办路径：把这句话交给既有审批链路（companion:submit）。
+   * 主进程照旧先只读分诊，需要写入时才生成 pending_approval 写请求；
+   * 这里既不新建任务类型，也不绕过批准——只是把「要不要建任务」的决定权从模型挪到人手上。
+   */
+  const handoffChat = async (session, text) => {
+    const target = chatHandoffTarget();
+    if (!target) {
+      // 沿用 #41：没选项目就拦下，不静默落到第一个项目。
+      renderChatHandoff();
+      toast('先选这次要交办的项目：会话还没绑定可用项目。', 5000);
+      return;
+    }
+    chatBusy = true;
+    $('cSend').disabled = true;
+    $('cInput').value = '';
+    chatAppend('me', text);
+    const thinking = el('div', 'c-msg bot',
+      `正在交办到 ${target.name || target.id}：先只读分析，再生成待批准任务…`);
+    $('cTranscript').append(thinking);
+    $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
+    try {
+      // captureIdea: false —— 交办是明确的动作，不该再被当成一条「想法」重复收集。
+      const result = await window.companion.submit({
+        text,
+        projectId: target.id,
+        captureIdea: false
+      });
+      thinking.remove();
+      const kind = window.OwnerChatHandoff?.resultKind(result) ?? 'error';
+      if (kind === 'task') {
+        chatAppend('bot',
+          `已生成待批准任务「${result.intent || text.slice(0, 40)}」（${result.jobId}）。\n`
+          + '它在「专注」的待办里等你批准，批准之前不会改动任何文件；'
+          + '交办记录留在待办里，不占这段会话。');
+        toast('已生成待批准任务；到专注页待办里批准后才会动手', 6000);
+        // 立刻刷新快照，专注页待办能马上看到这条任务，而不是等下一次轮询。
+        await refresh();
+      } else if (kind === 'answer') {
+        chatAppend('bot',
+          `这次分诊判断不需要改文件，只回答、没有生成任务：\n${result?.summary || '（没有结论）'}`);
+      } else {
+        chatAppend('bot',
+          `交办没跑通，没有生成任务：${result?.advice || result?.summary || '请检查模型配置后重试。'}`,
+          { status: 'error' });
+      }
+      await loadChatSessions();
+    } catch (error) {
+      thinking.remove();
+      // 失败时把内容放回输入框，别让人重写。
+      if (!$('cInput').value.trim()) $('cInput').value = text;
+      chatAppend('bot', `交办失败，没有生成任务：${String(error?.message ?? error)}`, { status: 'error' });
+    } finally {
+      chatBusy = false;
+      $('cSend').disabled = false;
+      $('cInput').focus();
+      // 一次性动作：这次发送之后开关一定回到关闭（含失败），不会悄悄对下一条生效。
+      const next = window.OwnerChatHandoff?.consume(chatHandoffArmed) ?? { armed: false };
+      chatHandoffArmed = next.armed === true;
+      renderChatHandoff();
+    }
+  };
+
   const sendChat = async () => {
     const text = $('cInput').value.trim();
     if (!text || chatBusy) return;
@@ -3813,6 +3915,11 @@
     if (!session) {
       // 没有会话时不偷偷落到某个项目：先让 Owner 明确选项目。
       openNewChatSession({ draft: text });
+      return;
+    }
+    // 两条互斥路径：开关关＝只回答（只读会话，绝不建任务）；开＝走交办。
+    if ((window.OwnerChatHandoff?.routeOf(chatHandoffArmed) ?? 'answer') === 'handoff') {
+      await handoffChat(session, text);
       return;
     }
     chatBusy = true;
@@ -3862,6 +3969,15 @@
     button.onclick = () => setMode(button.dataset.mode);
   }
   $('cSend').onclick = () => { void sendChat(); };
+  // 「交办」开关只翻内存标记：不写 localStorage，重启必然回到关闭。
+  $('cHandoff').onclick = () => {
+    chatHandoffArmed = !chatHandoffArmed;
+    renderChatHandoff();
+    if (chatHandoffArmed && !chatHandoffTarget()) {
+      toast('这个会话还没绑定可用项目；先新建会话并选项目。', 5000);
+    }
+    $('cInput').focus();
+  };
   $('cInput').addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();

@@ -2101,9 +2101,36 @@ const runPlaybookInChild = ({ playbookId, playbook, project, task = '', model = 
   };
 });
 
+/**
+ * 视觉验收用的假分诊：验收环境没有真实模型，交办会停在「只读分析失败」。
+ * 只由 OWNER_COMPANION_FAKE_TRIAGE=1 打开，固定回一条「需要写入」的结论，
+ * 让后面的 pending_approval 写请求与待办展示可稳定复现；审批链路本身完全不变。
+ */
+const fakeTriageRunner = () => ({
+  async run({ task }) {
+    const intent = String(task ?? '').trim().slice(0, 120);
+    return {
+      runId: 'tr_fake_handoff',
+      status: 'ok',
+      format: 'json',
+      summary: `验收用分诊：这条交办需要改文件（${intent}）`,
+      needsWrite: true,
+      writePlan: { intent, targets: ['src/retry.js'], allowedPaths: 'src/', notes: '验收假分诊' },
+      findings: [],
+      questions: [],
+      model: 'fake-triage',
+      durationMs: 0
+    };
+  }
+});
+
 /** 只读分诊执行器：判断一条交办是否需要写入，再决定是否发起 HITL 写请求。 */
 const getTriageRunner = async () => {
   if (triageRunner) return triageRunner;
+  if (process.env.OWNER_COMPANION_FAKE_TRIAGE === '1') {
+    triageRunner = fakeTriageRunner();
+    return triageRunner;
+  }
   const { TriageRunner } = await importEsm('../src/pstack/triage.mjs');
   triageRunner = new TriageRunner({ model: config.model || '' });
   return triageRunner;
@@ -3786,6 +3813,195 @@ async function boot() {
               `);
             }
           }
+          // #47 对话：交办开关。默认关闭；关闭时发送只回答、不建任务；
+          // 打开后走既有审批链路生成待批准任务，生成后开关自动复位，任务出现在专注页待办里。
+          const handoffSteps = {};
+          // ⓪ 发送前：专注页待办基线（开关还没用过，这里应当 0）。
+          handoffSteps.before = await panel.webContents.executeJavaScript(`
+            (async () => {
+              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+              document.querySelector('#modeBar button[data-mode="A"]')?.click();
+              await wait(1000);
+              document.getElementById('needsSection')?.scrollIntoView({ block: 'start' });
+              document.getElementById('toast').hidden = true;
+              await wait(300);
+              return {
+                needsCount: document.getElementById('needsCount')?.textContent ?? '',
+                pendingCount: document.getElementById('pendingCount')?.textContent ?? '',
+                cards: document.querySelectorAll('#pendingList .pending-card').length
+              };
+            })()
+          `);
+          let handoffImage = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'panel-A-handoff-before.png'), handoffImage.toPNG());
+          // ① 默认状态：开关可见且关闭。会话列表先收起来，别挡住输入区。
+          // 特意打开一个「不是第一个项目」的会话，用来证明交办打到会话绑定的项目，而不是默认第一个。
+          handoffSteps.idle = await panel.webContents.executeJavaScript(`
+            (async () => {
+              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+              document.querySelector('#modeBar button[data-mode="C"]')?.click();
+              await wait(900);
+              const view = await window.companion.snapshot();
+              const projects = view?.projects ?? [];
+              let sessions = (await window.companion.chat.sessions.list()).items ?? [];
+              // 没有会话时先建一条（绑定第一个项目），别让发送落到「新建会话」弹窗里。
+              if (!sessions.length && projects.length) {
+                await window.companion.chat.sessions.create({ projectId: projects[0].id });
+                document.querySelector('#modeBar button[data-mode="A"]')?.click();
+                await wait(400);
+                document.querySelector('#modeBar button[data-mode="C"]')?.click();
+                await wait(900);
+                sessions = (await window.companion.chat.sessions.list()).items ?? [];
+              }
+              const pick = sessions.find((s) => s.projectId !== (projects[0]?.id ?? ''))
+                ?? sessions[0];
+              if (pick) {
+                const row = document.querySelector('[data-session-id="' + pick.id + '"]');
+                (row ?? document.querySelector('.c-session-item'))?.querySelector('.c-session-open')?.click();
+                await wait(800);
+              }
+              if (!document.getElementById('cSessionList')?.hidden) {
+                document.getElementById('cSessionsToggle')?.click();
+                await wait(300);
+              }
+              const toggle = document.getElementById('cHandoff');
+              const after = (await window.companion.chat.sessions.list()).items ?? [];
+              const activeId = localStorage.getItem('owner-chat-session') ?? '';
+              return {
+                hasToggle: Boolean(toggle),
+                ariaPressed: toggle?.getAttribute('aria-pressed') ?? '',
+                sendLabel: document.getElementById('cSend')?.textContent?.trim() ?? '',
+                targetHidden: document.getElementById('cHandoffTarget')?.hidden !== false,
+                targetLabel: document.getElementById('cHandoffTarget')?.textContent ?? '',
+                pending: (view?.pending ?? []).length,
+                firstProjectId: projects[0]?.id ?? '',
+                sessionProjectId: after.find((s) => s.id === activeId)?.projectId ?? '',
+                projectIds: projects.map((p) => p.id)
+              };
+            })()
+          `);
+          handoffImage = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'panel-C-handoff-default.png'), handoffImage.toPNG());
+          // ② 关闭状态发送：只回答，待办数不变。
+          handoffSteps.off = await panel.webContents.executeJavaScript(`
+            (async () => {
+              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+              const input = document.getElementById('cInput');
+              input.value = '这个仓库为什么用 retry 封装？';
+              document.getElementById('cSend')?.click();
+              // 只回答走只读会话：没有模型时会尽快返回 no-model 提示，这里等到发送键恢复。
+              for (let i = 0; i < 150; i += 1) {
+                await wait(100);
+                if (!document.getElementById('cSend')?.disabled) break;
+              }
+              await wait(500);
+              const view = await window.companion.snapshot();
+              const bots = [...document.querySelectorAll('#cTranscript .c-msg.bot')];
+              return {
+                pending: (view?.pending ?? []).length,
+                togglePressed: document.getElementById('cHandoff')?.getAttribute('aria-pressed') ?? '',
+                lastBot: bots.length ? String(bots[bots.length - 1].textContent).slice(0, 160) : ''
+              };
+            })()
+          `);
+          handoffImage = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'panel-C-handoff-answer.png'), handoffImage.toPNG());
+          // ②b 回到专注页：待办数必须和发送前一样（关闭时发送不建任务）。
+          handoffSteps.focusAfterOff = await panel.webContents.executeJavaScript(`
+            (async () => {
+              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+              document.querySelector('#modeBar button[data-mode="A"]')?.click();
+              await wait(1000);
+              document.getElementById('needsSection')?.scrollIntoView({ block: 'start' });
+              document.getElementById('toast').hidden = true;
+              await wait(300);
+              return {
+                needsCount: document.getElementById('needsCount')?.textContent ?? '',
+                pendingCount: document.getElementById('pendingCount')?.textContent ?? '',
+                cards: document.querySelectorAll('#pendingList .pending-card').length
+              };
+            })()
+          `);
+          handoffImage = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'panel-A-handoff-after-answer.png'), handoffImage.toPNG());
+          // ③ 打开开关：按钮变「交办」，并把目标项目写在输入框旁。
+          handoffSteps.armed = await panel.webContents.executeJavaScript(`
+            (async () => {
+              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+              document.querySelector('#modeBar button[data-mode="C"]')?.click();
+              await wait(900);
+              document.getElementById('cHandoff')?.click();
+              await wait(250);
+              return {
+                ariaPressed: document.getElementById('cHandoff')?.getAttribute('aria-pressed') ?? '',
+                sendLabel: document.getElementById('cSend')?.textContent?.trim() ?? '',
+                targetHidden: document.getElementById('cHandoffTarget')?.hidden !== false,
+                targetLabel: document.getElementById('cHandoffTarget')?.textContent ?? ''
+              };
+            })()
+          `);
+          handoffImage = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'panel-C-handoff-armed.png'), handoffImage.toPNG());
+          // ④ 打开状态发送：生成待批准任务，开关复位。
+          handoffSteps.on = await panel.webContents.executeJavaScript(`
+            (async () => {
+              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+              const input = document.getElementById('cInput');
+              input.value = '把 retry 的循环改回 attempts 次，并补一条测试';
+              document.getElementById('cSend')?.click();
+              let created = null;
+              for (let i = 0; i < 60; i += 1) {
+                await wait(300);
+                const view = await window.companion.snapshot();
+                const pending = view?.pending ?? [];
+                const item = pending.find((p) => String(p.title ?? '').startsWith('写请求'));
+                if (item) { created = item; break; }
+              }
+              await wait(600);
+              const view = await window.companion.snapshot();
+              const bots = [...document.querySelectorAll('#cTranscript .c-msg.bot')];
+              return {
+                created: created
+                  ? { id: created.id, title: created.title, projectId: created.projectId, kind: created.kind }
+                  : null,
+                pending: (view?.pending ?? []).length,
+                ariaPressed: document.getElementById('cHandoff')?.getAttribute('aria-pressed') ?? '',
+                sendLabel: document.getElementById('cSend')?.textContent?.trim() ?? '',
+                lastBot: bots.length ? String(bots[bots.length - 1].textContent).slice(0, 220) : ''
+              };
+            })()
+          `);
+          handoffImage = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'panel-C-handoff-done.png'), handoffImage.toPNG());
+          // ⑤ 专注页待办里要能看到这条任务。
+          handoffSteps.focus = await panel.webContents.executeJavaScript(`
+            (async () => {
+              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+              document.querySelector('#modeBar button[data-mode="A"]')?.click();
+              await wait(1200);
+              const cards = [...document.querySelectorAll('#pendingList .pending-card')];
+              const target = cards.find((card) =>
+                String(card.textContent ?? '').includes('写请求')) ?? cards[0] ?? null;
+              // 多个项目时待办按项目分组，非首组默认折叠：把这条所在的组展开再截图。
+              const group = target?.closest('details.pending-group');
+              if (group) group.open = true;
+              target?.scrollIntoView({ block: 'center' });
+              document.getElementById('toast').hidden = true;
+              await wait(500);
+              return {
+                needsCount: document.getElementById('needsCount')?.textContent ?? '',
+                pendingCount: document.getElementById('pendingCount')?.textContent ?? '',
+                cards: cards.length,
+                titles: cards.map((card) => String(card.querySelector('.pending-title')?.textContent ?? card.textContent ?? '').slice(0, 80))
+              };
+            })()
+          `);
+          handoffImage = await panel.webContents.capturePage();
+          fs.writeFileSync(path.join(screenshotDir, 'panel-A-handoff-pending.png'), handoffImage.toPNG());
+          fs.writeFileSync(
+            path.join(screenshotDir, 'chat-handoff-probe.json'),
+            JSON.stringify(handoffSteps, null, 2)
+          );
           // 顺手记录按项目取数的结果，验证预重构没有破坏默认行为。
           const probe = [];
           for (const projectId of ['companion-demo', 'cultivation-agent']) {

@@ -1613,10 +1613,18 @@ pre.diff, pre.logs {
 .c-yes, .c-no { border: 0; border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
 .c-yes { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
 .c-no { background: transparent; border: 1px solid var(--line); color: var(--muted); }
-.c-composer { display: flex; gap: 8px; padding: 10px 14px 14px; border-top: 1px solid var(--line); flex: none; }
-.c-composer textarea { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); padding: 8px 10px; font: inherit; font-size: 12.5px; outline: none; }
+.c-composer { display: flex; gap: 8px; padding: 10px 14px 14px; border-top: 1px solid var(--line); flex: none; align-items: flex-start; }
+.c-composer textarea { flex: 1; resize: none; min-height: 32px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); padding: 8px 10px; font: inherit; font-size: 12.5px; outline: none; }
 .c-composer button { border: 0; border-radius: 10px; padding: 0 14px; background: var(--accent); color: var(--accent-fg); font-weight: 600; cursor: pointer; }
+.c-composer #cSend { height: 32px; }
 .c-composer button:disabled { opacity: .5; }
+/* 「交办」开关：默认是描边的关闭态；打开后变成实心，避免截图里看不出这次会不会建任务。 */
+.c-composer .c-handoff { display: flex; align-items: center; gap: 5px; height: 32px; padding: 0 10px; background: transparent; border: 1px solid var(--line); color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.c-composer .c-handoff[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.c-handoff-dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; opacity: .55; }
+.c-composer .c-handoff[aria-pressed="true"] .c-handoff-dot { opacity: 1; }
+.c-handoff-target { align-self: center; max-width: 40%; font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-handoff-target[hidden] { display: none; }
 /* 会话栏：列表按项目分组，展开时不挤掉输入框（列表自己滚动）。 */
 .c-sessionbar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); flex: none; }
 .c-session-toggle { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 11.5px; cursor: pointer; }
