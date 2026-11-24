@@ -2886,6 +2886,17 @@
     return node;
   };
 
+  // 已核对的引用单独一行展示，避免把模型猜的路径当成事实。
+  const chatAppendCitations = (citations) => {
+    if (!Array.isArray(citations) || citations.length === 0) return;
+    const row = el('div', 'c-cites');
+    for (const cite of citations.slice(0, 8)) {
+      row.append(el('span', 'c-cite', cite.line ? `${cite.path}:${cite.line}` : cite.path));
+    }
+    $('cTranscript').append(row);
+    $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
+  };
+
   const greetChatOnce = () => {
     if (chatGreeted) return;
     chatGreeted = true;
@@ -2896,8 +2907,22 @@
       return;
     }
     const lines = [`我在看 ${project.name || project.id}。`];
+    lines.push('这里只能读文件：可以查代码和配置来回答，但不会改任何东西；要改请去「交办」走审批。');
+    const model = String(view?.config?.model ?? '').trim();
+    if (!model) {
+      // 没有模型时不假装能回答：直接说明缺什么、去哪里补。
+      lines.push('现在还没有配置模型，暂时没法读文件回答。先打开设置选一个模型（需要 Pi 登录或 API key），再回来提问。');
+      chatAppend('bot', lines.join('\n'));
+      const row = el('div', 'c-greet-actions');
+      const open = el('button', 'c-yes', '打开设置');
+      open.onclick = () => { $('openSettings').click(); };
+      row.append(open);
+      $('cTranscript').append(row);
+      $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
+      return;
+    }
     lines.push(pending > 0 ? `现在有 ${pending} 件事等你决定，列在下面。` : '现在没有需要你决定的事。');
-    lines.push('你可以直接问，也可以让我去查项目状态。');
+    lines.push('可以直接问，比如「这个项目为什么卡住」。');
     chatAppend('bot', lines.join('\n'));
   };
 
@@ -2942,20 +2967,23 @@
     $('cSend').disabled = true;
     $('cInput').value = '';
     chatAppend('me', text);
-    const thinking = el('div', 'c-msg bot', '正在分析…');
+    const thinking = el('div', 'c-msg bot', '正在读项目文件…');
     $('cTranscript').append(thinking);
     $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
     try {
-      const result = await window.companion.submit({
-        text,
-        projectId: view?.activeProjectId || '',
-        captureIdea: false
+      // 对话模式走只读 Pi 会话；不再复用「交办」的写请求链路。
+      const result = await window.companion.chat.ask({
+        question: text,
+        projectId: view?.config?.projectId || view?.activeProjectId || ''
       });
       thinking.remove();
-      if (result?.mode === 'answer') chatAppend('bot', result.summary || '没有结论。');
-      else if (result?.mode === 'write-request') chatAppend('bot', '需要改代码，已生成待批准的写请求；批准后才会动手。');
-      else chatAppend('bot', result?.advice || result?.summary || '这次没跑通，可以再说一次。');
-      await refresh();
+      if (result?.status === 'ok') {
+        chatAppend('bot', result.answer || '没有结论。');
+        chatAppendCitations(result.citations);
+      } else {
+        // no-model / auth-error 等都由主进程给出可执行提示，这里原样展示。
+        chatAppend('bot', result?.advice || '这次没跑通，可以再说一次。');
+      }
     } catch (error) {
       thinking.remove();
       chatAppend('bot', `失败：${String(error?.message ?? error)}`);

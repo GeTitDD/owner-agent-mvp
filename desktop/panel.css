@@ -1530,6 +1530,9 @@ pre.diff, pre.logs {
 .c-title { margin-top: 4px; font-size: 12.5px; font-weight: 600; }
 .c-sub { margin-top: 3px; font-size: 11.5px; color: var(--muted); }
 .c-actions { display: flex; gap: 8px; margin-top: 8px; }
+.c-cites { display: flex; flex-wrap: wrap; gap: 6px; align-self: flex-start; max-width: 88%; }
+.c-cite { font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; background: var(--bg); }
+.c-greet-actions { display: flex; gap: 8px; margin-top: 2px; }
 .c-yes, .c-no { border: 0; border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
 .c-yes { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
 .c-no { background: transparent; border: 1px solid var(--line); color: var(--muted); }
