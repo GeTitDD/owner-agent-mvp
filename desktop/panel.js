@@ -56,20 +56,15 @@
     $('pendingCount').textContent = `${pending} 项待决定`;
     $('pendingBadge').textContent = String(pending);
     $('pendingBadge').hidden = pending === 0;
-    // 收件箱常驻：有待办时显示列表，没有待办时换成「下一步」空状态。
+    // 待办是专注页第一张卡：没有待办时卡片留着，用一句话说明，别让专注页只剩详情。
     $('needsSection').hidden = false;
     $('pendingList').hidden = pending === 0;
-    $('needsHint').hidden = pending === 0;
-    $('inboxEmpty').hidden = pending > 0;
-    if (pending === 0) {
-      const action = view?.nextAction;
-      $('inboxNextText').textContent = action?.title
-        ? `${action.title}${action.detail ? ` · ${action.detail}` : ''}`
-        : '可以展开工作区看看项目状态。';
-    }
+    $('needsHint').hidden = false;
     $('needsCount').textContent = String(pending);
     $('needsChip').classList.toggle('warn', pending > 0);
-    $('needsHint').textContent = `有 ${pending} 项需要你确认；写入、补丁与测试在批准前不会改变真实项目。`;
+    $('needsHint').textContent = pending === 0
+      ? '现在没有需要你决定的事；下面可以看这个项目的样子。'
+      : `有 ${pending} 项需要你确认；写入、补丁与测试在批准前不会改变真实项目。`;
     const running = view?.worker?.running;
     const playbookRunning = view?.playbook?.running === true;
     const chainItems = [view?.chain?.job, view?.chain?.patch, view?.chain?.sandbox, view?.chain?.cycle]
@@ -88,7 +83,7 @@
     // 没有项目时自动展开工作区，否则添加项目的入口会被折叠在下面。
     if (!hasProjects && $('workspaceToggle')) $('workspaceToggle').open = true;
     $('setup').hidden = hasProjects;
-    $('composeSection').hidden = !hasProjects || panelMode !== 'B';
+    $('composeSection').hidden = !hasProjects || panelMode !== 'A';
     $('submitTask').disabled = composerBusy || !hasProjects;
     $('queueSection').hidden = !hasProjects;
     if (!hasProjects) renderServiceGrid($('setupServices'), view?.services);
@@ -2161,6 +2156,12 @@
     try {
       view = await window.companion.snapshot();
       if (view?.knowledge?.projectId) knowledgeCache.set(view.knowledge.projectId, view.knowledge);
+      // 知识数量变了就重读一次浏览列表，避免用户在别处提炼/确认后看到旧列表。
+      const knowledgeSignature = JSON.stringify(view?.knowledge?.counts ?? {});
+      if (panelMode === 'B' && knowledgeBrowseData && knowledgeSignature !== knowledgeBrowseSignature) {
+        void loadKnowledgeBrowse();
+      }
+      knowledgeBrowseSignature = knowledgeSignature;
       applyState();
       renderActivity();
       renderTimeline();
@@ -2503,12 +2504,7 @@
   };
 
   $('openSettings').onclick = () => { void openSettings(); };
-  // 空状态的主按钮：展开工作区并滚到项目列表。
-  $('inboxNextBtn').onclick = () => {
-    const toggle = $('workspaceToggle');
-    if (toggle) toggle.open = true;
-    $('projectSection')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  };
+  $('kbRefresh').onclick = () => { void loadKnowledgeBrowse(); };
   $('mobileRefreshCode').onclick = () => { void renderMobileInfo(true); };
   $('closeSettings').onclick = () => { $('settings').hidden = true; };
   $('hidePanel').onclick = () => window.companion.hidePanel();
@@ -2700,16 +2696,19 @@
 
   // ---- 专注：项目详情卡（只读） ----
   //
-  // 这张卡只影响自己：选中哪个项目不写回配置、不记忆，刷新后回到第一个。
+  // 专注页第一张卡是待办（列表由 renderPending 画），这张是第二张。
+  // 卡片只影响自己：选中哪个项目不写回配置、不记忆，刷新后回到第一个。
   // 九块内容里只有画像 / 图谱 / 想法 / Playbook 渲染正文；知识 / 测试 / 补丁 /
-  // 运行只给入口与计数，点击跳到「待办」里对应的位置，避免同屏两份内容。
+  // 运行只给入口与计数，点击跳到对应模式或小节，避免同屏两份内容。
 
   // 详情卡的取数节奏：卡片内容变化慢，没必要跟着 2 秒轮询。
   const FOCUS_DETAIL_TTL = 15000;
+  // 入口跳转：知识去知识模式（B）的浏览页；补丁回专注的待办卡；
+  // 测试与运行在知识模式里折叠的工作区。目标找不到就退回该模式顶部。
   const FOCUS_JUMP = {
-    knowledge: ['B', 'knowledgeSection'],
+    knowledge: ['B', 'knowledgeBrowse'],
     tests: ['B', 'runningSection'],
-    patches: ['B', 'needsSection'],
+    patches: ['A', 'needsSection'],
     runs: ['B', 'runningSection']
   };
 
@@ -2793,12 +2792,12 @@
     if (!target) return;
     const [mode, sectionId] = target;
     setMode(mode);
-    // 工作区默认折叠，先展开再滚动，否则跳过去是一片空白。
-    const workspace = $('workspaceToggle');
-    if (workspace && sectionId !== 'needsSection') workspace.open = true;
     // 目标小节以后可能被并到别的模式里；找不到就退回该模式顶部，不留死跳转。
     const node = $(sectionId) ?? $(`mode${mode}`);
     if (!node) return;
+    // 只有目标在折叠的工作区里时才需要先展开，否则会把用户带到无关的区域。
+    const workspace = $('workspaceToggle');
+    if (workspace && workspace.contains(node)) workspace.open = true;
     window.setTimeout(() => node.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
   };
 
@@ -3078,6 +3077,133 @@
   };
 
   // ---- 三种视图模式：专注（A） / 待办（B） / 对话（C） ----
+  // ---- 知识模式：浏览与筛选（只读本地 SQLite） ----
+
+  const PROJECT_PREFIX = /^project\./u;
+  const projectLabel = (id) => {
+    const key = String(id ?? '');
+    const known = (view?.projects ?? []).find((project) => project.id === key);
+    if (known?.name) return known.name;
+    const short = key.replace(PROJECT_PREFIX, '');
+    return short.length > 22 ? `${short.slice(0, 22)}…` : (short || '未归属项目');
+  };
+
+  let knowledgeBrowseData = null;
+  let knowledgeBrowseProject = '';
+  let knowledgeBrowseToken = 0;
+  let knowledgeBrowseSignature = '';
+
+  // 把纯视图模型渲染成卡片；这里只做 DOM 与项目显示名，不重新计算归属。
+  const knowledgeGroupCard = (group) => {
+    const card = el('section', `kb-group kb-${group.key}`);
+    const head = el('div', 'kb-group-head');
+    head.append(el('h4', 'kb-group-name', group.label));
+    head.append(el('span', 'kb-group-count', `${group.count} 条`));
+    card.append(head);
+    if (group.items.length === 0) {
+      card.append(el('p', 'kb-group-empty', group.emptyHint));
+      return card;
+    }
+    const list = el('div', 'kb-list');
+    for (const item of group.items) {
+      const row = el('button', 'kb-item');
+      row.type = 'button';
+      row.dataset.id = item.id;
+      row.append(el('span', 'kb-item-title', item.title));
+      const meta = el('span', 'kb-item-meta', item.detail);
+      // 「全部」视图下补项目名，避免同名条目看不出属于哪个项目。
+      if (!knowledgeBrowseProject && item.projectId) {
+        meta.textContent += ` · ${projectLabel(item.projectId)}`;
+      }
+      row.append(meta);
+      row.onclick = () => { void openKnowledgeDetail(item.id); };
+      list.append(row);
+    }
+    card.append(list);
+    if (group.truncated) {
+      card.append(el('p', 'kb-group-more', `共 ${group.count} 条，只显示最近 ${group.shown} 条。`));
+    }
+    return card;
+  };
+
+  const renderKnowledgeBrowse = () => {
+    const holder = $('kbGroups');
+    const filters = $('kbFilters');
+    holder.replaceChildren();
+    filters.replaceChildren();
+    const data = knowledgeBrowseData;
+
+    const chip = (id, label, count) => {
+      const button = el('button', `kb-chip${id === knowledgeBrowseProject ? ' on' : ''}`);
+      button.type = 'button';
+      button.append(el('span', undefined, label));
+      if (count !== undefined) button.append(el('span', 'kb-chip-count', String(count)));
+      button.onclick = () => {
+        if (knowledgeBrowseProject === id) return;
+        knowledgeBrowseProject = id;
+        void loadKnowledgeBrowse();
+      };
+      return button;
+    };
+
+    if (!data) {
+      filters.append(chip('', '全部'));
+      holder.append(el('p', 'kb-loading', '正在读取本地知识库…'));
+      return;
+    }
+
+    $('kbTotal').textContent = String(data.totals?.all ?? 0);
+    filters.append(chip('', '全部', data.overall?.all ?? data.totals?.all ?? 0));
+    for (const project of data.projects ?? []) {
+      filters.append(chip(project.id, projectLabel(project.id), project.count));
+    }
+
+    if (!data.available) {
+      const empty = el('div', 'kb-empty');
+      empty.append(el('div', 'kb-empty-title', '知识库还没有初始化'));
+      empty.append(el('div', 'kb-empty-sub', data.empty?.detail ?? '本地 SQLite 打不开时这里只显示说明。'));
+      holder.append(empty);
+      return;
+    }
+
+    if (data.empty) {
+      const empty = el('div', 'kb-empty');
+      empty.append(el('div', 'kb-empty-title', data.empty.title));
+      empty.append(el('div', 'kb-empty-sub', data.empty.detail));
+      holder.append(empty);
+    }
+    // 即使全空也保留三组与计数，让「候选 / 已验证 / 经验」的结构始终可见。
+    for (const group of data.groups ?? []) holder.append(knowledgeGroupCard(group));
+  };
+
+  const loadKnowledgeBrowse = async () => {
+    const token = ++knowledgeBrowseToken;
+    const started = performance.now();
+    try {
+      const data = await window.companion.knowledge.browse({ projectId: knowledgeBrowseProject });
+      if (token !== knowledgeBrowseToken) return;
+      knowledgeBrowseData = data;
+      // 所选项目在新数据里已经不存在（例如知识被清空）时退回「全部」。
+      if (knowledgeBrowseProject && !(data.projects ?? []).some((item) => item.id === knowledgeBrowseProject)) {
+        knowledgeBrowseProject = '';
+        void loadKnowledgeBrowse();
+        return;
+      }
+      renderKnowledgeBrowse();
+      $('knowledgeBrowse').dataset.renderMs = String(Math.round(performance.now() - started));
+    } catch (error) {
+      if (token !== knowledgeBrowseToken) return;
+      knowledgeBrowseData = null;
+      const holder = $('kbGroups');
+      holder.replaceChildren();
+      const box = el('div', 'kb-empty');
+      box.append(el('div', 'kb-empty-title', '读取知识库失败'));
+      box.append(el('div', 'kb-empty-sub', String(error?.message ?? error)));
+      holder.append(box);
+    }
+  };
+
+  // ---- 三种视图模式：专注（A） / 知识（B） / 对话（C） ----
 
   const MODE_IDS = { A: 'modeA', B: 'modeB', C: 'modeC' };
 
@@ -3095,52 +3221,19 @@
       button.classList.toggle('on', button.dataset.mode === mode);
     }
     const hasProjects = (view?.projects?.length ?? 0) > 0;
-    // 交办输入框只在「待办」里出现；对话模式用自己的输入。
-    $('composeSection').hidden = !hasProjects || mode !== 'B';
+    // 交办输入框只属于专注；对话模式用自己的输入，知识模式只读。
+    $('composeSection').hidden = !hasProjects || mode !== 'A';
     if (mode === 'A') renderModeA();
+    if (mode === 'B') void loadKnowledgeBrowse();
     if (mode === 'C') {
       greetChatOnce();
       renderChatCards();
     }
   };
 
+  // 专注页两张卡：第一张待办（列表由 renderPending 画），第二张所选项目的只读详情。
+  // 旧的「单一下一步」首卡已被待办卡取代，这里不再重建。
   const renderModeA = () => {
-    const project = view?.projects?.find((item) => item.id === view?.activeProjectId) ?? view?.projects?.[0];
-    $('aProject').textContent = project ? String(project.name || project.id) : '还没有项目';
-    const pending = Array.isArray(view?.pending) ? view.pending : [];
-    const top = pending[0];
-    const action = view?.nextAction;
-    // 有项目时下方还有「项目详情」卡，就不把整页做成居中的空状态。
-    $('modeA').querySelector('.a-wrap')?.classList.toggle('is-empty', !top && focusProjects().length === 0);
-
-    if (top) {
-      $('aChip').hidden = false;
-      $('aChip').textContent = pending.length > 1 ? `${pending.length} 件待你` : '1 件待你';
-      $('aTitle').textContent = top.title || '有一件事等你决定';
-      $('aDetail').textContent = top.summary || '批准前不会改变真实项目。';
-      $('aCard').hidden = false;
-      $('aKicker').textContent = top.kind === 'patch' ? '补丁待审' : top.kind === 'job' ? '任务待批' : '待确认';
-      $('aSummary').textContent = top.next || '';
-      $('aPrimary').textContent = '去处理';
-    } else {
-      $('aChip').hidden = true;
-      $('aTitle').textContent = '现在没有需要你决定的事';
-      $('aDetail').textContent = action?.title
-        ? `${action.title}${action.detail ? ` · ${action.detail}` : ''}`
-        : '可以切到对话，问问项目现在什么情况。';
-      $('aCard').hidden = true;
-      $('aPrimary').textContent = '看看项目';
-    }
-
-    $('aFeed').replaceChildren();
-    for (const item of pending.slice(1, 4)) {
-      const row = el('div', 'a-row');
-      row.append(el('span', 'a-dot'));
-      row.append(el('span', undefined, item.title || item.id));
-      $('aFeed').append(row);
-    }
-
-    // 第二张卡：所选项目的只读详情（项目选择只影响这张卡）。
     renderFocusDetail();
   };
 
@@ -3162,7 +3255,7 @@
     const pending = view?.pending?.length ?? 0;
     const project = view?.projects?.find((item) => item.id === view?.activeProjectId) ?? view?.projects?.[0];
     if (!project) {
-      chatAppend('bot', '还没有登记项目。切到「待办」展开工作区，先添加一个目录。');
+      chatAppend('bot', '还没有登记项目。切到「专注」展开工作区，先添加一个目录。');
       return;
     }
     const lines = [`我在看 ${project.name || project.id}。`];
@@ -3239,11 +3332,6 @@
   for (const button of document.querySelectorAll('#modeBar button')) {
     button.onclick = () => setMode(button.dataset.mode);
   }
-  $('aPrimary').onclick = () => {
-    setMode('B');
-    $('needsSection')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  };
-  $('aSecondary').onclick = () => setMode('C');
   $('cSend').onclick = () => { void sendChat(); };
   $('cInput').addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {

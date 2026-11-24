@@ -1381,7 +1381,7 @@ pre.diff, pre.logs {
 }
 .mobile-actions { display: flex; gap: 6px; margin-top: 6px; }
 
-/* ---- 观察员式收件箱（原型 B 主干 + A 空状态） ---- */
+/* ---- 观察员式待办列表（专注模式的待决定区） ---- */
 .inbox-section {
   margin: 10px 12px 4px;
   padding: 14px 14px 12px;
@@ -1405,29 +1405,6 @@ pre.diff, pre.logs {
   font-size: 12px;
   line-height: 1.6;
   color: var(--muted);
-}
-.inbox-empty {
-  padding: 10px 2px 6px;
-}
-.inbox-empty-title {
-  font-size: 16px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  margin-bottom: 6px;
-}
-.inbox-empty-sub {
-  font-size: 12.5px;
-  line-height: 1.65;
-  color: var(--muted);
-  margin-bottom: 12px;
-}
-.inbox-empty .primary {
-  width: auto;
-  min-width: 112px;
-  height: 34px;
-  padding: 0 14px;
-  border-radius: 9px;
-  font-size: 12.5px;
 }
 
 .workspace {
@@ -1454,7 +1431,7 @@ pre.diff, pre.logs {
 .workspace[open] > .workspace-summary { border-bottom: 1px solid var(--line); }
 .workspace .zone { margin-top: 0; border: 0; padding-top: 8px; }
 
-/* ---- 三种视图模式：专注 / 待办 / 对话 ---- */
+/* ---- 三种视图模式：专注 / 知识 / 对话 ---- */
 .mode-bar {
   display: flex;
   gap: 4px;
@@ -1487,21 +1464,49 @@ pre.diff, pre.logs {
 
 /* A：专注 */
 .a-wrap { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 16px 16px; display: flex; flex-direction: column; }
-/* 没有待办时把内容垂直居中，避免一大片空白看起来像没加载完。 */
-.a-wrap.is-empty { justify-content: center; padding-bottom: 56px; }
-.a-wrap.is-empty .a-feed { display: none; }
-.a-top { display: flex; align-items: baseline; justify-content: space-between; font-size: 12px; color: var(--muted); }
-.a-chip { background: var(--warn-soft); color: var(--warn); border-radius: 999px; padding: 2px 8px; font-size: 11px; }
-.a-wrap h2 { margin: 12px 0 6px; font-size: 20px; line-height: 1.35; letter-spacing: -.2px; }
-.a-detail { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--muted); }
-.a-card { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
-.a-kicker { font-size: 10px; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; }
-.a-sum { margin-top: 6px; font-size: 12.5px; line-height: 1.6; color: var(--text); }
-.a-primary { margin-top: 14px; height: 44px; border: 0; border-radius: 12px; background: var(--accent); color: var(--accent-fg); font-size: 14px; font-weight: 600; cursor: pointer; }
-.a-secondary { margin-top: 8px; height: 38px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--muted); font-size: 12.5px; cursor: pointer; }
-.a-feed { margin-top: auto; padding-top: 14px; display: grid; gap: 6px; }
-.a-row { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--muted); }
-.a-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--line); flex: none; margin-top: 6px; }
+/* 第一张卡是待办（#42 从知识模式挪来），没有待办时卡片仍在，只显示一句空状态。 */
+.a-pending { margin: 0 0 4px; padding: 12px 12px 10px; }
+.a-pending .inbox-head h3 { font-size: 13px; }
+
+/* B：知识（只读浏览 + 项目筛选） */
+.knowledge-browse {
+  margin: 10px 12px 4px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.kb-head { display: flex; align-items: center; gap: 8px; }
+.kb-head h3 { margin: 0; font-size: 15px; letter-spacing: -.01em; }
+.kb-head .count { margin-left: auto; }
+.kb-hint { margin: 6px 0 10px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.kb-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.kb-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--bg); color: var(--muted); font-size: 11.5px; cursor: pointer;
+}
+.kb-chip:hover { color: var(--text); }
+.kb-chip.on { background: var(--accent-soft); color: var(--text); border-color: rgba(38, 38, 38, .28); font-weight: 600; }
+.kb-chip-count { font-size: 10.5px; opacity: .65; }
+.kb-groups { display: grid; gap: 10px; }
+.kb-group { padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+.kb-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.kb-group-name { margin: 0; font-size: 13px; letter-spacing: -.01em; }
+.kb-group-count { font-size: 11px; color: var(--muted); }
+.kb-list { display: grid; gap: 1px; margin-top: 6px; }
+.kb-item {
+  display: flex; flex-direction: column; gap: 2px; width: 100%;
+  padding: 6px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--text); text-align: left; cursor: pointer;
+}
+.kb-item:hover { background: var(--accent-soft); }
+.kb-item-title { font-size: 12.5px; font-weight: 600; line-height: 1.4; }
+.kb-item-meta { font-size: 11px; color: var(--muted); line-height: 1.45; }
+.kb-group-empty, .kb-group-more, .kb-loading { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }
+.kb-empty { padding: 12px 10px; background: var(--bg); border: 1px dashed var(--line); border-radius: 10px; }
+.kb-empty-title { margin-bottom: 5px; font-size: 14px; font-weight: 650; }
+.kb-empty-sub { font-size: 12px; line-height: 1.65; color: var(--muted); }
 
 /* C：对话 */
 .c-transcript { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
