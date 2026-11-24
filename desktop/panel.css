@@ -1464,19 +1464,8 @@ pre.diff, pre.logs {
 
 /* A：专注 */
 .a-wrap { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 16px 16px; display: flex; flex-direction: column; }
-/* 没有待办时把内容垂直居中，避免一大片空白看起来像没加载完。 */
-.a-wrap.is-empty { justify-content: center; padding-bottom: 56px; }
-.a-top { display: flex; align-items: baseline; justify-content: space-between; font-size: 12px; color: var(--muted); }
-.a-chip { background: var(--warn-soft); color: var(--warn); border-radius: 999px; padding: 2px 8px; font-size: 11px; }
-.a-wrap h2 { margin: 12px 0 6px; font-size: 20px; line-height: 1.35; letter-spacing: -.2px; }
-.a-detail { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--muted); }
-.a-card { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
-.a-kicker { font-size: 10px; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; }
-.a-sum { margin-top: 6px; font-size: 12.5px; line-height: 1.6; color: var(--text); }
-.a-primary { margin-top: 14px; height: 44px; border: 0; border-radius: 12px; background: var(--accent); color: var(--accent-fg); font-size: 14px; font-weight: 600; cursor: pointer; }
-.a-secondary { margin-top: 8px; height: 38px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--muted); font-size: 12.5px; cursor: pointer; }
-/* 待办列表现在住在专注里，跟在主卡下方；空列表交给专注页自己的空状态。 */
-.a-pending { margin: 16px 0 0; padding: 12px 12px 10px; }
+/* 第一张卡是待办（#42 从知识模式挪来），没有待办时卡片仍在，只显示一句空状态。 */
+.a-pending { margin: 0 0 4px; padding: 12px 12px 10px; }
 .a-pending .inbox-head h3 { font-size: 13px; }
 
 /* B：知识（只读浏览 + 项目筛选） */
@@ -1591,3 +1580,71 @@ pre.diff, pre.logs {
 .c-composer textarea { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); padding: 8px 10px; font: inherit; font-size: 12.5px; outline: none; }
 .c-composer button { border: 0; border-radius: 10px; padding: 0 14px; background: var(--accent); color: var(--accent-fg); font-weight: 600; cursor: pointer; }
 .c-composer button:disabled { opacity: .5; }
+
+/* ---- A：专注第二张卡 —— 项目详情（只读） ---- */
+.focus-detail { margin-top: 18px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.focus-detail[hidden] { display: none; }
+.fd-head { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.fd-head-text { display: flex; align-items: baseline; gap: 8px; }
+.fd-title { font-size: 12.5px; font-weight: 600; }
+.fd-hint { font-size: 10.5px; color: var(--muted); }
+.fd-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.fd-tab { display: inline-flex; align-items: center; gap: 5px; max-width: 170px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--muted); padding: 3px 9px; font: inherit; font-size: 11.5px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-tab.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.fd-tab-count { flex: none; border-radius: 999px; background: var(--warn-soft); color: var(--warn); padding: 0 5px; font-size: 10px; }
+.fd-tab.on .fd-tab-count { background: rgba(255, 255, 255, .22); color: inherit; }
+.fd-body { display: flex; flex-direction: column; padding: 4px 12px 12px; }
+.fd-block { border-bottom: 1px solid var(--line); }
+.fd-block:last-of-type { border-bottom: 0; }
+.fd-block-head { display: flex; align-items: center; gap: 6px; padding: 7px 0; list-style: none; font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
+.fd-block-head::-webkit-details-marker { display: none; }
+.fd-block-head::before { content: '▸'; width: 10px; color: var(--muted); font-size: 10px; }
+.fd-block[open] > .fd-block-head::before { content: '▾'; }
+.fd-block-badge { border-radius: 999px; background: var(--accent-soft); color: var(--muted); padding: 1px 6px; font-size: 10px; font-weight: 400; }
+.fd-block-body { padding: 0 0 8px 16px; font-size: 12px; }
+.fd-section-title { margin: 12px 0 4px; color: var(--muted); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+.fd-empty { margin: 4px 0; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
+.fd-text { margin: 4px 0; font-size: 11.5px; line-height: 1.6; }
+.fd-text.warn { color: var(--warn); }
+.fd-brief-one { margin: 2px 0 6px; font-size: 12.5px; line-height: 1.6; }
+.fd-row { margin-top: 6px; }
+.fd-label { display: block; margin-bottom: 2px; color: var(--muted); font-size: 11px; }
+.fd-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.fd-chip { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 1px 5px; font-size: 11px; }
+.fd-diagram { max-height: 220px; overflow: auto; }
+.fd-diagram svg { max-width: 100%; height: auto; }
+.fd-ideas { display: flex; flex-direction: column; gap: 4px; }
+.fd-idea { display: flex; align-items: baseline; gap: 8px; }
+.fd-idea-status { flex: none; border-radius: 999px; background: var(--accent-soft); color: var(--muted); padding: 1px 6px; font-size: 10px; }
+.fd-idea-status.s-done { color: var(--ok); }
+.fd-idea-status.s-blocked { color: var(--warn); }
+.fd-idea-title { font-size: 11.5px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-playbook { display: flex; flex-direction: column; gap: 4px; }
+.fd-running { color: var(--warn); font-size: 11.5px; }
+.fd-run { display: flex; align-items: baseline; gap: 8px; font-size: 11.5px; }
+.fd-run-status { flex: none; border-radius: 999px; background: var(--accent-soft); color: var(--muted); padding: 1px 6px; font-size: 10px; }
+.fd-run-status.s-ok, .fd-run-status.s-succeeded { color: var(--ok); }
+.fd-run-status.s-error, .fd-run-status.s-failed { color: var(--danger); }
+.fd-run-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-run-time { flex: none; color: var(--muted); font-size: 10.5px; }
+.fd-entries { display: flex; flex-direction: column; gap: 2px; }
+.fd-entry { display: flex; align-items: baseline; gap: 8px; width: 100%; border: 0; border-radius: 8px; background: transparent; color: var(--text); padding: 6px 4px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.fd-entry:hover { background: var(--accent-soft); }
+.fd-entry-label { flex: none; width: 44px; font-weight: 600; }
+.fd-entry-count { flex: none; font-weight: 600; font-variant-numeric: tabular-nums; }
+.fd-entry-note { flex: 1; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-entry-go { color: var(--muted); }
+.fd-more { display: flex; flex-direction: column; }
+.fd-more-label { margin: 8px 0 2px; color: var(--muted); font-size: 10.5px; letter-spacing: .5px; }
+.fd-github-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.fd-github-repo { border: 0; background: transparent; color: var(--text); padding: 0; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.fd-github-repo:hover { text-decoration: underline; }
+.fd-github-count { color: var(--muted); font-size: 10.5px; }
+.fd-github-item { display: flex; align-items: baseline; gap: 8px; width: 100%; border: 0; border-radius: 6px; background: transparent; color: var(--text); padding: 3px 2px; font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
+.fd-github-item:hover { background: var(--accent-soft); }
+.fd-github-kind { flex: none; color: var(--muted); font-size: 10.5px; }
+.fd-github-kind.k-pr { color: var(--ok); }
+.fd-github-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-guide { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 6px 0; }
+.fd-guide-title { font-size: 13px; font-weight: 600; }
+.fd-guide-text { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.6; }

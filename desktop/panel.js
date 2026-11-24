@@ -56,13 +56,15 @@
     $('pendingCount').textContent = `${pending} 项待决定`;
     $('pendingBadge').textContent = String(pending);
     $('pendingBadge').hidden = pending === 0;
-    // 待办列表住在专注模式；没有待办时交给专注页的空状态，不再渲染空列表。
-    $('needsSection').hidden = pending === 0;
+    // 待办是专注页第一张卡：没有待办时卡片留着，用一句话说明，别让专注页只剩详情。
+    $('needsSection').hidden = false;
     $('pendingList').hidden = pending === 0;
-    $('needsHint').hidden = pending === 0;
+    $('needsHint').hidden = false;
     $('needsCount').textContent = String(pending);
     $('needsChip').classList.toggle('warn', pending > 0);
-    $('needsHint').textContent = `有 ${pending} 项需要你确认；写入、补丁与测试在批准前不会改变真实项目。`;
+    $('needsHint').textContent = pending === 0
+      ? '现在没有需要你决定的事；下面可以看这个项目的样子。'
+      : `有 ${pending} 项需要你确认；写入、补丁与测试在批准前不会改变真实项目。`;
     const running = view?.worker?.running;
     const playbookRunning = view?.playbook?.running === true;
     const chainItems = [view?.chain?.job, view?.chain?.patch, view?.chain?.sandbox, view?.chain?.cycle]
@@ -2693,6 +2695,389 @@
     }
   };
 
+  // ---- 专注：项目详情卡（只读） ----
+  //
+  // 专注页第一张卡是待办（列表由 renderPending 画），这张是第二张。
+  // 卡片只影响自己：选中哪个项目不写回配置、不记忆，刷新后回到第一个。
+  // 九块内容里只有画像 / 图谱 / 想法 / Playbook 渲染正文；知识 / 测试 / 补丁 /
+  // 运行只给入口与计数，点击跳到对应模式或小节，避免同屏两份内容。
+
+  // 详情卡的取数节奏：卡片内容变化慢，没必要跟着 2 秒轮询。
+  const FOCUS_DETAIL_TTL = 15000;
+  // 入口跳转：知识去知识模式（B）的浏览页；补丁回专注的待办卡；
+  // 测试与运行在知识模式里折叠的工作区。目标找不到就退回该模式顶部。
+  const FOCUS_JUMP = {
+    knowledge: ['B', 'knowledgeBrowse'],
+    tests: ['B', 'runningSection'],
+    patches: ['A', 'needsSection'],
+    runs: ['B', 'runningSection']
+  };
+
+  let focusProjectId = '';
+  // 这张卡自己的快照：只用来画详情，不参与全局 view、也不改配置。
+  let focusDetail = null;
+  let focusDetailAt = 0;
+  let focusDetailLoading = false;
+  let focusDetailToken = 0;
+  let focusPlaybook = null;
+  let focusPlaybookLoading = '';
+  let focusRenderedKey = '';
+  let focusTabsKey = '';
+  let focusMoreOpen = false;
+  const focusDiagramCache = new Map();
+  let focusDiagramToken = 0;
+
+  const focusProjects = () => (Array.isArray(view?.projects) ? view.projects : []);
+
+  /** 当前展示的项目：没选过、或选中的项目没了，都回到第一个。 */
+  const focusProject = () => {
+    const projects = focusProjects();
+    if (!projects.length) return null;
+    return projects.find((item) => item.id === focusProjectId) ?? projects[0];
+  };
+
+  /** 点列表切换：只换这张卡看的项目，不写回配置。 */
+  const selectFocusProject = (projectId) => {
+    if (!projectId) return;
+    if (projectId !== focusProject()?.id) {
+      focusProjectId = projectId;
+      // 换项目后旧数据一律作废，避免把 A 的内容画在 B 名下。
+      focusDetail = null;
+      focusDetailAt = 0;
+      focusRenderedKey = '';
+      focusMoreOpen = false;
+    }
+    renderFocusDetail();
+    void loadFocusDetail();
+  };
+
+  const loadFocusDetail = async () => {
+    const project = focusProject();
+    if (!project) return;
+    const token = ++focusDetailToken;
+    focusDetailLoading = true;
+    try {
+      const snapshot = await window.companion.snapshot({ projectId: project.id });
+      // 迟到的响应可能已经换了项目，直接丢掉。
+      if (token !== focusDetailToken) return;
+      focusDetail = snapshot;
+      focusDetailAt = Date.now();
+    } catch {
+      // 单张卡取数失败不打断整个面板；记个时间，过几秒再试。
+      if (token === focusDetailToken) focusDetailAt = Date.now();
+    } finally {
+      if (token === focusDetailToken) {
+        focusDetailLoading = false;
+        renderFocusDetail();
+      }
+    }
+  };
+
+  const loadFocusPlaybook = async (projectId) => {
+    if (!projectId || focusPlaybookLoading === projectId) return;
+    focusPlaybookLoading = projectId;
+    try {
+      const catalog = await window.companion.playbooks.list({ projectId });
+      focusPlaybook = { projectId, catalog };
+    } catch {
+      focusPlaybook = { projectId, catalog: null };
+    } finally {
+      focusPlaybookLoading = '';
+      renderFocusDetail();
+    }
+  };
+
+  /** 入口点击：跳到「待办」里对应的位置，不在卡片里重画第二份。 */
+  const focusJump = (key) => {
+    const target = FOCUS_JUMP[key];
+    if (!target) return;
+    const [mode, sectionId] = target;
+    setMode(mode);
+    // 目标小节以后可能被并到别的模式里；找不到就退回该模式顶部，不留死跳转。
+    const node = $(sectionId) ?? $(`mode${mode}`);
+    if (!node) return;
+    // 只有目标在折叠的工作区里时才需要先展开，否则会把用户带到无关的区域。
+    const workspace = $('workspaceToggle');
+    if (workspace && workspace.contains(node)) workspace.open = true;
+    window.setTimeout(() => node.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
+  };
+
+  const fdBlock = (title, badge, body, { open = true, onToggle = null } = {}) => {
+    const box = document.createElement('details');
+    box.className = 'fd-block';
+    box.open = open;
+    const summary = el('summary', 'fd-block-head');
+    summary.append(el('span', 'fd-block-title', title));
+    if (badge) summary.append(el('span', 'fd-block-badge', badge));
+    box.append(summary);
+    const content = el('div', 'fd-block-body');
+    if (body) content.append(body);
+    box.append(content);
+    if (onToggle) box.addEventListener('toggle', () => onToggle(box.open));
+    return box;
+  };
+
+  const fdEmpty = (text) => el('p', 'fd-empty', text);
+
+  const fdChips = (values, className = 'fd-chip') => {
+    const wrap = el('span', 'fd-chips');
+    for (const value of values) wrap.append(el('code', className, value));
+    return wrap;
+  };
+
+  const fdBriefBody = (brief) => {
+    if (brief.state !== 'ready') return fdEmpty(brief.hint);
+    const wrap = el('div', 'fd-brief');
+    if (brief.oneLiner) wrap.append(el('p', 'fd-brief-one', brief.oneLiner));
+    else if (brief.whatItIs) wrap.append(el('p', 'fd-brief-one', brief.whatItIs));
+    const row = (label, content) => {
+      const line = el('div', 'fd-row');
+      line.append(el('span', 'fd-label', label));
+      line.append(content);
+      wrap.append(line);
+    };
+    if (brief.howToRun.length) row('怎么跑', fdChips(brief.howToRun));
+    if (brief.modules.length) {
+      row('关键模块', fdChips(brief.modules.map((module) =>
+        module.role ? `${module.name} · ${module.role}` : module.name), 'fd-chip'));
+    }
+    if (brief.verify.length) row('怎么验收', fdChips(brief.verify));
+    if (brief.risks.length) row('风险', el('span', 'fd-text', brief.risks.join('；')));
+    if (brief.unknowns.length) row('还不确定', el('span', 'fd-text', brief.unknowns.join('；')));
+    return wrap;
+  };
+
+  /** 图谱：复用 mermaid 渲染，按「项目 + 类型 + 源码」缓存，轮询不重画。 */
+  const fdRenderDiagram = (container, diagram, projectId) => {
+    if (diagram.state !== 'ready' || !diagram.mermaid) {
+      container.append(fdEmpty(diagram.hint || '还没有图谱。'));
+      return;
+    }
+    const key = `${projectId}|${diagram.kind}|${diagram.mermaid}`;
+    const cached = focusDiagramCache.get(key);
+    if (cached) {
+      container.innerHTML = cached;
+      return;
+    }
+    const token = ++focusDiagramToken;
+    container.append(el('div', 'fd-empty', '正在渲染图谱…'));
+    void window.mermaid.render(`fd-diagram-${Date.now()}`, diagram.mermaid)
+      .then(({ svg }) => {
+        focusDiagramCache.set(key, svg);
+        // 缓存只留最近几张，避免一直涨。
+        if (focusDiagramCache.size > 12) {
+          focusDiagramCache.delete(focusDiagramCache.keys().next().value);
+        }
+        if (token === focusDiagramToken && container.isConnected) container.innerHTML = svg;
+      })
+      .catch(() => {
+        if (token === focusDiagramToken && container.isConnected) {
+          container.replaceChildren(fdEmpty('图谱渲染失败，可以到待办里重新生成。'));
+        }
+      });
+  };
+
+  const fdEntriesBody = (entries) => {
+    const list = el('div', 'fd-entries');
+    for (const entry of entries) {
+      const row = el('button', 'fd-entry');
+      row.type = 'button';
+      row.title = `跳到${entry.label}${entry.note ? ` · ${entry.note}` : ''}`;
+      row.append(el('span', 'fd-entry-label', entry.label));
+      row.append(el('span', 'fd-entry-count', String(entry.count)));
+      row.append(el('span', 'fd-entry-note', entry.note));
+      row.append(el('span', 'fd-entry-go', '›'));
+      row.onclick = () => focusJump(entry.key);
+      list.append(row);
+    }
+    return list;
+  };
+
+  const fdIdeasBody = (ideas) => {
+    if (!ideas.items.length) return fdEmpty(ideas.hint || '还没有想法。');
+    const list = el('div', 'fd-ideas');
+    for (const idea of ideas.items) {
+      const row = el('div', 'fd-idea');
+      row.append(el('span', `fd-idea-status s-${idea.status}`, idea.statusLabel));
+      row.append(el('span', 'fd-idea-title', idea.title));
+      list.append(row);
+    }
+    return list;
+  };
+
+  const fdPlaybookBody = (playbook) => {
+    const wrap = el('div', 'fd-playbook');
+    if (playbook.running) {
+      wrap.append(el('div', 'fd-running', `正在跑：${playbook.runningTitle || 'Playbook'}`));
+    }
+    if (!playbook.available) {
+      wrap.append(fdEmpty(playbook.hint || 'Playbook 不可用。'));
+      return wrap;
+    }
+    if (!playbook.lastRuns.length) {
+      wrap.append(fdEmpty('这个项目还没跑过 Playbook；可以到待办里跑一次。'));
+    }
+    for (const run of playbook.lastRuns) {
+      const row = el('div', 'fd-run');
+      row.append(el('span', `fd-run-status s-${run.status || 'unknown'}`, run.status || '—'));
+      row.append(el('span', 'fd-run-label', run.label));
+      row.append(el('span', 'fd-run-time',
+        formatRelative(run.startedAt) || ''));
+      wrap.append(row);
+    }
+    return wrap;
+  };
+
+  const fdGithubBody = (github) => {
+    if (!github.linked) return fdEmpty(github.hint);
+    const wrap = el('div', 'fd-github');
+    const head = el('div', 'fd-github-head');
+    const repo = el('button', 'fd-github-repo', github.nameWithOwner);
+    repo.type = 'button';
+    repo.title = '在浏览器打开仓库';
+    repo.onclick = () => openGithub(github.url);
+    head.append(repo);
+    if (!github.loading) {
+      head.append(el('span', 'fd-github-count', `Issues ${github.issueCount}`));
+      head.append(el('span', 'fd-github-count', `PR ${github.prCount}`));
+    }
+    wrap.append(head);
+    if (github.loading) wrap.append(fdEmpty(github.hint));
+    else if (github.error) wrap.append(fdEmpty(github.error));
+    else if (!github.items.length) wrap.append(fdEmpty('没有打开的 Issues 或 PR。'));
+    for (const item of github.items) {
+      const row = el('button', 'fd-github-item');
+      row.type = 'button';
+      row.append(el('span', `fd-github-kind k-${item.kind}`,
+        item.kind === 'issue' ? `#${item.number}` : `PR #${item.number}`));
+      row.append(el('span', 'fd-github-title', item.title || '（无标题）'));
+      row.onclick = () => openGithub(item.url);
+      wrap.append(row);
+    }
+    return wrap;
+  };
+
+  const fdTestsBody = (tests) => {
+    const wrap = el('div', 'fd-tests');
+    wrap.append(el('p', 'fd-text',
+      `沙箱测试：${tests.enabled ? (tests.ok ? '可用' : '配置不完整') : '已关闭'}${tests.profile ? ` · ${tests.profile}` : ''}`));
+    if (tests.missing.length) {
+      wrap.append(el('p', 'fd-text warn', `缺：${tests.missing.join('、')}`));
+    }
+    wrap.append(el('p', 'fd-empty', tests.hint));
+    const button = el('button', 'ghost small', '跳到测试配置');
+    button.type = 'button';
+    button.onclick = () => openSettings();
+    wrap.append(button);
+    return wrap;
+  };
+
+  /** 画整张卡：数据没变就不重建，避免每 2 秒把图重新渲染一遍。 */
+  const renderFocusDetail = () => {
+    const card = $('focusDetail');
+    if (!card) return;
+    const project = focusProject();
+    const model = window.OwnerFocusDetail?.buildFocusDetail({
+      projects: focusProjects(),
+      selectedId: focusProjectId,
+      detail: focusDetail,
+      playbook: focusPlaybook,
+      github: project ? githubActivityCache.get(project.id) ?? null : null
+    });
+    if (!model) return;
+
+    // 没有项目：只给添加项目的引导，别画一个空壳卡片。
+    if (!model.hasProjects) {
+      card.hidden = false;
+      if (focusRenderedKey === 'guide') return;
+      focusRenderedKey = 'guide';
+      $('fdTabs').replaceChildren();
+      $('fdHint').textContent = '';
+      const body = $('fdBody');
+      body.replaceChildren();
+      const guide = el('div', 'fd-guide');
+      guide.append(el('div', 'fd-guide-title', model.guide.title));
+      guide.append(el('p', 'fd-guide-text', model.guide.text));
+      const add = el('button', 'primary small', model.guide.actionLabel);
+      add.type = 'button';
+      add.onclick = () => { void pickProject(); };
+      guide.append(add);
+      body.append(guide);
+      return;
+    }
+
+    // 详情过期，或换过项目但还没取到：发起一次按项目的快照请求。
+    const stale = !focusDetail || focusDetail.config?.projectId !== model.projectId
+      || Date.now() - focusDetailAt > FOCUS_DETAIL_TTL;
+    if (project && stale && !focusDetailLoading) void loadFocusDetail();
+
+    card.hidden = false;
+    // 项目列表很短，直接平铺；多了也只在卡片内横向换行，不影响别的模式。
+    // 只在项目/选中项/待办数变化时重建，避免轮询把按钮闪烁一遍。
+    const tabsKey = JSON.stringify(model.tabs);
+    if (tabsKey !== focusTabsKey) {
+      focusTabsKey = tabsKey;
+      $('fdTabs').replaceChildren(...model.tabs.map((tab) => {
+        const button = el('button', `fd-tab${tab.selected ? ' on' : ''}`, tab.name);
+        button.type = 'button';
+        button.dataset.project = tab.id;
+        button.setAttribute('role', 'tab');
+        button.setAttribute('aria-selected', tab.selected ? 'true' : 'false');
+        button.title = tab.pending > 0 ? `${tab.name} · ${tab.pending} 件待办` : tab.name;
+        if (tab.pending > 0) button.append(el('span', 'fd-tab-count', String(tab.pending)));
+        button.onclick = () => selectFocusProject(tab.id);
+        return button;
+      }));
+    }
+    $('fdHint').textContent = model.detailReady ? '' : '正在读取…';
+
+    const key = JSON.stringify(model);
+    if (key === focusRenderedKey) return;
+    focusRenderedKey = key;
+
+    const body = $('fdBody');
+    body.replaceChildren();
+
+    // 画像 / 图谱 / 想法 / Playbook 默认展开。
+    body.append(fdBlock('画像', model.brief.stale ? '已过期' : '', fdBriefBody(model.brief)));
+
+    const diagramBox = el('div', 'fd-diagram');
+    fdRenderDiagram(diagramBox, model.diagram, model.projectId);
+    body.append(fdBlock('图谱', model.diagram.state === 'ready' ? model.diagram.label : '',
+      diagramBox));
+
+    body.append(fdBlock('想法', model.ideas.total ? String(model.ideas.active || model.ideas.total) : '',
+      fdIdeasBody(model.ideas)));
+
+    body.append(fdBlock('Playbook', model.playbook.running ? '运行中' : '',
+      fdPlaybookBody(model.playbook)));
+
+    // 知识 / 测试 / 补丁 / 运行：只给入口与计数，不重复渲染内容。
+    body.append(el('div', 'fd-section-title', '入口'));
+    body.append(fdEntriesBody(model.entries));
+
+    // GitHub 与测试配置折叠在「更多」里。
+    const more = el('div', 'fd-more');
+    more.append(el('div', 'fd-more-label', 'GitHub'));
+    more.append(fdGithubBody(model.more.github));
+    more.append(el('div', 'fd-more-label', '测试'));
+    more.append(fdTestsBody(model.more.tests));
+    body.append(fdBlock('更多', '', more, {
+      open: focusMoreOpen,
+      onToggle: (open) => {
+        focusMoreOpen = open;
+        if (open) void loadGithubActivity(model.projectId);
+      }
+    }));
+    if (focusMoreOpen) void loadGithubActivity(model.projectId);
+
+    // Playbook 目录按所选项目取；取过就不再重复。
+    if (!focusPlaybook || focusPlaybook.projectId !== model.projectId) {
+      void loadFocusPlaybook(model.projectId);
+    }
+  };
+
+  // ---- 三种视图模式：专注（A） / 待办（B） / 对话（C） ----
   // ---- 知识模式：浏览与筛选（只读本地 SQLite） ----
 
   const PROJECT_PREFIX = /^project\./u;
@@ -2980,32 +3365,10 @@
     }
   };
 
+  // 专注页两张卡：第一张待办（列表由 renderPending 画），第二张所选项目的只读详情。
+  // 旧的「单一下一步」首卡已被待办卡取代，这里不再重建。
   const renderModeA = () => {
-    const project = view?.projects?.find((item) => item.id === view?.activeProjectId) ?? view?.projects?.[0];
-    $('aProject').textContent = project ? String(project.name || project.id) : '还没有项目';
-    const pending = Array.isArray(view?.pending) ? view.pending : [];
-    const top = pending[0];
-    const action = view?.nextAction;
-    $('modeA').querySelector('.a-wrap')?.classList.toggle('is-empty', !top);
-
-    if (top) {
-      $('aChip').hidden = false;
-      $('aChip').textContent = pending.length > 1 ? `${pending.length} 件待你` : '1 件待你';
-      $('aTitle').textContent = top.title || '有一件事等你决定';
-      $('aDetail').textContent = top.summary || '批准前不会改变真实项目。';
-      $('aCard').hidden = false;
-      $('aKicker').textContent = top.kind === 'patch' ? '补丁待审' : top.kind === 'job' ? '任务待批' : '待确认';
-      $('aSummary').textContent = top.next || '';
-      $('aPrimary').textContent = '去处理';
-    } else {
-      $('aChip').hidden = true;
-      $('aTitle').textContent = '现在没有需要你决定的事';
-      $('aDetail').textContent = action?.title
-        ? `${action.title}${action.detail ? ` · ${action.detail}` : ''}`
-        : '可以切到对话，问问项目现在什么情况。';
-      $('aCard').hidden = true;
-      $('aPrimary').textContent = '看看项目';
-    }
+    renderFocusDetail();
   };
 
   const chatLog = [];
@@ -3131,18 +3494,6 @@
   for (const button of document.querySelectorAll('#modeBar button')) {
     button.onclick = () => setMode(button.dataset.mode);
   }
-  $('aPrimary').onclick = () => {
-    // 有待办时滚到专注里的待办列表；没有待办时展开工作区（项目详情暂时还在知识模式下方）。
-    if ((view?.pending?.length ?? 0) > 0) {
-      setMode('A');
-      $('needsSection')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-      return;
-    }
-    setMode('B');
-    $('workspaceToggle').open = true;
-    $('workspaceToggle')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  };
-  $('aSecondary').onclick = () => setMode('C');
   $('cSend').onclick = () => { void sendChat(); };
   $('cInput').addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
