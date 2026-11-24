@@ -12,7 +12,6 @@ import { appendDecision } from '../src/knowledge-loop/decision-log.mjs';
 import { createWorkbenchServer } from '../src/workbench-server.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { OwnerStore } from '../src/owner-store.mjs';
-import { KnowledgeLoopRuntime } from '../src/knowledge-loop/runtime.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const image = `sha256:${'a'.repeat(64)}`;
@@ -233,29 +232,32 @@ test('controlled negative comparison proposes re-verification', () => {
   } finally { personal.close(); }
 });
 
-test('KnowledgeLoopRuntime 已退役：tick 不再采集、不写库、不产生待提炼队列', async () => {
+test('自动采集/自动提炼链已删除：没有 runtime、没有旧经验表、没有旧写入口（P0-4 / P1-3）', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'knowledge-runtime-'));
   const ownerDb = path.join(tmp, 'owner.sqlite');
   const knowledgeDb = path.join(tmp, 'knowledge.sqlite');
   const owner = new OwnerStore(ownerDb);
   const personal = new PersonalKnowledgeStore(knowledgeDb);
   try {
-    const runtime = new KnowledgeLoopRuntime({ ownerStore: owner, personalStore: personal });
-    const first = await runtime.tick();
-    assert.equal(first.retired, true);
-    assert.equal(first.collected, 0);
-    assert.equal(first.newExperiences, 0);
-    assert.equal(first.pending, 0);
-    // 旧经验表不存在，也就没有任何写入：重复 tick 仍然是同一个空结果。
+    // 常驻 tick 与旧采集链一起删掉了：文件不存在，也就没有「空转的 tick」可以调用。
+    for (const file of [
+      'src/knowledge-loop/runtime.mjs',
+      'scripts/knowledge-loop/auto-runtime.mjs',
+      'src/knowledge-loop/experience.mjs',
+      'src/knowledge-loop/harvest.mjs',
+      'src/knowledge-loop/pi-harvest-session.mjs'
+    ]) {
+      assert.equal(fs.existsSync(path.join(ROOT, file)), false, `${file} 应已删除`);
+    }
+    // 旧经验表不再存在，旧写入口也整体消失：调用方无处可写。
     assert.equal(personal.db.prepare("SELECT name FROM sqlite_master WHERE name='knowledge_experiences'").get(), undefined);
-    const second = await runtime.tick({ projectId: 'anything' });
-    assert.equal(second.retired, true);
-    assert.equal(second.projectId, 'anything');
-    assert.equal(runtime.status().pending, 0);
-    assert.equal(runtime.status().allowHarvest, false);
-    // setAutoHarvest 保留入口但永远不开启：旧链路不会因为旧设置被重新激活。
-    assert.equal(runtime.setAutoHarvest(true, { model: 'fake/model' }).allowHarvest, false);
+    for (const method of ['addExperience', 'getExperience', 'listExperiences']) {
+      assert.equal(typeof personal[method], 'undefined', `${method} 应已退役`);
+    }
     assert.equal(personal.listHarvestRuns(10).length, 0);
+    // 新链路仍在：经验表可写、待提炼队列可读。
+    assert.equal(typeof personal.recordLessonOrDispute, 'function');
+    assert.equal(typeof personal.recordReproducedLesson, 'undefined', '复现已并入 recordLessonOrDispute（P1-4）');
   } finally {
     personal.close();
     owner.close();

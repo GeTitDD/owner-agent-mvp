@@ -4,7 +4,7 @@
 // 提炼器可注入（`extractor`）：测试用假提炼器，不联网、不调真实模型。
 // 失败不静默丢弃：执行记录不落表，也没有「已提炼」标记，只要没写出经验行，
 // 它下次仍然在待提炼队列里；失败原因随结果一起返回。
-import { requireId } from '../utils.mjs';
+import { flatText, requireId } from '../utils.mjs';
 import { listExecutionRecords, EXECUTION_RECORD_LIMIT } from './execution-records.mjs';
 import { normalizeLesson, normalizeLessonDraft } from './contracts.mjs';
 
@@ -14,7 +14,8 @@ const CLIP = { stdout: 800, stderr: 600, diff: 400, summary: 400 };
 const DISTILL_LIMIT = 20;
 
 const nowIso = () => new Date().toISOString();
-const clip = (value, max) => String(value ?? '').replace(/\u0000/gu, '').slice(0, max);
+// 证据摘要统一走 utils.flatText（压平空白 + 按字符截断），各处差异只体现在长度参数上。
+const clip = (value, max) => flatText(value, max);
 const splitRef = (ref) => {
   const [prefix, id, extra] = String(ref).split(':');
   return { prefix, id, extra };
@@ -225,15 +226,13 @@ export class LessonDistiller {
         createdAt: this.clock()
       });
       // 同现象同作用域会命中已有经验：只追加证据、累加计数，不新增经验行。
-      // #57 起写入优先走 recordLessonOrDispute：同现象同作用域但对策不同时另起一行、
+      // #57 起写入统一走 recordLessonOrDispute：同现象同作用域但对策不同时另起一行、
       // 两条都标争议等裁决，不让后来的对策被静默并进第一条。
-      // 同对策时它内部仍走 #56 的复现合并（登记来源项目、打「已复现」标记），
+      // 同对策时它内部按项目去重、并同步「已复现」属性（P0-1：跨项目复现不合并成一行），
       // 并且绝不改 verificationStatus（升为已验证仍由人确认）。
       const write = typeof this.personal.recordLessonOrDispute === 'function'
         ? this.personal.recordLessonOrDispute.bind(this.personal)
-        : typeof this.personal.recordReproducedLesson === 'function'
-          ? this.personal.recordReproducedLesson.bind(this.personal)
-          : this.personal.recordLesson.bind(this.personal);
+        : this.personal.recordLesson.bind(this.personal);
       stored = write(lesson, {
         evidence: cited.map((item) => ({ ref: item.ref, recordId: record.id, kind: item.kind, excerpt: item.excerpt }))
       });

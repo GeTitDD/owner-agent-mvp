@@ -9,23 +9,27 @@
 // （personal_units / personal_proposals / knowledge_lessons），不读 owner.json 里的
 // 项目知识，避免同屏出现两套不同步的内容（ADR-0002 / ADR-0006）。
 
+import { flatText } from '../utils.mjs';
+import { LESSON_STATUS_LABELS, lessonStatusOf, lessonStatusLabel } from '../lesson-status.mjs';
+
 const CANDIDATE_CONTRACT = 'knowledge-candidate/v1';
 const DEFAULT_LIMIT = 50;
 
-// 状态徽章：沿用存储层的取值，展示时翻成中文；未登记的状态原样显示，方便排查。
-const STATUS_LABELS = {
-  inferred: '推断',
+// 状态徽章：知识条目（personal_units）自己有状态词表；经验（lesson/v1）用状态模块那一份。
+// 两处都只是徽章文案，未知状态原样显示，方便排查。
+const KNOWLEDGE_STATUS_LABELS = {
   unverified: '待验证',
   verified: '已验证',
-  reproduced: '已复现',
   needs_reverification: '待重新验证',
   disputed: '争议'
 };
+// 经验的徽章：五种状态 + 「已复现」属性。已复现是属性不是第六种状态，但它也要能被看见（P0-6）。
+const LESSON_BADGE_LABELS = { ...LESSON_STATUS_LABELS, reproduced: '已复现' };
 const CANDIDATE_BADGE = '待审核';
 const SCOPE_LABELS = { project: '项目', domain: '领域共享', personal: '个人' };
 
 /** 状态徽章文案：未知状态不吞掉，原样显示。 */
-const badgeOf = (status) => STATUS_LABELS[status] ?? String(status ?? '未知');
+const badgeOf = (status, labels = KNOWLEDGE_STATUS_LABELS) => labels[status] ?? String(status ?? '未知');
 
 /**
  * 三层定义：层的顺序、标题与空状态文案只在这里写一份。
@@ -56,7 +60,7 @@ const LAYER_DEFS = [
 ];
 
 /** 把任意文本压成一行，避免长内容把列表撑开。 */
-const oneLine = (value, max = 120) => String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, max);
+const oneLine = (value, max = 120) => flatText(value, max);
 
 /** 时间倒序；时间相同的按 id 兜底，保证同一份数据每次渲染顺序一致。 */
 const newestFirst = (a, b) =>
@@ -118,23 +122,29 @@ export function knowledgeBrowseView({
     .sort(newestFirst);
 
   // 经验：lesson/v1 的「现象 → 机制 → 对策」，默认项目级；域级经验不属于任何项目。
+  // 状态只从那一列读（P0-2）；reproduced 是属性，单独标成徽章，避免被状态覆盖掉（P0-6）。
   const lessonItems = lessons
     .map((row) => {
       const layer = row.scope?.layer ?? 'project';
       const ids = layer === 'project'
         ? projectIdsOf([row.scope?.projectId ?? row.projectId ?? null])
         : [];
-      const status = row.verificationStatus ?? 'inferred';
+      const status = lessonStatusOf(row);
+      const reproduced = row.reproduced === true;
       const evidenceCount = Array.isArray(row.evidence)
         ? row.evidence.length
         : (row.evidenceRefs?.length ?? 0);
+      const statusText = lessonStatusLabel(status);
       return {
         id: row.id,
         kind: 'lesson',
         title: oneLine(row.phenomenon, 200) || '未命名经验',
         status,
-        badge: badgeOf(status),
-        detail: `经验 · ${badgeOf(status)} · ${layer === 'domain' ? SCOPE_LABELS.domain : SCOPE_LABELS.project} · 证据 ${evidenceCount} 条`,
+        statusLabel: statusText,
+        reproduced,
+        badge: reproduced ? LESSON_BADGE_LABELS.reproduced : badgeOf(status, LESSON_BADGE_LABELS),
+        detail: `经验 · ${reproduced ? '已复现 · ' : ''}${statusText} · `
+          + `${layer === 'domain' ? SCOPE_LABELS.domain : SCOPE_LABELS.project} · 证据 ${evidenceCount} 条`,
         projectIds: ids,
         projectId: ids[0] ?? null,
         at: row.lastMergedAt ?? row.createdAt ?? row.created_at ?? null

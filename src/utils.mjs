@@ -39,6 +39,16 @@ export async function readJson(file) {
   catch (error) { throw new Error(`Cannot read JSON ${file}: ${error.message}`); }
 }
 
+/**
+ * 压平文本：去掉 NUL、把换行与连续空白折成一个空格、去首尾空白，超长按字符截断。
+ * 展示、关键词匹配、证据摘要原本各写一份，现在共用这一份；各自的截断长度作为参数传进来。
+ * 只处理文本，不做 HTML 清洗——需要时另加。
+ */
+export function flatText(value, max = 0) {
+  const flat = String(value ?? '').replace(/\u0000/gu, '').replace(/\s+/gu, ' ').trim();
+  return max > 0 ? flat.slice(0, max) : flat;
+}
+
 // Conservative heuristic only, NOT model tokenizer accounting. Provider usage is the ground truth.
 export function estimateTokens(text) {
   const wideChars = (text.match(/[\u2e80-\u9fff\uf900-\ufaff]/g) ?? []).length;

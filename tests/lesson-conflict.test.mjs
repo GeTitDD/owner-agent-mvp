@@ -17,8 +17,7 @@ const fakeOwner = ({
   listProjects: () => Object.values(projects)
 });
 
-// 「已验证」还没落库（表的 CHECK 只允许 unverified / inferred）；排序用桩 store 断言，
-// 不绕过真实库的约束去造一个还不存在的状态。
+// 排序只看那一列的状态（P0-2）：桩 store 的行走的是同一个字段，不需要真实库。
 const stubStore = (rows) => ({
   listLessons: ({ projectId = '', limit = 100 } = {}) =>
     rows.filter((row) => !projectId || row.projectId === projectId).slice(0, limit),
@@ -119,11 +118,11 @@ test('同一作用域内对策不同：两条都标争议，不自动合并、�
 
 test('争议不参与已验证优先排序，也不会被当成已验证引用', () => {
   const rows = [
-    // 争议条目故意带着旧状态 verified：检索必须按争议处理，排最后。
+    // 争议条目带着自己那列状态 disputed：检索必须按争议处理，排最后。
     {
       ...lesson({ sourceRecordId: 'sandbox:1', phenomenon: '争议但曾经验证过的现象' }),
-      id: 'l-disputed', verificationStatus: 'verified',
-      dispute: { status: 'disputed', peerIds: ['l-other'], openedAt: '2026-02-10T00:00:00.000Z' }
+      id: 'l-disputed', verificationStatus: 'disputed',
+      dispute: { peerIds: ['l-other'], openedAt: '2026-02-10T00:00:00.000Z' }
     },
     { ...lesson({ sourceRecordId: 'sandbox:2', phenomenon: '待验证的现象' }), id: 'l-unverified' },
     { ...lesson({ sourceRecordId: 'sandbox:3', phenomenon: '已验证的现象' }), id: 'l-verified', verificationStatus: 'verified' }

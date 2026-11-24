@@ -4,7 +4,8 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { canonical, requireId, sha256 } from './utils.mjs';
+import { canonical, flatText, requireId, sha256 } from './utils.mjs';
+import { CREATABLE_LESSON_STATUSES, LESSON_STATUSES, lessonStatusOf as readLessonStatus } from './lesson-status.mjs';
 import { defaultDbPath } from './storage.mjs';
 import { rejectObviousSecrets } from './evolution.mjs';
 
@@ -23,6 +24,19 @@ const safeText = (text,max,label,required=false) => {
   valid(!/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text), `${label} contains control characters`);
   return text.trim();
 };
+/**
+ * 落库前剥掉状态字段（P0-2）：状态只存 knowledge_lessons.verification_status 一列。
+ * 争议的裁决过程（payload.dispute）保留，但「当前状态」不在那里重复一份。
+ */
+function lessonPayloadBody(lesson) {
+  if (!lesson || typeof lesson !== 'object') return {};
+  const { verificationStatus: _verification, status: _status, ...rest } = lesson;
+  if (rest.dispute && typeof rest.dispute === 'object') {
+    const { status: _disputeStatus, ...dispute } = rest.dispute;
+    rest.dispute = dispute;
+  }
+  return rest;
+}
 function stringArray(value, max, itemMax, label) {
   valid(Array.isArray(value) && value.length <= max, `Invalid ${label}`);
   const output = value.map(item => safeText(item,itemMax,label,true));
@@ -124,10 +138,11 @@ export class PersonalKnowledgeStore {
       CREATE INDEX IF NOT EXISTS knowledge_eval_runs_project ON knowledge_eval_runs(project_id,created_at DESC);
       -- 三层沉淀：经验（现象/机制/对策 + 作用域）与它引用的证据。
       -- 证据行必须指回一条具体的执行记录；执行记录本身不落表，所以不会留下指向已删项目的孤儿经验行。
+      -- 状态只有这一列（P0-2）：争议与已被取代也写在这里，payload 里不再存第二份状态。
       CREATE TABLE IF NOT EXISTS knowledge_lessons (
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL, source_record_id TEXT NOT NULL,
         phenomenon TEXT NOT NULL, scope_layer TEXT NOT NULL CHECK(scope_layer IN ('project','domain')),
-        verification_status TEXT NOT NULL CHECK(verification_status IN ('unverified','inferred')),
+        verification_status TEXT NOT NULL CHECK(verification_status IN ('unverified','inferred','verified','disputed','superseded')),
         dedupe_key TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS knowledge_lessons_project ON knowledge_lessons(project_id,created_at DESC);
@@ -152,8 +167,75 @@ export class PersonalKnowledgeStore {
     // 三层沉淀（ADR-0007 / #62）：旧 experience/v1 表已停写、读路径已摘除。
     // 这里在建表之后退役旧表，结果留在 lastExperienceRetirement 上，方便调用方与测试核对。
     this.lastExperienceRetirement = this.retireLegacyExperiences();
+    // 状态列升级（P0-2）：旧建表语句只允许 unverified/inferred，需要换成五态 CHECK。
+    // 只在这一种条件下重建，重复初始化是空操作；结果留在 lastLessonStatusMigration 上。
+    this.lastLessonStatusMigration = this.rebuildLessonStatusColumn();
   }
   close() { this.db.close(); }
+
+  /**
+   * 经验状态列升级（P0-2）：把 CHECK 从两态扩到五态，状态只存这一列。
+   *
+   * 幂等守卫：只有现存建表语句里不含 'verified' 时才重建；重建过程是
+   * 「建新表 → 拷数据 → 删旧表 → 改名 → 重建索引」，全程在一个事务里。
+   * 失败一律回滚并留下明确日志，绝不静默：宁可继续用旧表，也不留一张半成品。
+   * 该表是本次 spec 新建的，真实库里没有数据；这里仍按有数据的情况处理，避免误删。
+   */
+  rebuildLessonStatusColumn() {
+    let row;
+    try {
+      row = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='knowledge_lessons'").get();
+    } catch (error) {
+      this.logger?.warn?.(`[personal-store] 检查经验状态列失败，本次跳过升级：${error.message}`);
+      return { rebuilt: false, reason: 'check-failed', rows: 0, error: error.message };
+    }
+    if (!row) return { rebuilt: false, reason: 'absent', rows: 0 };
+    // 只认「建表语句已包含 verified」这一种已升级形态；其余一律按旧表处理。
+    if (String(row.sql ?? '').includes("'verified'")) return { rebuilt: false, reason: 'current', rows: 0 };
+    const columns = 'id,project_id,source_record_id,phenomenon,scope_layer,verification_status,dedupe_key,created_at,payload,payload_hash';
+    const foreignKeys = Number(this.db.prepare('PRAGMA foreign_keys').get()?.foreign_keys ?? 1);
+    let rows = 0;
+    try {
+      rows = Number(this.db.prepare('SELECT COUNT(*) AS total FROM knowledge_lessons').get()?.total ?? 0);
+    } catch (error) {
+      this.logger?.warn?.(`[personal-store] 统计经验行数失败，保留旧表不升级：${error.message}`);
+      return { rebuilt: false, reason: 'count-failed', rows: 0, error: error.message };
+    }
+    try {
+      // 证据表用外键指向经验表：删旧表前必须先关掉外键（SQLite 不能在事务里切）。
+      if (foreignKeys) this.db.exec('PRAGMA foreign_keys=OFF');
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        this.db.exec(`
+          CREATE TABLE knowledge_lessons_next (
+            id TEXT PRIMARY KEY, project_id TEXT NOT NULL, source_record_id TEXT NOT NULL,
+            phenomenon TEXT NOT NULL, scope_layer TEXT NOT NULL CHECK(scope_layer IN ('project','domain')),
+            verification_status TEXT NOT NULL CHECK(verification_status IN ('unverified','inferred','verified','disputed','superseded')),
+            dedupe_key TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL, payload_hash TEXT NOT NULL
+          );
+        `);
+        this.db.exec(`INSERT INTO knowledge_lessons_next(${columns}) SELECT ${columns} FROM knowledge_lessons`);
+        this.db.exec('DROP TABLE knowledge_lessons');
+        this.db.exec('ALTER TABLE knowledge_lessons_next RENAME TO knowledge_lessons');
+        this.db.exec(`
+          CREATE INDEX IF NOT EXISTS knowledge_lessons_project ON knowledge_lessons(project_id,created_at DESC);
+          CREATE INDEX IF NOT EXISTS knowledge_lessons_source ON knowledge_lessons(source_record_id);
+          CREATE INDEX IF NOT EXISTS knowledge_lessons_dedupe ON knowledge_lessons(dedupe_key);
+        `);
+        this.db.exec('COMMIT');
+      } catch (error) {
+        try { this.db.exec('ROLLBACK'); } catch { /* 回滚失败时下面的日志仍要说清楚 */ }
+        throw error;
+      }
+    } catch (error) {
+      this.logger?.warn?.(`[personal-store] 经验状态列升级失败，保留旧表（状态仍只有两态）：${error.message}`);
+      return { rebuilt: false, reason: 'rebuild-failed', rows, error: error.message };
+    } finally {
+      if (foreignKeys) this.db.exec('PRAGMA foreign_keys=ON');
+    }
+    this.logger?.info?.(`[personal-store] 经验状态列已扩为五态（P0-2），迁移 ${rows} 行。`);
+    return { rebuilt: true, reason: 'legacy-check', rows };
+  }
 
   /**
    * 退役旧经验表（#62）。旧 experience/v1 记录本质是执行记录性质的旧数据，不是 ADR-0007 的「经验」。
@@ -461,6 +543,7 @@ export class PersonalKnowledgeStore {
 
   // ---- 三层沉淀：经验（Lesson）与证据 ----
   // 只在本类末尾追加，不改上面已有的方法与建表语句（后续票会继续在同一处追加）。
+
   addLesson(lesson,{evidence=[]}={}) {
     valid(lesson && typeof lesson === 'object' && !Array.isArray(lesson),'Lesson must be an object');
     valid(Array.isArray(evidence),'Lesson evidence must be an array');
@@ -471,7 +554,8 @@ export class PersonalKnowledgeStore {
     const scopeLayer = lesson.scope?.layer ?? 'project';
     valid(['project','domain'].includes(scopeLayer),'Invalid lesson scope layer');
     const verificationStatus = lesson.verificationStatus ?? 'inferred';
-    valid(['unverified','inferred'].includes(verificationStatus),'Invalid lesson verification status');
+    // 新建时只允许「待验证 / 推断 / 争议」：已验证与已被取代只能由裁决或人工确认写出。
+    valid(CREATABLE_LESSON_STATUSES.includes(verificationStatus),'Invalid lesson verification status');
     const evidenceRefs = Array.isArray(lesson.evidenceRefs) ? lesson.evidenceRefs : [];
     // 追不到证据的结论只能算推断：没有证据行就不可能成为待验证。
     valid(verificationStatus !== 'unverified' || evidenceRefs.length > 0,'Lesson evidence is required before it can be marked unverified');
@@ -496,7 +580,8 @@ export class PersonalKnowledgeStore {
     });
     valid(new Set(rows.map((row)=>row.ref)).size === rows.length,'Duplicate lesson evidence reference');
     const stamp = now();
-    const payload = {...lesson,id,projectId,sourceRecordId,phenomenon,dedupeKey,createdAt:lesson.createdAt ?? stamp};
+    // 状态不进 payload（P0-2）：同一概念只存一列，写库时把调用方可能带来的状态字段剥掉。
+    const payload = { ...lessonPayloadBody(lesson),id,projectId,sourceRecordId,phenomenon,dedupeKey,createdAt:lesson.createdAt ?? stamp };
     const body = canonical(payload);
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -512,7 +597,15 @@ export class PersonalKnowledgeStore {
   getLesson(id) {
     const row = this.db.prepare('SELECT * FROM knowledge_lessons WHERE id=?').get(id);
     if(!row) return null;
-    return {...JSON.parse(row.payload),payloadHash:row.payload_hash,dedupeKey:row.dedupe_key,evidence:this.lessonEvidence(row.id)};
+    // 状态只认列（P0-2）：payload 里的旧状态字段一律以列上的当前值为准。
+    return {
+      ...JSON.parse(row.payload),
+      verificationStatus: row.verification_status,
+      status: row.verification_status,
+      payloadHash: row.payload_hash,
+      dedupeKey: row.dedupe_key,
+      evidence: this.lessonEvidence(row.id)
+    };
   }
   lessonEvidence(lessonId) {
     return this.db.prepare('SELECT * FROM knowledge_lesson_evidence WHERE lesson_id=? ORDER BY ref,id').all(lessonId)
@@ -548,11 +641,13 @@ export class PersonalKnowledgeStore {
   }
 
   /**
-   * 经验沉淀的写入口（#55）：
+   * 经验沉淀的底层写入口（#55）：按项目去重键做「插入或追加证据」，不处理争议与跨项目复现。
    * - 首次提炼：照常插入一条经验行；
    * - 命中同一去重键：只追加证据行、重算计数，经验行本身不新增；
    * - 证据按 (经验, 引用) 幂等，同一条证据重复出现既不报错也不重复计数。
-   * 返回值额外带 support，方便调用方直接读「被多少条执行记录支持」。
+   *
+   * 提炼链路统一走 recordLessonOrDispute（它在本方法之上补争议与复现）；本方法保留给
+   * 「已知同一作用域、只要把证据写进去」的调用方与测试。返回值带 support。
    */
   recordLesson(lesson, { evidence = [] } = {}) {
     valid(lesson && typeof lesson === 'object' && !Array.isArray(lesson),'Lesson must be an object');
@@ -619,13 +714,13 @@ export class PersonalKnowledgeStore {
         payload.sourceRecordId ?? null,
         sourceRecordId
       ].filter(Boolean))];
-      // 后来补上可追证据的推断，升级为待验证；已待验证的不会被这次合并降级。
-      const previous = row.verification_status ?? payload.verificationStatus ?? 'inferred';
+      // 后来补上可追证据的推断，升级为待验证；其余状态（待验证 / 争议 / 已验证 / 已被取代）不因合并而变。
+      const previous = row.verification_status ?? 'inferred';
       const verificationStatus = previous === 'inferred' && Number(stats.evidence) > 0 ? 'unverified' : previous;
+      // payload 里不带状态（P0-2）：状态只写列，读的时候由 getLesson 覆盖回来。
       const next = {
-        ...payload,
+        ...lessonPayloadBody(payload),
         evidenceRefs: refs,
-        verificationStatus,
         // 累加计数：证据条数与支持它的执行记录条数，两处都从证据表重算。
         evidenceCount: Number(stats.evidence),
         supportCount: Number(stats.records),
@@ -675,23 +770,28 @@ export class PersonalKnowledgeStore {
     return [...ids];
   }
 
-  // ---- 三层沉淀：跨项目复现与作用域升级（#56） ----
-  // 复现的判定是「规范化现象 + 作用域层」，不是「项目」：同一现象在第二个项目出现时，
-  // 合并进最早那条经验、登记来源项目并打「已复现」标记，而不是再写一条项目级经验。
+  // ---- 三层沉淀：跨项目复现与作用域升级（#56 / P0-1） ----
+  // 复现的判定是「规范化现象 + 作用域层」，但行仍然**按项目各自成行**：
+  // 同一现象在第二个项目出现时，第二个项目写自己那条项目级经验，两条都打「已复现」，
+  // 并把两个项目的来源台账写进各自的 payload.sources。
   //
-  // 去重键没有改成跨项目唯一键，仍沿用 contracts.lessonDedupeKey（现象 + 作用域层 + 项目）。
-  // 跨项目合并走现象查询而不是去重键，代价写清楚：
-  // 1) 合并后库里仍只有一条 knowledge_lessons 行，行上的 project_id 固定为最早出现该现象的
-  //    项目；listLessons({projectId}) 只能查到最早项目，第二个项目必须走
-  //    listLessonsForProject / lessonSources 反查。
-  // 2) 第二个项目自己的 dedupe_key 不再单独存在；来源追溯改由 payload.sources（项目 → 记录 ID）
-  //    和证据表的 record_id 承担，二者都细到执行记录，不依赖去重键。
-  // 3) 历史库里若同一现象已按项目各自成行，本方法只认最早一条，其余重复行仍需另行清理。
-  // 4) addLesson / recordLesson 保留「按项目去重」的原语义：绕过本方法直接调用它们仍会
-  //    按项目各自成行；#56 之后经验提炼统一走 recordReproducedLesson。
-  // 复现只打标记，verificationStatus 一律不动：系统不代替人把经验升为已验证。
+  // 为什么不合并成一行（P0-1 的修正）：如果两个项目共用一行，行上的 project_id 只能指向最早
+  // 那个项目，listLessons({projectId:'第二个项目'}) 会返回空——#59 的「按项目过滤命中项目级
+  // 经验」在第二个项目直接失效，界面显示「这个项目还没提炼过」。跨项目复现因此只作为属性
+  // 体现（reproduced / supportProjects / supportedByProjects / sources），不吞掉另一个项目的行。
+  //
+  // 升域仍只能由人显式调用 promoteLessonToDomain；复现只打标记，系统不替人把经验升为已验证。
 
-  /** 按规范化现象找已有经验：复现判定跨项目，所以这里刻意不带 projectId 条件。 */
+  /** 同一现象的项目级经验行：按项目各自成行后，同现象会有多行（每个项目一行）。 */
+  lessonsByPhenomenon(phenomenon, { layer = 'project' } = {}) {
+    const flat = safeText(phenomenon,400,'lesson phenomenon',true);
+    valid(['project','domain'].includes(layer),'Invalid lesson scope layer');
+    return this.db.prepare(`SELECT id FROM knowledge_lessons
+      WHERE lower(phenomenon)=lower(?) AND scope_layer=? ORDER BY created_at,id`).all(flat,layer)
+      .map((row)=>this.getLesson(row.id));
+  }
+
+  /** 按规范化现象找最早的一条经验：读路径用（例如「这条现象以前出现过吗」）。 */
   lessonByPhenomenon(phenomenon, { layer = '' } = {}) {
     const flat = safeText(phenomenon,400,'lesson phenomenon',true);
     const where = ['lower(phenomenon)=lower(?)'];
@@ -707,74 +807,60 @@ export class PersonalKnowledgeStore {
   }
 
   /**
-   * 复现判定后的写入口（#56）：
-   * - 库里还没有同现象经验：照常写入一条项目级经验，并登记来源项目；
-   * - 已有同现象经验（可能来自另一个项目，也可能已升域）：追加证据、登记来源项目；
-   *   来源项目从 1 变 2 时打上 reproduced。
-   * 返回值额外带 support / sources / reproduced / supportProjects，都是读库后的最新值。
+   * 复现台账（写，P0-1）：把同一现象的项目级经验行归成一组，每一行都写上同一份
+   * sources / supportProjects / reproduced。行不改、不合并、不删；只是把「同一现象在哪些
+   * 项目出现过」这个属性同步到组内每一行，让任一项目都能查回整组来源。
+   *
+   * 每个项目自己的记录 ID 从该行证据表推出（按项目聚合、去重），不把别的项目的证据复制过来。
    */
-  recordReproducedLesson(lesson, { evidence = [] } = {}) {
-    valid(lesson && typeof lesson === 'object' && !Array.isArray(lesson),'Lesson must be an object');
-    valid(Array.isArray(evidence),'Lesson evidence must be an array');
-    const projectId = safeText(lesson.projectId,90,'lesson project id',true);
-    const phenomenon = safeText(lesson.phenomenon,200,'lesson phenomenon',true);
-    const existing = this.lessonByPhenomenon(phenomenon);
-    const stored = existing
-      ? this.appendLessonEvidence(existing.id, lesson, evidence)
-      : this.recordLesson(lesson, { evidence });
-    const merged = this.retainLessonSource(stored.id, {
-      projectId,
-      recordIds: [lesson.sourceRecordId, ...evidence.map((item) => item?.recordId)]
-    });
-    return { ...merged, support: this.lessonSupport(merged.id) };
-  }
-
-  /**
-   * 登记经验来自哪个项目（#56）：按项目聚合记录 ID，重算 supportProjects 与 reproduced。
-   * 复现只打标记：verificationStatus 不在这里改，升为已验证必须由人另外确认。
-   */
-  retainLessonSource(lessonId, { projectId, recordIds = [] } = {}) {
-    const id = safeText(lessonId,90,'lesson id',true);
-    const project = safeText(projectId,90,'lesson source project id',true);
-    valid(Array.isArray(recordIds),'Lesson source record ids must be an array');
-    const row = this.db.prepare('SELECT payload FROM knowledge_lessons WHERE id=?').get(id);
-    valid(Boolean(row),'Lesson not found');
-    let payload = {};
-    try { payload = JSON.parse(row.payload) ?? {}; } catch { payload = {}; }
+  syncLessonReproduction(phenomenon, { layer = 'project' } = {}) {
+    const peers = this.lessonsByPhenomenon(phenomenon, { layer });
+    if (!peers.length) return [];
     const stamp = now();
-    // 来源台账逐项目保留记录 ID：合并后没有「第二项目专属的经验行」，追溯只能靠这里。
-    const sources = (Array.isArray(payload.sources) ? payload.sources : [])
-      .filter((source) => source && typeof source.projectId === 'string')
-      .map((source) => ({
-        projectId: source.projectId,
-        recordIds: [...new Set((Array.isArray(source.recordIds) ? source.recordIds : []).map(String))],
-        firstAt: source.firstAt ?? payload.createdAt ?? stamp,
-        lastAt: source.lastAt ?? source.firstAt ?? payload.createdAt ?? stamp
-      }));
-    const ids = [...new Set([...recordIds, payload.sourceRecordId].filter(Boolean).map(String))];
-    const found = sources.find((source) => source.projectId === project);
-    if (found) {
-      found.recordIds = [...new Set([...found.recordIds, ...ids])];
-      found.lastAt = stamp;
-    } else {
-      sources.push({ projectId: project, recordIds: ids, firstAt: stamp, lastAt: stamp });
+    // 一个项目可能有多条同现象经验（对策不同 → 争议各成一行）：按项目合并记录 ID。
+    const byProject = new Map();
+    for(const peer of peers) {
+      const projectId = String(peer.scope?.projectId ?? peer.projectId ?? '');
+      if(!projectId) continue;
+      const prior = (Array.isArray(peer.sources) ? peer.sources : [])
+        .find((source)=>source?.projectId === projectId);
+      const entry = byProject.get(projectId) ?? {
+        projectId,
+        recordIds: new Set(),
+        firstAt: prior?.firstAt ?? peer.createdAt ?? stamp,
+        lastAt: stamp
+      };
+      for(const recordId of this.lessonSupport(peer.id)?.recordIds ?? []) entry.recordIds.add(String(recordId));
+      const peerLast = peer.lastMergedAt ?? peer.createdAt ?? null;
+      if(peerLast && peerLast > entry.lastAt) entry.lastAt = peerLast;
+      byProject.set(projectId,entry);
     }
-    sources.sort((a,b)=>a.projectId.localeCompare(b.projectId));
+    const sources = [...byProject.values()]
+      .map((entry)=>({ ...entry, recordIds:[...entry.recordIds] }))
+      .sort((a,b)=>a.projectId.localeCompare(b.projectId));
     const supportProjects = sources.length;
     const reproduced = supportProjects >= 2;
-    const next = {
-      ...payload,
-      sources,
-      supportedByProjects: sources.map((source)=>source.projectId),
-      supportProjects,
-      reproduced,
-      // 只记第一次跨到两个项目的时刻；此后的复现不再改写它。
-      ...(reproduced && !payload.reproducedAt ? { reproducedAt: stamp } : {})
-    };
-    const body = canonical(next);
-    this.db.prepare('UPDATE knowledge_lessons SET payload=?,payload_hash=? WHERE id=?')
-      .run(body,sha256(body),id);
-    return this.getLesson(id);
+    const write = this.db.prepare('UPDATE knowledge_lessons SET payload=?,payload_hash=? WHERE id=?');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for(const peer of peers) {
+        let payload = {};
+        try { payload = JSON.parse(this.db.prepare('SELECT payload FROM knowledge_lessons WHERE id=?').get(peer.id)?.payload ?? '{}') ?? {}; } catch { payload = {}; }
+        const next = {
+          ...payload,
+          sources,
+          supportedByProjects:sources.map((source)=>source.projectId),
+          supportProjects,
+          reproduced,
+          // 只记第一次跨到两个项目的时刻；此后的复现不再改写它。
+          ...(reproduced && !payload.reproducedAt ? { reproducedAt:stamp } : {})
+        };
+        const body = canonical(next);
+        write.run(body,sha256(body),peer.id);
+      }
+      this.db.exec('COMMIT');
+    } catch(error) { this.db.exec('ROLLBACK'); throw error; }
+    return peers.map((peer)=>this.getLesson(peer.id));
   }
 
   /**
@@ -893,14 +979,12 @@ export class PersonalKnowledgeStore {
   // 冲突判定看三个字段：规范化现象、作用域（层 + 项目或域集合）、对策。
   // 同一现象 + 同一作用域 + 对策不同 → 争议（disputed），两条都留着等人裁决；
   // 域级与项目级并列时默认查询以域级为准，项目级仍可单查，不删不藏。
-  // 「争议 / 已被取代」只写进 payload，不改已有的 verification_status 列与约束：
-  // 这里的追加只发生在类末尾，现有方法与建表语句一行不动。
+  // P0-2 之后状态只存 verification_status 一列（含 disputed / superseded），
+  // payload.dispute 只记裁决过程（谁和谁争、谁裁的、裁决前是什么状态）。
 
   /** 冲突判定用的文本规范化：压平空白、去首尾引号与句尾标点、小写。 */
   lessonConflictText(value) {
-    return String(value ?? '')
-      .replace(/\s+/gu, ' ')
-      .trim()
+    return flatText(value)
       .replace(/^["'“”‘’「」『』]+/u, '')
       .replace(/["'“”‘’「」『』。．.，,；;：:、]+$/u, '')
       .toLowerCase();
@@ -921,14 +1005,11 @@ export class PersonalKnowledgeStore {
   }
 
   /**
-   * 经验的有效状态：争议与取代优先于验证状态。
-   * 争议条目哪怕以前是 verified，也不能再被当成已验证引用。
+   * 经验的有效状态（P0-2）：只有一列，读也只认这一处。
+   * 争议与已被取代也是这一列上的取值，不再从 payload.dispute 里推。
    */
   lessonStatusOf(lesson) {
-    const dispute = lesson?.dispute?.status;
-    if(dispute === 'disputed') return 'disputed';
-    if(dispute === 'superseded' || lesson?.supersededBy) return 'superseded';
-    return lesson?.verificationStatus ?? 'inferred';
+    return readLessonStatus(lesson);
   }
 
   /** 按 ID 读一条经验的有效状态（含争议 / 已被取代）。 */
@@ -942,13 +1023,21 @@ export class PersonalKnowledgeStore {
   /**
    * 争议状态（读）：人能据此看到「谁和谁有争议、裁决到哪一步」。
    * status ∈ none / disputed / resolved / superseded。
+   * 当前状态取自那一列；「resolved」表示裁决过且赢家已回到裁决前的状态。
    */
   lessonDispute(lessonId) {
     const id = safeText(lessonId,90,'lesson id',true);
     const lesson = this.getLesson(id);
     valid(Boolean(lesson),'Lesson not found');
     const dispute = lesson.dispute && typeof lesson.dispute === 'object' ? lesson.dispute : {};
-    const status = lesson.supersededBy ? 'superseded' : (['disputed','resolved','superseded'].includes(dispute.status) ? dispute.status : 'none');
+    const current = this.lessonStatusOf(lesson);
+    const status = current === 'superseded'
+      ? 'superseded'
+      : current === 'disputed'
+        ? 'disputed'
+        : dispute.resolution
+          ? 'resolved'
+          : 'none';
     return {
       lessonId:id,
       status,
@@ -1005,18 +1094,19 @@ export class PersonalKnowledgeStore {
 
   /**
    * 标争议（写）：只接受同一现象、同一作用域、对策确实不同的经验。
-   * 不覆盖、不合并、不改 verificationStatus——两条原样留着等人裁决。
+   * 状态写进 verification_status 列（disputed），payload.dispute 只留裁决过程与
+   * 「争议前是什么状态」，把两条原样留着等人裁决。
    */
   markLessonsDisputed(lessonIds, { reason = '', actor = 'user' } = {}) {
     valid(Array.isArray(lessonIds) && lessonIds.length >= 1 && lessonIds.length <= 20,
       'Lesson ids must be an array of 1 to 20 ids');
     const ids = [...new Set(lessonIds.map((id)=>safeText(id,90,'lesson id',true)))];
     const rows = ids.map((id)=>{
-      const row = this.db.prepare('SELECT payload FROM knowledge_lessons WHERE id=?').get(id);
+      const row = this.db.prepare('SELECT payload,verification_status FROM knowledge_lessons WHERE id=?').get(id);
       valid(Boolean(row),'Lesson not found');
       let payload = {};
       try { payload = JSON.parse(row.payload) ?? {}; } catch { payload = {}; }
-      return { id, payload };
+      return { id, payload, status: row.verification_status ?? 'inferred' };
     });
     valid(rows.length >= 2,'A dispute needs at least two lessons');
     const scopeKey = this.lessonScopeKey(rows[0].payload);
@@ -1034,18 +1124,20 @@ export class PersonalKnowledgeStore {
     try {
       for(const row of rows) {
         const previous = row.payload.dispute && typeof row.payload.dispute === 'object' ? row.payload.dispute : {};
-        const next = {
+        const next = lessonPayloadBody({
           ...row.payload,
           dispute:{
-            status:'disputed',
             reason:text,
             actor:who,
             openedAt:previous.openedAt ?? stamp,
+            // 裁决后要恢复到的状态：争议本身不是一次验证，定位只是「暂挂」。
+            priorStatus:previous.priorStatus ?? row.status,
             peerIds:rows.filter((item)=>item.id !== row.id).map((item)=>item.id)
           }
-        };
+        });
         const body = canonical(next);
-        this.db.prepare('UPDATE knowledge_lessons SET payload=?,payload_hash=? WHERE id=?').run(body,sha256(body),row.id);
+        this.db.prepare('UPDATE knowledge_lessons SET payload=?,payload_hash=?,verification_status=? WHERE id=?')
+          .run(body,sha256(body),'disputed',row.id);
       }
       this.db.exec('COMMIT');
     } catch(error) { this.db.exec('ROLLBACK'); throw error; }
@@ -1054,8 +1146,8 @@ export class PersonalKnowledgeStore {
 
   /**
    * 裁决入口（写）：人标某条为准，另一条落为「已被取代」。
-   * - 赢家 dispute.status=resolved，verificationStatus 不动（裁决不等于验证）；
-   * - 输家留下 supersededBy，payload 与证据都在，仍可单独查到；
+   * - 赢家状态回到争议前的值（裁决不等于验证，不会顺手升为 verified）；
+   * - 输家状态写 superseded，留下 supersededBy，payload 与证据都在，仍可单独查到；
    * - 两条都还在库里，只是默认检索不再把输家当建议。
    */
   resolveLessonDispute(winnerId, loserId, { actor = 'user', note = '' } = {}) {
@@ -1079,37 +1171,40 @@ export class PersonalKnowledgeStore {
     const memo = note ? safeText(note,500,'dispute note') : '';
     const winnerPrior = winnerPayload.dispute && typeof winnerPayload.dispute === 'object' ? winnerPayload.dispute : {};
     const loserPrior = loserPayload.dispute && typeof loserPayload.dispute === 'object' ? loserPayload.dispute : {};
-    const winnerNext = {
+    // 争议前的状态记在 dispute.priorStatus；旧数据没有这个字段时按最保守的 inferred 恢复。
+    const winnerStatus = readLessonStatus({ verificationStatus: winnerPrior.priorStatus });
+    const winnerNext = lessonPayloadBody({
       ...winnerPayload,
       dispute:{
-        status:'resolved',
         reason:winnerPrior.reason ?? '同一现象、同一作用域出现不同对策',
         actor:who,
         openedAt:winnerPrior.openedAt ?? stamp,
         resolvedAt:stamp,
+        priorStatus:winnerStatus,
         peerIds:[loser],
         resolution:{ winnerId:winner, loserId:loser, note:memo }
       }
-    };
-    const loserNext = {
+    });
+    const loserNext = lessonPayloadBody({
       ...loserPayload,
       dispute:{
-        status:'superseded',
         reason:loserPrior.reason ?? winnerPrior.reason ?? '同一现象、同一作用域出现不同对策',
         actor:who,
         openedAt:loserPrior.openedAt ?? stamp,
         resolvedAt:stamp,
+        priorStatus:loserPrior.priorStatus ?? loserPrior.status ?? 'inferred',
         peerIds:[winner],
         winnerId:winner
       },
       supersededBy:winner,
       supersededAt:stamp
-    };
+    });
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for(const [id,payload] of [[winner,winnerNext],[loser,loserNext]]) {
+      const write = this.db.prepare('UPDATE knowledge_lessons SET payload=?,payload_hash=?,verification_status=? WHERE id=?');
+      for(const [id,payload,status] of [[winner,winnerNext,winnerStatus],[loser,loserNext,'superseded']]) {
         const body = canonical(payload);
-        this.db.prepare('UPDATE knowledge_lessons SET payload=?,payload_hash=? WHERE id=?').run(body,sha256(body),id);
+        write.run(body,sha256(body),status,id);
       }
       this.db.exec('COMMIT');
     } catch(error) { this.db.exec('ROLLBACK'); throw error; }
@@ -1139,7 +1234,7 @@ export class PersonalKnowledgeStore {
         domainIds:Array.isArray(lesson.scope?.domainIds) ? [...lesson.scope.domainIds] : []
       }
     };
-    // 同一现象 + 同一作用域（层 + 项目 / 域集合）才算同级；跨项目复现交给 #56 的合并。
+    // 同级 = 同一现象 + 同一作用域（层 + 项目 / 域集合）；跨项目复现交给 syncLessonReproduction。
     const scopeKey = this.lessonScopeKey(candidate);
     const phenomenonKey = this.lessonConflictText(phenomenon);
     const peers = this.listLessons({ limit:1000 }).filter((item)=>
@@ -1156,21 +1251,20 @@ export class PersonalKnowledgeStore {
         this.markLessonsDisputed(peers.map((item)=>item.id),
           { reason:'同一现象、同一作用域出现不同对策', actor:'system' });
       }
-      return { ...stored, support:this.lessonSupport(stored.id) };
+      const synced = this.syncLessonReproduction(phenomenon)
+        .find((item)=>item.id === stored.id) ?? stored;
+      return { ...synced, support:this.lessonSupport(synced.id) };
     }
-    // 没有同级经验：照旧走复现 / 新建。
+    // 没有同级经验：按项目新建（或命中本项目的去重键后追加证据），再同步跨项目复现台账。
     if(peers.length === 0) {
-      const write = typeof this.recordReproducedLesson === 'function'
-        ? this.recordReproducedLesson.bind(this)
-        : this.recordLesson.bind(this);
-      return write(lesson, { evidence });
+      const stored = this.recordLesson(lesson, { evidence });
+      const synced = this.syncLessonReproduction(phenomenon)
+        .find((item)=>item.id === stored.id) ?? stored;
+      return { ...synced, support:this.lessonSupport(synced.id) };
     }
     // 同级出现新对策：另起一行、双方标争议，不自动覆盖、不自动合并。
     const stored = this.addLesson(candidate, { evidence });
-    this.retainLessonSource(stored.id, {
-      projectId,
-      recordIds:[lesson.sourceRecordId, ...evidence.map((item)=>item?.recordId)]
-    });
+    this.syncLessonReproduction(phenomenon);
     this.markLessonsDisputed([...peers.map((item)=>item.id), stored.id],
       { reason:'同一现象、同一作用域出现不同对策', actor:'system' });
     const merged = this.getLesson(stored.id);

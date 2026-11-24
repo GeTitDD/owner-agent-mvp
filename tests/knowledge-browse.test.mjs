@@ -214,6 +214,31 @@ test('条目超过上限时保留全量计数，只截断渲染', () => {
   assert.equal(knowledge.truncated, true);
 });
 
+test('经验条目的状态徽章取自那一列：reproduced 与 disputed 都能显示出来（P0-6）', () => {
+  const view = knowledgeBrowseView({
+    lessons: [
+      // 已复现：状态仍是待验证，但「已复现」必须作为徽章可见。
+      { ...lessonRow({ id: 'l1', status: 'unverified' }), reproduced: true, supportProjects: 2 },
+      // 争议：状态列上就是 disputed（不再塞在 payload.dispute 里）。
+      { ...lessonRow({ id: 'l2', status: 'disputed' }) },
+      // 已被取代。
+      { ...lessonRow({ id: 'l3', status: 'superseded' }) },
+      // 已验证。
+      { ...lessonRow({ id: 'l4', status: 'verified' }) }
+    ]
+  });
+  const byId = Object.fromEntries(groupsByKey(view).lessons.items.map((item) => [item.id, item]));
+  assert.equal(byId.l1.status, 'unverified');
+  assert.equal(byId.l1.reproduced, true);
+  assert.equal(byId.l1.badge, '已复现', 'reproduced 徽章必须取得到');
+  assert.match(byId.l1.detail, /已复现/u);
+  assert.match(byId.l1.detail, /待验证/u, '复现只是属性，状态仍是待验证');
+  assert.equal(byId.l2.status, 'disputed');
+  assert.equal(byId.l2.badge, '争议');
+  assert.equal(byId.l3.badge, '已被取代');
+  assert.equal(byId.l4.badge, '已验证');
+});
+
 test('从个人知识库读出的三层数据与筛选一致', () => {
   const store = new PersonalKnowledgeStore(':memory:');
   try {

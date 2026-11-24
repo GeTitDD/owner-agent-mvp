@@ -4,6 +4,8 @@
 // 天然不会再返回任何指向它的记录。非终态记录一律不投影——这正是历史脏数据的来源。
 // 一次执行（job → patch → sandbox run）只产出一条记录，主体按 run > job > patch 取舍；
 // 其余主体退化为这条记录的 evidenceRefs，供提炼时追证据。
+import { flatText } from '../utils.mjs';
+
 export const EXECUTION_RECORD_LIMIT = 100;
 /** 单次扫描上限：owner store 的列表接口最多返回 500 条，够覆盖默认的最近 100 条。 */
 const SCAN_LIMIT = 500;
@@ -13,7 +15,7 @@ const TERMINAL_SANDBOX = new Set(['completed', 'failed', 'cancelled', 'rejected'
 const TERMINAL_JOB = new Set(['succeeded', 'failed', 'cancelled', 'rejected']);
 const TERMINAL_PATCH = new Set(['applied', 'rejected', 'apply_failed']);
 
-const text = (value, max = 300) => String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, max);
+const text = (value, max = 300) => flatText(value, max);
 /** 取第一个非空字符串：终态记录的发生时间优先用真实结束时间。 */
 const firstTime = (...values) => values.find((value) => typeof value === 'string' && value) ?? null;
 const fileList = (patch) => (patch?.files ?? []).map((file) => text(file?.path ?? file, 200)).filter(Boolean);
