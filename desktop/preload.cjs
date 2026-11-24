@@ -6,7 +6,14 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   snapshot: (input) => invoke('companion:snapshot', input),
   submit: (input) => invoke('companion:submit', input),
   chat: Object.freeze({
-    ask: (input) => invoke('companion:chat-ask', input)
+    ask: (input) => invoke('companion:chat-ask', input),
+    sessions: Object.freeze({
+      list: (input) => invoke('companion:chat-sessions', input),
+      get: (input) => invoke('companion:chat-session-get', input),
+      create: (input) => invoke('companion:chat-session-create', input),
+      rename: (input) => invoke('companion:chat-session-rename', input),
+      remove: (input) => invoke('companion:chat-session-delete', input)
+    })
   }),
   createJob: (input) => invoke('companion:create-job', input),
   decide: (input) => invoke('companion:decide', input),
