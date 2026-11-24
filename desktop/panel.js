@@ -56,17 +56,10 @@
     $('pendingCount').textContent = `${pending} 项待决定`;
     $('pendingBadge').textContent = String(pending);
     $('pendingBadge').hidden = pending === 0;
-    // 收件箱常驻：有待办时显示列表，没有待办时换成「下一步」空状态。
-    $('needsSection').hidden = false;
+    // 待办列表住在专注模式；没有待办时交给专注页的空状态，不再渲染空列表。
+    $('needsSection').hidden = pending === 0;
     $('pendingList').hidden = pending === 0;
     $('needsHint').hidden = pending === 0;
-    $('inboxEmpty').hidden = pending > 0;
-    if (pending === 0) {
-      const action = view?.nextAction;
-      $('inboxNextText').textContent = action?.title
-        ? `${action.title}${action.detail ? ` · ${action.detail}` : ''}`
-        : '可以展开工作区看看项目状态。';
-    }
     $('needsCount').textContent = String(pending);
     $('needsChip').classList.toggle('warn', pending > 0);
     $('needsHint').textContent = `有 ${pending} 项需要你确认；写入、补丁与测试在批准前不会改变真实项目。`;
@@ -88,7 +81,7 @@
     // 没有项目时自动展开工作区，否则添加项目的入口会被折叠在下面。
     if (!hasProjects && $('workspaceToggle')) $('workspaceToggle').open = true;
     $('setup').hidden = hasProjects;
-    $('composeSection').hidden = !hasProjects || panelMode !== 'B';
+    $('composeSection').hidden = !hasProjects || panelMode !== 'A';
     $('submitTask').disabled = composerBusy || !hasProjects;
     $('queueSection').hidden = !hasProjects;
     if (!hasProjects) renderServiceGrid($('setupServices'), view?.services);
@@ -2161,6 +2154,12 @@
     try {
       view = await window.companion.snapshot();
       if (view?.knowledge?.projectId) knowledgeCache.set(view.knowledge.projectId, view.knowledge);
+      // 知识数量变了就重读一次浏览列表，避免用户在别处提炼/确认后看到旧列表。
+      const knowledgeSignature = JSON.stringify(view?.knowledge?.counts ?? {});
+      if (panelMode === 'B' && knowledgeBrowseData && knowledgeSignature !== knowledgeBrowseSignature) {
+        void loadKnowledgeBrowse();
+      }
+      knowledgeBrowseSignature = knowledgeSignature;
       applyState();
       renderActivity();
       renderTimeline();
@@ -2503,12 +2502,7 @@
   };
 
   $('openSettings').onclick = () => { void openSettings(); };
-  // 空状态的主按钮：展开工作区并滚到项目列表。
-  $('inboxNextBtn').onclick = () => {
-    const toggle = $('workspaceToggle');
-    if (toggle) toggle.open = true;
-    $('projectSection')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  };
+  $('kbRefresh').onclick = () => { void loadKnowledgeBrowse(); };
   $('mobileRefreshCode').onclick = () => { void renderMobileInfo(true); };
   $('closeSettings').onclick = () => { $('settings').hidden = true; };
   $('hidePanel').onclick = () => window.companion.hidePanel();
@@ -2698,7 +2692,133 @@
     }
   };
 
-  // ---- 三种视图模式：专注（A） / 待办（B） / 对话（C） ----
+  // ---- 知识模式：浏览与筛选（只读本地 SQLite） ----
+
+  const PROJECT_PREFIX = /^project\./u;
+  const projectLabel = (id) => {
+    const key = String(id ?? '');
+    const known = (view?.projects ?? []).find((project) => project.id === key);
+    if (known?.name) return known.name;
+    const short = key.replace(PROJECT_PREFIX, '');
+    return short.length > 22 ? `${short.slice(0, 22)}…` : (short || '未归属项目');
+  };
+
+  let knowledgeBrowseData = null;
+  let knowledgeBrowseProject = '';
+  let knowledgeBrowseToken = 0;
+  let knowledgeBrowseSignature = '';
+
+  // 把纯视图模型渲染成卡片；这里只做 DOM 与项目显示名，不重新计算归属。
+  const knowledgeGroupCard = (group) => {
+    const card = el('section', `kb-group kb-${group.key}`);
+    const head = el('div', 'kb-group-head');
+    head.append(el('h4', 'kb-group-name', group.label));
+    head.append(el('span', 'kb-group-count', `${group.count} 条`));
+    card.append(head);
+    if (group.items.length === 0) {
+      card.append(el('p', 'kb-group-empty', group.emptyHint));
+      return card;
+    }
+    const list = el('div', 'kb-list');
+    for (const item of group.items) {
+      const row = el('button', 'kb-item');
+      row.type = 'button';
+      row.dataset.id = item.id;
+      row.append(el('span', 'kb-item-title', item.title));
+      const meta = el('span', 'kb-item-meta', item.detail);
+      // 「全部」视图下补项目名，避免同名条目看不出属于哪个项目。
+      if (!knowledgeBrowseProject && item.projectId) {
+        meta.textContent += ` · ${projectLabel(item.projectId)}`;
+      }
+      row.append(meta);
+      row.onclick = () => { void openKnowledgeDetail(item.id); };
+      list.append(row);
+    }
+    card.append(list);
+    if (group.truncated) {
+      card.append(el('p', 'kb-group-more', `共 ${group.count} 条，只显示最近 ${group.shown} 条。`));
+    }
+    return card;
+  };
+
+  const renderKnowledgeBrowse = () => {
+    const holder = $('kbGroups');
+    const filters = $('kbFilters');
+    holder.replaceChildren();
+    filters.replaceChildren();
+    const data = knowledgeBrowseData;
+
+    const chip = (id, label, count) => {
+      const button = el('button', `kb-chip${id === knowledgeBrowseProject ? ' on' : ''}`);
+      button.type = 'button';
+      button.append(el('span', undefined, label));
+      if (count !== undefined) button.append(el('span', 'kb-chip-count', String(count)));
+      button.onclick = () => {
+        if (knowledgeBrowseProject === id) return;
+        knowledgeBrowseProject = id;
+        void loadKnowledgeBrowse();
+      };
+      return button;
+    };
+
+    if (!data) {
+      filters.append(chip('', '全部'));
+      holder.append(el('p', 'kb-loading', '正在读取本地知识库…'));
+      return;
+    }
+
+    $('kbTotal').textContent = String(data.totals?.all ?? 0);
+    filters.append(chip('', '全部', data.overall?.all ?? data.totals?.all ?? 0));
+    for (const project of data.projects ?? []) {
+      filters.append(chip(project.id, projectLabel(project.id), project.count));
+    }
+
+    if (!data.available) {
+      const empty = el('div', 'kb-empty');
+      empty.append(el('div', 'kb-empty-title', '知识库还没有初始化'));
+      empty.append(el('div', 'kb-empty-sub', data.empty?.detail ?? '本地 SQLite 打不开时这里只显示说明。'));
+      holder.append(empty);
+      return;
+    }
+
+    if (data.empty) {
+      const empty = el('div', 'kb-empty');
+      empty.append(el('div', 'kb-empty-title', data.empty.title));
+      empty.append(el('div', 'kb-empty-sub', data.empty.detail));
+      holder.append(empty);
+    }
+    // 即使全空也保留三组与计数，让「候选 / 已验证 / 经验」的结构始终可见。
+    for (const group of data.groups ?? []) holder.append(knowledgeGroupCard(group));
+  };
+
+  const loadKnowledgeBrowse = async () => {
+    const token = ++knowledgeBrowseToken;
+    const started = performance.now();
+    try {
+      const data = await window.companion.knowledge.browse({ projectId: knowledgeBrowseProject });
+      if (token !== knowledgeBrowseToken) return;
+      knowledgeBrowseData = data;
+      // 所选项目在新数据里已经不存在（例如知识被清空）时退回「全部」。
+      if (knowledgeBrowseProject && !(data.projects ?? []).some((item) => item.id === knowledgeBrowseProject)) {
+        knowledgeBrowseProject = '';
+        void loadKnowledgeBrowse();
+        return;
+      }
+      renderKnowledgeBrowse();
+      $('knowledgeBrowse').dataset.renderMs = String(Math.round(performance.now() - started));
+    } catch (error) {
+      if (token !== knowledgeBrowseToken) return;
+      knowledgeBrowseData = null;
+      const holder = $('kbGroups');
+      holder.replaceChildren();
+      const box = el('div', 'kb-empty');
+      box.append(el('div', 'kb-empty-title', '读取知识库失败'));
+      box.append(el('div', 'kb-empty-sub', String(error?.message ?? error)));
+      holder.append(box);
+    }
+  };
+
+  // ---- 三种视图模式：专注（A） / 知识（B） / 对话（C） ----
 
   const MODE_IDS = { A: 'modeA', B: 'modeB', C: 'modeC' };
 
@@ -2716,9 +2836,10 @@
       button.classList.toggle('on', button.dataset.mode === mode);
     }
     const hasProjects = (view?.projects?.length ?? 0) > 0;
-    // 交办输入框只在「待办」里出现；对话模式用自己的输入。
-    $('composeSection').hidden = !hasProjects || mode !== 'B';
+    // 交办输入框只属于专注；对话模式用自己的输入，知识模式只读。
+    $('composeSection').hidden = !hasProjects || mode !== 'A';
     if (mode === 'A') renderModeA();
+    if (mode === 'B') void loadKnowledgeBrowse();
     if (mode === 'C') {
       greetChatOnce();
       renderChatCards();
@@ -2751,14 +2872,6 @@
       $('aCard').hidden = true;
       $('aPrimary').textContent = '看看项目';
     }
-
-    $('aFeed').replaceChildren();
-    for (const item of pending.slice(1, 4)) {
-      const row = el('div', 'a-row');
-      row.append(el('span', 'a-dot'));
-      row.append(el('span', undefined, item.title || item.id));
-      $('aFeed').append(row);
-    }
   };
 
   const chatLog = [];
@@ -2779,7 +2892,7 @@
     const pending = view?.pending?.length ?? 0;
     const project = view?.projects?.find((item) => item.id === view?.activeProjectId) ?? view?.projects?.[0];
     if (!project) {
-      chatAppend('bot', '还没有登记项目。切到「待办」展开工作区，先添加一个目录。');
+      chatAppend('bot', '还没有登记项目。切到「专注」展开工作区，先添加一个目录。');
       return;
     }
     const lines = [`我在看 ${project.name || project.id}。`];
@@ -2857,8 +2970,15 @@
     button.onclick = () => setMode(button.dataset.mode);
   }
   $('aPrimary').onclick = () => {
+    // 有待办时滚到专注里的待办列表；没有待办时展开工作区（项目详情暂时还在知识模式下方）。
+    if ((view?.pending?.length ?? 0) > 0) {
+      setMode('A');
+      $('needsSection')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      return;
+    }
     setMode('B');
-    $('needsSection')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    $('workspaceToggle').open = true;
+    $('workspaceToggle')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   };
   $('aSecondary').onclick = () => setMode('C');
   $('cSend').onclick = () => { void sendChat(); };

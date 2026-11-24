@@ -76,6 +76,7 @@ const lastPlaybookResults = new Map();
 const playbookAborts = new Map();
 const playbookChildren = new Map();
 let knowledgeSummaryModule = null;
+let knowledgeBrowseModule = null;
 let harvestInFlight = false;
 let mascotModule = null;
 let githubModule = null;
@@ -2717,6 +2718,16 @@ const registerIpc = () => {
     } finally {
       harvestInFlight = false;
     }
+  });
+
+  // 知识模式浏览：只读一次本地 SQLite，按项目筛选后由视图模型分组返回。
+  ipcMain.handle('companion:knowledge-browse', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    knowledgeBrowseModule = knowledgeBrowseModule ?? await importEsm('../src/knowledge/browse.mjs');
+    return knowledgeBrowseModule.knowledgeBrowseFor({
+      personalStore,
+      projectId: String(input?.projectId ?? '')
+    });
   });
 
   ipcMain.handle('companion:knowledge-ask', async (event, input) => {
