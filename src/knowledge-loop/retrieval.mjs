@@ -2,8 +2,13 @@
 //
 // 只读本地 SQLite，不写库、不联网、不调模型。本地几百条的量级，结构化过滤
 // 加关键词匹配就够（ADR-0007），不引入向量库。
-// 返回顺序：已验证优先，其次待验证，推断在最后；同状态时项目级先于域级，
-// 再按证据条数与时间倒序。每条都带证据条数，让模型能表达「这条有多可靠」。
+// 返回顺序：已验证优先，其次待验证，推断在后，争议（disputed）永远垫底；
+// 同状态时项目级先于域级，再按证据条数与时间倒序。每条都带证据条数，让模型能表达「这条有多可靠」。
+//
+// #57 冲突与争议：同一现象同时有域级与项目级时，默认结果只给域级，
+// 被覆盖的项目级放进 overridden（不删不藏，仍可用 listLessonsForProject 单查）；
+// 争议条目带「争议」标注且不参与已验证优先排序；
+// 已被取代（superseded）的不进 items，单独列在 superseded，避免把落选对策当建议。
 //
 // 没有匹配时不返回一个空列表假装「没有经验」：reason.code 区分
 // no-project（没指定项目）/ project-not-distilled（项目还没提炼过）/
@@ -14,9 +19,20 @@ export const DEFAULT_LESSON_RETRIEVAL_LIMIT = 10;
 const MAX_LESSON_SCAN = 1000;
 
 /** 状态优先级：已验证排最前，争议按 #57 的约定不参与优先排序（排在最后）。 */
-const STATUS_RANK = { verified: 0, unverified: 1, inferred: 2, disputed: 3 };
+const STATUS_RANK = { verified: 0, unverified: 1, inferred: 2, disputed: 3, superseded: 4 };
 /** 状态标注跟着结果一起返回：待验证不能被当成定论。 */
-const STATUS_LABEL = { verified: '已验证', unverified: '待验证', inferred: '推断', disputed: '争议' };
+const STATUS_LABEL = { verified: '已验证', unverified: '待验证', inferred: '推断', disputed: '争议', superseded: '已被取代' };
+
+/**
+ * 有效状态（#57）：争议与已被取代优先于验证状态。
+ * 争议条目哪怕以前是 verified，也不能再被当成已验证引用。
+ */
+const statusOf = (lesson) => {
+  const dispute = lesson?.dispute?.status;
+  if (dispute === 'disputed') return 'disputed';
+  if (dispute === 'superseded' || lesson?.supersededBy) return 'superseded';
+  return lesson?.verificationStatus ?? 'unverified';
+};
 const LAYER_LABEL = { project: '项目', domain: '域' };
 
 /** 压平空白：关键词匹配与展示用同一份文本，避免多空格把一条经验切成两块。 */
@@ -52,7 +68,7 @@ const supportOf = (personalStore, lesson) => {
 };
 
 const toItem = (personalStore, lesson, layer) => {
-  const status = lesson.verificationStatus ?? 'unverified';
+  const status = statusOf(lesson);
   return {
     id: lesson.id,
     layer,
@@ -124,7 +140,8 @@ const reasonFor = ({ projectId, domain, query, projectTotal, domainTotal }) => {
  * @param {string} [input.query] 关键词；空串表示不过滤
  * @param {number} [input.limit] 最多返回多少条；计数按过滤前的全量
  * @returns {{projectId: string, domain: string, query: string, limit: number,
- *   items: object[], counts: {project: number, domain: number, matched: number},
+ *   items: object[], overridden: object[], superseded: object[],
+ *   counts: {project: number, domain: number, matched: number, overridden: number},
  *   reason: null | {code: string, message: string}}}
  */
 export function retrieveLessons({
@@ -140,26 +157,47 @@ export function retrieveLessons({
   const max = checkLimit(limit);
 
   // 第一遍：项目级经验。第二遍：域级经验按 scope.domainIds 补，不看项目归属。
-  const projectLessons = id
-    ? personalStore.listLessons({ projectId: id, limit: MAX_LESSON_SCAN })
-      .filter((lesson) => layerOf(lesson) === 'project')
-    : [];
+  // #57 起优先走 store 的 listEffectiveLessons：域级覆盖同现象的项目级，
+  // 被覆盖的项目级放进 overridden（不删不藏），已被取代的单独列在 superseded。
+  // 桩 store 没有这个方法时退回原先的两次 listLessons，不影响已有调用方。
+  const view = typeof personalStore.listEffectiveLessons === 'function'
+    ? personalStore.listEffectiveLessons({
+      projectId: id,
+      domainIds: wantedDomain ? [wantedDomain] : [],
+      limit: MAX_LESSON_SCAN
+    })
+    : null;
+  const projectLessons = view
+    ? view.project
+    : id
+      ? personalStore.listLessons({ projectId: id, limit: MAX_LESSON_SCAN })
+        .filter((lesson) => layerOf(lesson) === 'project')
+      : [];
   const known = new Set(projectLessons.map((lesson) => lesson.id));
-  const domainLessons = wantedDomain
-    ? personalStore.listLessons({ limit: MAX_LESSON_SCAN })
-      .filter((lesson) => layerOf(lesson) === 'domain'
-        && domainsOf(lesson).includes(wantedDomain)
-        && !known.has(lesson.id))
-    : [];
+  const domainLessons = view
+    ? view.domain
+    : wantedDomain
+      ? personalStore.listLessons({ limit: MAX_LESSON_SCAN })
+        .filter((lesson) => layerOf(lesson) === 'domain'
+          && domainsOf(lesson).includes(wantedDomain)
+          && !known.has(lesson.id))
+      : [];
+  const overridden = view ? view.overridden : [];
+  const superseded = view ? view.superseded : [];
 
   const tokens = tokensOf(wantedQuery);
+  const hit = (lesson) => tokens.every((token) => haystackOf(lesson).includes(token));
+  // 默认结果不给被域级覆盖的项目级，也不给已被取代的那条；它们分别在 overridden / superseded 里。
+  const shadowed = new Set(overridden.map((lesson) => lesson.id));
+  const replaced = new Set(superseded.map((lesson) => lesson.id));
+  const usable = (lesson) => !shadowed.has(lesson.id) && !replaced.has(lesson.id);
   const matched = [
-    ...projectLessons.filter((lesson) => tokens.every((token) => haystackOf(lesson).includes(token)))
-      .map((lesson) => toItem(personalStore, lesson, 'project')),
-    ...domainLessons.filter((lesson) => tokens.every((token) => haystackOf(lesson).includes(token)))
-      .map((lesson) => toItem(personalStore, lesson, 'domain'))
+    ...projectLessons.filter(usable).filter(hit).map((lesson) => toItem(personalStore, lesson, 'project')),
+    ...domainLessons.filter(usable).filter(hit).map((lesson) => toItem(personalStore, lesson, 'domain'))
   ].sort(compareItems);
   const items = matched.slice(0, max);
+  // 被域级覆盖的项目级经验同样按关键词带回来：查询以域级为准，但旧的不能凭空消失。
+  const overriddenItems = overridden.filter(hit);
 
   return {
     projectId: id,
@@ -167,13 +205,20 @@ export function retrieveLessons({
     query: wantedQuery,
     limit: max,
     items,
-    counts: { project: projectLessons.length, domain: domainLessons.length, matched: items.length },
+    overridden: overriddenItems,
+    superseded: superseded.filter(hit),
+    counts: {
+      project: projectLessons.length,
+      domain: domainLessons.length,
+      matched: items.length,
+      overridden: overriddenItems.length
+    },
     // 有结果就不解释；没有结果时把原因讲清楚，而不是给一个空列表。
     reason: items.length
       ? null
       : reasonFor({
         projectId: id, domain: wantedDomain, query: wantedQuery,
-        projectTotal: projectLessons.length, domainTotal: domainLessons.length
+        projectTotal: projectLessons.length - overriddenItems.length, domainTotal: domainLessons.length
       })
   };
 }

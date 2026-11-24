@@ -886,4 +886,340 @@ export class PersonalKnowledgeStore {
       } catch { return false; }
     }).slice(0,limit).map((row)=>this.getLesson(row.id));
   }
+
+  // ---- 三层沉淀：冲突与争议（#57） ----
+  // 冲突判定看三个字段：规范化现象、作用域（层 + 项目或域集合）、对策。
+  // 同一现象 + 同一作用域 + 对策不同 → 争议（disputed），两条都留着等人裁决；
+  // 域级与项目级并列时默认查询以域级为准，项目级仍可单查，不删不藏。
+  // 「争议 / 已被取代」只写进 payload，不改已有的 verification_status 列与约束：
+  // 这里的追加只发生在类末尾，现有方法与建表语句一行不动。
+
+  /** 冲突判定用的文本规范化：压平空白、去首尾引号与句尾标点、小写。 */
+  lessonConflictText(value) {
+    return String(value ?? '')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .replace(/^["'“”‘’「」『』]+/u, '')
+      .replace(/["'“”‘’「」『』。．.，,；;：:、]+$/u, '')
+      .toLowerCase();
+  }
+
+  /** 经验的作用域层：只有显式 domain 才算域级，其余一律按项目级。 */
+  lessonScopeLayer(lesson) {
+    return lesson?.scope?.layer === 'domain' ? 'domain' : 'project';
+  }
+
+  /** 作用域身份：项目级按项目，域级按域集合；跨层的两条不互为「同级冲突」。 */
+  lessonScopeKey(lesson) {
+    if(this.lessonScopeLayer(lesson) === 'domain') {
+      const domains = (lesson?.scope?.domainIds ?? []).map(String).sort();
+      return `domain|${domains.join(',')}`;
+    }
+    return `project|${String(lesson?.scope?.projectId ?? lesson?.projectId ?? '')}`;
+  }
+
+  /**
+   * 经验的有效状态：争议与取代优先于验证状态。
+   * 争议条目哪怕以前是 verified，也不能再被当成已验证引用。
+   */
+  lessonStatusOf(lesson) {
+    const dispute = lesson?.dispute?.status;
+    if(dispute === 'disputed') return 'disputed';
+    if(dispute === 'superseded' || lesson?.supersededBy) return 'superseded';
+    return lesson?.verificationStatus ?? 'inferred';
+  }
+
+  /** 按 ID 读一条经验的有效状态（含争议 / 已被取代）。 */
+  lessonStatus(lessonId) {
+    const id = safeText(lessonId,90,'lesson id',true);
+    const lesson = this.getLesson(id);
+    valid(Boolean(lesson),'Lesson not found');
+    return this.lessonStatusOf(lesson);
+  }
+
+  /**
+   * 争议状态（读）：人能据此看到「谁和谁有争议、裁决到哪一步」。
+   * status ∈ none / disputed / resolved / superseded。
+   */
+  lessonDispute(lessonId) {
+    const id = safeText(lessonId,90,'lesson id',true);
+    const lesson = this.getLesson(id);
+    valid(Boolean(lesson),'Lesson not found');
+    const dispute = lesson.dispute && typeof lesson.dispute === 'object' ? lesson.dispute : {};
+    const status = lesson.supersededBy ? 'superseded' : (['disputed','resolved','superseded'].includes(dispute.status) ? dispute.status : 'none');
+    return {
+      lessonId:id,
+      status,
+      disputed:status === 'disputed',
+      reason:dispute.reason ?? '',
+      actor:dispute.actor ?? null,
+      openedAt:dispute.openedAt ?? null,
+      resolvedAt:dispute.resolvedAt ?? null,
+      peerIds:Array.isArray(dispute.peerIds) ? [...dispute.peerIds] : [],
+      winnerId:dispute.resolution?.winnerId ?? dispute.winnerId ?? null,
+      supersededBy:lesson.supersededBy ?? null,
+      supersededAt:lesson.supersededAt ?? null
+    };
+  }
+
+  /**
+   * 冲突分组（读）：同一现象 + 同一作用域 + 对策不同的经验归成一组。
+   * 已被取代的不参与分组（它们已经裁决过）；未标争议的也会被列出来，供人一键标争议。
+   */
+  lessonConflicts({ projectId = '', domainIds = [], limit = 200 } = {}) {
+    const project = projectId ? safeText(projectId,90,'project id',true) : '';
+    valid(Array.isArray(domainIds),'Lesson domain ids must be an array');
+    const wantedDomains = [...new Set(domainIds.map((domain)=>safeText(String(domain),80,'domain id',true)))];
+    const cap = Math.min(Math.max(1,Number(limit) || 200),1000);
+    const groups = new Map();
+    for(const lesson of this.listLessons({ limit: cap })) {
+      if(this.lessonStatusOf(lesson) === 'superseded') continue;
+      const layer = this.lessonScopeLayer(lesson);
+      const domains = (lesson.scope?.domainIds ?? []).map(String);
+      if(project && layer === 'project' && (lesson.scope?.projectId ?? lesson.projectId) !== project) continue;
+      if(layer === 'domain' && wantedDomains.length && !domains.some((domain)=>wantedDomains.includes(domain))) continue;
+      const key = `${this.lessonScopeKey(lesson)}|${this.lessonConflictText(lesson.phenomenon)}`;
+      const group = groups.get(key) ?? { scopeLayer:layer, lessons:[], countermeasures:[] };
+      group.lessons.push(lesson);
+      const countermeasure = this.lessonConflictText(lesson.countermeasure);
+      if(countermeasure && !group.countermeasures.includes(countermeasure)) group.countermeasures.push(countermeasure);
+      groups.set(key,group);
+    }
+    return [...groups.values()]
+      .filter((group)=>group.countermeasures.length > 1)
+      .map((group)=>({
+        phenomenon:group.lessons[0].phenomenon,
+        scope:{
+          layer:group.scopeLayer,
+          projectId:group.scopeLayer === 'project' ? (group.lessons[0].scope?.projectId ?? group.lessons[0].projectId ?? null) : null,
+          domainIds:[...(group.lessons[0].scope?.domainIds ?? [])]
+        },
+        lessonIds:group.lessons.map((lesson)=>lesson.id),
+        countermeasures:group.lessons.map((lesson)=>lesson.countermeasure),
+        lessons:group.lessons,
+        disputed:group.lessons.every((lesson)=>this.lessonStatusOf(lesson) === 'disputed')
+      }));
+  }
+
+  /**
+   * 标争议（写）：只接受同一现象、同一作用域、对策确实不同的经验。
+   * 不覆盖、不合并、不改 verificationStatus——两条原样留着等人裁决。
+   */
+  markLessonsDisputed(lessonIds, { reason = '', actor = 'user' } = {}) {
+    valid(Array.isArray(lessonIds) && lessonIds.length >= 1 && lessonIds.length <= 20,
+      'Lesson ids must be an array of 1 to 20 ids');
+    const ids = [...new Set(lessonIds.map((id)=>safeText(id,90,'lesson id',true)))];
+    const rows = ids.map((id)=>{
+      const row = this.db.prepare('SELECT payload FROM knowledge_lessons WHERE id=?').get(id);
+      valid(Boolean(row),'Lesson not found');
+      let payload = {};
+      try { payload = JSON.parse(row.payload) ?? {}; } catch { payload = {}; }
+      return { id, payload };
+    });
+    valid(rows.length >= 2,'A dispute needs at least two lessons');
+    const scopeKey = this.lessonScopeKey(rows[0].payload);
+    const phenomenon = this.lessonConflictText(rows[0].payload.phenomenon);
+    for(const row of rows) {
+      valid(this.lessonScopeKey(row.payload) === scopeKey,'Disputed lessons must share one scope');
+      valid(this.lessonConflictText(row.payload.phenomenon) === phenomenon,'Disputed lessons must share one phenomenon');
+    }
+    valid(new Set(rows.map((row)=>this.lessonConflictText(row.payload.countermeasure))).size > 1,
+      'Disputed lessons must differ in countermeasure');
+    const stamp = now();
+    const text = reason ? safeText(reason,500,'dispute reason') : '同一现象、同一作用域出现不同对策';
+    const who = safeText(String(actor ?? 'user'),90,'dispute actor',true);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for(const row of rows) {
+        const previous = row.payload.dispute && typeof row.payload.dispute === 'object' ? row.payload.dispute : {};
+        const next = {
+          ...row.payload,
+          dispute:{
+            status:'disputed',
+            reason:text,
+            actor:who,
+            openedAt:previous.openedAt ?? stamp,
+            peerIds:rows.filter((item)=>item.id !== row.id).map((item)=>item.id)
+          }
+        };
+        const body = canonical(next);
+        this.db.prepare('UPDATE knowledge_lessons SET payload=?,payload_hash=? WHERE id=?').run(body,sha256(body),row.id);
+      }
+      this.db.exec('COMMIT');
+    } catch(error) { this.db.exec('ROLLBACK'); throw error; }
+    return ids.map((id)=>this.getLesson(id));
+  }
+
+  /**
+   * 裁决入口（写）：人标某条为准，另一条落为「已被取代」。
+   * - 赢家 dispute.status=resolved，verificationStatus 不动（裁决不等于验证）；
+   * - 输家留下 supersededBy，payload 与证据都在，仍可单独查到；
+   * - 两条都还在库里，只是默认检索不再把输家当建议。
+   */
+  resolveLessonDispute(winnerId, loserId, { actor = 'user', note = '' } = {}) {
+    const winner = safeText(winnerId,90,'lesson id',true);
+    const loser = safeText(loserId,90,'lesson id',true);
+    valid(winner !== loser,'A lesson cannot supersede itself');
+    const load = (id)=>{
+      const row = this.db.prepare('SELECT payload FROM knowledge_lessons WHERE id=?').get(id);
+      valid(Boolean(row),'Lesson not found');
+      try { return JSON.parse(row.payload) ?? {}; } catch { return {}; }
+    };
+    const winnerPayload = load(winner);
+    const loserPayload = load(loser);
+    valid(this.lessonScopeKey(winnerPayload) === this.lessonScopeKey(loserPayload),'Resolved lessons must share one scope');
+    valid(this.lessonConflictText(winnerPayload.phenomenon) === this.lessonConflictText(loserPayload.phenomenon),
+      'Resolved lessons must share one phenomenon');
+    valid(this.lessonConflictText(winnerPayload.countermeasure) !== this.lessonConflictText(loserPayload.countermeasure),
+      'Resolved lessons do not conflict');
+    const stamp = now();
+    const who = safeText(String(actor ?? 'user'),90,'dispute actor',true);
+    const memo = note ? safeText(note,500,'dispute note') : '';
+    const winnerPrior = winnerPayload.dispute && typeof winnerPayload.dispute === 'object' ? winnerPayload.dispute : {};
+    const loserPrior = loserPayload.dispute && typeof loserPayload.dispute === 'object' ? loserPayload.dispute : {};
+    const winnerNext = {
+      ...winnerPayload,
+      dispute:{
+        status:'resolved',
+        reason:winnerPrior.reason ?? '同一现象、同一作用域出现不同对策',
+        actor:who,
+        openedAt:winnerPrior.openedAt ?? stamp,
+        resolvedAt:stamp,
+        peerIds:[loser],
+        resolution:{ winnerId:winner, loserId:loser, note:memo }
+      }
+    };
+    const loserNext = {
+      ...loserPayload,
+      dispute:{
+        status:'superseded',
+        reason:loserPrior.reason ?? winnerPrior.reason ?? '同一现象、同一作用域出现不同对策',
+        actor:who,
+        openedAt:loserPrior.openedAt ?? stamp,
+        resolvedAt:stamp,
+        peerIds:[winner],
+        winnerId:winner
+      },
+      supersededBy:winner,
+      supersededAt:stamp
+    };
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for(const [id,payload] of [[winner,winnerNext],[loser,loserNext]]) {
+        const body = canonical(payload);
+        this.db.prepare('UPDATE knowledge_lessons SET payload=?,payload_hash=? WHERE id=?').run(body,sha256(body),id);
+      }
+      this.db.exec('COMMIT');
+    } catch(error) { this.db.exec('ROLLBACK'); throw error; }
+    return { winner:this.getLesson(winner), loser:this.getLesson(loser) };
+  }
+
+  /**
+   * 冲突感知的写入口（#57）：提炼统一走这里。
+   * - 同现象同作用域但对策不同：单独成行，双方都标争议，等裁决；
+   * - 对策相同：照旧并进已有经验（#55 的证据累加 / #56 的跨项目复现合并）；
+   * - 没有同现象同作用域的经验：照旧新建。
+   */
+  recordLessonOrDispute(lesson, { evidence = [] } = {}) {
+    valid(lesson && typeof lesson === 'object' && !Array.isArray(lesson),'Lesson must be an object');
+    valid(Array.isArray(evidence),'Lesson evidence must be an array');
+    const projectId = safeText(lesson.projectId,90,'lesson project id',true);
+    const phenomenon = safeText(lesson.phenomenon,200,'lesson phenomenon',true);
+    const layer = lesson.scope?.layer ?? 'project';
+    valid(['project','domain'].includes(layer),'Invalid lesson scope layer');
+    const candidate = {
+      ...lesson,
+      projectId,
+      phenomenon,
+      scope:{
+        layer,
+        projectId:layer === 'domain' ? null : (lesson.scope?.projectId ?? projectId),
+        domainIds:Array.isArray(lesson.scope?.domainIds) ? [...lesson.scope.domainIds] : []
+      }
+    };
+    // 同一现象 + 同一作用域（层 + 项目 / 域集合）才算同级；跨项目复现交给 #56 的合并。
+    const scopeKey = this.lessonScopeKey(candidate);
+    const phenomenonKey = this.lessonConflictText(phenomenon);
+    const peers = this.listLessons({ limit:1000 }).filter((item)=>
+      this.lessonStatusOf(item) !== 'superseded'
+      && this.lessonScopeKey(item) === scopeKey
+      && this.lessonConflictText(item.phenomenon) === phenomenonKey);
+    const sameCountermeasure = peers.filter((item)=>
+      this.lessonConflictText(item.countermeasure) === this.lessonConflictText(lesson.countermeasure));
+    // 已有同对策的经验：先把证据并进去；同级若已有别的对策，整个作用域标争议。
+    if(sameCountermeasure.length) {
+      const stored = this.appendLessonEvidence(sameCountermeasure[0].id, lesson, evidence);
+      const contested = new Set(peers.map((item)=>this.lessonConflictText(item.countermeasure)));
+      if(peers.length > 1 && contested.size > 1) {
+        this.markLessonsDisputed(peers.map((item)=>item.id),
+          { reason:'同一现象、同一作用域出现不同对策', actor:'system' });
+      }
+      return { ...stored, support:this.lessonSupport(stored.id) };
+    }
+    // 没有同级经验：照旧走复现 / 新建。
+    if(peers.length === 0) {
+      const write = typeof this.recordReproducedLesson === 'function'
+        ? this.recordReproducedLesson.bind(this)
+        : this.recordLesson.bind(this);
+      return write(lesson, { evidence });
+    }
+    // 同级出现新对策：另起一行、双方标争议，不自动覆盖、不自动合并。
+    const stored = this.addLesson(candidate, { evidence });
+    this.retainLessonSource(stored.id, {
+      projectId,
+      recordIds:[lesson.sourceRecordId, ...evidence.map((item)=>item?.recordId)]
+    });
+    this.markLessonsDisputed([...peers.map((item)=>item.id), stored.id],
+      { reason:'同一现象、同一作用域出现不同对策', actor:'system' });
+    const merged = this.getLesson(stored.id);
+    return { ...merged, support:this.lessonSupport(merged.id) };
+  }
+
+  /**
+   * 默认查询（#57）：域级覆盖项目级。
+   * - 同一现象在域级与项目级同时存在时，effective 只给域级；
+   * - 被覆盖的项目级不删不藏，原样放进 overridden（也仍可用 listLessons / listLessonsForProject 单查）；
+   * - 已被取代（superseded）不进 effective，单独列在 superseded；
+   * - 争议（disputed）留在 effective，由检索排到最后。
+   */
+  listEffectiveLessons({ projectId = '', domainIds = [], limit = 200 } = {}) {
+    const project = projectId ? safeText(projectId,90,'project id',true) : '';
+    valid(Array.isArray(domainIds),'Lesson domain ids must be an array');
+    const wantedDomains = [...new Set(domainIds.map((domain)=>safeText(String(domain),80,'domain id',true)))];
+    const cap = Math.min(Math.max(1,Number(limit) || 200),1000);
+    const projectLessons = project
+      ? this.listLessons({ projectId:project, limit:cap }).filter((item)=>this.lessonScopeLayer(item) === 'project')
+      : [];
+    const domainLessons = wantedDomains.length
+      ? this.listLessons({ limit:cap }).filter((item)=>this.lessonScopeLayer(item) === 'domain'
+        && (item.scope?.domainIds ?? []).some((domain)=>wantedDomains.includes(String(domain))))
+      : [];
+    const superseded = [...projectLessons, ...domainLessons]
+      .filter((item)=>this.lessonStatusOf(item) === 'superseded');
+    const supersededIds = new Set(superseded.map((item)=>item.id));
+    const domainIndex = new Map();
+    const effective = [];
+    for(const item of domainLessons) {
+      if(supersededIds.has(item.id)) continue;
+      effective.push({ ...item, effectiveStatus:this.lessonStatusOf(item) });
+      const key = this.lessonConflictText(item.phenomenon);
+      if(!domainIndex.has(key)) domainIndex.set(key,item);
+    }
+    const overridden = [];
+    for(const item of projectLessons) {
+      if(supersededIds.has(item.id)) continue;
+      const peer = domainIndex.get(this.lessonConflictText(item.phenomenon));
+      if(peer) {
+        overridden.push({
+          ...item,
+          overriddenBy:peer.id,
+          overriddenReason:'domain-precedence',
+          sameCountermeasure:this.lessonConflictText(peer.countermeasure) === this.lessonConflictText(item.countermeasure)
+        });
+        continue;
+      }
+      effective.push({ ...item, effectiveStatus:this.lessonStatusOf(item) });
+    }
+    return { project:projectLessons, domain:domainLessons, effective, overridden, superseded };
+  }
 }
