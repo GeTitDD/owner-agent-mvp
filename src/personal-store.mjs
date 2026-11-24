@@ -533,4 +533,143 @@ export class PersonalKnowledgeStore {
       : this.db.prepare('SELECT DISTINCT source_record_id AS record_id FROM knowledge_lessons').all();
     return rows.map((row)=>row.record_id);
   }
+
+  // ---- 三层沉淀：去重与证据累加 ----
+  // 同一现象在同一作用域再次被提炼时，不新建经验，只把新证据追加到已有经验上。
+  // 比较用的是提炼时产出的规范化现象短句（contracts.lessonDedupeKey），不是整段文本。
+
+  /** 按去重键找已有经验：键 = 规范化现象 + 作用域层 + 项目，由 contracts.lessonDedupeKey 产出。 */
+  lessonByDedupe(dedupeKey) {
+    const key = safeText(dedupeKey,128,'lesson dedupe key',true);
+    const row = this.db.prepare('SELECT id FROM knowledge_lessons WHERE dedupe_key=? ORDER BY created_at,id LIMIT 1').get(key);
+    return row ? this.getLesson(row.id) : null;
+  }
+
+  /**
+   * 经验沉淀的写入口（#55）：
+   * - 首次提炼：照常插入一条经验行；
+   * - 命中同一去重键：只追加证据行、重算计数，经验行本身不新增；
+   * - 证据按 (经验, 引用) 幂等，同一条证据重复出现既不报错也不重复计数。
+   * 返回值额外带 support，方便调用方直接读「被多少条执行记录支持」。
+   */
+  recordLesson(lesson, { evidence = [] } = {}) {
+    valid(lesson && typeof lesson === 'object' && !Array.isArray(lesson),'Lesson must be an object');
+    valid(Array.isArray(evidence),'Lesson evidence must be an array');
+    const projectId = safeText(lesson.projectId,90,'lesson project id',true);
+    const phenomenon = safeText(lesson.phenomenon,200,'lesson phenomenon',true);
+    const scopeLayer = lesson.scope?.layer ?? 'project';
+    valid(['project','domain'].includes(scopeLayer),'Invalid lesson scope layer');
+    // 去重键沿用 contracts.lessonDedupeKey 的公式（规范化现象 + 作用域层 + 项目），这里不另造一套。
+    const dedupeKey = safeText(
+      lesson.dedupeKey
+        ?? sha256(canonical({contract:'lesson/v1',phenomenon:phenomenon.toLowerCase(),layer:scopeLayer,projectId})),
+      128,'lesson dedupe key',true
+    );
+    const existing = this.lessonByDedupe(dedupeKey);
+    const stored = existing
+      ? this.appendLessonEvidence(existing.id, lesson, evidence)
+      : this.addLesson({ ...lesson, dedupeKey }, { evidence });
+    return { ...stored, support: this.lessonSupport(stored.id) };
+  }
+
+  /**
+   * 把新证据追加到已有经验上：现象/机制/对策保留第一次提炼的措辞，只更新证据与计数。
+   * 计数按证据表重算而不是逐次累加，所以重复提交不会把数字抬高。
+   */
+  appendLessonEvidence(lessonId, lesson, evidence = []) {
+    const id = safeText(lessonId,90,'lesson id',true);
+    const sourceRecordId = safeText(lesson?.sourceRecordId,200,'lesson source record id',true);
+    valid(Array.isArray(evidence),'Lesson evidence must be an array');
+    const row = this.db.prepare('SELECT payload,verification_status FROM knowledge_lessons WHERE id=?').get(id);
+    valid(Boolean(row),'Lesson not found');
+    const payload = JSON.parse(row.payload);
+    const stamp = now();
+    const known = new Set(this.db.prepare('SELECT ref FROM knowledge_lesson_evidence WHERE lesson_id=?').all(id)
+      .map((item)=>item.ref));
+    const insert = this.db.prepare(`INSERT OR IGNORE INTO knowledge_lesson_evidence(id,lesson_id,record_id,ref,kind,excerpt,content_hash,created_at)
+      VALUES(?,?,?,?,?,?,?,?)`);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for(const item of evidence) {
+        valid(item && typeof item === 'object' && !Array.isArray(item),'Lesson evidence must be objects');
+        const ref = safeText(item.ref,500,'lesson evidence reference',true);
+        // 同一条证据已经在库里：幂等跳过，不报错、不新增行、不抬高计数。
+        if(known.has(ref)) continue;
+        const excerpt = item.excerpt ?? '';
+        const inserted = insert.run(
+          `le_${randomUUID().replaceAll('-','').slice(0,24)}`,id,
+          safeText(item.recordId ?? sourceRecordId,200,'lesson evidence record id',true),
+          ref,
+          safeText(item.kind ?? 'other',40,'lesson evidence kind',true),
+          safeText(excerpt,2000,'lesson evidence excerpt'),
+          safeText(item.contentHash ?? sha256(String(excerpt)),128,'lesson evidence hash',true),
+          stamp
+        );
+        if(Number(inserted?.changes) > 0) known.add(ref);
+      }
+      const stats = this.db.prepare(`SELECT COUNT(*) AS evidence,COUNT(DISTINCT record_id) AS records
+        FROM knowledge_lesson_evidence WHERE lesson_id=?`).get(id);
+      const refs = this.db.prepare('SELECT ref FROM knowledge_lesson_evidence WHERE lesson_id=? ORDER BY ref,id').all(id)
+        .map((item)=>item.ref);
+      // 合并进来的执行记录也要记下来：待提炼队列靠它判断「这条记录已经提炼过」。
+      const recordIds = [...new Set([
+        ...(Array.isArray(payload.recordIds) ? payload.recordIds : []),
+        payload.sourceRecordId ?? null,
+        sourceRecordId
+      ].filter(Boolean))];
+      // 后来补上可追证据的推断，升级为待验证；已待验证的不会被这次合并降级。
+      const previous = row.verification_status ?? payload.verificationStatus ?? 'inferred';
+      const verificationStatus = previous === 'inferred' && Number(stats.evidence) > 0 ? 'unverified' : previous;
+      const next = {
+        ...payload,
+        evidenceRefs: refs,
+        verificationStatus,
+        // 累加计数：证据条数与支持它的执行记录条数，两处都从证据表重算。
+        evidenceCount: Number(stats.evidence),
+        supportCount: Number(stats.records),
+        recordIds,
+        lastMergedAt: stamp
+      };
+      const body = canonical(next);
+      this.db.prepare('UPDATE knowledge_lessons SET payload=?,payload_hash=?,verification_status=? WHERE id=?')
+        .run(body,sha256(body),verificationStatus,id);
+      this.db.exec('COMMIT');
+    } catch(error) { this.db.exec('ROLLBACK'); throw error; }
+    return this.getLesson(id);
+  }
+
+  /** 这条经验被多少条执行记录支持：按证据指向的执行记录去重，不按被引用的次数。 */
+  lessonSupport(lessonId) {
+    const id = safeText(lessonId,90,'lesson id',true);
+    const row = this.db.prepare('SELECT id,project_id,created_at FROM knowledge_lessons WHERE id=?').get(id);
+    if(!row) return null;
+    const stats = this.db.prepare(`SELECT COUNT(*) AS evidence,COUNT(DISTINCT record_id) AS records,
+      MAX(created_at) AS latest_at FROM knowledge_lesson_evidence WHERE lesson_id=?`).get(id);
+    const recordIds = this.db.prepare('SELECT DISTINCT record_id FROM knowledge_lesson_evidence WHERE lesson_id=? ORDER BY record_id').all(id)
+      .map((item)=>item.record_id);
+    return {
+      lessonId:id, projectId:row.project_id,
+      records:Number(stats.records) || 0, evidence:Number(stats.evidence) || 0,
+      latestAt:stats.latest_at ?? row.created_at, recordIds
+    };
+  }
+
+  /**
+   * 已提炼的执行记录 ID：来源记录 + 合并进来的证据所属记录。
+   * 合并后经验行仍只有一条，只靠 source_record_id 会把后续记录一直留在待提炼队列里。
+   */
+  distilledRecordIds({projectId=''}={}) {
+    const rows = projectId
+      ? this.db.prepare('SELECT id,source_record_id,payload FROM knowledge_lessons WHERE project_id=?').all(projectId)
+      : this.db.prepare('SELECT id,source_record_id,payload FROM knowledge_lessons').all();
+    const ids = new Set();
+    for(const row of rows) {
+      ids.add(row.source_record_id);
+      let payload = {};
+      try { payload = JSON.parse(row.payload); } catch { payload = {}; }
+      for(const recordId of (Array.isArray(payload.recordIds) ? payload.recordIds : [])) ids.add(recordId);
+      for(const item of this.lessonEvidence(row.id)) ids.add(item.recordId);
+    }
+    return [...ids];
+  }
 }
