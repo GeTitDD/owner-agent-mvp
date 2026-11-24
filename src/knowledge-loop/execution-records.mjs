@@ -2,6 +2,8 @@
 //
 // 不落表、不写库：每次读取都直接查 owner store 的既有事实，因此项目被删除后
 // 天然不会再返回任何指向它的记录。非终态记录一律不投影——这正是历史脏数据的来源。
+// 一次执行（job → patch → sandbox run）只产出一条记录，主体按 run > job > patch 取舍；
+// 其余主体退化为这条记录的 evidenceRefs，供提炼时追证据。
 export const EXECUTION_RECORD_LIMIT = 100;
 /** 单次扫描上限：owner store 的列表接口最多返回 500 条，够覆盖默认的最近 100 条。 */
 const SCAN_LIMIT = 500;
@@ -17,10 +19,6 @@ const firstTime = (...values) => values.find((value) => typeof value === 'string
 const fileList = (patch) => (patch?.files ?? []).map((file) => text(file?.path ?? file, 200)).filter(Boolean);
 const unique = (values) => [...new Set(values.filter(Boolean))];
 const runTimestamp = (run) => firstTime(run?.finished_at, run?.updated_at, run?.created_at);
-const byOccurredAtAsc = (a, b) =>
-  String(runTimestamp(a) ?? '').localeCompare(String(runTimestamp(b) ?? ''));
-/** 取最近发生的一条运行：作业/补丁自身没有测试结论，用它的测试状态代表。 */
-const latestRun = (runs) => runs.slice().sort(byOccurredAtAsc).at(-1) ?? null;
 
 function sandboxRecord({ run, job, task, patch, evidenceKinds }) {
   const changedFiles = fileList(patch);
@@ -49,10 +47,8 @@ function sandboxRecord({ run, job, task, patch, evidenceKinds }) {
   };
 }
 
-function jobRecord({ job, attempts, task, runs, patches }) {
+function jobRecord({ job, attempts, task, patches }) {
   const changedFiles = unique(patches.flatMap(fileList));
-  // 作业自身没有测试结论，取该作业最近一次终态运行的结果作为测试状态。
-  const testStatus = latestRun(runs)?.test_status ?? null;
   return {
     id: `job:${job.id}`,
     source: 'job',
@@ -67,22 +63,20 @@ function jobRecord({ job, attempts, task, runs, patches }) {
     ].filter(Boolean).join('；'),
     changedFiles,
     status: job.status,
-    testStatus,
+    // 作业自身没有测试结论；有终态运行时这次执行已由 run 记录代表，不会走到这里。
+    testStatus: null,
     occurredAt: firstTime(job.finished_at, job.updated_at, job.created_at),
     evidenceRefs: unique([
       `job:${job.id}`,
       ...attempts.map((attempt) => `attempt:${attempt.id}`),
-      ...runs.map((run) => `sandbox:${run.id}`),
       ...patches.map((item) => `patch:${item.id}`),
       task ? `task:${task.id}` : ''
     ])
   };
 }
 
-function patchRecord({ patch, job, task, runs }) {
+function patchRecord({ patch, job, task }) {
   const changedFiles = fileList(patch);
-  // 补丁的测试结论来自引用它的终态运行；没有运行就表示没有测试证据。
-  const testStatus = latestRun(runs)?.test_status ?? null;
   return {
     id: `patch:${patch.id}`,
     source: 'patch',
@@ -93,12 +87,12 @@ function patchRecord({ patch, job, task, runs }) {
     actionSummary: changedFiles.length ? `补丁文件：${changedFiles.join(', ')}` : '',
     changedFiles,
     status: patch.status,
-    testStatus,
+    // 没有运行也没有作业可代表这次执行，因此没有测试证据。
+    testStatus: null,
     occurredAt: firstTime(patch.updated_at, patch.created_at),
     evidenceRefs: unique([
       `patch:${patch.id}`,
       `job:${patch.job_id}`,
-      ...runs.map((run) => `sandbox:${run.id}`),
       task ? `task:${task.id}` : ''
     ])
   };
@@ -131,6 +125,12 @@ export function listExecutionRecords({ ownerStore, projectId, limit = EXECUTION_
     .filter((patch) => patch.project_id === id);
   const terminalPatches = patches.filter((patch) => TERMINAL_PATCH.has(patch.status));
 
+  // 一次执行只产出一条记录，主体优先级与 ExperienceCollector.collectProject 一致：
+  // 终态 run > 终态 job > 终态 patch。低优先级主体只作为证据引用出现，不另起记录。
+  const jobsCoveredByRuns = new Set(runs.map((run) => run.job_id));
+  const patchesCoveredByRuns = new Set(runs.map((run) => run.proposal_id));
+  const terminalJobIds = new Set(jobs.map((job) => job.id));
+
   for (const run of runs) {
     const job = ownerStore.getJob(run.job_id);
     const task = job?.owner_task_id ? ownerStore.getTask(job.owner_task_id) : null;
@@ -141,27 +141,24 @@ export function listExecutionRecords({ ownerStore, projectId, limit = EXECUTION_
   }
 
   for (const job of jobs) {
+    if (jobsCoveredByRuns.has(job.id)) continue;
     const detail = ownerStore.getJob(job.id) ?? job;
     const task = detail.owner_task_id ? ownerStore.getTask(detail.owner_task_id) : null;
     records.push(jobRecord({
       job: detail,
       attempts: detail.attempts ?? [],
       task,
-      runs: runs.filter((run) => run.job_id === detail.id),
       patches: patches.filter((patch) => patch.job_id === detail.id)
     }));
   }
 
   for (const patch of terminalPatches) {
+    // run 或 job 已经代表过这次执行时，补丁只作为它们的上下文，不再单独成条。
+    if (patchesCoveredByRuns.has(patch.id) || terminalJobIds.has(patch.job_id)) continue;
     const job = ownerStore.getJob(patch.job_id);
     const ownerTaskId = patch.owner_task_id ?? job?.owner_task_id;
     const task = ownerTaskId ? ownerStore.getTask(ownerTaskId) : null;
-    records.push(patchRecord({
-      patch,
-      job,
-      task,
-      runs: runs.filter((run) => run.proposal_id === patch.id)
-    }));
+    records.push(patchRecord({ patch, job, task }));
   }
 
   records.sort(byOccurredAtDesc);

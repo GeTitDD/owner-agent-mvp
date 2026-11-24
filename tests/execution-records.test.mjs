@@ -76,8 +76,8 @@ test('非终态的排队、执行中、待批准记录都不出现', () => {
     }
   });
   const { records, total } = listExecutionRecords({ ownerStore: owner, projectId: 'p1' });
-  assert.deepEqual(records.map((record) => record.id).sort(), ['job:succeededJob', 'patch:applied', 'sandbox:done']);
-  assert.equal(total, 3);
+  assert.deepEqual(records.map((record) => record.id).sort(), ['job:succeededJob', 'sandbox:done']);
+  assert.equal(total, 2);
 });
 
 test('终态运行投影成一条执行记录，带任务标题、改动文件与证据引用', () => {
@@ -104,41 +104,68 @@ test('终态运行投影成一条执行记录，带任务标题、改动文件�
   }
 });
 
-test('终态的作业与补丁各自投影成一条执行记录', () => {
+test('同一条流水线只产出一条运行记录，作业与补丁只作上下文', () => {
   const owner = fakeOwner({
     runs: { run1: sandbox('run1', { status: 'failed', test_status: 'fail' }) },
     jobs: { job1: job('job1') },
     tasks: { task1: task('task1') },
     patches: { patch1: patch('patch1') }
   });
-  const { records } = listExecutionRecords({ ownerStore: owner, projectId: 'p1' });
-  assert.equal(records.length, 3);
-
-  const jobRecord = records.find((item) => item.id === 'job:job1');
-  assert.ok(jobRecord, '终态作业必须出现');
-  assert.equal(jobRecord.source, 'job');
-  assert.equal(jobRecord.sourceId, 'job1');
-  assert.equal(jobRecord.taskTitle, '修好重试测试');
-  assert.deepEqual(jobRecord.changedFiles, ['src/retry.js']);
-  assert.match(jobRecord.actionSummary, /补丁文件：src\/retry\.js/u);
-  assert.equal(jobRecord.status, 'succeeded');
-  assert.equal(jobRecord.testStatus, 'fail');
-  assert.equal(jobRecord.occurredAt, '2026-01-31T00:10:00.000Z');
-  for (const ref of ['job:job1', 'task:task1', 'sandbox:run1', 'patch:patch1']) {
-    assert.ok(jobRecord.evidenceRefs.includes(ref), `作业记录缺少证据引用 ${ref}`);
+  const { records, total } = listExecutionRecords({ ownerStore: owner, projectId: 'p1' });
+  assert.equal(total, 1);
+  assert.equal(records.length, 1);
+  const [record] = records;
+  assert.equal(record.id, 'sandbox:run1');
+  assert.equal(record.status, 'failed');
+  assert.equal(record.testStatus, 'fail');
+  assert.deepEqual(record.changedFiles, ['src/retry.js']);
+  // 作业与补丁没有单独成条，但它们的信息必须仍能从这个入口拿到。
+  for (const ref of ['sandbox:run1', 'job:job1', 'patch:patch1', 'task:task1']) {
+    assert.ok(record.evidenceRefs.includes(ref), `运行记录缺少证据引用 ${ref}`);
   }
+});
 
-  const patchRecord = records.find((item) => item.id === 'patch:patch1');
-  assert.ok(patchRecord, '终态补丁必须出现');
-  assert.equal(patchRecord.source, 'patch');
-  assert.equal(patchRecord.sourceId, 'patch1');
-  assert.equal(patchRecord.taskTitle, '修好重试测试');
-  assert.deepEqual(patchRecord.changedFiles, ['src/retry.js']);
-  assert.equal(patchRecord.status, 'applied');
-  assert.equal(patchRecord.testStatus, 'fail');
-  assert.equal(patchRecord.occurredAt, '2026-01-30T00:02:00.000Z');
-  for (const ref of ['patch:patch1', 'job:job1', 'task:task1', 'sandbox:run1']) {
-    assert.ok(patchRecord.evidenceRefs.includes(ref), `补丁记录缺少证据引用 ${ref}`);
+test('没有运行可代表时，终态作业产出一条记录并把补丁作为上下文', () => {
+  const owner = fakeOwner({
+    jobs: {
+      job1: job('job1', {
+        attempts: [{ id: 'attempt-1', attempt: 1, status: 'succeeded', result_note: 'ok' }]
+      })
+    },
+    tasks: { task1: task('task1') },
+    patches: { patch1: patch('patch1') }
+  });
+  const { records, total } = listExecutionRecords({ ownerStore: owner, projectId: 'p1' });
+  assert.equal(total, 1);
+  const [record] = records;
+  assert.equal(record.id, 'job:job1');
+  assert.equal(record.source, 'job');
+  assert.equal(record.taskTitle, '修好重试测试');
+  assert.deepEqual(record.changedFiles, ['src/retry.js']);
+  assert.match(record.actionSummary, /补丁文件：src\/retry\.js/u);
+  assert.equal(record.status, 'succeeded');
+  assert.equal(record.occurredAt, '2026-01-31T00:10:00.000Z');
+  for (const ref of ['job:job1', 'attempt:attempt-1', 'patch:patch1', 'task:task1']) {
+    assert.ok(record.evidenceRefs.includes(ref), `作业记录缺少证据引用 ${ref}`);
+  }
+});
+
+test('既没有运行也没有作业时，终态补丁产出一条记录', () => {
+  const owner = fakeOwner({
+    tasks: { task1: task('task1') },
+    patches: { patch1: patch('patch1', { job_id: 'lost-job' }) }
+  });
+  const { records, total } = listExecutionRecords({ ownerStore: owner, projectId: 'p1' });
+  assert.equal(total, 1);
+  const [record] = records;
+  assert.equal(record.id, 'patch:patch1');
+  assert.equal(record.source, 'patch');
+  assert.equal(record.taskTitle, '修好重试测试');
+  assert.deepEqual(record.changedFiles, ['src/retry.js']);
+  assert.equal(record.status, 'applied');
+  assert.equal(record.occurredAt, '2026-01-30T00:02:00.000Z');
+  for (const ref of ['patch:patch1', 'job:lost-job', 'task:task1']) {
+    assert.ok(record.evidenceRefs.includes(ref), `补丁记录缺少证据引用 ${ref}`);
   }
 });
 
@@ -170,6 +197,36 @@ test('按时间倒序列举，默认截断到最近 100 条', () => {
   assert.throws(() => listExecutionRecords({ ownerStore: owner, projectId: 'p1', limit: 0 }), /limit/u);
 });
 
+test('一条完整流水线（job → patch → run）只产出一条执行记录', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'execution-pipeline-'));
+  const projectId = 'pipeline-project';
+  const store = new OwnerStore(path.join(tmp, 'owner.sqlite'));
+  try {
+    const seeded = createPassingProject({ store, root: path.join(tmp, 'repo'), projectId, name: 'Pipeline' });
+    const jobId = store.listJobs({ projectId })
+      .find((item) => item.job_type === 'code-patch').id;
+    const { records, total } = listExecutionRecords({ ownerStore: store, projectId });
+    assert.equal(total, 1, '一次执行只算一条记录');
+    assert.equal(records.length, 1);
+    const [record] = records;
+    assert.equal(record.source, 'sandbox');
+    assert.equal(record.id, `sandbox:${seeded.runId}`);
+    assert.equal(record.taskId, seeded.taskId);
+    assert.equal(record.testStatus, 'pass');
+    assert.deepEqual(record.changedFiles, ['src/retry.js']);
+    // 同一次执行的作业、补丁、任务和证据都要能从这一条记录里追到。
+    for (const ref of [
+      `sandbox:${seeded.runId}`, `evidence:${seeded.runId}:stdout`,
+      `job:${jobId}`, `patch:${seeded.patchId}`, `task:${seeded.taskId}`
+    ]) {
+      assert.ok(record.evidenceRefs.includes(ref), `流水线记录缺少证据引用 ${ref}`);
+    }
+  } finally {
+    store.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('项目删除后不再返回任何记录，读取也不建表、不写库', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'execution-records-'));
   const dbPath = path.join(tmp, 'owner.sqlite');
@@ -188,8 +245,8 @@ test('项目删除后不再返回任何记录，读取也不建表、不写库',
     try {
       createPassingProject({ store, root: path.join(tmp, 'repo'), projectId, name: 'Real' });
       const before = listExecutionRecords({ ownerStore: store, projectId });
-      assert.equal(before.total, 3);
-      assert.deepEqual(before.records.map((record) => record.source).sort(), ['job', 'patch', 'sandbox']);
+      assert.equal(before.total, 1);
+      assert.deepEqual(before.records.map((record) => record.source), ['sandbox']);
     } finally {
       store.close();
     }
