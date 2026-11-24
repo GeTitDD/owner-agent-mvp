@@ -55,13 +55,20 @@
     $('pendingCount').textContent = `${pending} 项待决定`;
     $('pendingBadge').textContent = String(pending);
     $('pendingBadge').hidden = pending === 0;
-    // 没有待决定事项时不再占一整块空位，把顶部留给项目列表。
-    $('needsSection').hidden = pending === 0;
+    // 收件箱常驻：有待办时显示列表，没有待办时换成「下一步」空状态。
+    $('needsSection').hidden = false;
+    $('pendingList').hidden = pending === 0;
+    $('needsHint').hidden = pending === 0;
+    $('inboxEmpty').hidden = pending > 0;
+    if (pending === 0) {
+      const action = view?.nextAction;
+      $('inboxNextText').textContent = action?.title
+        ? `${action.title}${action.detail ? ` · ${action.detail}` : ''}`
+        : '可以展开工作区看看项目状态。';
+    }
     $('needsCount').textContent = String(pending);
     $('needsChip').classList.toggle('warn', pending > 0);
-    $('needsHint').textContent = pending > 0
-      ? `有 ${pending} 项需要你确认；写入、补丁与测试在批准前不会改变真实项目。`
-      : '现在没有需要你决定的事项。写入、补丁、测试和修复都会先停在这里。';
+    $('needsHint').textContent = `有 ${pending} 项需要你确认；写入、补丁与测试在批准前不会改变真实项目。`;
     const running = view?.worker?.running;
     const playbookRunning = view?.playbook?.running === true;
     const chainItems = [view?.chain?.job, view?.chain?.patch, view?.chain?.sandbox, view?.chain?.cycle]
@@ -77,6 +84,8 @@
       ? '运行中'
       : (totalSteps > 0 ? '最近任务' : '运行中');
     const hasProjects = (view?.projects?.length ?? 0) > 0;
+    // 没有项目时自动展开工作区，否则添加项目的入口会被折叠在下面。
+    if (!hasProjects && $('workspaceToggle')) $('workspaceToggle').open = true;
     $('setup').hidden = hasProjects;
     $('composeSection').hidden = !hasProjects;
     $('submitTask').disabled = composerBusy || !hasProjects;
@@ -2453,6 +2462,12 @@
   };
 
   $('openSettings').onclick = () => { void openSettings(); };
+  // 空状态的主按钮：展开工作区并滚到项目列表。
+  $('inboxNextBtn').onclick = () => {
+    const toggle = $('workspaceToggle');
+    if (toggle) toggle.open = true;
+    $('projectSection')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
   $('mobileRefreshCode').onclick = () => { void renderMobileInfo(true); };
   $('closeSettings').onclick = () => { $('settings').hidden = true; };
   $('hidePanel').onclick = () => window.companion.hidePanel();

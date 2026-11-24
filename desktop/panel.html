@@ -28,6 +28,22 @@
     </header>
 
     <div class="scroll">
+      <section id="needsSection" class="inbox-section">
+        <div class="inbox-head">
+          <h3>待你决定</h3>
+          <span id="pendingBadge" class="count">0</span>
+        </div>
+        <p id="needsHint" class="inbox-hint">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
+        <div id="pendingList" class="pending-list"></div>
+        <div id="inboxEmpty" class="inbox-empty" hidden>
+          <div class="inbox-empty-title">现在没有需要你决定的事</div>
+          <div id="inboxNextText" class="inbox-empty-sub">可以展开工作区看看项目状态。</div>
+          <button id="inboxNextBtn" class="primary" type="button">看看项目</button>
+        </div>
+      </section>
+
+      <details class="workspace" id="workspaceToggle">
+        <summary class="workspace-summary">工作区 · 项目 / 图谱 / 想法 / 知识 / Playbook</summary>
       <section class="zone project-zone">
         <div class="zone-head">
           <strong>当前项目</strong>
@@ -122,15 +138,6 @@
           <span>跨项目的决定、运行与最近结果</span>
         </div>
 
-        <section id="needsSection" class="needs-section">
-          <div class="section-title">
-            <h3>需要你决定</h3>
-            <span id="pendingBadge" class="count">0</span>
-          </div>
-          <p id="needsHint" class="section-sub">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
-          <div id="pendingList" class="pending-list"></div>
-        </section>
-
         <section id="runningSection" class="running-section">
           <div class="section-title">
             <h3 id="runningTitle">运行中</h3>
@@ -182,6 +189,7 @@
           <div id="resultCard" class="result-card"></div>
         </section>
       </section>
+      </details>
     </div>
 
     <section class="composer-dock" id="composeSection">
