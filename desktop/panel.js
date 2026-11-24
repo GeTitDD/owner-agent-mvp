@@ -60,17 +60,10 @@
     $('workerLabel').textContent = view?.worker?.label ? `Worker · ${view.worker.label}` : 'Worker 空闲';
     const pending = view?.pending?.length ?? 0;
     $('pendingCount').textContent = `${pending} 项待决定`;
-    $('pendingBadge').textContent = String(pending);
-    $('pendingBadge').hidden = pending === 0;
-    // 待办是专注页第一张卡：没有待办时卡片留着，用一句话说明，别让专注页只剩详情。
-    $('needsSection').hidden = false;
-    $('pendingList').hidden = pending === 0;
-    $('needsHint').hidden = false;
     $('needsCount').textContent = String(pending);
     $('needsChip').classList.toggle('warn', pending > 0);
-    $('needsHint').textContent = pending === 0
-      ? '现在没有需要你决定的事；下面可以看这个项目的样子。'
-      : `有 ${pending} 项需要你确认；写入、补丁与测试在批准前不会改变真实项目。`;
+    // 待办块自己的标题、计数与空态跟着操作区视图模型走（见 renderOps）；
+    // 这里只维护页头计数，避免同一件事在两处各算一遍。
     const running = view?.worker?.running;
     const playbookRunning = view?.playbook?.running === true;
     const chainItems = [view?.chain?.job, view?.chain?.patch, view?.chain?.sandbox, view?.chain?.cycle]
@@ -1899,6 +1892,38 @@
     }
   };
 
+  // ---- 专注：操作区（两区骨架的上半区） ----
+  //
+  // 组装一律走 src/focus-ops.mjs 的 focusOpsView（由 focus-ops-host.mjs 挂到
+  // window.OwnerFocusOps）：三段块、固定顺序、空态文案都在模型里，渲染层只画。
+  // #68 只接「待办」块；运行中与待提炼先传空数组，由 #70 / #71 再补数据。
+  const renderOps = () => {
+    const zone = $('opsZone');
+    const body = $('opsBody');
+    const emptyLine = $('opsEmpty');
+    if (!zone || !body || !emptyLine) return;
+    const api = window.OwnerFocusOps;
+    // 模块脚本可能还没执行完：这一帧不画，等 owner-focus-ops-ready 或下一次轮询。
+    if (!api?.focusOpsView) return;
+    const model = api.focusOpsView({
+      projectId: viewProjectId,
+      pending: view?.pending ?? [],
+      executions: [],
+      proposals: []
+    });
+    // 三类块全空时压成一行：文案来自模型，卡片外框由 .ops-empty 去掉。
+    zone.classList.toggle('ops-empty', model.empty);
+    emptyLine.hidden = !model.empty;
+    emptyLine.textContent = model.empty ? model.emptyText : '';
+    body.hidden = model.empty;
+    const pendingBlock = model.blocks.find((block) => block.key === 'pending');
+    if (!pendingBlock) return;
+    // 标题与计数也读模型：以后块里加内容时不会出现「标题写死、数字另算」。
+    $('opsPendingTitle').textContent = pendingBlock.title;
+    $('pendingBadge').textContent = String(pendingBlock.count);
+    $('pendingBadge').hidden = pendingBlock.count === 0;
+  };
+
   const renderActivity = () => {
     const box = $('activityLines');
     box.replaceChildren();
@@ -2097,6 +2122,7 @@
       renderNextAction();
       renderQueue();
       renderDiagrams();
+      renderOps();
       renderPending();
       renderRunning();
       renderResult();
@@ -3455,9 +3481,10 @@
     }
   };
 
-  // 专注页两张卡：第一张待办（列表由 renderPending 画），第二张所选项目的只读详情；
-  // 详情之后是默认折叠的工作区（项目 / 图谱 / 想法 / 知识 / Playbook）。
+  // 专注页两区：上半区操作区（待办块 + 后续运行中/待提炼），下半区工作区
+  // （详情卡 + 默认折叠的旧面板）。两区容器写在 panel.html，#68 只把操作区接上模型。
   const renderFocusMode = () => {
+    renderOps();
     renderFocusDetail();
   };
 
@@ -4024,6 +4051,12 @@
       else if (!$('settings').hidden) $('settings').hidden = true;
       else window.companion.hidePanel();
     }
+  });
+
+  // 操作区模型是 ESM（src/focus-ops.mjs），由 focus-ops-host.mjs 挂到 window；
+  // 模块脚本晚于本脚本执行，就绪时补画一次，不用等下一次 2 秒轮询。
+  window.addEventListener('owner-focus-ops-ready', () => {
+    if (panelMode === 'focus') renderOps();
   });
 
   void refresh().then(() => {

@@ -1502,6 +1502,32 @@ pre.diff, pre.logs {
 .a-pending { margin: 0 0 4px; padding: 12px 12px 10px; }
 .a-pending .inbox-head h3 { font-size: 13px; }
 
+/* #68 两区骨架：上面操作区、下面工作区。
+   两个区头都吸顶，滚动时能看出自己在哪一区；分界线放在两区之间。 */
+.focus-zone { display: block; }
+.focus-zone + .focus-zone {
+  margin-top: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.focus-zone-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 0 8px;
+  padding: 6px 2px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+/* 区内的卡片不再各自留横向外边距，两区共用 .a-wrap 的一条沟。 */
+.a-wrap .focus-zone .inbox-section,
+.a-wrap .focus-zone .workspace { margin-left: 0; margin-right: 0; }
+.work-zone .focus-detail { margin-top: 0; }
+.work-zone .workspace { margin-top: 10px; }
+/* 操作区为空：只剩一行文字，标题与外框都不留，工作区拿走剩余空间。 */
+.ops-zone.ops-empty .ops-zone-head { display: none; }
+.ops-empty-line { margin: 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+
 /* B：知识（只读浏览 + 项目筛选） */
 .knowledge-browse {
   margin: 10px 12px 4px;

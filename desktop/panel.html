@@ -40,18 +40,40 @@
 
     <section id="modeA" class="mode" hidden>
       <div class="a-wrap">
-        <!-- 专注第一张卡：待办（知识模式只管浏览，处理决定留在这里）。
-             没有待办时卡片仍在，只留一句空状态，避免整页只剩详情。 -->
-        <section id="needsSection" class="inbox-section a-pending">
-          <div class="inbox-head">
-            <h3>待你决定</h3>
-            <span id="pendingBadge" class="count">0</span>
+        <!-- 上半区 · 操作区：现在要你处理什么。
+             内容由 src/focus-ops.mjs 的视图模型（focusOpsView）给出，这里只负责画；
+             三段块的顺序与空态文案都不在渲染里另写。本张票只接「待办」块，
+             运行中与待提炼由 #70 / #71 再接进来。 -->
+        <section id="opsZone" class="focus-zone ops-zone">
+          <div class="zone-head focus-zone-head ops-zone-head">
+            <strong>操作区</strong>
+            <span>现在要你处理什么</span>
           </div>
-          <p id="needsHint" class="inbox-hint">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
-          <div id="pendingList" class="pending-list"></div>
+          <!-- 三类块都空时操作区压成这一行文字，不保留卡片外框（#66）。 -->
+          <p id="opsEmpty" class="ops-empty-line" hidden></p>
+          <div id="opsBody" class="ops-body">
+            <!-- 待办块：知识模式只管浏览，处理决定留在这里。
+                 分组与首组展开仍由 pending-groups.cjs 决定，这里不重写规则。 -->
+            <section id="needsSection" class="inbox-section a-pending">
+              <div class="inbox-head">
+                <h3 id="opsPendingTitle">待办</h3>
+                <span id="pendingBadge" class="count">0</span>
+              </div>
+              <p id="needsHint" class="inbox-hint">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
+              <div id="pendingList" class="pending-list"></div>
+            </section>
+          </div>
         </section>
 
-        <!-- 专注第二张卡：所选项目的只读详情（视图项目，与交办目标互不影响）。 -->
+        <!-- 下半区 · 工作区：所选项目的详情与旧折叠面板。
+             #69 才会把工作区改成常驻、#72 才会删详情卡；这一张保持原样。 -->
+        <section id="workZone" class="focus-zone work-zone">
+          <div class="zone-head focus-zone-head work-zone-head">
+            <strong>工作区</strong>
+            <span>处置完的项目样子在这里展开</span>
+          </div>
+
+        <!-- 专注的详情卡：所选项目的只读详情（视图项目，与交办目标互不影响）。 -->
         <section id="focusDetail" class="focus-detail" hidden>
           <div class="fd-head">
             <div class="fd-head-text">
@@ -63,7 +85,7 @@
           <div id="fdBody" class="fd-body"></div>
         </section>
         <details class="workspace" id="workspaceToggle">
-          <summary class="workspace-summary">工作区 · 项目 / 图谱 / 想法 / 知识 / Playbook</summary>
+          <summary class="workspace-summary">展开 · 项目 / 图谱 / 想法 / 知识 / Playbook</summary>
         <section class="zone project-zone">
           <div class="zone-head">
             <strong>所选项目</strong>
@@ -209,6 +231,7 @@
           </section>
         </section>
         </details>
+        </section>
       </div>
     </section>
 
@@ -387,6 +410,9 @@
   <script src="./panel-selection.cjs"></script>
   <script src="./focus-detail.cjs"></script>
   <script src="./pending-groups.cjs"></script>
+  <!-- 操作区视图模型是 ESM（src/focus-ops.mjs）；模块脚本会被推迟到解析完再执行，
+       panel.js 只在真正渲染操作区时读 window.OwnerFocusOps，读不到就等 next tick。 -->
+  <script type="module" src="./focus-ops-host.mjs"></script>
   <script src="./chat-handoff.cjs"></script>
   <script src="../node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="./panel.js"></script>
