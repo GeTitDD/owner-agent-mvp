@@ -8,6 +8,7 @@
     error: '遇到异常'
   };
   let view = null;
+  let panelMode = 'B';
   let refreshing = false;
   let composerBusy = false;
   let toastTimer = null;
@@ -87,7 +88,7 @@
     // 没有项目时自动展开工作区，否则添加项目的入口会被折叠在下面。
     if (!hasProjects && $('workspaceToggle')) $('workspaceToggle').open = true;
     $('setup').hidden = hasProjects;
-    $('composeSection').hidden = !hasProjects;
+    $('composeSection').hidden = !hasProjects || panelMode !== 'B';
     $('submitTask').disabled = composerBusy || !hasProjects;
     $('queueSection').hidden = !hasProjects;
     if (!hasProjects) renderServiceGrid($('setupServices'), view?.services);
@@ -1872,7 +1873,10 @@
     if (item.scope) rows.push(['修复范围', item.scope]);
     const nodes = [detailRows(rows)];
     if (item.kind === 'job') nodes.push(taskPlan(item));
-    if (item.next) nodes.push(el('p', 'pending-next', `批准后：${item.next}`));
+    if (item.next) {
+      const nextText = String(item.next).replace(/^批准后[：:]\s*/u, '');
+      nodes.push(el('p', 'pending-next', `批准后：${nextText}`));
+    }
     const close = el('button', 'ghost', '关闭');
     close.onclick = closeModal;
     const approve = el('button', 'primary', '去批准');
@@ -1895,7 +1899,10 @@
     }
     card.append(el('div', 'pending-summary',
       item.hash ? `${item.summary} · ${fmtHash(item.hash)}` : item.summary));
-    if (item.next) card.append(el('div', 'pending-next', `批准后：${item.next}`));
+    if (item.next) {
+      const nextText = String(item.next).replace(/^批准后[：:]\s*/u, '');
+      card.append(el('div', 'pending-next', `批准后：${nextText}`));
+    }
     const actions = el('div', 'pending-actions');
     const detail = el('button', 'ghost small', '详情');
     detail.onclick = () => openPendingDetail(item);
@@ -2135,6 +2142,8 @@
       renderPending();
       renderRunning();
       renderResult();
+      if (panelMode === 'A') renderModeA();
+      if (panelMode === 'C') renderChatCards();
     } catch (error) {
       $('stateDot').className = 'state-dot error';
       $('stateText').textContent = '连接异常';
@@ -2657,6 +2666,177 @@
     }
   };
 
+  // ---- 三种视图模式：专注（A） / 待办（B） / 对话（C） ----
+
+  const MODE_IDS = { A: 'modeA', B: 'modeB', C: 'modeC' };
+
+  const setMode = (next, { persist = true } = {}) => {
+    const mode = MODE_IDS[next] ? next : 'B';
+    panelMode = mode;
+    if (persist) {
+      try { localStorage.setItem('panelMode', mode); } catch { /* ignore */ }
+    }
+    for (const [key, id] of Object.entries(MODE_IDS)) {
+      const node = $(id);
+      if (node) node.hidden = key !== mode;
+    }
+    for (const button of document.querySelectorAll('#modeBar button')) {
+      button.classList.toggle('on', button.dataset.mode === mode);
+    }
+    const hasProjects = (view?.projects?.length ?? 0) > 0;
+    // 交办输入框只在「待办」里出现；对话模式用自己的输入。
+    $('composeSection').hidden = !hasProjects || mode !== 'B';
+    if (mode === 'A') renderModeA();
+    if (mode === 'C') {
+      greetChatOnce();
+      renderChatCards();
+    }
+  };
+
+  const renderModeA = () => {
+    const project = view?.projects?.find((item) => item.id === view?.activeProjectId) ?? view?.projects?.[0];
+    $('aProject').textContent = project ? String(project.name || project.id) : '还没有项目';
+    const pending = Array.isArray(view?.pending) ? view.pending : [];
+    const top = pending[0];
+    const action = view?.nextAction;
+    $('modeA').querySelector('.a-wrap')?.classList.toggle('is-empty', !top);
+
+    if (top) {
+      $('aChip').hidden = false;
+      $('aChip').textContent = pending.length > 1 ? `${pending.length} 件待你` : '1 件待你';
+      $('aTitle').textContent = top.title || '有一件事等你决定';
+      $('aDetail').textContent = top.summary || '批准前不会改变真实项目。';
+      $('aCard').hidden = false;
+      $('aKicker').textContent = top.kind === 'patch' ? '补丁待审' : top.kind === 'job' ? '任务待批' : '待确认';
+      $('aSummary').textContent = top.next || '';
+      $('aPrimary').textContent = '去处理';
+    } else {
+      $('aChip').hidden = true;
+      $('aTitle').textContent = '现在没有需要你决定的事';
+      $('aDetail').textContent = action?.title
+        ? `${action.title}${action.detail ? ` · ${action.detail}` : ''}`
+        : '可以切到对话，问问项目现在什么情况。';
+      $('aCard').hidden = true;
+      $('aPrimary').textContent = '看看项目';
+    }
+
+    $('aFeed').replaceChildren();
+    for (const item of pending.slice(1, 4)) {
+      const row = el('div', 'a-row');
+      row.append(el('span', 'a-dot'));
+      row.append(el('span', undefined, item.title || item.id));
+      $('aFeed').append(row);
+    }
+  };
+
+  const chatLog = [];
+  let chatGreeted = false;
+  let chatBusy = false;
+
+  const chatAppend = (role, text) => {
+    chatLog.push({ role, text });
+    const node = el('div', `c-msg ${role}`, text);
+    $('cTranscript').append(node);
+    $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
+    return node;
+  };
+
+  const greetChatOnce = () => {
+    if (chatGreeted) return;
+    chatGreeted = true;
+    const pending = view?.pending?.length ?? 0;
+    const project = view?.projects?.find((item) => item.id === view?.activeProjectId) ?? view?.projects?.[0];
+    if (!project) {
+      chatAppend('bot', '还没有登记项目。切到「待办」展开工作区，先添加一个目录。');
+      return;
+    }
+    const lines = [`我在看 ${project.name || project.id}。`];
+    lines.push(pending > 0 ? `现在有 ${pending} 件事等你决定，列在下面。` : '现在没有需要你决定的事。');
+    lines.push('你可以直接问，也可以让我去查项目状态。');
+    chatAppend('bot', lines.join('\n'));
+  };
+
+  const renderChatCards = () => {
+    const holder = $('cCards');
+    holder.replaceChildren();
+    const pending = Array.isArray(view?.pending) ? view.pending : [];
+    for (const item of pending.slice(0, 3)) {
+      const card = el('div', 'c-card');
+      card.append(el('div', 'c-kicker', item.kind === 'patch' ? '补丁待审' : item.kind === 'job' ? '任务待批' : '待确认'));
+      card.append(el('div', 'c-title', item.title || item.id));
+      if (item.summary) card.append(el('div', 'c-sub', item.summary));
+
+      const row = el('div', 'c-actions');
+      const yes = el('button', 'c-yes', '批准');
+      const no = el('button', 'c-no', '拒绝');
+      const decide = async (action) => {
+        yes.disabled = true;
+        no.disabled = true;
+        try {
+          await window.companion.decide({ kind: item.kind, id: item.id, action, hash: item.hash || '' });
+          chatAppend('bot', `${action === 'approve' ? '已批准' : '已拒绝'}：${item.title || item.id}`);
+          await refresh();
+        } catch (error) {
+          chatAppend('bot', `操作失败：${String(error?.message ?? error)}`);
+          yes.disabled = false;
+          no.disabled = false;
+        }
+      };
+      yes.onclick = () => { void decide('approve'); };
+      no.onclick = () => { void decide('reject'); };
+      row.append(yes, no);
+      card.append(row);
+      holder.append(card);
+    }
+  };
+
+  const sendChat = async () => {
+    const text = $('cInput').value.trim();
+    if (!text || chatBusy) return;
+    chatBusy = true;
+    $('cSend').disabled = true;
+    $('cInput').value = '';
+    chatAppend('me', text);
+    const thinking = el('div', 'c-msg bot', '正在分析…');
+    $('cTranscript').append(thinking);
+    $('cTranscript').scrollTop = $('cTranscript').scrollHeight;
+    try {
+      const result = await window.companion.submit({
+        text,
+        projectId: view?.activeProjectId || '',
+        captureIdea: false
+      });
+      thinking.remove();
+      if (result?.mode === 'answer') chatAppend('bot', result.summary || '没有结论。');
+      else if (result?.mode === 'write-request') chatAppend('bot', '需要改代码，已生成待批准的写请求；批准后才会动手。');
+      else chatAppend('bot', result?.advice || result?.summary || '这次没跑通，可以再说一次。');
+      await refresh();
+    } catch (error) {
+      thinking.remove();
+      chatAppend('bot', `失败：${String(error?.message ?? error)}`);
+    } finally {
+      chatBusy = false;
+      $('cSend').disabled = false;
+      $('cInput').focus();
+    }
+  };
+
+  for (const button of document.querySelectorAll('#modeBar button')) {
+    button.onclick = () => setMode(button.dataset.mode);
+  }
+  $('aPrimary').onclick = () => {
+    setMode('B');
+    $('needsSection')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+  $('aSecondary').onclick = () => setMode('C');
+  $('cSend').onclick = () => { void sendChat(); };
+  $('cInput').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void sendChat();
+    }
+  });
+
   window.companion.onOpenSettings(() => { void openSettings(true); });
 
   document.addEventListener('keydown', (event) => {
@@ -2667,6 +2847,9 @@
     }
   });
 
-  void refresh().then(() => { void loadPlaybooks(); });
+  void refresh().then(() => {
+    try { setMode(localStorage.getItem('panelMode') || 'B', { persist: false }); } catch { setMode('B', { persist: false }); }
+    void loadPlaybooks();
+  });
   window.setInterval(refresh, 2000);
 })();
