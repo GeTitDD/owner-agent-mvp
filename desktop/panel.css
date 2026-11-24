@@ -1519,6 +1519,45 @@ pre.diff, pre.logs {
 .kb-empty-title { margin-bottom: 5px; font-size: 14px; font-weight: 650; }
 .kb-empty-sub { font-size: 12px; line-height: 1.65; color: var(--muted); }
 
+/* 知识模式下的技能目录：三处来源合并的只读列表 */
+.skill-catalog { margin-top: 12px; padding: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+.skill-missing-total {
+  padding: 1px 7px; border-radius: 999px;
+  background: rgba(196, 84, 40, .12); color: #a2461f;
+  font-size: 10.5px; font-weight: 600;
+}
+.skill-groups { display: grid; gap: 10px; }
+.skill-group { padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+.skill-list { display: grid; gap: 2px; margin-top: 6px; }
+.skill-item { border-radius: 8px; }
+.skill-item[open] { background: var(--accent-soft); }
+.skill-summary {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 6px; border-radius: 8px; cursor: pointer;
+  font-size: 12.5px; list-style: none;
+}
+.skill-summary::-webkit-details-marker { display: none; }
+.skill-summary::before { content: '▸'; font-size: 10px; color: var(--muted); }
+.skill-item[open] > .skill-summary::before { content: '▾'; }
+.skill-summary:hover { background: var(--accent-soft); }
+.skill-name { font-weight: 600; line-height: 1.4; }
+.skill-source {
+  margin-left: auto; padding: 0 6px; border: 1px solid var(--line); border-radius: 999px;
+  color: var(--muted); font-size: 10px; line-height: 16px; white-space: nowrap;
+}
+.skill-badge-missing {
+  padding: 0 6px; border-radius: 999px;
+  background: rgba(196, 84, 40, .12); color: #a2461f;
+  font-size: 10px; line-height: 16px; white-space: nowrap;
+}
+.skill-item.is-missing .skill-name { color: var(--muted); }
+.skill-detail { padding: 4px 6px 8px 18px; }
+/* 路径可以按分隔符断开，描述必须按词换行，否则英文会被切得很难读。 */
+.skill-detail dd.skill-path { word-break: break-all; }
+.skill-detail dd.skill-desc { word-break: normal; overflow-wrap: anywhere; }
+.skill-missing-reason { margin: 6px 0 0; font-size: 11.5px; color: #a2461f; line-height: 1.55; }
+
+
 /* C：对话 */
 .c-transcript { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .c-msg { max-width: 88%; padding: 8px 11px; border-radius: 12px; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }
