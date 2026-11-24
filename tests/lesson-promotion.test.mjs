@@ -144,25 +144,35 @@ test('候选被拒：经验状态、内容、证据、争议裁决都不动', ()
   } finally { personal.close(); }
 });
 
-test('同现象经验累积到 3 条才提议：2 条只在队列里，3 条返回信号且不自动提升', () => {
+test('同现象经验累积到 3 条才提议：执行记录再多也只算一条经验（P0-5）', () => {
   const personal = new PersonalKnowledgeStore(':memory:');
   try {
+    // 一条经验吃着三条执行记录：按 ADR-0007 的「同类经验 3 条」这仍只是 1 条经验。
     const lesson = seedLesson(personal, { records: ['sandbox:run1', 'sandbox:run2'] });
-    assert.deepEqual(lessonPromotionSignals({ personalStore: personal }).signals, [], '2 条还不提议');
-
-    // 第三条执行记录支持同一现象：同一条经验，证据累加。
     personal.appendLessonEvidence(lesson.id, { sourceRecordId: 'sandbox:run3' }, [
       { ref: 'sandbox:run3', recordId: 'sandbox:run3', kind: 'sandbox-run', excerpt: '记录=sandbox:run3' }
     ]);
+    assert.equal(personal.lessonSupport(lesson.id).records, 3);
+    assert.deepEqual(
+      lessonPromotionSignals({ personalStore: personal }).signals, [],
+      '三条执行记录支持同一条经验不构成 3 条同类经验'
+    );
 
+    // 第二条经验（另一个项目复现）：2 条，还不提议。
+    const second = seedLesson(personal, { projectId: 'p2', records: ['sandbox:run9'] });
+    assert.deepEqual(lessonPromotionSignals({ personalStore: personal }).signals, [], '2 条经验还不提议');
+
+    // 第三条经验：达到阈值才给信号，且不自动提升、不自动合并。
+    seedLesson(personal, { projectId: 'p3', records: ['sandbox:run10'] });
     const { threshold, signals } = lessonPromotionSignals({ personalStore: personal });
     assert.equal(threshold, PROMOTION_THRESHOLD);
     assert.equal(signals.length, 1);
     const [signal] = signals;
     assert.equal(signal.phenomenon, PHENOMENON);
-    assert.deepEqual(signal.lessonIds, [lesson.id]);
-    assert.equal(signal.occurrences, 3, '三条执行记录支持同一现象才算 3 条');
-    assert.equal(signal.recordCount, 3);
+    assert.deepEqual([...signal.lessonIds].sort(), [lesson.id, second.id, personal.listLessons({ projectId: 'p3' })[0].id].sort());
+    assert.equal(signal.occurrences, 3, '按经验条数计');
+    assert.equal(signal.lessonCount, 3);
+    assert.equal(signal.recordCount, 5, '记录数只作为信息回传（3+1+1）');
     assert.equal(signal.pendingProposalId, null);
 
     // 提议只是信号：不建候选、不改经验。
@@ -211,7 +221,10 @@ test('提升不把经验升为已验证：推断仍是推断，候选只是待�
 test('已提交待审的候选会出现在提议信号里，避免同一条经验被反复提交', () => {
   const personal = new PersonalKnowledgeStore(':memory:');
   try {
-    const lesson = seedLesson(personal, { records: ['sandbox:run1', 'sandbox:run2', 'sandbox:run3'] });
+    // 3 条同类经验（不同项目）才会提议；先提其中一条为候选。
+    const lesson = seedLesson(personal, { records: ['sandbox:run1'] });
+    seedLesson(personal, { projectId: 'p2', records: ['sandbox:run2'] });
+    seedLesson(personal, { projectId: 'p3', records: ['sandbox:run3'] });
     const { proposal } = promoteLessonToCandidate({ personalStore: personal, lessonId: lesson.id });
 
     const { signals } = lessonPromotionSignals({ personalStore: personal });

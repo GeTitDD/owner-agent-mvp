@@ -47,8 +47,6 @@ let observerWindow = null;
 let tray = null;
 let store = null;
 let personalStore = null;
-let knowledgeRuntime = null;
-let knowledgeTimer = null;
 let broker = null;
 let sidecar = null;
 let workbench = null;
@@ -81,6 +79,12 @@ let skillCatalogModule = null;
 let skillCatalogCache = null;
 let knowledgeReviewModule = null;
 let lessonRetrievalModule = null;
+// #58 / #61：待提炼提议、经验列表、经验提升为候选。三个模块都按需加载。
+let onDemandModule = null;
+let lessonModule = null;
+let promotionModule = null;
+// 提炼器只用来「读队列」：它本身不落库、不调模型，构造一次复用即可。
+let lessonDistiller = null;
 let mascotModule = null;
 let githubModule = null;
 let githubPrModule = null;
@@ -243,28 +247,10 @@ async function startServices() {
     personalStore = null;
   }
   if (personalStore) {
-    try {
-      const { KnowledgeLoopRuntime } = await importEsm('../src/knowledge-loop/runtime.mjs');
-      // 旧的自动采集链已退役（ADR-0007 / #62）：Runtime 只保留 tick/status 形状，不再写库。
-      // 经验改为从执行记录按需提炼（LessonDistiller），因此这里不再传 allowHarvest。
-      knowledgeRuntime = new KnowledgeLoopRuntime({
-        ownerStore: store,
-        personalStore,
-        model: config.model || ''
-      });
-      knowledgeTimer = setInterval(() => {
-        knowledgeRuntime.tick().catch((error) => {
-          console.error('knowledge auto tick failed:', error.message);
-        });
-      }, 15000);
-      knowledgeTimer.unref?.();
-      setTimeout(() => {
-        knowledgeRuntime.tick().catch(() => { /* first scan is best effort */ });
-      }, 2500).unref?.();
-    } catch (error) {
-      console.error('knowledge runtime unavailable:', error.message);
-      knowledgeRuntime = null;
-    }
+    // 旧的自动采集/自动提炼链随 ADR-0007 / #62 一起删除：不再有常驻 tick，也不再有
+    // 「后台自己写经验」的入口。提炼改为人在知识模式里按需触发（LessonDistiller /
+    // distillOnDemand），这里只保留读取用的提炼器实例（见 knowledgeDistiller）。
+    console.log('knowledge store ready: manual distillation only (ADR-0007)');
   }
   broker = new WorkspaceBroker(store, {
     workspacesRoot: path.join(app.getPath('userData'), 'workspaces')
@@ -673,13 +659,41 @@ const knowledgeSnapshot = async (projectId = config.projectId) => {
   return {
     available: true,
     ...summary,
-    // 自动采集/自动提炼随旧链路退役（#62）；保留 last 只为让面板显示最近一次空 tick。
+    // 自动采集/自动提炼链已删除（ADR-0007 / #62）：没有后台 tick，也就没有「最近一次」可报。
     auto: {
-      retired: true,
-      last: knowledgeRuntime?.last ?? null
+      retired: true
     }
   };
 };
+
+// #58：读取「待提炼队列」用的提炼器。它不联网、不调模型——只做执行记录投影与经验表反推；
+// 真正提炼要显式注入 extractor（distillOnDemand），本条 IPC 只提示，不触发提炼。
+const knowledgeDistiller = async () => {
+  if (!store || !personalStore) return null;
+  if (lessonDistiller) return lessonDistiller;
+  lessonModule = lessonModule ?? await importEsm('../src/knowledge-loop/lesson.mjs');
+  lessonDistiller = new lessonModule.LessonDistiller({
+    ownerStore: store,
+    personalStore,
+    model: config.model || ''
+  });
+  return lessonDistiller;
+};
+
+/** 经验列表的对外形状：面板只读它需要的字段，不把整条 payload 递过去。 */
+const lessonListItem = (lesson) => ({
+  id: lesson.id,
+  phenomenon: lesson.phenomenon ?? '',
+  mechanism: lesson.mechanism ?? '',
+  countermeasure: lesson.countermeasure ?? '',
+  scopeLayer: lesson.scope?.layer === 'domain' ? 'domain' : 'project',
+  projectId: lesson.scope?.projectId ?? lesson.projectId ?? null,
+  verificationStatus: lesson.verificationStatus ?? 'inferred',
+  reproduced: lesson.reproduced === true,
+  supportProjects: Number(lesson.supportProjects ?? 1) || 1,
+  evidenceCount: Array.isArray(lesson.evidence) ? lesson.evidence.length : (lesson.evidenceRefs?.length ?? 0),
+  createdAt: lesson.createdAt ?? null
+});
 
 // ---- 技能目录（只读） ----
 // 域包、pstack、插件三处技能合并成一份列表；扫描结果缓存一分钟，
@@ -2972,6 +2986,52 @@ const registerIpc = () => {
     return knowledgeDetail({ id: String(input?.id ?? '') });
   });
 
+  // #58 提议信号：按项目统计「还没提炼成经验的执行记录」，达到阈值才返回。
+  // 只读、只提示——这里不会调用任何提炼，也不会写库。
+  ipcMain.handle('companion:knowledge-distill-proposals', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const projectId = String(input?.projectId ?? '') || config.projectId || '';
+    const distiller = await knowledgeDistiller();
+    if (!distiller) return { projectId, proposals: [], threshold: null };
+    onDemandModule = onDemandModule ?? await importEsm('../src/knowledge-loop/on-demand.mjs');
+    return {
+      projectId,
+      threshold: onDemandModule.DISTILL_PROPOSAL_THRESHOLD,
+      proposals: onDemandModule.listDistillProposals({ distiller, projectId })
+    };
+  });
+
+  // #61 经验列表（按项目）：项目级只看本项目，域级只列与项目主域相关的那些。
+  ipcMain.handle('companion:lesson-list', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) return { projectId: String(input?.projectId ?? ''), lessons: [] };
+    const projectId = String(input?.projectId ?? '') || config.projectId || '';
+    const limit = input?.limit === undefined ? 100 : Number(input.limit);
+    const lessons = projectId
+      ? personalStore.listLessonsForProject(projectId, { limit })
+      : personalStore.listLessons({ limit });
+    return { projectId, lessons: lessons.map(lessonListItem) };
+  });
+
+  // #61 一键提交：把一条经验提为待审候选。已有待审/已接受时幂等返回，不重复造候选。
+  ipcMain.handle('companion:lesson-promote', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) throw new Error('知识库未初始化，暂时不能把经验提为候选。');
+    promotionModule = promotionModule ?? await importEsm('../src/knowledge-loop/promotion.mjs');
+    const result = promotionModule.promoteLessonToCandidate({
+      personalStore,
+      lessonId: String(input?.lessonId ?? ''),
+      actor: 'local-user'
+    });
+    return {
+      ok: true,
+      created: result.created,
+      reason: result.reason ?? null,
+      lessonId: result.lesson?.id ?? null,
+      proposalId: result.proposal?.id ?? null
+    };
+  });
+
   ipcMain.handle('companion:knowledge-open', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     await openKnowledgeWorkbench();
@@ -4301,7 +4361,6 @@ app.on('before-quit', () => {
   quitting = true;
   if (dragTimer) clearInterval(dragTimer);
   if (workerTimer) clearInterval(workerTimer);
-  if (knowledgeTimer) clearInterval(knowledgeTimer);
   saveConfig();
 });
 app.on('will-quit', () => {

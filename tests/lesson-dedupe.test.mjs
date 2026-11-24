@@ -152,11 +152,11 @@ test('同一条证据重复出现：幂等，不报错也不重复计数', async
   } finally { personal.close(); }
 });
 
-test('同一现象跨项目合并为一条经验，升域后仍是另一条作用域', async () => {
+test('同一现象跨项目：每个项目各留一条项目级经验，两条都打已复现（P0-1）', async () => {
   const personal = new PersonalKnowledgeStore(':memory:');
   try {
     const phenomenon = 'Retry loop leaves the last attempt unused';
-    // 两个项目出现同一现象：#56 起合并为一条经验并打「已复现」标记。
+    // 两个项目出现同一现象：各写一条项目级经验，跨项目复现只作为属性（reproduced / sources）。
     const owner = fakeOwner({
       runs: {
         run1: sandbox('run1'),
@@ -174,14 +174,30 @@ test('同一现象跨项目合并为一条经验，升域后仍是另一条作�
     const p1Only = personal.listLessons()[0];
     assert.equal(p1Only.reproduced, false, '只在一个项目出现时不打复现标记');
     await distiller.distill({ projectId: 'p2' });
+
+    // P0-1 的错误契约曾断言这里为 0：那会让第二个项目的「按项目过滤」查不到东西。
     assert.equal(personal.listLessons({ projectId: 'p1' }).length, 1);
-    // 合并后经验行只挂在最早的项目下；第二个项目靠来源台账反查（#56 的代价）。
-    assert.equal(personal.listLessons({ projectId: 'p2' }).length, 0);
-    assert.equal(personal.listLessons().length, 1, '同一现象跨项目只留一条经验');
-    const merged = personal.getLesson(p1Only.id);
-    assert.equal(merged.reproduced, true);
-    assert.deepEqual(personal.lessonSources(merged.id).projects.sort(), ['p1', 'p2']);
-    assert.deepEqual(personal.listLessonsForProject('p2').map((item) => item.id), [merged.id]);
+    assert.equal(personal.listLessons({ projectId: 'p2' }).length, 1, '第二个项目要有自己的项目级经验');
+    assert.equal(personal.listLessons().length, 2, '同一现象在两个项目各自成行，不合并成一条');
+    const p1Lesson = personal.listLessons({ projectId: 'p1' })[0];
+    const p2Lesson = personal.listLessons({ projectId: 'p2' })[0];
+    assert.notEqual(p1Lesson.id, p2Lesson.id);
+    for (const lesson of [p1Lesson, p2Lesson]) {
+      assert.equal(lesson.reproduced, true, '两条都要按属性标记已复现');
+      assert.equal(lesson.supportProjects, 2);
+      assert.deepEqual([...lesson.supportedByProjects].sort(), ['p1', 'p2']);
+      assert.deepEqual(lesson.sources.map((source) => source.projectId).sort(), ['p1', 'p2']);
+      // 复现只打属性，不自动升域、不自动升为已验证。
+      assert.equal(lesson.scope.layer, 'project');
+      assert.notEqual(lesson.verificationStatus, 'verified');
+    }
+    // 各自只带自己项目的证据，不复制另一个项目的证据。
+    assert.equal(personal.lessonSupport(p1Lesson.id).records, 1);
+    assert.equal(personal.lessonSupport(p2Lesson.id).records, 1);
+    assert.deepEqual(personal.lessonSources(p2Lesson.id).projects.sort(), ['p1', 'p2']);
+    // 按项目反查：行本身按项目归属，来源台账让「同现象另一项目那条」也能被反查到。
+    assert.deepEqual(personal.listLessonsForProject('p2').map((item) => item.id).sort(),
+      [p1Lesson.id, p2Lesson.id].sort());
 
     // 同一现象升到域层：去重键含作用域层，域层那条不会被当成项目级那条。
     const lessonDraft = {
@@ -202,14 +218,15 @@ test('同一现象跨项目合并为一条经验，升域后仍是另一条作�
       scope: { layer: 'domain', projectId: null, domainIds: ['software-engineering'] }
     }).dedupeKey;
     assert.notEqual(projectKey, domainKey, '作用域层不同，去重键必须不同');
-    const p1Lesson = personal.listLessons({ projectId: 'p1' })[0];
     assert.equal(personal.lessonByDedupe(projectKey)?.id, p1Lesson.id);
     // 未升域前库里的去重键仍只按项目级算，域级键查不到东西。
     assert.equal(personal.lessonByDedupe(domainKey), null);
     // 升域后去重键换成域级键，项目级键不再命中。
-    const promoted = personal.promoteLessonToDomain(merged.id, { domainIds: ['software-engineering'] });
+    const promoted = personal.promoteLessonToDomain(p1Lesson.id, { domainIds: ['software-engineering'] });
     assert.equal(promoted.dedupeKey, domainKey);
-    assert.equal(personal.lessonByDedupe(domainKey)?.id, merged.id);
+    assert.equal(personal.lessonByDedupe(domainKey)?.id, p1Lesson.id);
+    // 升域只发生在人显式调用的那一条上：另一个项目的行原样留在项目级。
+    assert.equal(personal.getLesson(p2Lesson.id).scope.layer, 'project');
   } finally { personal.close(); }
 });
 

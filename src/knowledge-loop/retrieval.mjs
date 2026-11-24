@@ -13,30 +13,23 @@
 // 没有匹配时不返回一个空列表假装「没有经验」：reason.code 区分
 // no-project（没指定项目）/ project-not-distilled（项目还没提炼过）/
 // no-matching-lesson（有经验但没有这一类）。
+import { flatText } from '../utils.mjs';
+import { LESSON_STATUS_LABELS, lessonStatusOf } from '../lesson-status.mjs';
+
 /** 一次对话默认取这么多条；多取会把项目上下文挤出提示词。 */
 export const DEFAULT_LESSON_RETRIEVAL_LIMIT = 10;
 /** listLessons 的条数上限：域的补充要覆盖全量，所以按它的天花板扫。 */
 const MAX_LESSON_SCAN = 1000;
 
-/** 状态优先级：已验证排最前，争议按 #57 的约定不参与优先排序（排在最后）。 */
+/** 状态优先级：已验证排最前，争议与已被取代按约定排在最后。 */
 const STATUS_RANK = { verified: 0, unverified: 1, inferred: 2, disputed: 3, superseded: 4 };
-/** 状态标注跟着结果一起返回：待验证不能被当成定论。 */
-const STATUS_LABEL = { verified: '已验证', unverified: '待验证', inferred: '推断', disputed: '争议', superseded: '已被取代' };
+/** 状态标注跟着结果一起返回：待验证不能被当成定论。文案与存储层共用一份。 */
+const STATUS_LABEL = LESSON_STATUS_LABELS;
 
-/**
- * 有效状态（#57）：争议与已被取代优先于验证状态。
- * 争议条目哪怕以前是 verified，也不能再被当成已验证引用。
- */
-const statusOf = (lesson) => {
-  const dispute = lesson?.dispute?.status;
-  if (dispute === 'disputed') return 'disputed';
-  if (dispute === 'superseded' || lesson?.supersededBy) return 'superseded';
-  return lesson?.verificationStatus ?? 'unverified';
-};
 const LAYER_LABEL = { project: '项目', domain: '域' };
 
 /** 压平空白：关键词匹配与展示用同一份文本，避免多空格把一条经验切成两块。 */
-const flat = (value) => String(value ?? '').replace(/\s+/gu, ' ').trim();
+const flat = (value) => flatText(value);
 
 /** 关键词按空白切成多个词，全部命中才算匹配（大小写不敏感）。 */
 const tokensOf = (query) => flat(query).toLowerCase().split(' ').filter(Boolean);
@@ -68,7 +61,7 @@ const supportOf = (personalStore, lesson) => {
 };
 
 const toItem = (personalStore, lesson, layer) => {
-  const status = statusOf(lesson);
+  const status = lessonStatusOf(lesson);
   return {
     id: lesson.id,
     layer,

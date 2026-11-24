@@ -3108,8 +3108,32 @@
   let knowledgeBrowseProject = '';
   let knowledgeBrowseToken = 0;
   let knowledgeBrowseSignature = '';
+  // #58 提议信号与 #61 经验列表：都只读，只用来提示与提供「提升为候选」入口。
+  let knowledgeProposals = [];
+  let knowledgeProposalThreshold = 0;
+  let knowledgeLessonCount = null;
 
-  // 候选条目带审核动作；其余条目仍是整行按钮，点开看详情。
+  // 提示卡：某项目还没提炼的执行记录达到阈值时显示一条，只提示不提炼。
+  const renderKnowledgeProposals = () => {
+    const holder = $('kbProposals');
+    if (!holder) return;
+    holder.replaceChildren();
+    if (!knowledgeProposals.length) return;
+    const card = el('div', 'kb-proposal');
+    card.append(el('div', 'kb-proposal-title', '有执行记录还没提炼'));
+    for (const item of knowledgeProposals.slice(0, 3)) {
+      const lessonText = knowledgeLessonCount === null || knowledgeBrowseProject
+        ? ''
+        : `；已有经验 ${knowledgeLessonCount} 条`;
+      card.append(el('p', 'kb-proposal-line',
+        `${projectLabel(item.projectId)} 有 ${item.count} 条执行记录还没提炼成经验`
+        + `${lessonText}。阈值是 ${knowledgeProposalThreshold || 3} 条；这里只提示，不会自动提炼。`));
+    }
+    card.append(el('p', 'kb-proposal-line', '提炼由人决定：这条提示不会自动触发提炼；提炼出的经验会出现在「经验」层，并可在那里一键提为知识候选。'));
+    holder.append(card);
+  };
+
+  // 候选条目带审核动作；经验条目带「提升为候选」；其余条目仍是整行按钮，点开看详情。
   const knowledgeItemRow = (item) => {
     const row = el('div', 'kb-item');
     const main = el('button', 'kb-item-main');
@@ -3156,6 +3180,29 @@
       actions.append(accept, reject);
       row.append(actions);
     }
+
+    // #61：每条经验都能一键提为知识候选（走既有审核流，不自动接受）。
+    if (item.kind === 'lesson') {
+      const actions = el('div', 'kb-item-actions');
+      const promote = el('button', 'kb-act promote', '提升为候选');
+      promote.type = 'button';
+      promote.onclick = async () => {
+        promote.disabled = true;
+        try {
+          const result = await window.companion.knowledge.promoteLesson({ lessonId: item.id });
+          toast(result?.created
+            ? '已提交为知识候选，等待审核'
+            : (result?.reason === 'approved' ? '这条经验已经落成知识，不再重复提交' : '这条经验已有待审候选，未重复提交'),
+          4000);
+          await loadKnowledgeBrowse();
+        } catch (error) {
+          toast(String(error?.message ?? error), 6000);
+          promote.disabled = false;
+        }
+      };
+      actions.append(promote);
+      row.append(actions);
+    }
     return row;
   };
 
@@ -3184,6 +3231,7 @@
     const filters = $('kbFilters');
     holder.replaceChildren();
     filters.replaceChildren();
+    renderKnowledgeProposals();
     const data = knowledgeBrowseData;
 
     const chip = (id, label, count) => {
@@ -3236,6 +3284,15 @@
       const data = await window.companion.knowledge.browse({ projectId: knowledgeBrowseProject });
       if (token !== knowledgeBrowseToken) return;
       knowledgeBrowseData = data;
+      // 提议信号与经验计数只做提示：任一失败都不影响三层列表。
+      const [proposals, lessons] = await Promise.all([
+        window.companion.knowledge.distillProposals({ projectId: knowledgeBrowseProject }).catch(() => null),
+        window.companion.knowledge.lessonList({ projectId: knowledgeBrowseProject }).catch(() => null)
+      ]);
+      if (token !== knowledgeBrowseToken) return;
+      knowledgeProposals = Array.isArray(proposals?.proposals) ? proposals.proposals : [];
+      knowledgeProposalThreshold = Number(proposals?.threshold ?? 0) || 0;
+      knowledgeLessonCount = Array.isArray(lessons?.lessons) ? lessons.lessons.length : null;
       // 所选项目在新数据里已经不存在（例如知识被清空）时退回「全部」。
       if (knowledgeBrowseProject && !(data.projects ?? []).some((item) => item.id === knowledgeBrowseProject)) {
         knowledgeBrowseProject = '';
