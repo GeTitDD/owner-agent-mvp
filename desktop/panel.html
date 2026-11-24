@@ -84,6 +84,37 @@
               <div id="proposeList" class="propose-list"></div>
             </section>
           </div>
+
+          <!-- 结果下钻区（#73）：答案卡 / 会话 / 最近结果是「某次操作的结果」，
+               落在操作区里，不再占工作区。三段都空时整段 hidden，一个像素都不留。 -->
+          <section id="opsDrill" class="ops-drill" hidden>
+            <div class="ops-block-head ops-drill-head">
+              <h3>操作结果</h3>
+              <span class="ops-drill-hint">这次操作留下了什么</span>
+            </div>
+
+            <section id="answerSection" class="ops-answer" hidden>
+              <div class="section-title">
+                <h3>只读分析</h3>
+                <span id="answerBadge" class="count">分析</span>
+              </div>
+              <div id="answerCard" class="answer-card"></div>
+            </section>
+
+            <!-- 会话是历史记录：默认折叠，要回看再展开，不在操作区铺一屏旧记录。 -->
+            <details id="timelineSection" class="timeline-section ops-timeline" hidden>
+              <summary class="ops-drill-summary">
+                <span>会话记录</span>
+                <span id="timelineCount" class="count">0</span>
+              </summary>
+              <div id="timeline" class="timeline-list"></div>
+            </details>
+
+            <section id="resultSection" class="ops-result" hidden>
+              <div class="section-title"><h3>最近结果</h3></div>
+              <div id="resultCard" class="result-card"></div>
+            </section>
+          </section>
         </section>
 
         <!-- 下半区 · 工作区：永远是某个项目的详情与操作面（#69 起常驻展开）。
@@ -100,6 +131,10 @@
           <div id="workProjectBar" class="work-project-bar" hidden>
             <span id="workProjectName" class="work-project-name"></span>
             <div id="fdTabs" class="fd-tabs" role="tablist" aria-label="切换工作区项目" hidden></div>
+            <!-- 选项目只剩这一处（#73）：旧的「搜索 + 列表 + 添加」段已删除，
+                 但「添加项目」入口不能丢，挂在切换行尾，文案写清它做什么。 -->
+            <button id="addProjectTop" class="ghost small work-project-add" type="button"
+              title="选择一个本地 Git 仓库目录，添加为项目">添加项目</button>
           </div>
 
         <!-- 四个入口（知识 / 测试 / 补丁 / 运行）：原只读详情卡的计数搬到这里（#72）。
@@ -129,7 +164,7 @@
           </button>
         </div>
         <!-- 工作区内容常驻展开：原来包在外面的 details 折叠条已经去掉，
-             这里只留容器，项目 / 通用两段直接铺开。 -->
+             这里只留容器；#73 之后只剩「所选项目」一段，全局块都搬走了。 -->
         <section class="workspace" id="workWorkspace">
         <section class="zone project-zone">
           <div class="zone-head">
@@ -137,16 +172,10 @@
             <span>项目画像、待办、知识与操作</span>
           </div>
 
+          <!-- 项目画像 / 知识摘要 / GitHub：都只描述「所选项目」。
+               旧的「搜索 + 项目列表 + 添加」段已删除（#73）——选项目只剩顶部切换一处，
+               「添加项目」挂在切换行尾，设置里也还有一个入口。 -->
           <section id="projectSection" class="project-section">
-            <div class="section-title">
-              <h3>项目</h3>
-              <span class="section-actions">
-                <input id="projectSearch" class="project-search" type="search" placeholder="搜索" aria-label="搜索项目" />
-                <span id="projectBadge" class="count">0</span>
-                <button id="addProjectTop" class="ghost small" type="button">添加</button>
-              </span>
-            </div>
-            <div id="projectList" class="project-list"></div>
             <div id="projectBrief" class="project-brief" hidden></div>
             <div id="projectSummary" class="project-summary" hidden></div>
             <div id="githubPanel" class="github-panel" hidden></div>
@@ -216,14 +245,10 @@
             <div id="playbookGroups" class="playbook-groups"></div>
             <div id="playbookResult" class="playbook-result" hidden></div>
           </section>
-        </section>
 
-        <section class="zone general-zone">
-          <div class="zone-head">
-            <strong>通用管理</strong>
-            <span>跨项目的决定、运行与最近结果</span>
-          </div>
-
+          <!-- 运行中 / 最近活动（原「通用管理」段）：数据是当前项目的任务链与 worker 状态，
+               属于「这个项目现在是什么样」，所以留在工作区里；#73 去掉了外面那层
+               「跨项目的决定、运行与最近结果」分区头，工作区不再有全局块。 -->
           <section id="runningSection" class="running-section">
             <div class="section-title">
               <h3 id="runningTitle">运行中</h3>
@@ -245,34 +270,6 @@
                 <div id="activityLines" class="activity-lines"></div>
               </details>
             </div>
-          </section>
-
-          <section id="setup" class="setup" hidden>
-            <h3>先添加一个项目</h3>
-            <p>选择本地 Git 仓库目录。桌宠会从这里读取项目并创建任务；L1 不依赖 OpenClaw，完整工作台才需要它。</p>
-            <div id="setupServices" class="service-grid"></div>
-            <button id="addProject" class="primary">选择项目目录</button>
-          </section>
-
-          <section id="answerSection" hidden>
-            <div class="section-title">
-              <h3>只读分析</h3>
-              <span id="answerBadge" class="count">分析</span>
-            </div>
-            <div id="answerCard" class="answer-card"></div>
-          </section>
-
-          <section id="timelineSection" class="timeline-section" hidden>
-            <div class="section-title">
-              <h3>会话</h3>
-              <span id="timelineCount" class="count">0</span>
-            </div>
-            <div id="timeline" class="timeline-list"></div>
-          </section>
-
-          <section id="resultSection" hidden>
-            <div class="section-title"><h3>最近结果</h3></div>
-            <div id="resultCard" class="result-card"></div>
           </section>
         </section>
         </section>
@@ -384,6 +381,13 @@
         <button id="closeSettings" class="ghost">×</button>
       </div>
       <div class="sheet-body">
+        <!-- 设置向导（#73）：添加项目不属于任何项目，所以跟着设置走，不再占工作区。
+             没有项目时它是设置里第一件该做的事；已经有项目时也能再加一个。 -->
+        <section id="setup" class="setup setup-in-settings">
+          <h3>添加项目</h3>
+          <p>选择本地 Git 仓库目录。桌宠会从这里读取项目并创建任务；L1 不依赖 OpenClaw，完整工作台才需要它。</p>
+          <button id="addProject" class="primary">选择项目目录</button>
+        </section>
         <label class="field">
           <span>OpenClaw Gateway 地址</span>
           <input id="gatewayUrl" placeholder="http://127.0.0.1:18789" />
@@ -434,7 +438,6 @@
         <div class="sheet-actions">
           <button id="saveSettings" class="primary">保存</button>
           <button id="retryServices" class="ghost">重新检测</button>
-          <button id="addProjectSettings" class="ghost">添加项目</button>
         </div>
       </div>
     </div>

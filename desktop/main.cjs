@@ -3610,7 +3610,7 @@ async function boot() {
             const toastText = toast?.textContent ?? '';
             const toastVisible = !(toast?.hidden ?? true);
             const draftKept = input.value;
-            const selectedRow = document.querySelector('#projectList .project-row.selected')?.dataset.project ?? '';
+            // #73 之后选项目只剩工作区顶部一处：视图项目只从切换标签读。
             const detailTab = document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
             // toast 位置验收：不能压住模式栏，也不能压住底部输入区。
             const rectOf = (node) => {
@@ -3630,7 +3630,7 @@ async function boot() {
               blockedToast: toastText,
               blockedToastVisible: toastVisible,
               draftKept,
-              viewProjectFromDom: selectedRow || detailTab,
+              viewProjectFromDom: detailTab,
               toastRect,
               navRect,
               composerRect,
@@ -3682,7 +3682,7 @@ async function boot() {
               // 选中后等界面真正换到该项目（快照要走一遍服务探测），最多等 6 秒。
               let viewProject = '';
               for (let i = 0; i < 40; i += 1) {
-                viewProject = document.querySelector('#projectList .project-row.selected')?.dataset.project ?? '';
+                viewProject = document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
                 if (viewProject && viewProject === target?.dataset.project) break;
                 await wait(150);
               }
@@ -4121,10 +4121,9 @@ async function boot() {
             const chip = document.getElementById('handoffTarget');
             const name = document.getElementById('handoffTargetName');
             const tabOf = () => document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
-            const rowOf = () => document.querySelector('#projectList .project-row.selected')?.dataset.project ?? '';
             const handoffOf = () => ({ id: chip?.dataset.projectId ?? '', label: name?.textContent?.trim() ?? '' });
             if (projects.length < 2) return { skipped: 'need-two-projects', count: projects.length };
-            const initial = { view: tabOf(), selectedRow: rowOf(), handoff: handoffOf() };
+            const initial = { view: tabOf(), handoff: handoffOf() };
             // 点工作区的项目切换标签看另一个项目：只应换视图，交办仍是「未选项目」。
             const other = projects[1];
             const tab = [...document.querySelectorAll('#fdTabs .fd-tab')]
@@ -4132,7 +4131,7 @@ async function boot() {
             tab?.click();
             for (let i = 0; i < 60; i += 1) {
               await wait(150);
-              if (tabOf() === other.id && rowOf() === other.id) break;
+              if (tabOf() === other.id) break;
             }
             await wait(600);
             // 截图要同时看到工作区的项目切换（视图项目）与底部「交办到 …」（交办目标）。
@@ -4142,7 +4141,7 @@ async function boot() {
             return {
               projectIds: projects.map((item) => item.id),
               initial,
-              afterTab: { view: tabOf(), selectedRow: rowOf(), handoff: handoffOf() },
+              afterTab: { view: tabOf(), handoff: handoffOf() },
               clicked: other.id
             };
           })()`);

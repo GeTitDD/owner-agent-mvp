@@ -287,8 +287,8 @@ const scenarioWithProposals = async (probe) => {
       const snapshot = await window.companion.snapshot({});
       return {
         fromSnapshot: (snapshot.projects ?? []).map((project) => ({ id: project.id, name: project.name })),
-        fromList: [...document.querySelectorAll('#projectList .project-row')]
-          .map((row) => ({ id: row.dataset.project, name: row.querySelector('.row-name')?.textContent }))
+        fromSwitcher: [...document.querySelectorAll('#fdTabs .fd-tab')]
+          .map((tab) => ({ id: tab.dataset.project, name: tab.textContent }))
       };
     })()`);
     check('提议带项目与条数', dom.rows.length === 1
@@ -370,8 +370,8 @@ const scenarioWithoutProposals = async (probe) => {
     await waitFor(panel, 'window.OwnerFocusOps');
     await panel.evaluate("document.querySelector('#modeBar button[data-mode=\"focus\"]').click()");
     await waitFor(panel, "!document.getElementById('modeA').hidden");
-    // 等快照到齐（项目列表出现）再看提议：否则截图会停在还没取到数的空壳上。
-    await waitFor(panel, "document.querySelector('#projectList .project-row')");
+    // 等快照到齐（项目切换标签出现）再看提议：否则截图会停在还没取到数的空壳上。
+    await waitFor(panel, "document.querySelector('#fdTabs .fd-tab')");
     // 等提议取数跑完一轮（TTL 之内不会重复读）。
     await sleep(2000);
     const dom = await panel.evaluate(`(() => ({
