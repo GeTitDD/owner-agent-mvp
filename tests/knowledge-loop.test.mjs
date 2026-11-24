@@ -6,17 +6,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PersonalKnowledgeStore } from '../src/personal-store.mjs';
 import { createDomainEngine } from '../src/engine.mjs';
-import { normalizeExperience } from '../src/knowledge-loop/contracts.mjs';
-import { ExperienceCollector } from '../src/knowledge-loop/experience.mjs';
-import { KnowledgeHarvester, HARVEST_STEPS } from '../src/knowledge-loop/harvest.mjs';
 import { KnowledgeReuse } from '../src/knowledge-loop/reuse.mjs';
 import { KnowledgeFeedback } from '../src/knowledge-loop/feedback.mjs';
 import { appendDecision } from '../src/knowledge-loop/decision-log.mjs';
 import { createWorkbenchServer } from '../src/workbench-server.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { OwnerStore } from '../src/owner-store.mjs';
-import { KnowledgeLoopRuntime } from '../src/knowledge-loop/runtime.mjs';
-import { createSyntheticProject, createPassingProject } from '../scripts/knowledge-loop/fixtures.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const image = `sha256:${'a'.repeat(64)}`;
@@ -38,197 +33,6 @@ const sandbox = (id, overrides = {}) => ({
   execution_status: 'completed', test_status: 'pass', profile_id: 'node-smoke',
   image_digest: image, evidence: [{ kind: 'stdout' }, { kind: 'stderr' }],
   ...overrides
-});
-
-const job = (id, overrides = {}) => ({
-  id, project_id: 'p1', owner_task_id: 'task1', title: 'Fix the failing retry test',
-  status: 'succeeded', attempts: [
-    { id: `attempt-${id}`, attempt: 1, status: 'succeeded', result_note: 'ok' }
-  ], payload: {}, ...overrides
-});
-
-test('auto collection ignores non-terminal runs and collects one final experience', () => {
-  const personal = new PersonalKnowledgeStore(':memory:');
-  try {
-    const state = {
-      tasks: { task1: { id: 'task1', project_id: 'p1' } },
-      jobs: { job1: job('job1', { status: 'running' }) },
-      runs: { run1: sandbox('run1', { status: 'running', test_status: 'unknown' }) }
-    };
-    const owner = fakeOwner(state);
-    const collector = new ExperienceCollector(owner, personal);
-    assert.throws(() => collector.collectSandboxRun('run1'), /not terminal/u);
-    assert.deepEqual(collector.collectProject('p1'), []);
-    state.runs.run1 = sandbox('run1');
-    state.jobs.job1 = job('job1');
-    const collected = collector.collectProject('p1');
-    assert.equal(collected.length, 1);
-    assert.equal(collected[0].observedOutcome.status, 'succeeded');
-    assert.equal(personal.listExperiences({ projectId: 'p1' }).length, 1);
-    const again = collector.collectProject('p1');
-    assert.equal(again.length, 1);
-    assert.equal(again[0].duplicate, true);
-    assert.equal(personal.listExperiences({ projectId: 'p1' }).length, 1);
-  } finally { personal.close(); }
-});
-
-test('Experience collector records success, failure and repair without duplicating', () => {
-  const personal = new PersonalKnowledgeStore(':memory:');
-  try {
-    const owner = fakeOwner({
-      tasks: { task1: { id: 'task1', project_id: 'p1' } },
-      jobs: { job1: job('job1') },
-      patches: { patch1: { id: 'patch1', status: 'applied', files: [{ path: 'src/retry.js' }], proposal_hash: 'a'.repeat(64) } },
-      runs: {
-        runPass: sandbox('runPass'),
-        runFail: sandbox('runFail', { test_status: 'fail' }),
-        runRepair: sandbox('runRepair', { repair_cycle_id: 'cycle1', test_status: 'pass' })
-      },
-      cycles: [{ id: 'cycle1', status: 'tested_pass', repairScope: ['src/'], source_sandbox_run_id: 'runFail', repair_sandbox_run_id: 'runRepair' }],
-      evidence: { 'runPass:stdout': { content: 'ok 1' }, 'runPass:stderr': { content: '' } }
-    });
-    const collector = new ExperienceCollector(owner, personal, { clock: () => '2026-01-01T00:00:00.000Z' });
-    const pass = collector.collectSandboxRun('runPass');
-    assert.equal(pass.observedOutcome.status, 'succeeded');
-    assert.equal(pass.observedOutcome.testStatus, 'pass');
-    assert.ok(pass.evidenceRefs.includes('sandbox:runPass'));
-    assert.ok(pass.evidenceRefs.includes('patch:patch1'));
-    const again = collector.collectSandboxRun('runPass');
-    assert.equal(again.duplicate, true);
-    assert.equal(personal.listExperiences({ projectId: 'p1' }).length, 1);
-
-    const fail = collector.collectSandboxRun('runFail');
-    assert.equal(fail.observedOutcome.status, 'failed');
-    const repair = collector.collectSandboxRun('runRepair');
-    assert.equal(repair.observedOutcome.status, 'repaired');
-    assert.equal(repair.observedOutcome.repairStatus, 'tested_pass');
-    assert.equal(personal.listExperiences({ projectId: 'p1' }).length, 3);
-
-    const unknown = collector.collectSandboxRun('runFail');
-    assert.equal(unknown.duplicate, true);
-  } finally { personal.close(); }
-});
-
-test('Experience collector handles rejected jobs and marks missing test evidence unknown', () => {
-  const personal = new PersonalKnowledgeStore(':memory:');
-  try {
-    const owner = fakeOwner({
-      jobs: { rejected: job('rejected', { status: 'rejected', attempts: [] }) },
-      tasks: { task1: { id: 'task1', project_id: 'p1' } }
-    });
-    const collector = new ExperienceCollector(owner, personal);
-    const record = collector.collectJob('rejected');
-    assert.equal(record.observedOutcome.status, 'rejected');
-    assert.equal(record.observedOutcome.testStatus, null);
-    assert.ok(record.unknowns.some((item) => /没有 Sandbox/u.test(item)));
-  } finally { personal.close(); }
-});
-
-const experience = (id, projectId = 'p1', overrides = {}) => normalizeExperience({
-  sourceRunId: id, projectId, taskId: `task-${id}`, domainIds: ['software-engineering'],
-  observedProblem: 'retry loop leaves the last attempt unused',
-  actionSummary: 'changed loop bound and verified the retry test',
-  observedOutcome: { status: 'succeeded', source: 'owner-store', testStatus: 'pass', executionStatus: 'completed', repairStatus: null },
-  evidenceRefs: [`sandbox:${id}`, `experience:${id}`],
-  environment: { primaryDomain: 'software-engineering', profileId: 'node-smoke', runtime: 'node' },
-  facts: ['test passed'], inferences: [], unknowns: [],
-  ...overrides
-});
-
-test('Harvest maps drafts into pending proposals, forces project layer for single-project evidence', async () => {
-  const personal = new PersonalKnowledgeStore(':memory:');
-  try {
-    const exp = personal.addExperience(experience('run-a'));
-    const harvester = new KnowledgeHarvester({
-      ownerStore: fakeOwner({ jobs: {}, tasks: {} }),
-      personalStore: personal,
-      extractor: null
-    });
-    const result = await harvester.harvest({
-      experienceIds: [exp.id],
-      projectId: 'p1',
-      domainId: 'software-engineering',
-      extractor: () => ({
-        candidates: [{
-          title: 'Retry loop bound', claim: 'Use i < attempts so the final retry executes.',
-          kind: 'pattern', proposedLayer: 'domain', applicability: ['node retry helper'],
-          exceptions: ['attempts <= 0'], confidence: 0.9, contradictions: [],
-          keywords: ['retry', 'off-by-one'], evidenceRefs: [`experience:${exp.id}`],
-          facts: ['test passed'], inferences: ['off-by-one is the cause'], unknowns: [],
-          validationSuggestions: ['run in a second project']
-        }]
-      })
-    });
-    assert.equal(result.candidates.length, 1);
-    const proposal = result.candidates[0];
-    assert.equal(proposal.status, 'pending');
-    assert.equal(proposal.payload.layer, 'project');
-    assert.equal(proposal.payload.scope, 'project');
-    assert.equal(proposal.payload.projectId, 'p1');
-    assert.equal(proposal.payload.verificationStatus, 'unverified');
-    assert.deepEqual(proposal.meta.sourceExperienceIds, [exp.id]);
-    assert.deepEqual(proposal.meta.steps, HARVEST_STEPS);
-    const duplicate = await harvester.harvest({
-      experienceIds: [exp.id], projectId: 'p1', domainId: 'software-engineering',
-      extractor: () => { throw new Error('must not be called'); }
-    });
-    assert.equal(duplicate.duplicate, true);
-    assert.equal(duplicate.candidates[0].id, proposal.id);
-  } finally { personal.close(); }
-});
-
-test('Harvest suggests applied only with two independent projects and flags contradictions', async () => {
-  const personal = new PersonalKnowledgeStore(':memory:');
-  try {
-    const a = personal.addExperience(experience('run-a', 'p1'));
-    const b = personal.addExperience(experience('run-b', 'p2'));
-    const harvester = new KnowledgeHarvester({ ownerStore: fakeOwner(), personalStore: personal });
-    const result = await harvester.harvest({
-      experienceIds: [a.id, b.id], projectId: 'p1', domainId: 'software-engineering',
-      extractor: () => ({
-        candidates: [{
-          title: 'Retry bound across projects',
-          claim: 'When a retry helper is expected to use every attempt, loop with i < attempts.',
-          kind: 'pattern', proposedLayer: 'project', applicability: ['Node retry helper with attempts=3'],
-          exceptions: ['attempts < 1'], confidence: 0.8, contradictions: ['project:old knowledge says attempts - 1'],
-          keywords: ['retry'], evidenceRefs: [`experience:${a.id}`, `experience:${b.id}`],
-          facts: [], inferences: [], unknowns: [], validationSuggestions: []
-        }]
-      })
-    });
-    const proposal = result.candidates[0];
-    assert.equal(proposal.payload.layer, 'applied');
-    assert.equal(proposal.payload.scope, 'domain');
-    assert.equal(proposal.payload.verificationStatus, 'needs_reverification');
-    assert.equal(proposal.meta.independentProjects?.length ?? 2, 2);
-  } finally { personal.close(); }
-});
-
-test('L2 requires passing evidence in two independent projects, not A pass + B fail', async () => {
-  const personal = new PersonalKnowledgeStore(':memory:');
-  try {
-    const a = personal.addExperience(experience('run-a', 'p1'));
-    const b = personal.addExperience(experience('run-b', 'p2', {
-      observedOutcome: { status: 'failed', source: 'owner-store', testStatus: 'fail', executionStatus: 'completed', repairStatus: null }
-    }));
-    const harvester = new KnowledgeHarvester({ ownerStore: fakeOwner(), personalStore: personal });
-    const result = await harvester.harvest({
-      experienceIds: [a.id, b.id], projectId: 'p1', domainId: 'software-engineering',
-      extractor: () => ({
-        candidates: [{
-          title: 'Retry bound across projects',
-          claim: 'When a retry helper must use every attempt, loop with i < attempts.',
-          kind: 'pattern', proposedLayer: 'applied', applicability: ['Node retry helper'],
-          exceptions: [], confidence: 0.8, contradictions: [], keywords: ['retry'],
-          evidenceRefs: [`experience:${a.id}`, `experience:${b.id}`],
-          facts: [], inferences: [], unknowns: [], validationSuggestions: []
-        }]
-      })
-    });
-    const proposal = result.candidates[0];
-    assert.equal(proposal.payload.layer, 'project');
-    assert.equal(proposal.payload.scope, 'project');
-  } finally { personal.close(); }
 });
 
 test('Reuse compiles a project-scoped knowledge unit and records idempotent usage', async () => {
@@ -428,26 +232,32 @@ test('controlled negative comparison proposes re-verification', () => {
   } finally { personal.close(); }
 });
 
-test('KnowledgeLoopRuntime auto-collects completed runs without CLI and is idempotent', async () => {
+test('自动采集/自动提炼链已删除：没有 runtime、没有旧经验表、没有旧写入口（P0-4 / P1-3）', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'knowledge-runtime-'));
   const ownerDb = path.join(tmp, 'owner.sqlite');
   const knowledgeDb = path.join(tmp, 'knowledge.sqlite');
   const owner = new OwnerStore(ownerDb);
   const personal = new PersonalKnowledgeStore(knowledgeDb);
   try {
-    createSyntheticProject({ store: owner, root: path.join(tmp, 'a'), projectId: 'runtime-a', name: 'Runtime A' });
-    createPassingProject({ store: owner, root: path.join(tmp, 'b'), projectId: 'runtime-b', name: 'Runtime B' });
-    const runtime = new KnowledgeLoopRuntime({ ownerStore: owner, personalStore: personal, allowHarvest: false });
-    const first = await runtime.tick();
-    assert.equal(first.newExperiences, 3);
-    assert.equal(first.pending, 3);
-    assert.equal(personal.listExperiences({ limit: 100 }).length, 3);
-    const second = await runtime.tick();
-    assert.equal(second.newExperiences, 0);
-    assert.equal(personal.listExperiences({ limit: 100 }).length, 3);
-    assert.equal(runtime.status().pending, 3);
-    // 待提炼队列可见：没有 Harvest run 引用这些 Experience。
+    // 常驻 tick 与旧采集链一起删掉了：文件不存在，也就没有「空转的 tick」可以调用。
+    for (const file of [
+      'src/knowledge-loop/runtime.mjs',
+      'scripts/knowledge-loop/auto-runtime.mjs',
+      'src/knowledge-loop/experience.mjs',
+      'src/knowledge-loop/harvest.mjs',
+      'src/knowledge-loop/pi-harvest-session.mjs'
+    ]) {
+      assert.equal(fs.existsSync(path.join(ROOT, file)), false, `${file} 应已删除`);
+    }
+    // 旧经验表不再存在，旧写入口也整体消失：调用方无处可写。
+    assert.equal(personal.db.prepare("SELECT name FROM sqlite_master WHERE name='knowledge_experiences'").get(), undefined);
+    for (const method of ['addExperience', 'getExperience', 'listExperiences']) {
+      assert.equal(typeof personal[method], 'undefined', `${method} 应已退役`);
+    }
     assert.equal(personal.listHarvestRuns(10).length, 0);
+    // 新链路仍在：经验表可写、待提炼队列可读。
+    assert.equal(typeof personal.recordLessonOrDispute, 'function');
+    assert.equal(typeof personal.recordReproducedLesson, 'undefined', '复现已并入 recordLessonOrDispute（P1-4）');
   } finally {
     personal.close();
     owner.close();
@@ -461,7 +271,14 @@ test('Workbench exposes knowledge-loop read-only views', async () => {
   const personal = new PersonalKnowledgeStore(dbPath);
   let server;
   try {
-    const exp = personal.addExperience(experience('run-a'));
+    const lesson = personal.addLesson({
+      projectId: 'p1', sourceRecordId: 'sandbox:run-a',
+      phenomenon: 'retry loop leaves the last attempt unused',
+      mechanism: 'loop bound is exclusive',
+      countermeasure: 'use i < attempts',
+      scope: { layer: 'project', projectId: 'p1', domainIds: ['software-engineering'] },
+      verificationStatus: 'unverified', evidenceRefs: ['sandbox:run-a']
+    }, { evidence: [{ ref: 'sandbox:run-a', recordId: 'run-a', kind: 'log', excerpt: 'attempt 3 missing' }] });
     const unit = personal.create({
       title: 'Retry loop bound', content: 'Use i < attempts.', kind: 'claim',
       layer: 'applied', scope: 'domain', domains: ['software-engineering'],
@@ -479,24 +296,27 @@ test('Workbench exposes knowledge-loop read-only views', async () => {
         title: 'Cross-project retry', content: 'Use i < attempts.', kind: 'claim',
         layer: 'applied', scope: 'domain', projectId: null,
         domains: ['software-engineering'], tags: ['retry'],
-        evidenceRefs: [`experience:${exp.id}`], verificationStatus: 'unverified',
+        evidenceRefs: [], verificationStatus: 'unverified',
         relations: {}, sourceRef: 'test'
       },
-      meta: { contract: 'knowledge-candidate/v1', sourceExperienceIds: [exp.id] }
+      meta: { contract: 'knowledge-candidate/v1', sourceLessonIds: [lesson.id] }
     });
     server = await createWorkbenchServer({ dbPath, port: 0 });
     const info = await server.listen();
     const base = `http://127.0.0.1:${info.port}`;
     const summary = await (await fetch(`${base}/api/knowledge/loop-summary`)).json();
-    assert.equal(summary.experiences, 1);
+    // 旧 experience/v1 已退役：loop-summary 的「经验」口径改读 lesson/v1。
+    assert.equal(summary.lessons, 1);
+    assert.equal('experiences' in summary, false);
     assert.equal(summary.pendingCandidates, 1);
     assert.equal(summary.usages, 1);
     assert.equal(summary.positiveUsages, 1);
-    const experiences = await (await fetch(`${base}/api/knowledge/experiences?projectId=p1`)).json();
-    assert.equal(experiences[0].id, exp.id);
+    // 旧经验读路由已摘除：不再返回列表，而是普通 404。
+    const retired = await fetch(`${base}/api/knowledge/experiences?projectId=p1`);
+    assert.equal(retired.status, 404);
     const candidates = await (await fetch(`${base}/api/knowledge/candidates`)).json();
     assert.equal(candidates[0].id, proposal.id);
-    assert.equal(candidates[0].meta.sourceExperienceIds[0], exp.id);
+    assert.equal(candidates[0].meta.sourceLessonIds[0], lesson.id);
     const usages = await (await fetch(`${base}/api/knowledge/usages?targetRunId=run-b`)).json();
     assert.equal(usages[0].id, usage.id);
   } finally {

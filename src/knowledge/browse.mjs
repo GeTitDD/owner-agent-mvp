@@ -1,62 +1,66 @@
-// 知识模式：只读浏览本地 SQLite 里的候选、待验证/已验证知识与经验。
+// 知识模式：把本地 SQLite 读成「候选 / 经验 / 知识」三层只读视图模型。
 //
-// 这里只做组装，不写库；候选审核见 review.mjs，#43 复用既有 reviewProposal。
-// 数据来源只有本地 SQLite（personal_units / personal_proposals /
-// knowledge_experiences），不读 owner.json 里的项目知识，避免同屏出现两套不同步
-// 的内容（ADR-0002 / ADR-0006）。
+// 三层来自 ADR-0007：执行记录 ──提炼──▶ 经验 ──收敛──▶ 知识；候选是等待入场的队列。
+// 待验证、已验证、已复现、争议都只是条目上的状态徽章，不再各自成组——否则同一条内容
+// 会因为状态变化在页面上换位置。每层给两个计数口径：当前项目（受项目筛选影响）与
+// 全部项目（不受影响，用来显示「切回全部还能看到多少」）。
+//
+// 这里只做组装，不写库；候选审核见 review.mjs。数据来源只有本地 SQLite
+// （personal_units / personal_proposals / knowledge_lessons），不读 owner.json 里的
+// 项目知识，避免同屏出现两套不同步的内容（ADR-0002 / ADR-0006）。
+
+import { flatText } from '../utils.mjs';
+import { LESSON_STATUS_LABELS, lessonStatusOf, lessonStatusLabel } from '../lesson-status.mjs';
 
 const CANDIDATE_CONTRACT = 'knowledge-candidate/v1';
 const DEFAULT_LIMIT = 50;
 
-const OUTCOME_LABELS = {
-  succeeded: '成功',
-  repaired: '已修复',
-  failed: '失败',
-  cancelled: '已取消',
-  rejected: '已拒绝',
-  unknown: '结果未知'
+// 状态徽章：知识条目（personal_units）自己有状态词表；经验（lesson/v1）用状态模块那一份。
+// 两处都只是徽章文案，未知状态原样显示，方便排查。
+const KNOWLEDGE_STATUS_LABELS = {
+  unverified: '待验证',
+  verified: '已验证',
+  needs_reverification: '待重新验证',
+  disputed: '争议'
 };
+// 经验的徽章：五种状态 + 「已复现」属性。已复现是属性不是第六种状态，但它也要能被看见（P0-6）。
+const LESSON_BADGE_LABELS = { ...LESSON_STATUS_LABELS, reproduced: '已复现' };
+const CANDIDATE_BADGE = '待审核';
 const SCOPE_LABELS = { project: '项目', domain: '领域共享', personal: '个人' };
-// 接受候选只会得到未验证知识；真正验证是下一步，所以单列一组，避免条目凭空消失。
-const STATUS_LABELS = { unverified: '待验证', needs_reverification: '待重新验证', disputed: '有争议' };
+
+/** 状态徽章文案：未知状态不吞掉，原样显示。 */
+const badgeOf = (status, labels = KNOWLEDGE_STATUS_LABELS) => labels[status] ?? String(status ?? '未知');
 
 /**
- * 知识分组定义：分组顺序、标题与空状态文案只在这里写一份。
- * 加组时改这一处，视图模型与「知识库未初始化」的占位分组会同时跟上。
+ * 三层定义：层的顺序、标题与空状态文案只在这里写一份。
+ * 加层或改文案时改这一处，视图模型与「知识库未初始化」的占位层会同时跟上。
  */
-const GROUP_DEFS = [
+const LAYER_DEFS = [
   {
     key: 'candidates',
     label: '候选',
-    empty: (filtered) => (filtered
+    hint: (filtered) => (filtered
       ? '这个项目还没有待审核候选。'
       : '还没有待审核候选；提炼经验后会先进入候选。')
   },
   {
-    key: 'pending',
-    label: '待验证知识',
-    empty: (filtered) => (filtered
-      ? '这个项目还没有待验证知识。'
-      : '还没有待验证知识；接受候选后会先进入这里。')
-  },
-  {
-    key: 'verified',
-    label: '已验证知识',
-    empty: (filtered) => (filtered
-      ? '这个项目还没有已验证知识。'
-      : '还没有已验证知识；候选确认并附证据后才算已验证。')
-  },
-  {
-    key: 'experiences',
+    key: 'lessons',
     label: '经验',
-    empty: (filtered) => (filtered
-      ? '这个项目还没有经验记录。'
-      : '还没有经验记录；完成一次任务并验证后会自动采集。')
+    hint: (filtered) => (filtered
+      ? '这个项目还没有经验。'
+      : '还没有经验；从执行记录里提炼出「现象 → 机制 → 对策」后会出现在这里。')
+  },
+  {
+    key: 'knowledge',
+    label: '知识',
+    hint: (filtered) => (filtered
+      ? '这个项目还没有知识条目。'
+      : '还没有知识；接受候选或由经验收敛出规则后会出现在这里。')
   }
 ];
 
-/** 把任意文本压成一行，避免长经验内容把列表撑开。 */
-const oneLine = (value, max = 120) => String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, max);
+/** 把任意文本压成一行，避免长内容把列表撑开。 */
+const oneLine = (value, max = 120) => flatText(value, max);
 
 /** 时间倒序；时间相同的按 id 兜底，保证同一份数据每次渲染顺序一致。 */
 const newestFirst = (a, b) =>
@@ -65,30 +69,33 @@ const newestFirst = (a, b) =>
 const projectIdsOf = (value) => [...new Set((value ?? []).filter(Boolean))];
 
 /**
- * 组装知识模式视图模型。
+ * 组装知识模式三层视图模型。
  *
  * @param {object} input
- * @param {string} [input.projectId] 当前筛选的项目；空串表示「全部」
- * @param {object[]} [input.units] personal_units 行（含 payload 展开后的字段）
- * @param {object[]} [input.proposals] personal_proposals 行（待审核候选）
- * @param {object[]} [input.experiences] knowledge_experiences 行
- * @param {number} [input.limit] 每组最多渲染多少条（计数仍按全量）
+ * @param {string} [input.projectId] 当前筛选的项目；空串表示「全部项目」
+ * @param {object[]} [input.units] personal_units 行（进「知识」层）
+ * @param {object[]} [input.proposals] personal_proposals 行（待审核候选，进「候选」层）
+ * @param {object[]} [input.lessons] knowledge_lessons 行（lesson/v1，进「经验」层）
+ * @param {number} [input.limit] 每层最多渲染多少条（计数仍按全量）
  * @returns {object} 供面板直接渲染的只读视图模型
  */
 export function knowledgeBrowseView({
   projectId = '',
   units = [],
   proposals = [],
-  experiences = [],
+  lessons = [],
   limit = DEFAULT_LIMIT
 } = {}) {
   const filterId = String(projectId ?? '');
   const cap = Math.max(1, Number.isSafeInteger(limit) ? limit : DEFAULT_LIMIT);
 
-  // 经验先建索引：候选用 sourceExperienceIds 反查所属项目。
-  const experienceProject = new Map(
-    experiences.map((row) => [row.id, row.projectId ?? row.project_id ?? null])
-  );
+  // 候选被提炼出来时只带来源 id：先建索引，才能把候选归属回项目。
+  // 来源只认 lesson/v1（#60 起的新链路）；旧的 experience/v1 表已退役（#62），不再读取。
+  const sourceProject = new Map();
+  for (const row of lessons) {
+    const ids = projectIdsOf([row.scope?.projectId ?? row.projectId ?? null]);
+    if (ids.length) sourceProject.set(row.id, ids[0]);
+  }
 
   const candidates = proposals
     .filter((row) => row?.status === 'pending' && row?.meta?.contract === CANDIDATE_CONTRACT)
@@ -96,7 +103,7 @@ export function knowledgeBrowseView({
       const payload = row.payload ?? {};
       const ids = projectIdsOf([
         payload.projectId ?? null,
-        ...(row.meta?.sourceExperienceIds ?? []).map((id) => experienceProject.get(id))
+        ...(row.meta?.sourceLessonIds ?? []).map((id) => sourceProject.get(id))
       ]);
       const layer = payload.layer ?? row.meta?.proposedLayer ?? 'project';
       const confidence = row.meta?.confidence;
@@ -104,7 +111,9 @@ export function knowledgeBrowseView({
         id: row.id,
         kind: 'candidate',
         title: oneLine(payload.title, 200) || '未命名候选',
-        detail: `待审核 · ${layer} 层 · 置信度 ${confidence === undefined || confidence === null ? '未知' : confidence}`,
+        status: 'pending',
+        badge: CANDIDATE_BADGE,
+        detail: `${CANDIDATE_BADGE} · ${layer} 层 · 置信度 ${confidence === undefined || confidence === null ? '未知' : confidence}`,
         projectIds: ids,
         projectId: ids[0] ?? null,
         at: row.createdAt ?? row.created_at ?? null
@@ -112,115 +121,124 @@ export function knowledgeBrowseView({
     })
     .sort(newestFirst);
 
-  // 候选被接受后先落成未验证知识；已验证与待验证只差一个状态词，
-  // 所以共用一份映射，再按 kind 拆成两组，避免两段几乎相同的代码各自漂移。
-  const mapKnowledgeUnit = (row) => {
-    const ids = row.scope === 'project' ? projectIdsOf([row.projectId]) : [];
-    const status = row.verificationStatus;
-    const verified = status === 'verified';
-    return {
-      id: row.id,
-      kind: verified ? 'verified' : 'pending',
-      title: oneLine(row.title, 200) || '未命名知识',
-      detail: `${verified ? '已验证' : STATUS_LABELS[status] ?? '待验证'} · ${SCOPE_LABELS[row.scope] ?? row.scope ?? '个人'} · ${row.layer ?? 'applied'} 层 · r${row.revision ?? 1}`,
-      projectIds: ids,
-      projectId: ids[0] ?? null,
-      at: row.updatedAt ?? row.updated_at ?? null
-    };
-  };
-  const knowledgeUnits = units
-    .filter((row) => row?.verificationStatus)
-    .map(mapKnowledgeUnit)
-    .sort(newestFirst);
-  const pendingUnits = knowledgeUnits.filter((item) => item.kind === 'pending');
-  const verified = knowledgeUnits.filter((item) => item.kind === 'verified');
-
-  const experienceItems = experiences
+  // 经验：lesson/v1 的「现象 → 机制 → 对策」，默认项目级；域级经验不属于任何项目。
+  // 状态只从那一列读（P0-2）；reproduced 是属性，单独标成徽章，避免被状态覆盖掉（P0-6）。
+  const lessonItems = lessons
     .map((row) => {
-      const ids = projectIdsOf([row.projectId ?? row.project_id ?? null]);
-      const outcome = row.observedOutcome?.status ?? row.outcome ?? 'unknown';
+      const layer = row.scope?.layer ?? 'project';
+      const ids = layer === 'project'
+        ? projectIdsOf([row.scope?.projectId ?? row.projectId ?? null])
+        : [];
+      const status = lessonStatusOf(row);
+      const reproduced = row.reproduced === true;
+      const evidenceCount = Array.isArray(row.evidence)
+        ? row.evidence.length
+        : (row.evidenceRefs?.length ?? 0);
+      const statusText = lessonStatusLabel(status);
       return {
         id: row.id,
-        kind: 'experience',
-        title: oneLine(row.observedProblem, 200) || '未命名经验',
-        detail: `经验 · ${OUTCOME_LABELS[outcome] ?? outcome}`,
+        kind: 'lesson',
+        title: oneLine(row.phenomenon, 200) || '未命名经验',
+        status,
+        statusLabel: statusText,
+        reproduced,
+        badge: reproduced ? LESSON_BADGE_LABELS.reproduced : badgeOf(status, LESSON_BADGE_LABELS),
+        detail: `经验 · ${reproduced ? '已复现 · ' : ''}${statusText} · `
+          + `${layer === 'domain' ? SCOPE_LABELS.domain : SCOPE_LABELS.project} · 证据 ${evidenceCount} 条`,
         projectIds: ids,
         projectId: ids[0] ?? null,
-        at: row.createdAt ?? row.created_at ?? null
+        at: row.lastMergedAt ?? row.createdAt ?? row.created_at ?? null
       };
     })
     .sort(newestFirst);
 
-  // 项目筛选：条目可能同时归属多个项目（候选由多条经验提炼而来），命中原样保留。
-  const matches = (item) => !filterId || item.projectIds.includes(filterId);
-  const visibleCandidates = candidates.filter(matches);
-  const visiblePending = pendingUnits.filter(matches);
-  const visibleVerified = verified.filter(matches);
-  const visibleExperiences = experienceItems.filter(matches);
+  // 知识：personal_units 行。项目级与域级的规则同处一层，作用域与层写在说明里，
+  // 验证状态只做徽章——接受候选后的待验证条目因此不会「凭空消失」。
+  const knowledgeItems = units
+    .map((row) => {
+      const status = row.verificationStatus ?? 'unverified';
+      const layer = row.layer ?? 'applied';
+      const ids = row.scope === 'project' ? projectIdsOf([row.projectId]) : [];
+      return {
+        id: row.id,
+        kind: 'knowledge',
+        title: oneLine(row.title, 200) || '未命名知识',
+        status,
+        badge: badgeOf(status),
+        detail: `${badgeOf(status)} · ${SCOPE_LABELS[row.scope] ?? row.scope ?? '个人'} · ${layer} 层 · r${row.revision ?? 1}`,
+        projectIds: ids,
+        projectId: ids[0] ?? null,
+        at: row.updatedAt ?? row.updated_at ?? null
+      };
+    })
+    .sort(newestFirst);
 
-  // 项目筛选下拉的数据同样只来自这些组条目，不引入 owner.json 的项目表。
+  const buckets = { candidates, lessons: lessonItems, knowledge: knowledgeItems };
+
+  // 项目筛选：条目可能同时归属多个项目（候选由多条证据提炼而来），命中原样保留。
+  const matches = (item) => !filterId || item.projectIds.includes(filterId);
+
+  // 项目筛选下拉的数据来自全部条目，不引入 owner.json 的项目表。
   const projectCounts = new Map();
-  for (const item of [...candidates, ...pendingUnits, ...verified, ...experienceItems]) {
+  for (const item of [...candidates, ...lessonItems, ...knowledgeItems]) {
     for (const id of item.projectIds) projectCounts.set(id, (projectCounts.get(id) ?? 0) + 1);
   }
   const projects = [...projectCounts.entries()]
     .map(([id, count]) => ({ id, count }))
     .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
 
-  const makeGroup = (key, label, items, emptyHint) => ({
-    key,
-    label,
-    count: items.length,
-    shown: Math.min(items.length, cap),
-    truncated: items.length > cap,
-    items: items.slice(0, cap),
-    emptyHint
+  // 计数两个口径：project 受当前筛选影响，all 恒为全量。
+  // 没选项目时「当前项目」就是「全部项目」，两个口径相等而不是强行报 0。
+  const groups = LAYER_DEFS.map((def) => {
+    const all = buckets[def.key] ?? [];
+    const visible = all.filter(matches);
+    return {
+      key: def.key,
+      label: def.label,
+      // count 是当前口径的条数，面板直接显示它（保持数字，不换成对象）。
+      count: visible.length,
+      counts: { project: visible.length, all: all.length },
+      shown: Math.min(visible.length, cap),
+      truncated: visible.length > cap,
+      items: visible.slice(0, cap),
+      // 空层不造假条目：只给标记与说明，面板据此显示一行空状态。
+      empty: visible.length === 0,
+      emptyHint: def.hint(Boolean(filterId))
+    };
   });
 
-  const visible = {
-    candidates: visibleCandidates,
-    pending: visiblePending,
-    verified: visibleVerified,
-    experiences: visibleExperiences
-  };
-
-  // 即使全空也保留四组与计数，让「候选 / 已验证 / 经验」的结构始终可见。
-  const groups = GROUP_DEFS.map((def) =>
-    makeGroup(def.key, def.label, visible[def.key], def.empty(Boolean(filterId))));
-
+  const byKey = Object.fromEntries(groups.map((group) => [group.key, group]));
   const totals = {
-    candidates: visibleCandidates.length,
-    pending: visiblePending.length,
-    verified: visibleVerified.length,
-    experiences: visibleExperiences.length
+    candidates: byKey.candidates.count,
+    lessons: byKey.lessons.count,
+    knowledge: byKey.knowledge.count
   };
-  totals.all = totals.candidates + totals.pending + totals.verified + totals.experiences;
+  totals.all = totals.candidates + totals.lessons + totals.knowledge;
   // overall 是筛选前的总量：「全部」筛选按钮用它显示回到全部后能看到多少条。
-  const overall = {
-    candidates: candidates.length,
-    pending: pendingUnits.length,
-    verified: verified.length,
-    experiences: experienceItems.length
-  };
-  overall.all = overall.candidates + overall.pending + overall.verified + overall.experiences;
+  const overall = {};
+  for (const group of groups) overall[group.key] = group.counts.all;
+  overall.all = groups.reduce((sum, group) => sum + group.counts.all, 0);
 
-  // 全空时给出「为什么空」，而不是留一片空白列表。
+  // 空层清单：给调用方一个可直接读的标记，不必再自己遍历 groups。
+  const emptyLayers = groups.filter((group) => group.empty).map((group) => group.key);
+
+  // 三层全空时给出「为什么空」，而不是留一片空白列表。
   let empty = null;
   if (totals.all === 0) {
     empty = filterId
       ? {
           kind: 'no-project-data',
           title: '这个项目还没有知识条目',
-          detail: '候选、待验证知识、已验证知识和经验都会记录所属项目；切回「全部」还能看到其他项目和共享知识。'
+          detail: '候选、经验与知识都会记录所属项目；切回「全部」还能看到其他项目和域级共享内容。'
         }
       : {
           kind: 'no-data',
           title: '本地知识库还没有内容',
-          detail: '经验来自完成并验证过的任务；提炼经验会产出候选，确认候选后先进入待验证知识。'
+          detail: '经验来自执行记录的提炼；提炼会先产出候选，接受候选或收敛出规则后才成为知识。'
         };
   }
 
-  return { filter: { projectId: filterId }, projects, totals, overall, groups, empty };
+  return { filter: { projectId: filterId }, projects, totals, overall, groups, emptyLayers, empty };
 }
 
 /**
@@ -233,17 +251,20 @@ export function knowledgeBrowseFor({ personalStore, projectId = '', limit = DEFA
       available: false,
       filter: { projectId: String(projectId ?? '') },
       projects: [],
-      totals: { candidates: 0, pending: 0, verified: 0, experiences: 0, all: 0 },
-      overall: { candidates: 0, pending: 0, verified: 0, experiences: 0, all: 0 },
-      groups: GROUP_DEFS.map((def) => ({
+      totals: { candidates: 0, lessons: 0, knowledge: 0, all: 0 },
+      overall: { candidates: 0, lessons: 0, knowledge: 0, all: 0 },
+      groups: LAYER_DEFS.map((def) => ({
         key: def.key,
         label: def.label,
         count: 0,
+        counts: { project: 0, all: 0 },
         shown: 0,
         truncated: false,
         items: [],
+        empty: true,
         emptyHint: `知识库未初始化，暂时读不到${def.label}。`
       })),
+      emptyLayers: LAYER_DEFS.map((def) => def.key),
       empty: {
         kind: 'unavailable',
         title: '知识库还没有初始化',
@@ -253,9 +274,9 @@ export function knowledgeBrowseFor({ personalStore, projectId = '', limit = DEFA
   }
   const units = personalStore.list({ limit: 2000 });
   const proposals = personalStore.proposals('pending');
-  const experiences = personalStore.listExperiences({ limit: 1000 });
+  const lessons = personalStore.listLessons({ limit: 1000 });
   return {
     available: true,
-    ...knowledgeBrowseView({ projectId, units, proposals, experiences, limit })
+    ...knowledgeBrowseView({ projectId, units, proposals, lessons, limit })
   };
 }

@@ -151,19 +151,12 @@
     if (knowledge?.available) {
       const counts = knowledge.counts ?? {};
       $('knowledgeSummaryText').textContent =
-        `本项目：经验 ${counts.experiences ?? 0} 条 · 待提炼 ${counts.pendingHarvest ?? 0} 条 · ` +
+        `本项目：经验 ${counts.lessons ?? 0} 条 · ` +
         `知识 ${counts.knowledge ?? 0} 条（已验证 ${counts.verified ?? 0} 条）· 候选 ${candidates} 条 · ` +
         `复用 ${counts.usages ?? 0} 次（正反馈 ${counts.positiveUsages ?? 0}）\n` +
         `共享知识 ${counts.sharedKnowledge ?? 0} 条（已验证 ${counts.sharedVerified ?? 0} 条）`;
-      const harvest = $('harvestNow');
-      harvest.disabled = (counts.pendingHarvest ?? 0) === 0;
-      harvest.textContent = '立即提炼';
-      harvest.title = (counts.pendingHarvest ?? 0) === 0
-        ? '这个项目没有待提炼经验：先完成一次终态任务'
-        : `把这个项目 ${counts.pendingHarvest} 条经验提炼成待审核候选`;
     } else {
-      $('knowledgeSummaryText').textContent = '知识库尚未建立；完成任务后会自动采集经验，提炼可自动或进入待提炼队列。';
-      $('harvestNow').disabled = true;
+      $('knowledgeSummaryText').textContent = '知识库尚未建立；完成任务并提炼执行记录后，这里会显示摘要。';
     }
   };
 
@@ -852,24 +845,14 @@
       if (!counts.duplicates && !counts.stale && !counts.conflicts && !counts.unverified) {
         nodes.push(el('p', 'pending-summary', '知识库很干净，没有需要整理的内容。'));
       }
-      const pending = view?.knowledge?.counts?.pendingHarvest ?? 0;
-      if (pending > 0) {
-        nodes.push(el('p', 'pending-summary', `还有 ${pending} 条待提炼经验，可以先提炼成候选。`));
-      }
       const close = el('button', 'ghost', '关闭');
       close.onclick = closeModal;
-      const harvest = el('button', 'primary', '立即提炼');
-      harvest.disabled = pending === 0;
-      harvest.onclick = () => {
-        closeModal();
-        void harvestNow();
-      };
       const open = el('button', 'primary', '去知识库处理');
       open.onclick = () => {
         closeModal();
         void window.companion.knowledge.open().catch((error) => toast(String(error?.message ?? error)));
       };
-      openModal('整理项目知识', nodes, pending > 0 ? [close, harvest, open] : [close, open]);
+      openModal('整理项目知识', nodes, [close, open]);
     } catch (error) {
       toast(String(error?.message ?? error), 6000);
     }
@@ -958,10 +941,9 @@
     const counts = data.counts ?? {};
     const chips = el('div', 'summary-chips');
     chips.append(
-      el('span', 'summary-chip', `经验 ${counts.experiences ?? 0}`),
+      el('span', 'summary-chip', `经验 ${counts.lessons ?? 0}`),
       el('span', 'summary-chip', `知识 ${counts.knowledge ?? 0}`),
       el('span', 'summary-chip ok', `已验证 ${counts.verified ?? 0}`),
-      el('span', 'summary-chip warn', `待提炼 ${counts.pendingHarvest ?? 0}`),
       el('span', 'summary-chip', `候选 ${counts.candidates ?? 0}`),
       el('span', 'summary-chip', `复用 ${counts.usages ?? 0}`)
     );
@@ -986,25 +968,25 @@
       }
       box.append(list);
     } else {
-      const experiences = (data.recentExperiences ?? []).slice(0, 3);
-      if (experiences.length) {
+      const lessons = (data.recentLessons ?? []).slice(0, 3);
+      if (lessons.length) {
         const list = el('div', 'summary-items');
-        for (const experience of experiences) {
+        for (const lesson of lessons) {
           const item = el('div', 'summary-item static');
           const dot = el('span', 'summary-dot');
-          dot.dataset.status = experience.outcome === 'repaired' || experience.outcome === 'succeeded'
-            ? 'verified' : 'unverified';
+          dot.dataset.status = lesson.status === 'verified' ? 'verified'
+            : lesson.status === 'unverified' ? 'unverified' : 'inferred';
           item.append(
             dot,
-            el('span', 'summary-item-text', experience.title),
-            el('span', 'summary-time', formatRelative(experience.createdAt) || '')
+            el('span', 'summary-item-text', lesson.title),
+            el('span', 'summary-time', formatRelative(lesson.createdAt) || '')
           );
           list.append(item);
         }
         box.append(list);
       } else {
         box.append(el('div', 'summary-empty',
-          '还没有收集到该项目的经验；完成一次任务后会自动采集，也可以点「提炼」生成候选。'));
+          '还没有经验；完成任务后可以从执行记录提炼「现象 → 机制 → 对策」。'));
       }
     }
 
@@ -1030,13 +1012,6 @@
     const foot = el('div', 'summary-foot');
     foot.append(el('span', 'summary-shared',
       `共享知识 ${counts.sharedKnowledge ?? 0} 条（已验证 ${counts.sharedVerified ?? 0}）`));
-    const pending = counts.pendingHarvest ?? 0;
-    const harvest = el('button', 'ghost small', pending > 0 ? `提炼 ${pending} 条` : '提炼');
-    harvest.type = 'button';
-    harvest.disabled = pending === 0;
-    harvest.title = pending === 0 ? '这个项目没有待提炼经验' : '把待提炼经验提炼成待审核候选';
-    harvest.onclick = () => { void harvestNow(); };
-    foot.append(harvest);
     box.append(foot);
   };
 
@@ -1194,7 +1169,7 @@
     button.type = 'button';
     button.append(el('strong', undefined, item.title));
     button.append(el('span', undefined,
-      `${item.type === 'experience' ? '经验' : item.type === 'candidate' ? '候选' : '知识'} · ` +
+      `${item.type === 'lesson' ? '经验' : item.type === 'candidate' ? '候选' : '知识'} · ` +
       `${item.status ?? 'unknown'}${item.layer ? ` · ${item.layer}` : ''}` +
       `${item.revision ? ` · r${item.revision}` : ''}`));
     if (item.detail) button.append(el('span', undefined, item.detail));
@@ -1222,23 +1197,32 @@
           nodes.push(el('pre', 'diff', data.usages.map((usage) =>
             `${usage.projectId} · ${usage.observedBenefit} · ${usage.targetRunId}`).join('\n')));
         }
-      } else if (data.kind === 'experience') {
-        nodes.push(el('p', 'result-summary', data.item.observedProblem));
+      } else if (data.kind === 'lesson') {
+        nodes.push(el('p', 'result-summary', data.item.phenomenon));
         nodes.push(detailRows([
           ['项目', data.item.projectId],
-          ['结果', data.item.observedOutcome?.status],
-          ['测试', data.item.observedOutcome?.testStatus ?? 'unknown'],
-          ['执行', data.item.observedOutcome?.executionStatus ?? 'unknown'],
+          ['作用域', data.item.scope?.layer === 'domain' ? '领域共享' : '项目'],
+          ['状态', data.item.verificationStatus],
+          ['来源记录', data.item.sourceRecordId],
           ['创建', data.item.createdAt]
         ]));
         for (const [title, values] of [
+          ['机制', [data.item.mechanism]],
+          ['对策', [data.item.countermeasure]],
           ['已观察事实', data.item.facts ?? []],
           ['模型推断', data.item.inferences ?? []],
           ['未知', data.item.unknowns ?? []]
         ]) {
-          if (!values.length) continue;
+          const lines = (values ?? []).filter(Boolean);
+          if (!lines.length) continue;
           nodes.push(el('div', 'section-title', title));
-          nodes.push(el('pre', 'diff', values.join('\n')));
+          nodes.push(el('pre', 'diff', lines.join('\n')));
+        }
+        const evidence = data.evidence ?? [];
+        if (evidence.length) {
+          nodes.push(el('div', 'section-title', '证据'));
+          nodes.push(el('pre', 'diff', evidence.map((item) =>
+            `${item.ref}${item.kind ? ` · ${item.kind}` : ''}${item.excerpt ? `\n${item.excerpt}` : ''}`).join('\n\n')));
         }
       } else {
         nodes.push(detailRows([
@@ -1280,72 +1264,6 @@
     } catch (error) {
       toast(String(error?.message ?? error), 5000);
     }
-  };
-
-  // ---- 手动提炼（只生成候选，不自动验证） ----
-
-  const showHarvestResult = (result) => {
-    const nodes = [
-      el('p', 'result-summary',
-        `已处理 ${result.experienceCount} 条经验，生成 ${result.candidates?.length ?? 0} 条候选。`),
-      el('p', 'pending-summary',
-        '候选仍是「待审核」状态：需要你在完整知识库里逐条批准；批准也不等于已验证。')
-    ];
-    if (result.invalid?.length) {
-      nodes.push(el('pre', 'diff',
-        `跳过 ${result.invalid.length} 条无效候选：\n${result.invalid.map((item) => item.error).join('\n')}`));
-    }
-    if (result.candidates?.length) {
-      const list = el('div', 'knowledge-list');
-      for (const item of result.candidates) {
-        const row = el('div', 'knowledge-item');
-        row.append(el('strong', undefined, item.title));
-        row.append(el('span', undefined,
-          `候选 · ${item.layer ?? 'project'} · 置信度 ${item.confidence ?? 'unknown'}`));
-        list.append(row);
-      }
-      nodes.push(list);
-    }
-    const close = el('button', 'ghost', '关闭');
-    close.onclick = closeModal;
-    const workbench = el('button', 'primary', '去知识库审核');
-    workbench.onclick = () => { closeModal(); void window.companion.knowledge.open(); };
-    openModal('提炼完成（待审核候选）', nodes, [close, workbench]);
-  };
-
-  const harvestNow = async () => {
-    const projectId = view?.config?.projectId ?? '';
-    const pending = view?.knowledge?.counts?.pendingHarvest ?? 0;
-    if (!projectId) { toast('先选择一个项目。'); return; }
-    if (pending === 0) { toast('这个项目没有待提炼经验。'); return; }
-    const nodes = [
-      el('p', 'result-summary', `将用当前模型把本项目的 ${pending} 条待提炼经验整理成候选。`),
-      el('p', 'pending-summary', '提炼只会生成待审核候选，不会写入已验证知识；模型调用可能需要几十秒。')
-    ];
-    const cancel = el('button', 'ghost', '取消');
-    cancel.onclick = closeModal;
-    const start = el('button', 'primary', '开始提炼');
-    start.onclick = async () => {
-      start.disabled = true;
-      start.textContent = '提炼中…';
-      const button = $('harvestNow');
-      button.disabled = true;
-      button.textContent = '提炼中…';
-      try {
-        const result = await window.companion.knowledge.harvest({ projectId });
-        closeModal();
-        await refresh();
-        showHarvestResult(result);
-      } catch (error) {
-        start.disabled = false;
-        start.textContent = '开始提炼';
-        toast(String(error?.message ?? error), 8000);
-      } finally {
-        button.textContent = '立即提炼';
-        button.disabled = (view?.knowledge?.counts?.pendingHarvest ?? 0) === 0;
-      }
-    };
-    openModal('提炼经验（只生成候选）', nodes, [cancel, start]);
   };
 
   // ---- pstack Playbook ----
@@ -2523,7 +2441,6 @@
       $('allowedPaths').value = data.allowedPaths ?? 'src/';
       $('sandboxMode').value = data.sandboxMode ?? 'auto';
       $('includePaths').value = (data.includePaths ?? []).join(',');
-      $('knowledgeAutoHarvest').checked = data.knowledgeAutoHarvest === true;
       renderServiceGrid($('serviceGrid'), data.services);
       await renderMobileInfo();
       await renderMascotGrid();
@@ -2734,12 +2651,10 @@
         diagramModel: $('diagramModel').value,
         allowedPaths: $('allowedPaths').value,
         includePaths: $('includePaths').value,
-        sandboxMode: $('sandboxMode').value,
-        knowledgeAutoHarvest: $('knowledgeAutoHarvest').checked
+        sandboxMode: $('sandboxMode').value
       });
       $('settings').hidden = true;
-      if (saved?.knowledgeAutoHarvest) toast('设置已保存；自动提炼会在模型可用时低频运行', 6000);
-      else if (saved?.modelPending) toast('设置已保存；模型将在当前任务结束后生效', 6000);
+      if (saved?.modelPending) toast('设置已保存；模型将在当前任务结束后生效', 6000);
       else if (saved?.modelChanged) toast('设置已保存，模型已切换');
       else toast('设置已保存');
       await refresh();
@@ -2787,7 +2702,6 @@
     void window.companion.knowledge.open().catch((error) => toast(String(error.message ?? error)));
   };
 
-  $('harvestNow').onclick = () => { void harvestNow(); };
   $('tidyKnowledge').onclick = () => { void openKnowledgeTidy(); };
   $('queueAdd').onclick = () => { void addQueueItem(); };
   $('queueInput').addEventListener('keydown', (event) => {
@@ -3194,8 +3108,32 @@
   let knowledgeBrowseProject = '';
   let knowledgeBrowseToken = 0;
   let knowledgeBrowseSignature = '';
+  // #58 提议信号与 #61 经验列表：都只读，只用来提示与提供「提升为候选」入口。
+  let knowledgeProposals = [];
+  let knowledgeProposalThreshold = 0;
+  let knowledgeLessonCount = null;
 
-  // 候选条目带审核动作；其余条目仍是整行按钮，点开看详情。
+  // 提示卡：某项目还没提炼的执行记录达到阈值时显示一条，只提示不提炼。
+  const renderKnowledgeProposals = () => {
+    const holder = $('kbProposals');
+    if (!holder) return;
+    holder.replaceChildren();
+    if (!knowledgeProposals.length) return;
+    const card = el('div', 'kb-proposal');
+    card.append(el('div', 'kb-proposal-title', '有执行记录还没提炼'));
+    for (const item of knowledgeProposals.slice(0, 3)) {
+      const lessonText = knowledgeLessonCount === null || knowledgeBrowseProject
+        ? ''
+        : `；已有经验 ${knowledgeLessonCount} 条`;
+      card.append(el('p', 'kb-proposal-line',
+        `${projectLabel(item.projectId)} 有 ${item.count} 条执行记录还没提炼成经验`
+        + `${lessonText}。阈值是 ${knowledgeProposalThreshold || 3} 条；这里只提示，不会自动提炼。`));
+    }
+    card.append(el('p', 'kb-proposal-line', '提炼由人决定：这条提示不会自动触发提炼；提炼出的经验会出现在「经验」层，并可在那里一键提为知识候选。'));
+    holder.append(card);
+  };
+
+  // 候选条目带审核动作；经验条目带「提升为候选」；其余条目仍是整行按钮，点开看详情。
   const knowledgeItemRow = (item) => {
     const row = el('div', 'kb-item');
     const main = el('button', 'kb-item-main');
@@ -3229,7 +3167,7 @@
             reject.disabled = false;
             return;
           }
-          toast(decision === 'approved' ? '已接受候选，移到待验证知识' : '已拒绝候选', 4000);
+          toast(decision === 'approved' ? '已接受候选，成为待验证的知识' : '已拒绝候选', 4000);
           await loadKnowledgeBrowse();
         } catch (error) {
           toast(String(error?.message ?? error), 6000);
@@ -3240,6 +3178,29 @@
       accept.onclick = () => { void decide('approved'); };
       reject.onclick = () => { void decide('rejected'); };
       actions.append(accept, reject);
+      row.append(actions);
+    }
+
+    // #61：每条经验都能一键提为知识候选（走既有审核流，不自动接受）。
+    if (item.kind === 'lesson') {
+      const actions = el('div', 'kb-item-actions');
+      const promote = el('button', 'kb-act promote', '提升为候选');
+      promote.type = 'button';
+      promote.onclick = async () => {
+        promote.disabled = true;
+        try {
+          const result = await window.companion.knowledge.promoteLesson({ lessonId: item.id });
+          toast(result?.created
+            ? '已提交为知识候选，等待审核'
+            : (result?.reason === 'approved' ? '这条经验已经落成知识，不再重复提交' : '这条经验已有待审候选，未重复提交'),
+          4000);
+          await loadKnowledgeBrowse();
+        } catch (error) {
+          toast(String(error?.message ?? error), 6000);
+          promote.disabled = false;
+        }
+      };
+      actions.append(promote);
       row.append(actions);
     }
     return row;
@@ -3270,6 +3231,7 @@
     const filters = $('kbFilters');
     holder.replaceChildren();
     filters.replaceChildren();
+    renderKnowledgeProposals();
     const data = knowledgeBrowseData;
 
     const chip = (id, label, count) => {
@@ -3322,6 +3284,15 @@
       const data = await window.companion.knowledge.browse({ projectId: knowledgeBrowseProject });
       if (token !== knowledgeBrowseToken) return;
       knowledgeBrowseData = data;
+      // 提议信号与经验计数只做提示：任一失败都不影响三层列表。
+      const [proposals, lessons] = await Promise.all([
+        window.companion.knowledge.distillProposals({ projectId: knowledgeBrowseProject }).catch(() => null),
+        window.companion.knowledge.lessonList({ projectId: knowledgeBrowseProject }).catch(() => null)
+      ]);
+      if (token !== knowledgeBrowseToken) return;
+      knowledgeProposals = Array.isArray(proposals?.proposals) ? proposals.proposals : [];
+      knowledgeProposalThreshold = Number(proposals?.threshold ?? 0) || 0;
+      knowledgeLessonCount = Array.isArray(lessons?.lessons) ? lessons.lessons.length : null;
       // 所选项目在新数据里已经不存在（例如知识被清空）时退回「全部」。
       if (knowledgeBrowseProject && !(data.projects ?? []).some((item) => item.id === knowledgeBrowseProject)) {
         knowledgeBrowseProject = '';

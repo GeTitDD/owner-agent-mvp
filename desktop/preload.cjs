@@ -46,8 +46,13 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     browse: (input) => invoke('companion:knowledge-browse', input),
     review: (input) => invoke('companion:knowledge-review', input),
     tidy: (input) => invoke('companion:knowledge-tidy', input),
-    harvest: (input) => invoke('companion:knowledge-harvest', input),
     ask: (input) => invoke('companion:knowledge-ask', input),
+    // 对话取经验：按项目再补域，只读；渲染与提示词不在这里改。
+    lessons: (input) => invoke('companion:lesson-retrieve', input),
+    // #58：未提炼执行记录的提议信号；#61：按项目取经验 / 一键提为候选。
+    distillProposals: (input) => invoke('companion:knowledge-distill-proposals', input),
+    lessonList: (input) => invoke('companion:lesson-list', input),
+    promoteLesson: (input) => invoke('companion:lesson-promote', input),
     detail: (input) => invoke('companion:knowledge-detail', input),
     open: () => invoke('companion:knowledge-open')
   }),

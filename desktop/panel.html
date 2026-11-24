@@ -132,7 +132,6 @@
             <div class="knowledge-actions">
               <button id="reflectDistill" class="primary small" title="跑一次 pstack 复盘，并自动沉淀为项目知识候选">复盘并沉淀</button>
               <button id="tidyKnowledge" class="ghost small" title="扫描重复、需复核、冲突和未验证知识">整理知识</button>
-              <button id="harvestNow" class="primary small" title="把当前项目的待提炼经验提炼成待审核候选">立即提炼</button>
               <button id="openKnowledge" class="ghost small">完整知识库</button>
             </div>
           </section>
@@ -221,8 +220,9 @@
           <span id="kbTotal" class="count">0</span>
           <button id="kbRefresh" class="ghost small" type="button" title="重新读取本地知识库">刷新</button>
         </div>
-        <p class="kb-hint">候选、待验证/已验证知识与经验都来自本地 SQLite；候选可直接接受或拒绝，其余点开看详情。</p>
+        <p class="kb-hint">知识分三层：候选待审核，经验是从执行里提炼的教训，知识是收敛后的规则。状态看徽章，不分组。</p>
         <div id="kbFilters" class="kb-filters" role="group" aria-label="按项目筛选"></div>
+        <div id="kbProposals" class="kb-proposals" aria-live="polite"></div>
         <div id="kbGroups" class="kb-groups" aria-live="polite"></div>
       </section>
 
@@ -354,10 +354,6 @@
             <button id="importMascot" class="ghost small" type="button">导入 Codex 宠物…</button>
           </div>
         </div>
-        <label class="checkbox-row">
-          <input id="knowledgeAutoHarvest" type="checkbox" />
-          <span>自动提炼知识（会调用模型；关闭时只自动采集经验并进入待提炼队列）</span>
-        </label>
         <label class="field">
           <span>允许修改的路径</span>
           <input id="allowedPaths" placeholder="src/" />
