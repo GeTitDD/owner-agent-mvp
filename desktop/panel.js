@@ -1896,7 +1896,54 @@
   //
   // 组装一律走 src/focus-ops.mjs 的 focusOpsView（由 focus-ops-host.mjs 挂到
   // window.OwnerFocusOps）：三段块、固定顺序、空态文案都在模型里，渲染层只画。
-  // #68 只接「待办」块；运行中与待提炼先传空数组，由 #70 / #71 再补数据。
+  // 运行中的相位（stuck / stopping / queued / running）由模型给出语义，
+  // 中文与颜色留在这一层——改文案不用动纯函数，也不重算状态。
+  const OPS_PHASE = {
+    stuck: { label: '卡住', tone: 'stuck' },
+    stopping: { label: '停止中', tone: 'stopping' },
+    queued: { label: '排队中', tone: 'queued' },
+    running: { label: '执行中', tone: 'running' }
+  };
+  const OPS_KIND = { job: '任务', patch: '补丁', sandbox: '沙箱测试', cycle: '修复', execution: '执行' };
+
+  const openExecutionDetail = (item) => {
+    const phase = OPS_PHASE[item.phase] ?? OPS_PHASE.running;
+    const rows = [
+      ['项目', item.projectName || item.projectId || '—'],
+      ['类型', OPS_KIND[item.kind] ?? item.kind],
+      ['状态', `${item.status}（${phase.label}）`],
+      ['最近更新', item.at ? String(item.at).replace('T', ' ').slice(0, 19) : '—'],
+      ['编号', item.id || '—']
+    ];
+    if (item.detail) rows.push(['详情', item.detail]);
+    const nodes = [detailRows(rows)];
+    if (item.phase === 'stuck') {
+      nodes.push(el('p', 'pending-next',
+        '租约已过期或需要核对：系统不会自动重试，处理后再重新发起。'));
+    }
+    // 停止动作按现状没有可用 IPC：侧车只暴露了批准/拒绝，只有 playbook 能取消。
+    // 因此这里只给「查看」，不画一个点了会报错的停止按钮。
+    const close = el('button', 'ghost', '关闭');
+    close.onclick = closeModal;
+    openModal('执行详情', nodes, [close]);
+  };
+
+  const opsRunRow = (item) => {
+    const phase = OPS_PHASE[item.phase] ?? OPS_PHASE.running;
+    const row = el('div', `ops-run tone-${phase.tone}`);
+    const body = el('div', 'ops-run-body');
+    body.append(el('strong', 'ops-run-title', item.title));
+    const meta = [item.projectName || item.projectId, OPS_KIND[item.kind] ?? item.kind]
+      .filter(Boolean).join(' · ');
+    if (meta) body.append(el('div', 'ops-run-meta', meta));
+    row.append(body);
+    row.append(el('span', `ops-run-phase ${phase.tone}`, phase.label));
+    const detail = el('button', 'ghost small', '查看');
+    detail.onclick = () => openExecutionDetail(item);
+    row.append(detail);
+    return row;
+  };
+
   const renderOps = () => {
     const zone = $('opsZone');
     const body = $('opsBody');
@@ -1908,7 +1955,9 @@
     const model = api.focusOpsView({
       projectId: viewProjectId,
       pending: view?.pending ?? [],
-      executions: [],
+      // 跨项目的非终态执行由主进程快照提供（view.executions）；
+      // 不拿 view.chain 硬凑——它只装当前项目、每类最多一条。
+      executions: view?.executions ?? [],
       proposals: []
     });
     // 三类块全空时压成一行：文案来自模型，卡片外框由 .ops-empty 去掉。
@@ -1916,12 +1965,27 @@
     emptyLine.hidden = !model.empty;
     emptyLine.textContent = model.empty ? model.emptyText : '';
     body.hidden = model.empty;
-    const pendingBlock = model.blocks.find((block) => block.key === 'pending');
-    if (!pendingBlock) return;
-    // 标题与计数也读模型：以后块里加内容时不会出现「标题写死、数字另算」。
-    $('opsPendingTitle').textContent = pendingBlock.title;
-    $('pendingBadge').textContent = String(pendingBlock.count);
-    $('pendingBadge').hidden = pendingBlock.count === 0;
+    const blockOf = (key) => model.blocks.find((block) => block.key === key);
+    const pendingBlock = blockOf('pending');
+    if (pendingBlock) {
+      // 标题与计数也读模型：以后块里加内容时不会出现「标题写死、数字另算」。
+      $('opsPendingTitle').textContent = pendingBlock.title;
+      $('pendingBadge').textContent = String(pendingBlock.count);
+      $('pendingBadge').hidden = pendingBlock.count === 0;
+    }
+    // 运行中块：没有非终态执行时整段 hidden，不留标题、说明和空壳。
+    const runningBlock = blockOf('running');
+    const runningSection = $('opsRunning');
+    if (runningBlock && runningSection) {
+      runningSection.hidden = runningBlock.empty;
+      $('opsRunningTitle').textContent = runningBlock.title;
+      $('opsRunningBadge').textContent = String(runningBlock.count);
+      const list = $('opsRunningList');
+      list.replaceChildren();
+      if (!runningBlock.empty) {
+        for (const item of runningBlock.items) list.append(opsRunRow(item));
+      }
+    }
   };
 
   const renderActivity = () => {

@@ -179,6 +179,46 @@ test('终态执行不进操作区，卡住的非终态照常进', () => {
   // 补丁的 applying / 修复周期的 applied 不是终态：还在场内。
   assert.deepEqual(blocksByKey(stuck).running.items.map((item) => item.id), ['stuck', 'applying', 'cycle-applied', 'provisioning']);
   assert.deepEqual(blocksByKey(stuck).running.items.map((item) => item.kind), ['job', 'patch', 'cycle', 'sandbox']);
+  // 模型把相位交给面板：卡住与运行中在数据上就已经分开，不靠面板猜状态。
+  assert.deepEqual(
+    blocksByKey(stuck).running.items.map((item) => item.phase),
+    ['stuck', 'running', 'running', 'running']
+  );
+});
+
+test('运行中的相位：排队 / 执行中 / 停止中 各有值，detail 原样带出', () => {
+  const view = focusOpsView({
+    executions: [
+      { id: 'q1', kind: 'job', status: 'queued' },
+      { id: 'r1', kind: 'job', status: 'running', detail: 'code-patch' },
+      { id: 's1', kind: 'job', status: 'cancel_requested' },
+      { id: 'k1', kind: 'sandbox', status: 'needs_reconciliation' }
+    ]
+  });
+  const items = blocksByKey(view).running.items;
+  assert.deepEqual(items.map((item) => item.phase), ['queued', 'running', 'stopping', 'stuck']);
+  assert.equal(items[1].detail, 'code-patch');
+  assert.equal(items[0].detail, '');
+});
+
+test('租约过期的执行在操作区模型里也归到卡住', () => {
+  const now = Date.parse('2026-11-25T01:00:00.000Z');
+  const view = focusOpsView({
+    now,
+    executions: [
+      {
+        id: 'lease-expired', kind: 'job', status: 'running',
+        leaseUntil: '2026-11-25T00:30:00.000Z'
+      },
+      {
+        id: 'lease-ok', kind: 'job', status: 'running',
+        lease_until: '2026-11-25T01:10:00.000Z'
+      }
+    ]
+  });
+  const items = blocksByKey(view).running.items;
+  assert.deepEqual(items.map((item) => item.id), ['lease-expired', 'lease-ok']);
+  assert.deepEqual(items.map((item) => item.phase), ['stuck', 'running']);
 });
 
 test('等你批准的执行不算运行中：不会在待办之外再画一遍', () => {
