@@ -46,7 +46,7 @@
           <div id="pendingList" class="pending-list"></div>
         </section>
 
-        <!-- 专注第二张卡：所选项目的只读详情；项目选择只影响这张卡。 -->
+        <!-- 专注第二张卡：所选项目的只读详情；选择和上方概览、任务链是同一个项目。 -->
         <section id="focusDetail" class="focus-detail" hidden>
           <div class="fd-head">
             <div class="fd-head-text">
@@ -77,7 +77,7 @@
         <summary class="workspace-summary">工作区 · 项目 / 图谱 / 想法 / 知识 / Playbook</summary>
       <section class="zone project-zone">
         <div class="zone-head">
-          <strong>当前项目</strong>
+          <strong>所选项目</strong>
           <span>项目画像、待办、知识与操作</span>
         </div>
 
@@ -247,8 +247,16 @@
         <textarea id="taskInput" rows="1" maxlength="1200"
           placeholder="和 Agent 聊聊项目进展，或说说你的改进想法…"></textarea>
         <div class="composer-bar">
-          <label class="composer-label" for="projectSelect">项目</label>
-          <select id="projectSelect" aria-label="项目"></select>
+          <!-- 取消全局「当前项目」：这里不是项目下拉，而是这次交办的显式目标；
+               没选项目点发送会被拦下，不做「默认用第一个」的静默回退。 -->
+          <button id="composerProject" class="composer-target" type="button"
+            aria-haspopup="listbox" aria-expanded="false"
+            title="选择这次交办到哪个项目（不会写回配置）">
+            <span class="composer-target-label">交办到</span>
+            <span id="composerProjectName" class="composer-target-name">未选项目</span>
+          </button>
+          <div id="composerProjectMenu" class="composer-project-menu" role="listbox"
+            aria-label="选择交办项目" hidden></div>
           <span id="composerHint" class="composer-hint" hidden></span>
           <button id="submitTask" class="send-btn" title="发送（Enter）" aria-label="发送">发送</button>
         </div>
@@ -357,6 +365,7 @@
   <div id="toast" class="toast" hidden></div>
   <script src="./composer-list.js"></script>
   <script src="./focus-detail.cjs"></script>
+  <script src="./panel-selection.cjs"></script>
   <script src="../node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="./panel.js"></script>
 </body>
