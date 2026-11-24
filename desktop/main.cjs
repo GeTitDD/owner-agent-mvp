@@ -80,6 +80,7 @@ let knowledgeBrowseModule = null;
 let skillCatalogModule = null;
 let skillCatalogCache = null;
 let knowledgeReviewModule = null;
+let lessonRetrievalModule = null;
 let harvestInFlight = false;
 let mascotModule = null;
 let githubModule = null;
@@ -2971,6 +2972,22 @@ const registerIpc = () => {
       projectId: String(input?.projectId ?? config.projectId ?? ''),
       domain: String(input?.domain ?? ''),
       query: String(input?.query ?? '').slice(0, 500)
+    });
+  });
+
+  // 对话取经验：先按当前项目取项目级经验，再补域级经验；只读一次本地 SQLite。
+  // 只把取数接到 IPC 上，不改对话的提示词与渲染（那是别的票）。
+  ipcMain.handle('companion:lesson-retrieve', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) throw new Error('知识库尚未建立；任务完成后会自动提炼经验。');
+    lessonRetrievalModule = lessonRetrievalModule ?? await importEsm('../src/knowledge-loop/retrieval.mjs');
+    return lessonRetrievalModule.retrieveLessons({
+      personalStore,
+      ownerStore: store,
+      projectId: String(input?.projectId ?? '') || config.projectId,
+      domain: String(input?.domain ?? ''),
+      query: String(input?.query ?? ''),
+      limit: input?.limit
     });
   });
 
