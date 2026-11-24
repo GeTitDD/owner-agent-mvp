@@ -672,4 +672,218 @@ export class PersonalKnowledgeStore {
     }
     return [...ids];
   }
+
+  // ---- 三层沉淀：跨项目复现与作用域升级（#56） ----
+  // 复现的判定是「规范化现象 + 作用域层」，不是「项目」：同一现象在第二个项目出现时，
+  // 合并进最早那条经验、登记来源项目并打「已复现」标记，而不是再写一条项目级经验。
+  //
+  // 去重键没有改成跨项目唯一键，仍沿用 contracts.lessonDedupeKey（现象 + 作用域层 + 项目）。
+  // 跨项目合并走现象查询而不是去重键，代价写清楚：
+  // 1) 合并后库里仍只有一条 knowledge_lessons 行，行上的 project_id 固定为最早出现该现象的
+  //    项目；listLessons({projectId}) 只能查到最早项目，第二个项目必须走
+  //    listLessonsForProject / lessonSources 反查。
+  // 2) 第二个项目自己的 dedupe_key 不再单独存在；来源追溯改由 payload.sources（项目 → 记录 ID）
+  //    和证据表的 record_id 承担，二者都细到执行记录，不依赖去重键。
+  // 3) 历史库里若同一现象已按项目各自成行，本方法只认最早一条，其余重复行仍需另行清理。
+  // 4) addLesson / recordLesson 保留「按项目去重」的原语义：绕过本方法直接调用它们仍会
+  //    按项目各自成行；#56 之后经验提炼统一走 recordReproducedLesson。
+  // 复现只打标记，verificationStatus 一律不动：系统不代替人把经验升为已验证。
+
+  /** 按规范化现象找已有经验：复现判定跨项目，所以这里刻意不带 projectId 条件。 */
+  lessonByPhenomenon(phenomenon, { layer = '' } = {}) {
+    const flat = safeText(phenomenon,400,'lesson phenomenon',true);
+    const where = ['lower(phenomenon)=lower(?)'];
+    const params = [flat];
+    if (layer) {
+      valid(['project','domain'].includes(layer),'Invalid lesson scope layer');
+      where.push('scope_layer=?');
+      params.push(layer);
+    }
+    const row = this.db.prepare(`SELECT id FROM knowledge_lessons WHERE ${where.join(' AND ')}
+      ORDER BY created_at,id LIMIT 1`).get(...params);
+    return row ? this.getLesson(row.id) : null;
+  }
+
+  /**
+   * 复现判定后的写入口（#56）：
+   * - 库里还没有同现象经验：照常写入一条项目级经验，并登记来源项目；
+   * - 已有同现象经验（可能来自另一个项目，也可能已升域）：追加证据、登记来源项目；
+   *   来源项目从 1 变 2 时打上 reproduced。
+   * 返回值额外带 support / sources / reproduced / supportProjects，都是读库后的最新值。
+   */
+  recordReproducedLesson(lesson, { evidence = [] } = {}) {
+    valid(lesson && typeof lesson === 'object' && !Array.isArray(lesson),'Lesson must be an object');
+    valid(Array.isArray(evidence),'Lesson evidence must be an array');
+    const projectId = safeText(lesson.projectId,90,'lesson project id',true);
+    const phenomenon = safeText(lesson.phenomenon,200,'lesson phenomenon',true);
+    const existing = this.lessonByPhenomenon(phenomenon);
+    const stored = existing
+      ? this.appendLessonEvidence(existing.id, lesson, evidence)
+      : this.recordLesson(lesson, { evidence });
+    const merged = this.retainLessonSource(stored.id, {
+      projectId,
+      recordIds: [lesson.sourceRecordId, ...evidence.map((item) => item?.recordId)]
+    });
+    return { ...merged, support: this.lessonSupport(merged.id) };
+  }
+
+  /**
+   * 登记经验来自哪个项目（#56）：按项目聚合记录 ID，重算 supportProjects 与 reproduced。
+   * 复现只打标记：verificationStatus 不在这里改，升为已验证必须由人另外确认。
+   */
+  retainLessonSource(lessonId, { projectId, recordIds = [] } = {}) {
+    const id = safeText(lessonId,90,'lesson id',true);
+    const project = safeText(projectId,90,'lesson source project id',true);
+    valid(Array.isArray(recordIds),'Lesson source record ids must be an array');
+    const row = this.db.prepare('SELECT payload FROM knowledge_lessons WHERE id=?').get(id);
+    valid(Boolean(row),'Lesson not found');
+    let payload = {};
+    try { payload = JSON.parse(row.payload) ?? {}; } catch { payload = {}; }
+    const stamp = now();
+    // 来源台账逐项目保留记录 ID：合并后没有「第二项目专属的经验行」，追溯只能靠这里。
+    const sources = (Array.isArray(payload.sources) ? payload.sources : [])
+      .filter((source) => source && typeof source.projectId === 'string')
+      .map((source) => ({
+        projectId: source.projectId,
+        recordIds: [...new Set((Array.isArray(source.recordIds) ? source.recordIds : []).map(String))],
+        firstAt: source.firstAt ?? payload.createdAt ?? stamp,
+        lastAt: source.lastAt ?? source.firstAt ?? payload.createdAt ?? stamp
+      }));
+    const ids = [...new Set([...recordIds, payload.sourceRecordId].filter(Boolean).map(String))];
+    const found = sources.find((source) => source.projectId === project);
+    if (found) {
+      found.recordIds = [...new Set([...found.recordIds, ...ids])];
+      found.lastAt = stamp;
+    } else {
+      sources.push({ projectId: project, recordIds: ids, firstAt: stamp, lastAt: stamp });
+    }
+    sources.sort((a,b)=>a.projectId.localeCompare(b.projectId));
+    const supportProjects = sources.length;
+    const reproduced = supportProjects >= 2;
+    const next = {
+      ...payload,
+      sources,
+      supportedByProjects: sources.map((source)=>source.projectId),
+      supportProjects,
+      reproduced,
+      // 只记第一次跨到两个项目的时刻；此后的复现不再改写它。
+      ...(reproduced && !payload.reproducedAt ? { reproducedAt: stamp } : {})
+    };
+    const body = canonical(next);
+    this.db.prepare('UPDATE knowledge_lessons SET payload=?,payload_hash=? WHERE id=?')
+      .run(body,sha256(body),id);
+    return this.getLesson(id);
+  }
+
+  /**
+   * 把项目级经验升为域级（#56）：显式操作，不自动发生。
+   * - scope.layer 变 domain、scope.projectId 清空；行上的 project_id 仍保留最早来源项目；
+   * - 来源项目台账（payload.sources）原样保留，升域不丢「它来自哪些项目」；
+   * - 去重键按合约公式换成域级键（现象 + domain + 无项目），域层不会被认成项目级那条；
+   * - 不碰 verificationStatus：升域不等于验证，验证仍由人确认。
+   */
+  promoteLessonToDomain(lessonId, { domainIds = [] } = {}) {
+    const id = safeText(lessonId,90,'lesson id',true);
+    valid(Array.isArray(domainIds),'Lesson domain ids must be an array');
+    const row = this.db.prepare('SELECT payload,project_id,scope_layer FROM knowledge_lessons WHERE id=?').get(id);
+    valid(Boolean(row),'Lesson not found');
+    let payload = {};
+    try { payload = JSON.parse(row.payload) ?? {}; } catch { payload = {}; }
+    const stamp = now();
+    // 来源台账缺失时按行上的来源项目补一条：升级不能把唯一的来源信息洗掉。
+    const rawSources = Array.isArray(payload.sources) ? payload.sources.filter((source) => source && typeof source.projectId === 'string') : [];
+    const sources = rawSources.length
+      ? rawSources.map((source) => ({
+          projectId: source.projectId,
+          recordIds: [...new Set((Array.isArray(source.recordIds) ? source.recordIds : []).map(String))],
+          firstAt: source.firstAt ?? payload.createdAt ?? stamp,
+          lastAt: source.lastAt ?? source.firstAt ?? payload.createdAt ?? stamp
+        }))
+      : [{
+          projectId: row.project_id,
+          recordIds: payload.sourceRecordId ? [String(payload.sourceRecordId)] : [],
+          firstAt: payload.createdAt ?? stamp,
+          lastAt: payload.createdAt ?? stamp
+        }];
+    sources.sort((a,b)=>a.projectId.localeCompare(b.projectId));
+    const existingDomains = Array.isArray(payload.scope?.domainIds) ? payload.scope.domainIds : [];
+    const mergedDomains = [...new Set([...existingDomains, ...domainIds])];
+    valid(mergedDomains.length <= 20,'Invalid lesson scope domainIds');
+    for (const domain of mergedDomains) requireId(domain,'domain ID');
+    const dedupeKey = sha256(canonical({
+      contract:'lesson/v1',
+      phenomenon:String(payload.phenomenon ?? '').toLowerCase(),
+      layer:'domain',
+      projectId:null
+    }));
+    const supportProjects = sources.length;
+    const next = {
+      ...payload,
+      scope: { layer:'domain', projectId:null, domainIds:mergedDomains },
+      originProjectId: payload.originProjectId ?? payload.projectId ?? row.project_id,
+      // 记下升级前的作用域，事后仍能解释这条经验最初来自哪个项目。
+      promotedFrom: payload.promotedFrom ?? { layer: row.scope_layer ?? 'project', projectId: row.project_id },
+      promotedAt: payload.promotedAt ?? stamp,
+      sources,
+      supportedByProjects: sources.map((source)=>source.projectId),
+      supportProjects,
+      reproduced: supportProjects >= 2,
+      ...(supportProjects >= 2 && !payload.reproducedAt ? { reproducedAt: stamp } : {})
+    };
+    const body = canonical(next);
+    this.db.prepare(`UPDATE knowledge_lessons SET payload=?,payload_hash=?,scope_layer='domain',dedupe_key=? WHERE id=?`)
+      .run(body,sha256(body),dedupeKey,id);
+    return this.getLesson(id);
+  }
+
+  /** 这条经验的来源项目台账：升域后仍从这里查「它来自哪些项目」。 */
+  lessonSources(lessonId) {
+    const id = safeText(lessonId,90,'lesson id',true);
+    const row = this.db.prepare('SELECT project_id,payload,scope_layer FROM knowledge_lessons WHERE id=?').get(id);
+    if(!row) return null;
+    let payload = {};
+    try { payload = JSON.parse(row.payload) ?? {}; } catch { payload = {}; }
+    const raw = Array.isArray(payload.sources) ? payload.sources : [];
+    const sources = raw.length
+      ? raw.map((source)=>({
+          projectId: String(source.projectId),
+          recordIds: (Array.isArray(source.recordIds) ? source.recordIds : []).map(String),
+          firstAt: source.firstAt ?? null,
+          lastAt: source.lastAt ?? null
+        }))
+      : [{
+          projectId: row.project_id,
+          recordIds: payload.sourceRecordId ? [String(payload.sourceRecordId)] : [],
+          firstAt: payload.createdAt ?? null,
+          lastAt: null
+        }];
+    return {
+      lessonId: id,
+      projects: sources.map((source)=>source.projectId),
+      projectCount: sources.length,
+      sources,
+      reproduced: sources.length >= 2,
+      scopeLayer: payload.scope?.layer ?? row.scope_layer
+    };
+  }
+
+  /**
+   * 按项目查经验：除行上的 project_id 外，也认来源台账里的项目。
+   * 跨项目合并后经验行只挂在最早项目下，第二个项目（以及升域后的所有来源项目）靠这里反查。
+   */
+  listLessonsForProject(projectId, { limit = 100 } = {}) {
+    const project = safeText(projectId,90,'project id',true);
+    if(!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+      throw new KnowledgeValidationError('limit must be an integer between 1 and 500');
+    }
+    // 经验是本地几百条的规模，整表读一遍再按来源台账过滤；不额外加索引也不用 JSON 函数。
+    const rows = this.db.prepare(`SELECT id,project_id,payload FROM knowledge_lessons
+      ORDER BY created_at DESC,id DESC LIMIT ?`).all(500);
+    return rows.filter((row)=>{
+      if(row.project_id === project) return true;
+      try {
+        return (JSON.parse(row.payload).sources ?? []).some((source)=>source?.projectId === project);
+      } catch { return false; }
+    }).slice(0,limit).map((row)=>this.getLesson(row.id));
+  }
 }

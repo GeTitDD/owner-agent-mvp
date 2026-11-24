@@ -152,11 +152,11 @@ test('同一条证据重复出现：幂等，不报错也不重复计数', async
   } finally { personal.close(); }
 });
 
-test('同一现象在不同作用域仍是两条经验', async () => {
+test('同一现象跨项目合并为一条经验，升域后仍是另一条作用域', async () => {
   const personal = new PersonalKnowledgeStore(':memory:');
   try {
     const phenomenon = 'Retry loop leaves the last attempt unused';
-    // 不同项目：同一现象、同一层，项目不同就是两条。
+    // 两个项目出现同一现象：#56 起合并为一条经验并打「已复现」标记。
     const owner = fakeOwner({
       runs: {
         run1: sandbox('run1'),
@@ -171,10 +171,17 @@ test('同一现象在不同作用域仍是两条经验', async () => {
       extractor: ({ record }) => draft(phenomenon, record.id)
     });
     await distiller.distill({ projectId: 'p1' });
+    const p1Only = personal.listLessons()[0];
+    assert.equal(p1Only.reproduced, false, '只在一个项目出现时不打复现标记');
     await distiller.distill({ projectId: 'p2' });
     assert.equal(personal.listLessons({ projectId: 'p1' }).length, 1);
-    assert.equal(personal.listLessons({ projectId: 'p2' }).length, 1);
-    assert.equal(personal.listLessons().length, 2, '项目不同就是两条经验');
+    // 合并后经验行只挂在最早的项目下；第二个项目靠来源台账反查（#56 的代价）。
+    assert.equal(personal.listLessons({ projectId: 'p2' }).length, 0);
+    assert.equal(personal.listLessons().length, 1, '同一现象跨项目只留一条经验');
+    const merged = personal.getLesson(p1Only.id);
+    assert.equal(merged.reproduced, true);
+    assert.deepEqual(personal.lessonSources(merged.id).projects.sort(), ['p1', 'p2']);
+    assert.deepEqual(personal.listLessonsForProject('p2').map((item) => item.id), [merged.id]);
 
     // 同一现象升到域层：去重键含作用域层，域层那条不会被当成项目级那条。
     const lessonDraft = {
@@ -195,10 +202,14 @@ test('同一现象在不同作用域仍是两条经验', async () => {
       scope: { layer: 'domain', projectId: null, domainIds: ['software-engineering'] }
     }).dedupeKey;
     assert.notEqual(projectKey, domainKey, '作用域层不同，去重键必须不同');
-    // 域层那一条还不能落库（升域属于后续票），但去重查询不会把它认成项目级那条。
     const p1Lesson = personal.listLessons({ projectId: 'p1' })[0];
     assert.equal(personal.lessonByDedupe(projectKey)?.id, p1Lesson.id);
+    // 未升域前库里的去重键仍只按项目级算，域级键查不到东西。
     assert.equal(personal.lessonByDedupe(domainKey), null);
+    // 升域后去重键换成域级键，项目级键不再命中。
+    const promoted = personal.promoteLessonToDomain(merged.id, { domainIds: ['software-engineering'] });
+    assert.equal(promoted.dedupeKey, domainKey);
+    assert.equal(personal.lessonByDedupe(domainKey)?.id, merged.id);
   } finally { personal.close(); }
 });
 
