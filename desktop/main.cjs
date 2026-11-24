@@ -86,6 +86,8 @@ let nextActionModule = null;
 let knowledgeTidyModule = null;
 let diagramModule = null;
 let ideaCaptureModule = null;
+let chatModule = null;
+let chatService = null;
 const githubCache = new Map();
 const githubActivityCache = new Map();
 const briefCache = new Map();
@@ -2324,6 +2326,17 @@ const submitCompanionTask = async ({ text, projectId }) => {
   return result;
 };
 
+/**
+ * 对话模式的只读 Pi 会话：按需创建，进程内按项目连续追问。
+ * 这里不做任何写操作；模型未配置时由服务返回明确的 no-model 提示。
+ */
+const getChatService = async () => {
+  if (chatService) return chatService;
+  chatModule ??= await importEsm('../src/pi-chat.mjs');
+  chatService = new chatModule.PiChatService({ model: config.model || '' });
+  return chatService;
+};
+
 const registerIpc = () => {
   const fromCompanion = (event) =>
     [pet?.webContents, panel?.webContents].filter(Boolean).includes(event.sender);
@@ -2352,6 +2365,30 @@ const registerIpc = () => {
     return submitCompanionTask({
       text: String(input?.text ?? ''),
       projectId: String(input?.projectId ?? '')
+    });
+  });
+
+  // 对话模式：只读 Pi SDK 会话（read/grep/find/ls），不能写文件。
+  ipcMain.handle('companion:chat-ask', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const service = await getChatService();
+    let project = null;
+    try {
+      project = await resolveProject(String(input?.projectId ?? ''));
+    } catch {
+      // 还没有项目时交给服务返回 no-project，而不是让 IPC 抛裸错误。
+      project = null;
+    }
+    return service.ask({
+      project: project
+        ? {
+          id: project.id,
+          root: projectRootOf(project),
+          domain: project.primary_domain ?? project.primaryDomain ?? ''
+        }
+        : null,
+      question: String(input?.question ?? ''),
+      model: config.model || ''
     });
   });
 
@@ -3106,7 +3143,12 @@ const registerIpc = () => {
     saveConfig();
     serviceCache = { at: 0, value: null };
     const modelChanged = config.model !== previousModel;
-    if (modelChanged) { playbookRunner = null; triageRunner = null; }
+    if (modelChanged) {
+      playbookRunner = null;
+      triageRunner = null;
+      // 对话会话绑定模型：换模型后旧会话立即释放，下一问重建。
+      chatService?.setModel(config.model || '');
+    }
     let modelApplied = true;
     let modelPending = false;
     if (modelChanged && worker) {
@@ -3243,6 +3285,21 @@ async function boot() {
             const image = await panel.webContents.capturePage();
             fs.writeFileSync(path.join(screenshotDir, `panel-${mode}.png`), image.toPNG());
           }
+          // 对话模式：没有模型时必须给出明确提示（不能静默失败）。
+          // 这里直接走一遍 IPC，顺带验证 preload 暴露的 chat.ask 接线。
+          const chatProbe = await panel.webContents.executeJavaScript(
+            `window.companion.chat.ask({ question: '这个项目是什么？', projectId: '' })
+               .then((r) => ({
+                 status: r?.status ?? null,
+                 category: r?.category ?? null,
+                 advice: String(r?.advice ?? '').slice(0, 160)
+               }))
+               .catch((e) => ({ error: String(e) }))`
+          );
+          fs.writeFileSync(
+            path.join(screenshotDir, 'chat-probe.json'),
+            JSON.stringify(chatProbe, null, 2)
+          );
           // 顺手记录按项目取数的结果，验证预重构没有破坏默认行为。
           const probe = [];
           for (const projectId of ['companion-demo', 'cultivation-agent']) {
@@ -3326,6 +3383,8 @@ app.on('before-quit', () => {
 });
 app.on('will-quit', () => {
   try { if (mobileServer) void mobileServer.close(); } catch { /* best effort */ }
+  // 退出时释放只读对话会话，避免留下等待模型的进程内句柄。
+  try { chatService?.disposeAll(); } catch { /* best effort */ }
   // 退出时先结束仍在跑的 playbook 子进程，避免留下孤儿 node 进程继续调用模型。
   for (const child of playbookChildren.values()) {
     try { child.__cancel?.(); } catch { /* best effort */ }
