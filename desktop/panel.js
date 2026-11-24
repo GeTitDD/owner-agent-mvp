@@ -3167,7 +3167,7 @@
             reject.disabled = false;
             return;
           }
-          toast(decision === 'approved' ? '已接受候选，移到待验证知识' : '已拒绝候选', 4000);
+          toast(decision === 'approved' ? '已接受候选，成为待验证的知识' : '已拒绝候选', 4000);
           await loadKnowledgeBrowse();
         } catch (error) {
           toast(String(error?.message ?? error), 6000);
