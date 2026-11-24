@@ -389,10 +389,14 @@ const testConfigForProject = async (project) => {
   return { ...plan, projectId };
 };
 
-const createSandbox = async (proposalId) => {
-  const projects = (await api('/owner/v1/projects')).items ?? [];
-  const project = projects.find((item) => item.id === config.projectId) ?? projects[0] ?? null;
-  const plan = await testConfigForProject(project);
+const createSandbox = async (proposalId, project = null) => {
+  // 沙箱计划要按补丁所属项目算；只有调用方没给时才退回配置/第一个项目。
+  let target = project;
+  if (!target) {
+    const projects = (await api('/owner/v1/projects')).items ?? [];
+    target = projects.find((item) => item.id === config.projectId) ?? projects[0] ?? null;
+  }
+  const plan = await testConfigForProject(target);
   const image = plan.image || 'node:22-alpine';
   const imageDigest = resolveDigest(image);
   if (!imageDigest) {
@@ -1339,8 +1343,9 @@ const knowledgeDetail = ({ id } = {}) => {
 const buildView = async (requestedProjectId = '') => {
   const projects = await api('/owner/v1/projects');
   const projectList = projects.items ?? [];
-  // 调用方可以指定要看哪个项目；不指定时沿用配置里的项目，再退回第一个。
-  const wanted = String(requestedProjectId || config.projectId || '');
+  // 没有全局「当前项目」：调用方指定了就按它取数，没指定就只看第一个项目。
+  // 这里不读 config.projectId，选择也不会写回配置，所以重启后总是回到默认的第一个。
+  const wanted = String(requestedProjectId || '');
   const activeProjectId = wanted && projectList.some((item) => item.id === wanted)
     ? wanted
     : projectList[0]?.id ?? '';
@@ -2288,8 +2293,7 @@ const createWriteRequest = async ({
       ownerTaskId: task.id
     }
   });
-  config.projectId = project.id;
-  saveConfig();
+  // 交办目标只用于这次任务，不写回 config.projectId（已经取消「当前项目」）。
   return { jobId: job.id, status: job.status, projectId: project.id };
 };
 
@@ -2326,7 +2330,8 @@ const captureIdeaFromMessage = async (text, projectId) => {
 };
 
 const submitCompanionTask = async ({ text, projectId }) => {
-  const project = await resolveProject(projectId);
+  // 交办必须显式指定项目：没给就报错，不静默回退到第一个，避免写进错项目。
+  const project = await registeredProject(projectId, '先选择要交办的项目。');
   const [{ submitCompanionTask: runSubmit }, triageRunner] = await Promise.all([
     loadCompanionSubmit(),
     getTriageRunner()
@@ -2377,9 +2382,9 @@ const requireChatSessions = () => {
 };
 
 /** 新建会话只接受已登记项目，不做「找不到就退回第一个」的静默兜底。 */
-const registeredProject = async (projectId) => {
+const registeredProject = async (projectId, missingMessage = '新建会话要选择一个项目。') => {
   const id = String(projectId ?? '').trim();
-  if (!id) throw new Error('新建会话要选择一个项目。');
+  if (!id) throw new Error(missingMessage);
   const items = (await api('/owner/v1/projects')).items ?? [];
   const project = items.find((item) => item.id === id);
   if (!project) throw new Error(`项目不存在：${id}`);
@@ -2722,8 +2727,12 @@ const registerIpc = () => {
         method: 'POST', body: { hash }, decision: true
       });
       // 应用后自动创建待批准的沙箱运行；失败必须如实回传，不能假装测试已开始。
+      // 项目取补丁自己的 project_id，不再依赖已取消的「当前项目」配置。
       const projects = (await api('/owner/v1/projects')).items ?? [];
-      const project = projects.find((item) => item.id === config.projectId) ?? projects[0] ?? null;
+      const patchProjectId = projectIdOf(applied?.proposal ?? {});
+      const project = projects.find((item) => item.id === patchProjectId)
+        ?? projects.find((item) => item.id === config.projectId)
+        ?? projects[0] ?? null;
       const testConfig = await testConfigForProject(project);
       // 明确关闭 / 非 Node 生态：补丁照常应用，但按设置跳过测试，不弹失败弹窗。
       if (!testConfig.enabled) {
@@ -2740,7 +2749,7 @@ const registerIpc = () => {
         };
       }
       try {
-        const run = await createSandbox(id);
+        const run = await createSandbox(id, project);
         return {
           ...applied,
           testRequested: true,
@@ -2832,8 +2841,14 @@ const registerIpc = () => {
 
   ipcMain.handle('companion:create-sandbox', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    const projects = (await api('/owner/v1/projects')).items ?? [];
-    const project = projects.find((item) => item.id === config.projectId) ?? projects[0] ?? null;
+    const proposalId = String(input?.proposalId ?? '');
+    // 优先按补丁所属项目取测试计划，避免配置里没有「当前项目」时落到别的项目。
+    const patch = proposalId
+      ? await api(`/owner/v1/patches/${encodeURIComponent(proposalId)}`).catch(() => null)
+      : null;
+    const project = await resolveProject(
+      projectIdOf(patch ?? {}) || String(input?.projectId ?? '')
+    );
     const testConfig = await testConfigForProject(project);
     if (!testConfig.enabled) {
       throw new Error('当前项目未启用沙箱测试；到设置 → 沙箱测试里调整（自动 / 关闭 / Node）。');
@@ -2841,7 +2856,7 @@ const registerIpc = () => {
     if (!testConfig.ok) {
       throw new Error(`测试配置缺少 ${testConfig.missing.join(', ')}，无法创建沙箱。`);
     }
-    return createSandbox(String(input?.proposalId ?? ''));
+    return createSandbox(proposalId, project);
   });
 
   ipcMain.handle('companion:knowledge-summary', async (event, input) => {
@@ -3252,7 +3267,7 @@ const registerIpc = () => {
     if (typeof input?.gatewayUrl === 'string') config.gatewayUrl = input.gatewayUrl.trim();
     if (typeof input?.model === 'string') config.model = input.model.trim();
     if (typeof input?.diagramModel === 'string') config.diagramModel = input.diagramModel.trim();
-    if (typeof input?.projectId === 'string') config.projectId = input.projectId;
+    // 不再接受 projectId：面板的项目选择只存在内存里，不允许通过设置写回配置。
     if (typeof input?.sandboxMode === 'string') {
       const mod = sandboxPlanModule ?? await importEsm('../src/sandbox-plan.mjs');
       config.sandboxMode = mod.normalizeSandboxMode(input.sandboxMode, config.sandboxMode ?? 'auto');
@@ -3332,8 +3347,7 @@ const registerIpc = () => {
         primaryDomain: 'software-engineering'
       });
     }
-    config.projectId = project.id;
-    saveConfig();
+    // 新项目只是登记进库；不再把它写成「当前项目」，选择由面板显式做出。
     return project;
   });
 
@@ -3464,6 +3478,118 @@ async function boot() {
                 afterImage.toPNG()
               );
             }
+          }
+          // #41 专注：取消全局「当前项目」。
+          // 第一次启动：没选项目时发送被拦；显式选项目后按钮显示项目名，概览/任务链切到该项目。
+          // 用同一个 --user-data-dir 再启动一次：选择不落盘，回到「未选 + 默认第一个」。
+          const focusMarker = path.join(app.getPath('userData'), 'focus-selection-run.txt');
+          const focusRestarted = fs.existsSync(focusMarker);
+          if (!focusRestarted) fs.writeFileSync(focusMarker, new Date().toISOString(), 'utf8');
+          const focusIdle = await panel.webContents.executeJavaScript(`(async () => {
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            document.querySelector('#modeBar button[data-mode="A"]')?.click();
+            await wait(700);
+            const chip = document.getElementById('composerProject');
+            const name = document.getElementById('composerProjectName');
+            const input = document.getElementById('taskInput');
+            const before = {
+              projectId: chip?.dataset.projectId ?? '',
+              label: name?.textContent?.trim() ?? '',
+              needsPick: chip?.classList.contains('needs-pick') === true
+            };
+            input.value = '把首页文案改得更直接一点';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            document.getElementById('submitTask')?.click();
+            await wait(500);
+            const toast = document.getElementById('toast');
+            // Toast 会自动消失，必须在 await 之前读快照，否则截到的是已隐藏状态。
+            const toastText = toast?.textContent ?? '';
+            const toastVisible = !(toast?.hidden ?? true);
+            const draftKept = input.value;
+            const selectedRow = document.querySelector('#projectList .project-row.selected')?.dataset.project ?? '';
+            const detailTab = document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
+            const view = await window.companion.snapshot();
+            const settings = await window.companion.settings.get();
+            return {
+              hasProjects: (view?.projects?.length ?? 0) > 0,
+              hasGlobalProjectSelect: Boolean(document.querySelector('#composeSection select#projectSelect')),
+              before,
+              blockedToast: toastText,
+              blockedToastVisible: toastVisible,
+              draftKept,
+              viewProjectFromDom: selectedRow || detailTab,
+              settingsProjectId: settings?.projectId ?? null
+            };
+          })()`);
+          fs.writeFileSync(
+            path.join(screenshotDir, 'focus-selection-probe.json'),
+            JSON.stringify(focusIdle, null, 2)
+          );
+          // 再点一次发送并立刻截图，把「未选项目被拦」的提示留在画面上。
+          await panel.webContents.executeJavaScript(
+            "document.getElementById('submitTask')?.click();"
+          );
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          let focusImage = await panel.webContents.capturePage();
+          fs.writeFileSync(
+            path.join(screenshotDir, focusRestarted ? 'panel-A-restart.png' : 'panel-A-no-project.png'),
+            focusImage.toPNG()
+          );
+          if (focusIdle.hasProjects) {
+            const focusPicked = await panel.webContents.executeJavaScript(`(async () => {
+              const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+              const chip = document.getElementById('composerProject');
+              const name = document.getElementById('composerProjectName');
+              const beforeView = (await window.companion.snapshot())?.config?.projectId ?? '';
+              chip?.click();
+              await wait(300);
+              const options = [...document.querySelectorAll('#composerProjectMenu .composer-project-option')];
+              const target = options.find((item) => item.dataset.project !== beforeView) ?? options[0];
+              target?.click();
+              // 选中后等界面真正换到该项目（快照要走一遍服务探测），最多等 6 秒。
+              let viewProject = '';
+              for (let i = 0; i < 40; i += 1) {
+                viewProject = document.querySelector('#projectList .project-row.selected')?.dataset.project ?? '';
+                if (viewProject && viewProject === target?.dataset.project) break;
+                await wait(150);
+              }
+              await wait(400);
+              const picked = (await window.companion.snapshot())?.projects ?? [];
+              // 视图项目从界面读：快照不传项目时主进程只会默认第一个，不代表渲染层的选择。
+              const detailTab = document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
+              const snapOf = async (projectId) => {
+                if (!projectId) return null;
+                const snap = await window.companion.snapshot({ projectId });
+                return {
+                  project: snap?.config?.projectId ?? '',
+                  stage: snap?.stage ?? '',
+                  chainJob: snap?.chain?.job?.title ?? '',
+                  chainPatch: snap?.chain?.patch?.id ?? '',
+                  counts: snap?.counts ?? {},
+                  nextAction: snap?.nextAction?.label ?? ''
+                };
+              };
+              const settings = await window.companion.settings.get();
+              // 截图前把详情卡滚到眼前，并清掉自动生成图谱的报错提示，别挡住选择证据。
+              document.getElementById('focusDetail')?.scrollIntoView({ block: 'start' });
+              await wait(400);
+              document.getElementById('toast').hidden = true;
+              return {
+                options: options.map((item) => item.dataset.project),
+                viewProject,
+                detailTab,
+                chip: { projectId: chip?.dataset.projectId ?? '', label: name?.textContent?.trim() ?? '' },
+                projectIds: picked.map((item) => item.id),
+                byProject: [await snapOf(picked[0]?.id ?? ''), await snapOf(picked[1]?.id ?? '')],
+                settingsProjectId: settings?.projectId ?? null
+              };
+            })()`);
+            fs.writeFileSync(
+              path.join(screenshotDir, 'focus-selection-picked.json'),
+              JSON.stringify(focusPicked, null, 2)
+            );
+            focusImage = await panel.webContents.capturePage();
+            fs.writeFileSync(path.join(screenshotDir, 'panel-A-picked.png'), focusImage.toPNG());
           }
           // 技能目录验收：列表（含插件组）、展开详情、缺失条目详情（#44）。
           await panel.webContents.executeJavaScript(`
