@@ -103,9 +103,15 @@
         ? `测试配置缺少 ${missing.join(', ')}；补丁应用后无法创建沙箱。`
         : '还没有可用的测试配置；补丁应用后无法创建沙箱。';
     } else if (showMuted) {
+      // ecosystem 缺失时（包括沙箱计划给的占位 'unknown'）不要打印括号里的占位词。
+      const ecosystem = testConfig.ecosystem && testConfig.ecosystem !== 'unknown'
+        ? testConfig.ecosystem
+        : '';
       $('testWarningText').textContent = testConfig.reason === 'disabled'
         ? '已按设置跳过沙箱测试；补丁只做人工验证。'
-        : `这个项目（${testConfig.ecosystem || 'unknown'}）没有可用沙箱 profile；补丁只做人工验证。`;
+        : ecosystem
+          ? `这个项目（${ecosystem}）没有可用沙箱 profile；补丁只做人工验证。`
+          : '这个项目还没有可用的沙箱 profile；补丁只做人工验证。';
     }
     const sandboxSelect = $('sandboxModeSelect');
     if (sandboxSelect) {
@@ -1884,11 +1890,9 @@
     head.append(el('div', 'pending-title', item.title));
     head.append(el('span', `tier-badge ${tier}`, tierLabel(item.tier)));
     card.append(head);
-    // 分组展示时项目名已经在组标题上，卡片里不再重复，也不再提「全局当前项目」。
+    // 没有全局「当前项目」了：卡片只标项目名，不再分「当前/其他」两堆。
     if (item.projectName && !grouped) {
-      const current = item.projectId === view?.config?.projectId;
-      card.append(el('div', 'pending-project',
-        current ? `所选项目 · ${item.projectName}` : `其他项目 · ${item.projectName}`));
+      card.append(el('div', 'pending-project', item.projectName));
     }
     card.append(el('div', 'pending-summary',
       item.hash ? `${item.summary} · ${fmtHash(item.hash)}` : item.summary));
