@@ -2505,6 +2505,7 @@
 
   $('openSettings').onclick = () => { void openSettings(); };
   $('kbRefresh').onclick = () => { void loadKnowledgeBrowse(); };
+  $('skillRefresh').onclick = () => { void loadSkillCatalog({ refresh: true }); };
   $('mobileRefreshCode').onclick = () => { void renderMobileInfo(true); };
   $('closeSettings').onclick = () => { $('settings').hidden = true; };
   $('hidePanel').onclick = () => window.companion.hidePanel();
@@ -3240,6 +3241,98 @@
     }
   };
 
+  // ---- 技能目录：三处来源合并的只读列表 ----
+
+  let skillCatalogData = null;
+  let skillCatalogToken = 0;
+
+  // 只渲染主进程给的数据；来源标签与缺失标注都由视图模型算好，面板不重新判断。
+  const renderSkillCatalog = () => {
+    const holder = $('skillGroups');
+    holder.replaceChildren();
+    const data = skillCatalogData;
+    if (!data) {
+      holder.append(el('p', 'kb-loading', '正在扫描技能目录…'));
+      return;
+    }
+    $('skillTotal').textContent = String(data.totals?.all ?? 0);
+    const missingTotal = data.totals?.missing ?? 0;
+    $('skillMissing').hidden = missingTotal === 0;
+    $('skillMissing').textContent = `${missingTotal} 个缺失`;
+
+    if (data.empty) {
+      const empty = el('div', 'kb-empty');
+      empty.append(el('div', 'kb-empty-title', data.empty.title));
+      empty.append(el('div', 'kb-empty-sub', data.empty.detail));
+      holder.append(empty);
+    }
+
+    for (const group of data.groups ?? []) {
+      const card = el('section', `skill-group skill-${group.key}`);
+      const head = el('div', 'kb-group-head');
+      head.append(el('h4', 'kb-group-name', group.label));
+      head.append(el('span', 'kb-group-count',
+        group.missing ? `${group.count} 个 · 缺失 ${group.missing}` : `${group.count} 个`));
+      card.append(head);
+      if (!group.items.length) {
+        card.append(el('p', 'kb-group-empty', '这一处没有声明的技能。'));
+        holder.append(card);
+        continue;
+      }
+      const list = el('div', 'skill-list');
+      for (const item of group.items) {
+        // 用原生 details：点开即展开，不需要额外按钮，也就没有编辑/运行入口。
+        const row = el('details', `skill-item${item.missing ? ' is-missing' : ''}`);
+        row.dataset.skill = item.id;
+        const summary = el('summary', 'skill-summary');
+        summary.append(el('span', 'skill-name', item.name));
+        summary.append(el('span', 'skill-source', item.sourceLabel));
+        if (item.missing) summary.append(el('span', 'skill-badge-missing', '缺失'));
+        row.append(summary);
+        const detail = el('div', 'skill-detail');
+        const rows = el('dl', 'detail-rows');
+        const addRow = (label, value, className) => {
+          rows.append(el('dt', undefined, label));
+          rows.append(el('dd', className, value));
+        };
+        addRow('来源',
+          item.origin && item.origin !== item.sourceLabel ? `${item.sourceLabel} · ${item.origin}` : item.sourceLabel);
+        addRow('路径', item.path || '（没有可指向的路径）', 'skill-path');
+        addRow('描述', item.description || (item.missing ? '（技能缺失，没有描述）' : '（SKILL.md 没有写描述）'), 'skill-desc');
+        detail.append(rows);
+        if (item.missing) detail.append(el('p', 'skill-missing-reason', `缺失原因：${item.reason}`));
+        row.append(detail);
+        list.append(row);
+      }
+      card.append(list);
+      if (group.truncated) {
+        card.append(el('p', 'kb-group-more',
+          `共 ${group.count} 个，只显示前 ${group.shown} 个（缺失的排在最前）。`));
+      }
+      holder.append(card);
+    }
+  };
+
+  const loadSkillCatalog = async ({ refresh = false } = {}) => {
+    const token = ++skillCatalogToken;
+    try {
+      const data = await window.companion.skills.catalog({ refresh });
+      if (token !== skillCatalogToken) return;
+      skillCatalogData = data;
+      renderSkillCatalog();
+      $('skillCatalog').dataset.scanState = data.cached ? 'cached' : 'fresh';
+    } catch (error) {
+      if (token !== skillCatalogToken) return;
+      skillCatalogData = null;
+      const holder = $('skillGroups');
+      holder.replaceChildren();
+      const box = el('div', 'kb-empty');
+      box.append(el('div', 'kb-empty-title', '扫描技能目录失败'));
+      box.append(el('div', 'kb-empty-sub', String(error?.message ?? error)));
+      holder.append(box);
+    }
+  };
+
   // ---- 三种视图模式：专注（A） / 知识（B） / 对话（C） ----
 
   const MODE_IDS = { A: 'modeA', B: 'modeB', C: 'modeC' };
@@ -3261,7 +3354,11 @@
     // 交办输入框只属于专注；对话模式用自己的输入，知识模式只读。
     $('composeSection').hidden = !hasProjects || mode !== 'A';
     if (mode === 'A') renderModeA();
-    if (mode === 'B') void loadKnowledgeBrowse();
+    if (mode === 'B') {
+      void loadKnowledgeBrowse();
+      // 主进程缓存一分钟；这里每次进入知识模式都读一次，顺便把上一次扫描结果带回来。
+      void loadSkillCatalog();
+    }
     if (mode === 'C') {
       // 会话列表来自本地库：切换到对话模式时恢复上次会话。
       void ensureChatSession();

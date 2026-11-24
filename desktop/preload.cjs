@@ -50,6 +50,9 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     detail: (input) => invoke('companion:knowledge-detail', input),
     open: () => invoke('companion:knowledge-open')
   }),
+  skills: Object.freeze({
+    catalog: (input) => invoke('companion:skill-catalog', input)
+  }),
   playbooks: Object.freeze({
     list: (input) => invoke('companion:playbooks', input),
     run: (input) => invoke('companion:playbook-run', input),

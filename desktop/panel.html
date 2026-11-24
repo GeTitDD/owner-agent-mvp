@@ -73,6 +73,17 @@
         <div id="kbGroups" class="kb-groups" aria-live="polite"></div>
       </section>
 
+      <section id="skillCatalog" class="skill-catalog">
+        <div class="kb-head">
+          <h3>技能</h3>
+          <span id="skillTotal" class="count">0</span>
+          <span id="skillMissing" class="skill-missing-total" hidden></span>
+          <button id="skillRefresh" class="ghost small" type="button" title="重新扫描域包、pstack 与插件三处技能">刷新</button>
+        </div>
+        <p class="kb-hint">域包、pstack、插件三处技能合并成一份只读列表；点开看路径与描述。缺失的条目会标「缺失」，不会被隐藏。</p>
+        <div id="skillGroups" class="skill-groups" aria-live="polite"></div>
+      </section>
+
       <details class="workspace" id="workspaceToggle">
         <summary class="workspace-summary">工作区 · 项目 / 图谱 / 想法 / 知识 / Playbook</summary>
       <section class="zone project-zone">
