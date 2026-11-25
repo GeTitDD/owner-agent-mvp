@@ -2264,6 +2264,7 @@
       renderNextAction();
       renderIdeas();
       renderDiagrams();
+      renderLibrary();
       renderOps();
       renderRunning();
       renderResult();
@@ -2702,6 +2703,7 @@
 
   $('openSettings').onclick = () => { void openSettings(); };
   $('kbRefresh').onclick = () => { void loadKnowledgeBrowse(); };
+  $('kbScanSessions').onclick = () => { void runSessionScan(); };
   $('skillRefresh').onclick = () => { void loadSkillCatalog({ refresh: true }); };
   $('mobileRefreshCode').onclick = () => { void renderMobileInfo(true); };
   $('closeSettings').onclick = () => { $('settings').hidden = true; };
@@ -2870,6 +2872,26 @@
   };
 
   $('tidyKnowledge').onclick = () => { void openKnowledgeTidy(); };
+  // 项目库：生成草稿可反复点（覆盖同一份），发布按钮在没有草稿时禁用。
+  $('libraryDraft').onclick = () => {
+    void libraryAction(
+      (projectId) => window.companion.library.draft({ projectId }),
+      () => '已生成草稿'
+    );
+  };
+  $('libraryPublish').onclick = () => {
+    void libraryAction(
+      (projectId) => window.companion.library.publish({ projectId }),
+      (result) => {
+        const label = result?.published?.label ?? '新版本';
+        const dir = result?.published?.export?.dir;
+        // 发布成功就把可预测的导出路径写进提示；路径本身在库段里长期可见，不靠 toast 留住。
+        if (dir) return `已发布 ${label}，导出到 ${dir}`;
+        if (result?.published?.exportError) return `已发布 ${label}，但导出失败：${result.published.exportError}`;
+        return `已发布 ${label}（导出未完成）`;
+      }
+    );
+  };
   $('ideaCapture').onclick = () => { void captureIdea(); };
   // 捕获框要能粘贴多行：Enter 只换行，Ctrl/Cmd+Enter 才存入，避免粘贴时被截断。
   $('ideaInput').addEventListener('keydown', (event) => {
@@ -3081,6 +3103,182 @@
       if (note) note.textContent = row.note;
       button.title = `${row.label} · ${row.count} · ${row.note}`;
       button.onclick = () => focusJump(row.key);
+    }
+  };
+
+  // ---- 项目库（#89）：两节（已验证 / 观察中）+ 计数 + 生成草稿 / 发布 ----
+  //
+  // 聚合与分节由主进程的 src/project-library.mjs 算好（快照里的 view.library），
+  // 这里只画 DOM、只读 snapshot 摘要；不在渲染层再算一次归属或计数。
+
+  const libraryEntryRow = (item) => {
+    const row = el('div', 'library-item');
+    const main = el('div', 'library-item-main');
+    main.append(el('div', 'library-item-title', item.title || '未命名条目'));
+    const meta = el('div', 'library-item-meta');
+    meta.append(el('span', `library-badge ${item.status || 'unknown'}`, item.badge || item.status || '未知'));
+    if (item.detail) meta.append(el('span', 'library-item-detail', item.detail));
+    // 只显示证据条数，不把证据正文铺进库：引用留在快照里，详情留给后续票。
+    const evidenceCount = (item.evidenceRefs ?? []).length || countOf(item.evidenceCount);
+    if (evidenceCount > 0) meta.append(el('span', 'library-item-evidence', `证据 ${evidenceCount}`));
+    main.append(meta);
+    row.append(main);
+    return row;
+  };
+
+  // ---- 项目库（#90）：导出到固定目录 ----
+  //
+  // 导出只读已发布的快照，路径由主进程算好（library.export），渲染层不再拼一次，
+  // 免得界面显示的路径和真正写出的目录不一致。
+  const renderLibraryExport = (library) => {
+    const holder = $('libraryExport');
+    if (!holder) return;
+    holder.replaceChildren();
+    const info = library?.export;
+    const versions = library?.snapshot?.versions ?? [];
+    if (!info || !versions.length) { holder.hidden = true; return; }
+    holder.hidden = false;
+
+    const line = el('div', 'library-export-line');
+    line.append(el('span', 'library-export-path',
+      info.exists ? `导出：${info.dir}` : `还没有导出 ${info.label}`));
+    if (info.exists) {
+      const open = el('button', 'ghost small', '打开目录');
+      open.type = 'button';
+      open.title = '在文件管理器里打开这一版的导出目录';
+      open.onclick = () => {
+        void window.companion.library.openExport({ path: info.dir })
+          .catch((error) => toast(cleanIpcError(error?.message ?? error), 6000));
+      };
+      line.append(open);
+    } else {
+      const run = el('button', 'ghost small', `导出 ${info.label}`);
+      run.type = 'button';
+      run.title = '把这一版已发布快照重新写到固定目录（重复导出内容不变）';
+      run.onclick = () => {
+        void libraryAction(
+          (projectId) => window.companion.library.export({ projectId, version: info.version }),
+          (result) => (result?.exported?.dir
+            ? `已导出 ${result.exported.label}：${result.exported.dir}`
+            : '已导出')
+        );
+      };
+      line.append(run);
+    }
+    holder.append(line);
+  };
+
+  const renderLibrary = () => {
+    const section = $('librarySection');
+    if (!section) return;
+    const library = view?.library;
+    const project = workspaceProject();
+    section.hidden = !(project && library);
+    if (!project || !library) return;
+
+    const counts = library.counts ?? {};
+    $('libraryBadge').textContent = String(countOf(counts.total));
+    $('libraryBadge').title = `已验证 ${countOf(counts.verified)} 条 · 观察中 ${countOf(counts.observing)} 条`;
+
+    const empty = $('libraryEmpty');
+    empty.hidden = !library.empty;
+    empty.replaceChildren();
+    if (library.empty) {
+      empty.append(el('strong', undefined, library.empty.title || '这个项目的库还是空的'));
+      empty.append(el('span', undefined, library.empty.detail || ''));
+    }
+
+    const holder = $('librarySections');
+    holder.replaceChildren();
+    for (const sectionModel of library.sections ?? []) {
+      const card = el('section', `library-block library-${sectionModel.key}`);
+      const head = el('div', 'library-block-head');
+      head.append(el('h4', 'library-block-name', sectionModel.label));
+      head.append(el('span', 'library-block-count', `${countOf(sectionModel.count)} 条`));
+      card.append(head);
+      if (!(sectionModel.items ?? []).length) {
+        card.append(el('p', 'library-block-empty', sectionModel.emptyHint || '没有条目。'));
+      } else {
+        for (const item of sectionModel.items) card.append(libraryEntryRow(item));
+        if (sectionModel.truncated) {
+          card.append(el('p', 'library-more',
+            `显示前 ${countOf(sectionModel.shown)} 条，共 ${countOf(sectionModel.count)} 条；发布时快照包含全部。`));
+        }
+      }
+      holder.append(card);
+    }
+
+    // 画像与图谱是库里的另两类只读资产，不参与两节分节；缺的类别写明缺。
+    const assetHolder = $('libraryAssets');
+    const profile = library.assets?.profile;
+    const diagrams = library.assets?.diagrams ?? [];
+    const parts = [
+      profile?.available
+        ? `画像：${profile.oneLiner || profile.title || '已生成'}${profile.basedOnCommit ? `（基于 ${String(profile.basedOnCommit).slice(0, 7)}）` : ''}`
+        : '画像：还没有生成',
+      `图谱：${diagrams.filter((item) => item.available).length}/${diagrams.length || 0} 类`
+    ];
+    const missing = library.assets?.missingDiagrams ?? [];
+    if (missing.length) parts.push(`缺 ${missing.join(' / ')}`);
+    assetHolder.hidden = false;
+    assetHolder.textContent = parts.join(' · ');
+
+    const snapshot = library.snapshot ?? {};
+    const draft = snapshot.draft;
+    const publishButton = $('libraryPublish');
+    if (draft) {
+      const draftCounts = draft.counts ?? {};
+      $('libraryStatus').textContent =
+        `草稿：已验证 ${countOf(draftCounts.verified)} 条 · 观察中 ${countOf(draftCounts.observing)} 条 · ` +
+        `生成于 ${formatRelative(draft.generatedAt) || '—'}（没有版本号）`;
+    } else {
+      $('libraryStatus').textContent = '还没有草稿；先生成草稿，再决定要不要发布。';
+    }
+    publishButton.textContent = `发布 ${snapshot.nextLabel || 'v1'}`;
+    publishButton.disabled = !draft;
+
+    // 版本浏览的详情是下一张票：这里只给版本号与时间，不给可点开的渲染。
+    const versions = $('libraryVersions');
+    versions.replaceChildren();
+    const rows = snapshot.versions ?? [];
+    if (rows.length) {
+      versions.append(el('span', 'library-versions-label', '已发布：'));
+      for (const item of rows.slice(0, 5)) {
+        const chip = el('span', 'library-version', `${item.label} · ${formatRelative(item.publishedAt) || '—'}`);
+        chip.title = `${item.label} · ${String(item.publishedAt ?? '').replace('T', ' ').slice(0, 19)}` +
+          (item.note ? ` · ${item.note}` : '');
+        versions.append(chip);
+      }
+    }
+    renderLibraryExport(library);
+  };
+
+  /**
+   * 生成草稿 / 发布：都是显式动作。成功后用主进程返回的 library 直接重画，
+   * 再 refresh 一次让知识计数等其它段同步；失败只 toast，不清掉已有草稿与版本。
+   */
+  const libraryAction = async (action, success) => {
+    const project = workspaceProject();
+    if (!project) { toast('先选择一个项目。'); return null; }
+    const draftButton = $('libraryDraft');
+    const publishButton = $('libraryPublish');
+    draftButton.disabled = true;
+    publishButton.disabled = true;
+    try {
+      const result = await action(project.id);
+      if (view) view = { ...view, library: result };
+      renderLibrary();
+      await refresh();
+      if (success) toast(success(result), 4200);
+      return result;
+    } catch (error) {
+      // Electron 会给 IPC 错误加前缀，先去掉再展示；发布不可变等原因由主进程给出。
+      toast(cleanIpcError(error?.message ?? error), 6000);
+      return null;
+    } finally {
+      draftButton.disabled = false;
+      // 发布按钮的可用性回到「有没有草稿」，由 renderLibrary 决定。
+      if (view?.library) renderLibrary();
     }
   };
 
@@ -3398,6 +3596,84 @@
     }
   };
 
+  // ---- 会话扫描（#86）：显式动作，结果只在本面板显示，扫描本身不写库 ----
+
+  let sessionScanResult = null;
+
+  // 计数先写清楚（扫了多少 / 匹配上多少 / 丢了多少），再看候选：
+  // 第一次扫出 0 条时要能从这几项里看出「扫了但没命中」，而不是「像坏了」。
+  const renderSessionScan = () => {
+    const data = sessionScanResult;
+    if (!data) return;
+    const box = $('kbScan');
+    box.hidden = false;
+    const counts = data.counts ?? {};
+    $('kbScanSummary').textContent = [
+      `扫了 ${counts.files ?? 0} 段会话`,
+      `匹配 ${counts.matched ?? 0} 段`,
+      `已扫过 ${counts.alreadyScanned ?? 0} 段`,
+      `丢弃 ${counts.dropped ?? 0} 段`,
+      `候选 ${counts.candidates ?? 0} 条`
+    ].join(' · ');
+
+    const reasons = $('kbScanReasons');
+    const parts = (data.droppedReasons ?? []).map((reason) => `${reason.label} ${reason.count} 段`);
+    if (data.truncated) parts.push(`超出本次上限未扫 ${data.truncated} 段`);
+    reasons.textContent = parts.length ? `丢弃原因：${parts.join(' · ')}` : '没有丢弃的会话。';
+    reasons.hidden = false;
+
+    const list = $('kbScanCandidates');
+    list.replaceChildren();
+    const shown = Array.isArray(data.candidates) ? data.candidates : [];
+    if (!shown.length) {
+      // 0 条候选的两种原因分开说，免得看起来像扫描没跑。
+      list.append(el('p', 'kb-scan-empty', counts.matched
+        ? '这段会话里没有像取舍的用户原话：提问、工具输出和注入的环境上下文都不算候选。'
+        : '没有会话匹配到已登记的项目：只有工作目录正好是项目根或在其子目录下才算命中。'));
+    } else {
+      for (const candidate of shown.slice(0, 8)) {
+        const row = el('div', 'kb-scan-item');
+        row.append(el('span', 'kb-scan-quote', candidate.quote?.user || candidate.phenomenon || '（无原话）'));
+        const meta = [
+          candidate.projectName || projectLabel(candidate.projectId),
+          candidate.source === 'codex' ? 'Codex' : 'Claude Code',
+          candidate.partial ? '只有用户原话' : '成对',
+          candidate.missingReason ? '缺理由' : ''
+        ].filter(Boolean).join(' · ');
+        row.append(el('span', 'kb-scan-item-meta', meta));
+        list.append(row);
+      }
+      if ((counts.candidates ?? 0) > shown.length) {
+        list.append(el('p', 'kb-scan-more', `共 ${counts.candidates} 条候选，这里只列前 ${shown.length} 条。`));
+      }
+    }
+    // e2e 直接读这几个属性，不用解析中文文案。
+    box.dataset.files = String(counts.files ?? 0);
+    box.dataset.matched = String(counts.matched ?? 0);
+    box.dataset.dropped = String(counts.dropped ?? 0);
+    box.dataset.candidates = String(counts.candidates ?? 0);
+  };
+
+  const runSessionScan = async () => {
+    const button = $('kbScanSessions');
+    if (button.disabled) return;
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = '扫描中…';
+    try {
+      sessionScanResult = await window.companion.memory.scanSessions();
+      renderSessionScan();
+      const counts = sessionScanResult?.counts ?? {};
+      toast(`扫描完成：匹配 ${counts.matched ?? 0} 段会话，候选 ${counts.candidates ?? 0} 条`, 4000);
+    } catch (error) {
+      // 失败不动已有数据：上一次的结果留在屏幕上。
+      toast(String(error?.message ?? error), 6000);
+    } finally {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  };
+
   // ---- 技能目录：三处来源合并的只读列表 ----
 
   let skillCatalogData = null;
@@ -3577,6 +3853,7 @@
     renderOps();
     renderWorkProjectBar();
     renderWorkEntries();
+    renderLibrary();
     renderSinceSeen();
   };
 

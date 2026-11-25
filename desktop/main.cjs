@@ -94,9 +94,17 @@ let knowledgeTidyModule = null;
 let diagramModule = null;
 let executionStatusModule = null;
 let ideaCaptureModule = null;
+// #86 会话扫描：模块按需加载；扫描是显式动作，不在启动或轮询里调用。
+let sessionScanModule = null;
 let chatModule = null;
 let chatService = null;
 let chatSessionStore = null;
+// #89：项目库视图与快照存储。视图复用 src/project-library.mjs，快照落 owner 库的同一连接。
+let projectLibraryModule = null;
+let snapshotModule = null;
+let snapshotStore = null;
+// #90：把已发布的快照导出到 <userData>/exports/<projectId>/vN/（只读快照，不重新聚合）。
+let exportModule = null;
 // #84：水位与「自上次看过」。
 // - memoryWatermarks：每项目一个时间点，与 OwnerStore 共用同一条连接（同一份本地库）；
 // - observerEventStore：只读观察员事件，独立连接（观察员可以和桌面端同时开着）；
@@ -167,6 +175,38 @@ const knowledgeDbPath = () =>
   process.env.OWNER_KNOWLEDGE_DB
   || process.env.DOMAIN_CONTEXT_DB
   || path.join(os.homedir(), '.domain-context', 'index.sqlite');
+
+// #86 会话扫描的本地状态：已扫过的会话键（重复点击不重复提炼），
+// 以及留给下一张票的「库里已有决策的指纹」位（现在是空数组）。
+// 只存这一份 JSON，不进知识库——扫描本身不写任何数据，确认入库是下一张票。
+// 上限只为防无限增长：一年也到不了 5000 条，真到了丢最旧的会话键也不会重扫出重复候选
+// （重复问答还有指纹兜底）。
+const sessionScanStatePath = () => path.join(app.getPath('userData'), 'memory-scan.json');
+const SESSION_SCAN_STATE_LIMIT = 5000;
+const loadSessionScanState = () => {
+  try {
+    const raw = fs.readFileSync(sessionScanStatePath(), 'utf8').replace(/^\uFEFF/u, '');
+    const parsed = JSON.parse(raw);
+    return {
+      sessions: Array.isArray(parsed.sessions) ? parsed.sessions.filter((key) => typeof key === 'string') : [],
+      fingerprints: Array.isArray(parsed.fingerprints) ? parsed.fingerprints.filter((key) => typeof key === 'string') : []
+    };
+  } catch {
+    return { sessions: [], fingerprints: [] };
+  }
+};
+const saveSessionScanState = ({ sessions = [], fingerprints = [] } = {}) => {
+  try {
+    const state = {
+      sessions: [...new Set(sessions)].slice(-SESSION_SCAN_STATE_LIMIT),
+      fingerprints: [...new Set(fingerprints)].slice(-SESSION_SCAN_STATE_LIMIT)
+    };
+    fs.mkdirSync(path.dirname(sessionScanStatePath()), { recursive: true });
+    fs.writeFileSync(sessionScanStatePath(), JSON.stringify(state, null, 2), 'utf8');
+  } catch (error) {
+    logError('session-scan-state', error);
+  }
+};
 
 const digestCache = new Map();
 const resolveDigest = (imageRef = 'node:22-alpine') => {
@@ -247,6 +287,24 @@ async function startServices() {
   } catch (error) {
     console.error('chat session store unavailable:', error.message);
     chatSessionStore = null;
+  }
+  // #89：项目库快照。表建在 owner 库上，复用同一条连接；不可用只影响库的发布，
+  // 不阻塞其余功能，所以失败只记日志、退回「没有草稿/版本」的空快照状态。
+  try {
+    snapshotModule = await importEsm('../src/project-snapshots.mjs');
+    snapshotStore = new snapshotModule.ProjectSnapshotStore({ db: store.db });
+  } catch (error) {
+    console.error('project snapshot store unavailable:', error.message);
+    snapshotModule = null;
+    snapshotStore = null;
+  }
+  // #90：导出模块。纯渲染 + 落盘，不依赖 Electron；失败只让导出入入口报错，
+  // 已发布快照与库本身不受影响。
+  try {
+    exportModule = await importEsm('../src/project-exports.mjs');
+  } catch (error) {
+    console.error('project export module unavailable:', error.message);
+    exportModule = null;
   }
   try {
     const { PersonalKnowledgeStore } = await importEsm('../src/personal-store.mjs');
@@ -1155,6 +1213,92 @@ const knowledgeDetail = ({ id } = {}) => {
     };
   };
 
+  // ---- #89 项目库：视图复用 project-library，快照走 project-snapshots ----
+
+  const loadProjectLibrary = async () =>
+    (projectLibraryModule ??= await importEsm('../src/project-library.mjs'));
+
+  /** 项目图谱：与 buildView 同一口径（stale 按当前 HEAD 判断），给库的图谱摘要复用。 */
+  const diagramsForProject = async (project) => {
+    if (!project?.id) return [];
+    const head = await headForProject(project.root ?? '');
+    const items = (await api(`/owner/v1/projects/${encodeURIComponent(project.id)}/diagrams`)
+      .catch(() => ({ items: [] }))).items ?? [];
+    return items.map((diagram) => ({
+      ...diagram,
+      stale: Boolean(diagram.basedOnCommit && head && diagram.basedOnCommit !== head)
+    }));
+  };
+
+  /** 按项目 id 取 owner 项目行；没给 id 时退回第一个项目（与 buildView 的口径一致）。 */
+  const projectRowFor = async (projectId) => {
+    const items = (await api('/owner/v1/projects')).items ?? [];
+    const wanted = String(projectId ?? '');
+    return (wanted ? items.find((item) => item.id === wanted) : items[0]) ?? null;
+  };
+
+  /**
+   * #90 导出根：<用户配置根>/exports/。userData 就是 %APPDATA%\owner-agent-mvp（打包版）
+   * 或 --user-data-dir 指定的临时目录（e2e），所以路径按「项目 / 版本」可预测，
+   * 便携版与测试实例也各自落在自己的根下，不会写进真实用户目录之外的地方。
+   */
+  const exportsRoot = () => path.join(app.getPath('userData'), 'exports');
+
+  /** 面板要显示的最新版本导出路径：目录是确定的，是否存在单独判断，不靠缓存。 */
+  const exportInfoFor = (projectId, versions) => {
+    if (!exportModule || !projectId) return null;
+    const latest = versions?.[0];
+    if (!latest) return null;
+    const files = exportModule.exportFilesOf({
+      root: exportsRoot(), projectId, version: latest.version
+    });
+    return {
+      version: latest.version,
+      label: `v${latest.version}`,
+      root: exportsRoot(),
+      dir: files.dir,
+      snapshotPath: files.snapshotPath,
+      reportPath: files.reportPath,
+      // 两个文件都在才算这一版导出完整；缺一个就当没导出，让「导出」按钮可用。
+      exists: fs.existsSync(files.snapshotPath) && fs.existsSync(files.reportPath)
+    };
+  };
+
+  /**
+   * 项目库视图 + 草稿/版本摘要。库是视图（ADR-0009）：每次按当前知识重新聚合，
+   * 只有「生成草稿 / 发布」才把它固化成快照，所以这里不写库。
+   * limit 只影响面板一屏显示多少条，计数仍按全量；生成快照时用大 limit 取全量。
+   */
+  const libraryForProject = async (project, { profile = null, diagrams = null, limit = 5, full = false } = {}) => {
+    if (!project?.id) return null;
+    const mod = await loadProjectLibrary();
+    let lessons = [];
+    let knowledge = [];
+    if (personalStore) {
+      try { lessons = personalStore.listLessonsForProject(project.id, { limit: 200 }); } catch { lessons = []; }
+      try { knowledge = personalStore.list({ limit: 1000 }); } catch { knowledge = []; }
+    }
+    const profileView = profile ?? await projectBriefFor(project);
+    const diagramView = diagrams ?? await diagramsForProject(project);
+    const view = mod.projectLibraryView({
+      project, lessons, knowledge, profile: profileView, diagrams: diagramView, limit
+    });
+    const draft = snapshotStore?.getDraftState(project.id) ?? null;
+    const versions = snapshotStore?.listVersions(project.id) ?? [];
+    const payload = {
+      ...view,
+      // 快照模块不可用时退回空摘要：库仍能看，只是不能生成/发布（按钮由 hasDraft 置灰）。
+      snapshot: snapshotModule
+        ? snapshotModule.snapshotStateOf({ draft, versions })
+        : { hasDraft: false, draft: null, versions: [], latestVersion: 0, nextVersion: 1, nextLabel: 'v1' },
+      // 导出只读快照：面板拿到的路径就是 publish / export 写出的同一个目录。
+      export: exportInfoFor(project.id, versions)
+    };
+    // 面板每 2 秒轮询一次快照，groups 是全量条目，只给生成快照用，不随渲染下发。
+    if (!full) delete payload.groups;
+    return payload;
+  };
+
 
   // 手机端概览：只暴露「看清项目 + 想法 + 知识摘要」，不含审批与写入。
   const mobileOverviewFor = async ({ projectId = '' } = {}) => {
@@ -1710,14 +1854,12 @@ const buildView = async (requestedProjectId = '') => {
   // #95 灵感收件箱是全局的（条目在整理前不属于任何项目）：不跟着 activeProjectId 取数，
   // 没有项目时也要能看能记。取不到就按「读不出来」显示，不要拿空收件箱冒充。
   const ideasView = (await api('/owner/v1/ideas').catch(() => null))?.view ?? null;
-  const projectHead = await headForProject(activeProject?.root ?? '');
-  const diagramView = ((await api(
-    `/owner/v1/projects/${encodeURIComponent(activeProjectId)}/diagrams`
-  ).catch(() => ({ items: [] }))).items ?? []).map((diagram) => ({
-    ...diagram,
-    stale: Boolean(diagram.basedOnCommit && projectHead && diagram.basedOnCommit !== projectHead)
-  }));
+  // 图谱的「有过更新」判断已经收进 diagramsForProject，这里不再自己取一次提交。
+  const diagramView = await diagramsForProject(activeProject);
   const briefView = await projectBriefFor(activeProject);
+  // #89：项目库是视图，不落库；草稿/版本摘要只读快照表。随快照一起给面板，
+  // 面板不再自己聚合（聚合规则只保留 src/project-library.mjs 一份）。
+  const libraryView = await libraryForProject(activeProject, { profile: briefView, diagrams: diagramView });
   const resultView = finalCycle
     ? {
       cycleId: finalCycle.id,
@@ -1827,6 +1969,8 @@ const buildView = async (requestedProjectId = '') => {
     ideas: ideasView,
     diagrams: diagramView,
     knowledge: knowledgeView,
+    // #89：项目库那一段（两节 + 计数 + 草稿/版本状态）；没有项目时为 null。
+    library: libraryView,
     result: resultView
   };
 };
@@ -3191,6 +3335,34 @@ const registerIpc = () => {
     await openKnowledgeWorkbench();
   });
 
+  // #86 会话扫描：读本机 Codex / Claude Code 的会话，按工作目录匹配项目后产决策候选。
+  // 只读：不写知识库、不调模型、不联网；已扫过的会话键与候选指纹落在 memory-scan.json，
+  // 所以再点一次不会把同一段会话重新提炼一遍。
+  ipcMain.handle('companion:session-scan', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    sessionScanModule = sessionScanModule ?? await importEsm('../src/memory/session-scan.mjs');
+    const projects = (store?.listProjects() ?? []).map((project) => ({
+      id: project.id,
+      name: project.name ?? '',
+      root: project.root ?? ''
+    }));
+    const state = loadSessionScanState();
+    const result = await sessionScanModule.scanSessions({
+      roots: sessionScanModule.sessionRootsFrom({ home: os.homedir(), env: process.env }),
+      projects,
+      seenSessions: state.sessions,
+      fingerprints: state.fingerprints
+    });
+    saveSessionScanState({
+      sessions: [...state.sessions, ...result.scannedKeys],
+      // 只记「哪些会话扫过」，不把未确认候选的指纹写进去：本轮提过的候选还没入库，
+      // 占住指纹会让它以后再也没机会被提出来。跨轮的同内容去重靠会话键；
+      // 指纹去重在本轮跨会话时生效，等确认入库后由库提供已有指纹（下一张票）。
+      fingerprints: state.fingerprints
+    });
+    return result;
+  });
+
   // 只读 playbook：列表、执行、报告、转提案。
   ipcMain.handle('companion:playbooks', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
@@ -3366,6 +3538,93 @@ const registerIpc = () => {
     const mod = await loadProjectBrief();
     const payload = mod.buildLocalProjectBrief({ project, repoFacts: facts });
     return saveProjectBrief(project, payload, { basedOnCommit: facts.head });
+  });
+
+  // #89 项目库：生成草稿（覆盖上一份）与发布（分配 v1..vN，发布后不可改）。
+  // 两个都是显式动作：只读快照不会生成草稿，改知识也不会自动发布。
+  ipcMain.handle('companion:library-draft', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('还没有项目，先添加一个项目目录。');
+    if (!snapshotStore || !snapshotModule) throw new Error('快照存储尚未就绪，请重启后再试。');
+    // 快照用 groups 取全量，limit 只影响随后的面板渲染；这里仍走一次全量视图。
+    const library = await libraryForProject(project, { full: true });
+    const note = String(input?.note ?? '');
+    const content = snapshotModule.snapshotContentOf(library, { note });
+    snapshotStore.saveDraft({ projectId: project.id, content });
+    return libraryForProject(project);
+  });
+
+  ipcMain.handle('companion:library-publish', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('还没有项目，先添加一个项目目录。');
+    if (!snapshotStore) throw new Error('快照存储尚未就绪，请重启后再试。');
+    const published = snapshotStore.publish({
+      projectId: project.id,
+      note: String(input?.note ?? '')
+    });
+    // #90：发布 = 生成快照 + 导出到固定目录。导出失败不回滚已发布版本（快照不可变、
+    // 版本号不能回收），把原因交给面板，由人点「导出」重试；下次导出仍是同一份字节。
+    let exported = null;
+    let exportError = '';
+    if (exportModule) {
+      try {
+        exported = exportModule.exportPublishedVersion({
+          store: snapshotStore,
+          root: exportsRoot(),
+          projectId: project.id,
+          version: published.version
+        });
+      } catch (error) {
+        exportError = String(error?.message ?? error);
+        console.error('project export failed:', exportError);
+      }
+    } else {
+      exportError = '导出模块尚未就绪，请重启后再试。';
+    }
+    const library = await libraryForProject(project);
+    return {
+      ...library,
+      published: {
+        version: published.version,
+        label: `v${published.version}`,
+        publishedAt: published.publishedAt,
+        export: exported,
+        exportError
+      }
+    };
+  });
+
+  // #90 导出：把某个已发布版本写进固定目录。默认最新一版；重复导出是幂等的。
+  ipcMain.handle('companion:library-export', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!snapshotStore || !exportModule) throw new Error('快照存储尚未就绪，请重启后再试。');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('还没有项目，先添加一个项目目录。');
+    const versions = snapshotStore.listVersions(project.id);
+    const wanted = Number(input?.version);
+    const version = Number.isSafeInteger(wanted) && wanted > 0 ? wanted : versions[0]?.version;
+    if (!version) throw new Error('还没有已发布的版本，先发布一次再导出。');
+    const exported = exportModule.exportPublishedVersion({
+      store: snapshotStore, root: exportsRoot(), projectId: project.id, version
+    });
+    const library = await libraryForProject(project);
+    return { ...library, exported };
+  });
+
+  // #90「打开目录」：只允许打开导出根之内的路径，路径不存在就明确报错。
+  ipcMain.handle('companion:library-export-open', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const root = path.resolve(exportsRoot());
+    const target = path.resolve(String(input?.path ?? ''));
+    if (target !== root && !target.startsWith(root + path.sep)) {
+      throw new Error('只能打开导出目录里的路径。');
+    }
+    if (!fs.existsSync(target)) throw new Error('导出目录不存在；先发布或导出一次。');
+    const failure = await shell.openPath(target);
+    if (failure) throw new Error(`打开目录失败：${failure}`);
+    return { opened: target };
   });
 
   ipcMain.handle('companion:github-pr-preview', async (event, input) => {

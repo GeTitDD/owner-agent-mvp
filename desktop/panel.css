@@ -1628,6 +1628,24 @@ pre.diff, pre.logs {
 .kb-head h3 { margin: 0; font-size: 15px; letter-spacing: -.01em; }
 .kb-head .count { margin-left: auto; }
 .kb-hint { margin: 6px 0 10px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+/* #86 会话扫描：计数与候选预览并排放在知识页顶部，0 条候选时也要看得出扫描确实跑过。 */
+.kb-scan {
+  margin: 0 0 10px; padding: 10px 12px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+}
+.kb-scan-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.kb-scan-title { font-size: 13px; font-weight: 650; }
+.kb-scan-summary { font-size: 11.5px; line-height: 1.5; color: var(--muted); text-align: right; }
+.kb-scan-reasons { margin: 6px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--muted); }
+.kb-scan-candidates { display: grid; gap: 6px; margin-top: 8px; }
+.kb-scan-item {
+  display: grid; gap: 2px; padding: 6px 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+}
+.kb-scan-quote { font-size: 12px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere; }
+.kb-scan-item-meta { font-size: 10.5px; color: var(--muted); }
+.kb-scan-empty, .kb-scan-more, .kb-scan-hint { margin: 0; font-size: 11px; line-height: 1.6; color: var(--muted); }
+.kb-scan-hint { margin-top: 8px; }
 .kb-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .kb-chip {
   display: inline-flex; align-items: center; gap: 6px;
@@ -1770,3 +1788,98 @@ pre.diff, pre.logs {
 .fd-tab.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
 .fd-tab-count { flex: none; border-radius: 999px; background: var(--warn-soft); color: var(--warn); padding: 0 5px; font-size: 10px; }
 .fd-tab.on .fd-tab-count { background: rgba(255, 255, 255, .22); color: inherit; }
+
+/* ---- 项目库（#89）：两节 + 草稿 / 发布 ---- */
+.library-section { margin-bottom: 14px; }
+.library-section[hidden] { display: none; }
+.library-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.library-empty strong { color: var(--text); font-size: 12px; font-weight: 600; }
+.library-empty[hidden] { display: none; }
+.library-sections { display: grid; gap: 8px; }
+.library-block {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 5px;
+  background: rgba(38, 38, 38, 0.02);
+}
+.library-block-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.library-block-name { margin: 0; font-size: 12px; font-weight: 600; }
+.library-block-count { color: var(--muted); font-size: 11px; }
+.library-block-empty { margin: 0; color: var(--muted); font-size: 11px; }
+.library-item { display: flex; gap: 6px; min-width: 0; }
+.library-item-main { display: grid; gap: 1px; min-width: 0; }
+.library-item-title {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-item-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; color: var(--muted); font-size: 10px; }
+.library-badge {
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 10px;
+  line-height: 16px;
+}
+.library-badge.verified, .library-badge.active { color: var(--ok); border-color: var(--ok); }
+.library-badge.disputed, .library-badge.superseded { color: var(--danger); border-color: var(--danger); }
+.library-badge.unverified, .library-badge.inferred, .library-badge.needs_reverification { color: var(--warn); border-color: var(--warn); }
+.library-more { margin: 2px 0 0; color: var(--muted); font-size: 10px; }
+.library-assets {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.library-assets[hidden] { display: none; }
+.library-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+.library-status { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.library-actions { display: flex; gap: 6px; }
+.library-versions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.library-versions:empty { display: none; }
+.library-version {
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  line-height: 17px;
+}
+/* #90 导出：路径要么完整显示（可复制），要么明确写「还没有导出」。 */
+.library-export { margin-top: 6px; }
+.library-export[hidden] { display: none; }
+.library-export-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.library-export-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+  word-break: break-all;
+}
