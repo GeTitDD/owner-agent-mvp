@@ -1889,7 +1889,82 @@ pre.diff, pre.logs {
   border: 1px solid var(--line);
   border-radius: 999px;
   line-height: 17px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
+.library-version:hover { border-color: var(--accent); }
+.library-version.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
+/* #92 发布说明：可空；空着就只是一个提示文本，不占内容。 */
+.library-publish-note { margin-top: 6px; display: flex; gap: 6px; }
+.library-note {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 11px;
+}
+/* #92 版本详情：只读内容 + 相邻两版 diff。没有输入框，也没有任何写入动作。 */
+.library-version-detail { margin-top: 8px; display: grid; gap: 7px; }
+.library-version-detail[hidden] { display: none; }
+.library-version-detail-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.library-version-detail-label { font-size: 12px; }
+.library-version-detail-time { color: var(--muted); font-size: 10.5px; }
+.library-version-readonly {
+  margin-left: auto;
+  padding: 0 6px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 16px;
+}
+.library-version-hint { margin: 0; color: var(--muted); font-size: 11px; }
+.library-version-brief { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; }
+.library-version-note {
+  flex: 0 1 180px;
+  min-width: 140px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+}
+.library-version-note-label { display: block; color: var(--muted); font-size: 10px; margin-bottom: 2px; }
+.library-version-note-text { margin: 0; font-size: 11.5px; line-height: 1.45; }
+.library-version-diff {
+  flex: 1 1 240px;
+  min-width: 200px;
+  display: grid;
+  gap: 5px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.library-diff-headline { margin: 0; font-size: 11px; font-weight: 600; }
+.library-diff-group { display: grid; gap: 2px; }
+.library-diff-group-head { display: flex; align-items: baseline; gap: 6px; }
+.library-diff-group-name { font-size: 11px; font-weight: 600; }
+.library-diff-added .library-diff-group-name { color: var(--ok); }
+.library-diff-changed .library-diff-group-name { color: var(--warn); }
+.library-diff-removed .library-diff-group-name { color: var(--danger); }
+.library-diff-group-count { color: var(--muted); font-size: 10px; }
+.library-diff-empty { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.library-diff-item { display: grid; gap: 1px; padding: 2px 0; border-top: 1px dashed var(--line); }
+.library-diff-item-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.library-diff-item-title { font-size: 11px; overflow-wrap: anywhere; }
+.library-diff-item-section { color: var(--muted); font-size: 9.5px; }
+.library-diff-change { display: flex; flex-wrap: wrap; gap: 3px; font-size: 10px; line-height: 1.4; }
+.library-diff-field { color: var(--muted); }
+.library-diff-before { color: var(--danger); text-decoration: line-through; }
+.library-diff-arrow { color: var(--muted); }
+.library-diff-after { color: var(--ok); }
+.library-version-sections { display: grid; gap: 6px; }
+.library-version-counts { margin: 0; color: var(--muted); font-size: 10.5px; }
 /* #90 导出：路径要么完整显示（可复制），要么明确写「还没有导出」。 */
 .library-export { margin-top: 6px; }
 .library-export[hidden] { display: none; }

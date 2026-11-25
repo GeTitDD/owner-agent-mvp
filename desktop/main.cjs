@@ -112,6 +112,8 @@ let exportModule = null;
 let publishCardModule = null;
 let publishCardStore = null;
 let feishuConfigModule = null;
+// #92：历史版本浏览时的相邻版本 diff（纯函数，只读两份快照内容）。
+let versionDiffModule = null;
 // #84：水位与「自上次看过」。
 // - memoryWatermarks：每项目一个时间点，与 OwnerStore 共用同一条连接（同一份本地库）；
 // - observerEventStore：只读观察员事件，独立连接（观察员可以和桌面端同时开着）；
@@ -1245,6 +1247,10 @@ const knowledgeDetail = ({ id } = {}) => {
 
   const loadProjectLibrary = async () =>
     (projectLibraryModule ??= await importEsm('../src/project-library.mjs'));
+
+  // #92：版本 diff 是纯函数；按需加载，和库视图一样不在启动时增加加载项。
+  const loadVersionDiff = async () =>
+    (versionDiffModule ??= await importEsm('../src/project-version-diff.mjs'));
 
   /** 项目图谱：与 buildView 同一口径（stale 按当前 HEAD 判断），给库的图谱摘要复用。 */
   const diagramsForProject = async (project) => {
@@ -3726,6 +3732,36 @@ const registerIpc = () => {
         exportError,
         delivery
       }
+    };
+  });
+
+  // #92 历史版本浏览：只读打开某一版，并给出与上一版的自动 diff。
+  // 这个入口只读：不生成草稿、不写任何表，打开历史版本不会改动已发布数据。
+  ipcMain.handle('companion:library-version', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!snapshotStore) throw new Error('快照存储尚未就绪，请重启后再试。');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('还没有项目，先添加一个项目目录。');
+    const version = Number(input?.version);
+    if (!Number.isSafeInteger(version) || version < 1) throw new Error('版本号无效。');
+    const current = snapshotStore.getVersion(project.id, version);
+    if (!current) throw new Error(`没有找到 v${version}。`);
+    // 相邻两版：v1 没有上一版，明说「首版」；版本号大于 1 却读不到上一版是异常，
+    // 与首版区分开，不把缺失说成「没有变化」。
+    const previous = version > 1 ? snapshotStore.getVersion(project.id, version - 1) : null;
+    const diffModule = await loadVersionDiff();
+    const diff = diffModule.versionDiffOf(previous?.content ?? null, current.content, {
+      previousLabel: previous ? `v${previous.version}` : (version > 1 ? `v${version - 1}` : ''),
+      previousMissing: version > 1 && !previous
+    });
+    return {
+      version: current.version,
+      label: `v${current.version}`,
+      publishedAt: current.publishedAt,
+      note: current.note,
+      counts: current.counts,
+      content: current.content,
+      diff
     };
   });
 
