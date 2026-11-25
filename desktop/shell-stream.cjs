@@ -265,6 +265,8 @@
     /**
      * 确认卡动作（#113）：四个动作都落到纯函数 riskAction，再按「我的 + 回复」两条消息落库。
      * 改判不覆盖原判据：新卡由 riskAction 生成，原卡只记一个 answers 标记。
+     * #115：项目目录同步的卡带着写入清单，动作交给 project-write-host 处理——「允许这一次」
+     * 在那条路上是真的写文件，并回一条带路径与字节数的回执。
      */
     const actRisk = (button) => ctx.report('确认卡', async () => {
       if (!listApi.canCompose(currentId())) return;
@@ -288,12 +290,27 @@
         return;
       }
 
-      let action = null;
-      if (button.dataset.riskOverrideSubmit !== undefined) {
+      const overrideSubmit = button.dataset.riskOverrideSubmit !== undefined;
+      const overrideArgs = () => {
         const form = button.closest('[data-risk-override-form]');
-        const level = form?.querySelector('[data-risk-override-level]')?.value ?? '';
-        const note = form?.querySelector('[data-risk-override-note]')?.value ?? '';
-        action = riskApi.riskAction({ card, action: 'override', level, note });
+        return {
+          level: form?.querySelector('[data-risk-override-level]')?.value ?? '',
+          note: form?.querySelector('[data-risk-override-note]')?.value ?? ''
+        };
+      };
+
+      let action = null;
+      const projectSync = window.OwnerProjectWrite;
+      if (projectSync?.knowsCard?.(card.id) === true) {
+        // 项目目录同步：清单在 project-write-host 里，允许才写，取消只留「未写入」回执。
+        action = await projectSync.act({
+          card,
+          action: overrideSubmit ? 'override' : (button.dataset.riskAction ?? ''),
+          ...overrideArgs(),
+          sessionId: currentId()
+        });
+      } else if (overrideSubmit) {
+        action = riskApi.riskAction({ card, action: 'override', ...overrideArgs() });
       } else if (button.dataset.riskAction) {
         action = riskApi.riskAction({ card, action: button.dataset.riskAction });
       }

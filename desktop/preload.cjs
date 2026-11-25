@@ -90,6 +90,12 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   // #114 自有目录写入：判定与回执在渲染层（src/own-write.mjs），这里只提供真正写库的一步。
   // 走这条路的动作不弹确认卡；删除 / 项目目录 / 外发不从这里走（#115 / #116）。
   ownWrite: (input) => invoke('companion:own-write', input),
+  // #115 项目目录同步：先算清单（只读，返回完整路径与字节数给确认卡），确认后再写。
+  // 判定与会话授权在渲染层（src/project-write.mjs + write-gate）；主进程只做落盘与越界校验。
+  projectSync: Object.freeze({
+    plan: (input) => invoke('companion:project-sync-plan', input),
+    write: (input) => invoke('companion:project-sync-write', input)
+  }),
   diagrams: Object.freeze({
     dependency: (input) => invoke('companion:diagram-dependency', input),
     generate: (input) => invoke('companion:diagram-generate', input)

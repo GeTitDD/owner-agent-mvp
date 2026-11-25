@@ -84,6 +84,8 @@
     // #114：自有目录写入的判定与回执由 src/own-write.mjs 提供，经 own-write-host.mjs
     // 挂到窗口。模块脚本晚于经典脚本，所以不在加载时断言存在，而是在发送时读。
     const ownWrites = () => window.OwnerOwnWrite ?? null;
+    // #115：项目目录同步同理（判定 / 清单 / 会话授权在 src/project-write.mjs）。
+    const projectSyncs = () => window.OwnerProjectWrite ?? null;
 
     const $ = (id) => document.getElementById(id);
     const form = $('composer');
@@ -509,6 +511,77 @@
       }
     };
 
+    /**
+     * 这次同步要写哪些文档。
+     *
+     * 默认来源是「这次会话」：整段对话按既有的消息 → Markdown 能力折成一篇笔记，
+     * 落到 docs/notes/<标题>.md。window.OwnerProjectSyncDocs 是注入点（e2e 验多文档清单，
+     * 将来接项目库草稿也走这里），返回非空数组就按它来。
+     */
+    const projectSyncDocs = async ({ sessionId, title, messages }) => {
+      const api = projectSyncs();
+      const injected = window.OwnerProjectSyncDocs;
+      if (typeof injected === 'function') {
+        const docs = await injected({ sessionId, title, messages });
+        if (Array.isArray(docs) && docs.length > 0) return docs;
+      }
+      const markdown = messages
+        .map((message) => ctx.copyApi.messageToMarkdown(message))
+        .filter((text) => String(text ?? '').trim())
+        .join('\n\n---\n\n');
+      return [api.sessionNoteDoc({ sessionId, title, markdown })];
+    };
+
+    /**
+     * 项目目录同步（#115）：清单 → 判定 → 确认卡 或 直接写入 → 回执。
+     *
+     * 与自有目录那条路的区别只有一处：项目目录未授权时先出确认卡，不在这里写；
+     * 授权是会话级的（project-write-host 记会话 id），换会话就重新确认。
+     * 没有选项目时明确说「什么都没写」，不回退到第一个项目。
+     */
+    const runProjectSyncTurn = async (command, raw) => {
+      const api = projectSyncs();
+      if (!api) {
+        ctx.ui.header.setError('项目目录同步模块还没加载好，稍等一下再试。');
+        return;
+      }
+      busy = true;
+      try {
+        const sessionId = currentId();
+        // 先算正文再落「我的一句话」：这条命令本身不该被写进同步的笔记里。
+        const detail = await store.get({ id: sessionId });
+        const messages = threadApi.fromStored(detail?.messages);
+        const session = ctx.ui.header.currentSession();
+        const title = command.title || listApi.titleOf(session);
+        const docs = await projectSyncDocs({ sessionId, title, messages });
+        await store.append({ id: sessionId, role: 'user', text: raw });
+        const projectId = ctx.ui.header.viewProjectId();
+        let reply = null;
+        if (!projectId) {
+          reply = { text: '同步到项目目录要先在顶栏选一个项目：这次什么都没写。', blocks: [] };
+        } else {
+          try {
+            reply = await api.request({ sessionId, projectId, docs });
+          } catch (error) {
+            // 算清单失败（路径非法 / 项目不在 / 没接主进程）也要留在流里，不静默。
+            reply = { text: `没有同步：${error?.message || '未知原因'}`, blocks: [] };
+          }
+        }
+        await store.append({
+          id: sessionId,
+          role: 'assistant',
+          text: reply?.text ?? '',
+          blocks: Array.isArray(reply?.blocks) ? reply.blocks : []
+        });
+        input.value = threadApi.draftAfterSend();
+        resizeInput();
+        await ctx.refreshThread();
+        input.focus();
+      } finally {
+        busy = false;
+      }
+    };
+
     const send = () => report('发送', async () => {
       if (busy || !listApi.canCompose(currentId())) return;
       const raw = input.value;
@@ -519,17 +592,21 @@
         await runOwnWriteTurn(command, raw);
         return;
       }
-      // 还没接模型：普通消息回占位回复；/blocks 回块全览；/risk 回一张确认卡（#113）；
-      // /外发 /删除 /同步 回 #116 的确认卡。全部是普通消息，先拦住再回，保证同一个入口。
+      // 项目目录同步（/同步到项目）：未授权先出确认卡，授权后按会话直接写。
+      const syncCommand = projectSyncs()?.parseCommand?.(raw) ?? null;
+      if (syncCommand) {
+        await runProjectSyncTurn(syncCommand, raw);
+        return;
+      }
+      // 还没接模型：普通消息回占位回复；/blocks 块全览；/risk 确认卡；/外发 /删除 走 #116 的确认卡。
       const confirmCommand = window.OwnerConfirm?.parseCommand(raw) ?? null;
-      const built = blocksApi.isSampleCommand(raw)
+      const reply = blocksApi.isSampleCommand(raw)
         ? blocksApi.sampleReply()
         : riskApi.isRiskCommand(raw)
           ? await riskApi.buildRiskReply(raw)
           : confirmCommand
             ? await window.OwnerConfirm.buildReply(confirmCommand)
             : { text: threadApi.placeholderText(raw), blocks: [] };
-      const reply = built ?? { text: threadApi.placeholderText(raw), blocks: [] };
       busy = true;
       try {
         await store.append({ id: currentId(), role: 'user', text: raw });

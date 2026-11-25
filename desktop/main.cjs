@@ -120,6 +120,8 @@ let exportModule = null;
 let conversationExportModule = null;
 // #93：删除项目连带清理快照与导出目录；清单（plan）与执行分开，未确认不删。
 let projectDeletionModule = null;
+// #115：项目目录同步。清单（完整路径 + 字节数）与写入分开：先算清单给确认卡，确认后才落盘。
+let projectWriteModule = null;
 // #91：发布后发一条飞书文本卡片，投递结果记在单独的账本表上（快照本身不可变）。
 let publishCardModule = null;
 let publishCardStore = null;
@@ -1138,6 +1140,7 @@ const knowledgeDetail = ({ id } = {}) => {
   const loadExecutionStatus = async () => (executionStatusModule ??= await importEsm('../src/execution-status.mjs'));
   const loadKnowledgeTidy = async () => (knowledgeTidyModule ??= await importEsm('../src/knowledge/tidy.mjs'));
   const loadDiagrams = async () => (diagramModule ??= await importEsm('../src/project-diagrams.mjs'));
+  const loadProjectWrite = async () => (projectWriteModule ??= await importEsm('../src/project-write.mjs'));
   const projectHeadCache = new Map();
   const triageDigestCache = new Map();
   /**
@@ -3153,6 +3156,87 @@ const registerIpc = () => {
       // 去重命中时如实说「没有新增」，回执里的「写了什么」才准确。
       wrote: result?.duplicate ? 'ideas 表 · 已有条目，未新增' : 'ideas 表 · 1 条',
       result: String(item.id ?? '') || '已记录'
+    };
+  });
+
+  // #115 项目目录同步：两段式，先算清单再写。
+  // - 判定与会话授权在渲染层（src/project-write.mjs + write-gate）；主进程不重复判定，
+  //   但必须自己校验「每条路径都落在已登记项目根下」，不能把渲染层传来的路径直接落盘；
+  // - 清单（plan）只读：给确认卡提供完整路径与字节数，用户确认前不写任何文件；
+  // - 写入（write）按清单逐条落盘，返回每个文件的真实字节数，并回答「是否进 git 工作区」。
+  // 外发与删除不从这里走（#116）。
+  const gitWorktreeOf = async (root, relativePaths) => {
+    const inside = await execFileAsync('git', ['-C', root, 'rev-parse', '--is-inside-work-tree'], {
+      timeout: 5000, windowsHide: true
+    }).then((result) => result.stdout.trim()).catch(() => '');
+    if (inside !== 'true') return { repo: false, files: [] };
+    if (relativePaths.length === 0) return { repo: true, files: [] };
+    const stdout = await execFileAsync('git', ['-C', root, 'status', '--porcelain', '--', ...relativePaths], {
+      timeout: 10000, windowsHide: true
+    }).then((result) => result.stdout).catch(() => '');
+    const files = String(stdout).split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      // `?? path` / ` M path` 前两位是状态；重命名行取 `->` 后面的新路径。
+      .map((line) => line.slice(3).trim())
+      .map((file) => (file.includes(' -> ') ? file.split(' -> ').pop().trim() : file))
+      .filter(Boolean);
+    return { repo: true, files };
+  };
+
+  const projectSyncRoot = async (input) => {
+    const project = await registeredProject(input?.projectId, '同步到项目目录要先选一个项目。');
+    const root = projectRootOf(project);
+    if (!root) throw new Error(`项目没有根目录：${project.id}`);
+    // 项目目录必须在：不拿一条过期登记凭空造一个目录出来。
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
+      throw new Error(`项目根目录不存在：${root}`);
+    }
+    return { project, root };
+  };
+
+  const projectSyncPlan = async (input) => {
+    const { project, root } = await projectSyncRoot(input);
+    const mod = await loadProjectWrite();
+    return mod.planProjectSync({
+      projectId: project.id,
+      projectName: project.name ?? '',
+      projectRoot: root,
+      docs: Array.isArray(input?.docs) ? input.docs : []
+    });
+  };
+
+  ipcMain.handle('companion:project-sync-plan', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return projectSyncPlan(input);
+  });
+
+  ipcMain.handle('companion:project-sync-write', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const { project, root } = await projectSyncRoot(input);
+    const mod = await loadProjectWrite();
+    // 重新算一遍清单：写入只按主进程自己解析出的绝对路径落盘，不用渲染层的路径字符串。
+    const plan = mod.planProjectSync({
+      projectId: project.id,
+      projectName: project.name ?? '',
+      projectRoot: root,
+      docs: Array.isArray(input?.docs) ? input.docs : []
+    });
+    const written = [];
+    for (const file of plan.files) {
+      const target = mod.resolveUnderRoot(root, file.relativePath);
+      await fs.promises.mkdir(path.dirname(target), { recursive: true });
+      await fs.promises.writeFile(target, file.content, 'utf8');
+      written.push({ relativePath: file.relativePath, fullPath: target, bytes: file.bytes });
+    }
+    const git = await gitWorktreeOf(root, written.map((file) => file.relativePath));
+    return {
+      ok: true,
+      projectId: plan.projectId,
+      projectName: plan.projectName,
+      root,
+      files: written,
+      git
     };
   });
 
