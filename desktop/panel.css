@@ -1384,6 +1384,74 @@ pre.diff, pre.logs {
   overflow: hidden;
 }
 
+/* #84 自上次看过：进入项目时先算差异、再把水位推到当前。
+   有变化时是一段普通卡片；三类全空时 .compact 去掉外框与标题，只留一行文字，
+   不占一块卡片的位置。 */
+.since-seen {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.since-seen[hidden] { display: none; }
+.since-seen.compact {
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.since-seen-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0 0 4px;
+}
+.since-seen-head strong { font-size: 11.5px; }
+.since-seen.compact .since-seen-head { display: none; }
+.since-seen-meta {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.since-seen-line { margin: 0; font-size: 11.5px; line-height: 1.55; }
+.since-seen-line[hidden] { display: none; }
+.since-seen.compact .since-seen-line { color: var(--muted); font-size: 11px; }
+.since-seen-note {
+  margin: 4px 0 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--warn);
+}
+.since-seen-note[hidden] { display: none; }
+.since-seen-groups { display: grid; gap: 6px; margin-top: 6px; }
+.since-seen-group { display: grid; gap: 2px; }
+.since-seen-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.since-seen-group-head .count { font-variant-numeric: tabular-nums; }
+.since-seen-items { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.since-seen-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.since-seen-item-text { min-width: 0; overflow-wrap: anywhere; }
+.since-seen-item-at {
+  margin-left: auto;
+  flex: none;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.since-seen-more { margin: 0; font-size: 10px; color: var(--muted); }
+
 /* ---- 三种视图模式：专注 / 知识 / 对话 ---- */
 .mode-bar {
   display: flex;

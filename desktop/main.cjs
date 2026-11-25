@@ -99,6 +99,14 @@ let sessionScanModule = null;
 let chatModule = null;
 let chatService = null;
 let chatSessionStore = null;
+// #84：水位与「自上次看过」。
+// - memoryWatermarks：每项目一个时间点，与 OwnerStore 共用同一条连接（同一份本地库）；
+// - observerEventStore：只读观察员事件，独立连接（观察员可以和桌面端同时开着）；
+// - 两个模块按需 import，启动时不额外加载。
+let memoryWatermarks = null;
+let observerEventStore = null;
+let sinceLastSeenModule = null;
+let observerProbeModule = null;
 const githubCache = new Map();
 const githubActivityCache = new Map();
 const briefCache = new Map();
@@ -288,6 +296,27 @@ async function startServices() {
     // 「后台自己写经验」的入口。提炼改为人在知识模式里按需触发（LessonDistiller /
     // distillOnDemand），这里只保留读取用的提炼器实例（见 knowledgeDistiller）。
     console.log('knowledge store ready: manual distillation only (ADR-0007)');
+  }
+
+  // #84 水位：新表建在同一个 owner.sqlite 里（老库打开时只多一张空表）。
+  // 复用 OwnerStore 的连接，避免第二条写连接与它抢锁。
+  try {
+    const { MemoryWatermarkStore } = await importEsm('../src/memory/watermark.mjs');
+    memoryWatermarks = new MemoryWatermarkStore({ db: store.db });
+  } catch (error) {
+    console.error('watermark store unavailable:', error.message);
+    memoryWatermarks = null;
+  }
+  // #84 观察员事件：观察员写的是审计库，桌面端只读同一份。
+  // 路径优先级沿用 db-path.mjs（OWNER_OBSERVER_DB → OWNER_AGENT_DB → userData/owner.sqlite），
+  // 所以命令行观察员与桌面端在默认布局和 e2e 的临时库下都指向同一个文件。
+  try {
+    const { ObserverStore } = await importEsm('../src/observer/store.mjs');
+    const { resolveObserverDbPath } = await importEsm('../src/observer/db-path.mjs');
+    observerEventStore = new ObserverStore(resolveObserverDbPath({ fallback: file }));
+  } catch (error) {
+    console.error('observer event store unavailable:', error.message);
+    observerEventStore = null;
   }
   broker = new WorkspaceBroker(store, {
     workspacesRoot: path.join(app.getPath('userData'), 'workspaces')
@@ -1250,6 +1279,66 @@ const knowledgeDetail = ({ id } = {}) => {
       windowsHide: true
     });
     return stdout.trim();
+  };
+
+  // ---- #84 自上次看过 ----
+  //
+  // 取数只用现有来源，不重写一套 git 事实：
+  // - 提交清单与未提交文件清单走 src/observer/probe.mjs（与探针同一套只读 git 调用）；
+  //   probeProject 只给 HEAD / lastCommitAt / uncommittedFiles 计数，回答不了「哪几条提交、
+  //   哪些文件」，所以那里补了 readCommitList / readWorkingTreeChanges 两个只读取数。
+  // - 观察员事件走审计库的 ObserverStore.listEvents（同一份库，只读）。
+  // - 比较与推进全部在 src/memory/since-last-seen.mjs：先算差异、再推水位。
+  const loadObserverProbe = async () => (observerProbeModule ??= await importEsm('../src/observer/probe.mjs'));
+  const loadSinceLastSeen = async () => (sinceLastSeenModule ??= await importEsm('../src/memory/since-last-seen.mjs'));
+
+  // 登记时写进项目根的身份标记与夹具目录不是「项目变了」；与 repoFactsFor 的过滤口径一致。
+  const isNoisePath = (file) =>
+    file === '.owner-root-identity' || String(file).startsWith('.fixture-workspaces/');
+
+  /** 读观察员事件；库或表读不到返回 null，变化窗口会据此标「未知」而不是「没有发生」。 */
+  const observerEventsFor = (projectId) => {
+    if (!observerEventStore) return null;
+    try {
+      return observerEventStore.listEvents({ projectId, limit: 50 });
+    } catch (error) {
+      logError('observer.events', error);
+      return null;
+    }
+  };
+
+  /**
+   * 进入项目时调用：先算「自上次看过」的差异，算完才推进水位（顺序在
+   * computeSinceLastSeen 里固定）。面板的 2 秒轮询不调用它，只刷新已算好的结果，
+   * 否则每 2 秒推进一次，差异会被自己吃掉。
+   * @param {string} projectId
+   * @returns {Promise<object>} changeWindowView 的视图模型（带 checkedAt / previousAt）
+   */
+  const sinceLastSeenFor = async (projectId) => {
+    const id = String(projectId ?? '').trim();
+    if (!id) throw new Error('缺少项目 id');
+    const items = (await api('/owner/v1/projects')).items ?? [];
+    const project = findProjectById(items, id);
+    if (!project) throw new Error(`项目不存在：${id}`);
+    if (!memoryWatermarks) throw new Error('水位存储不可用：本地数据库打不开，请重启客户端。');
+    const probe = await loadObserverProbe();
+    // 读不到（不是仓库 / git 失败）就给 null：这一类会被标成 unknown，不会缩成「没有变化」。
+    let commits = null;
+    let dirty = null;
+    if (project.root) {
+      commits = probe.readCommitList({ root: project.root, limit: 50 });
+      const working = probe.readWorkingTreeChanges({ root: project.root });
+      dirty = working === null ? null : working.filter((item) => !isNoisePath(item.path));
+    }
+    const module = await loadSinceLastSeen();
+    const { view } = module.computeSinceLastSeen({
+      projectId: id,
+      store: memoryWatermarks,
+      commits,
+      dirty,
+      events: observerEventsFor(id)
+    });
+    return view;
   };
 
   /**
@@ -2504,6 +2593,13 @@ const registerIpc = () => {
     const view = await buildView(input?.projectId);
     notifyIfNeeded(view);
     return view;
+  });
+
+  // #84：进入项目时算一次「自上次看过」，返回前把水位推到当前。
+  // 这个通道有副作用（写水位），所以只在「进入项目」时调用；快照轮询不碰它。
+  ipcMain.handle('companion:since-last-seen', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return sinceLastSeenFor(String(input?.projectId ?? ''));
   });
 
   ipcMain.handle('companion:submit', async (event, input) => {

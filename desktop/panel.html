@@ -163,6 +163,19 @@
             <span class="work-entry-note"></span>
           </button>
         </div>
+
+        <!-- 自上次看过（#84）：进入项目时先算差异、再把水位推到当前。
+             没有水位时写「首次查看」，不写「没有变化」；三类全空时整段压成一行（见 panel.js
+             的 renderSinceSeen / src/memory/since-last-seen.mjs），不占一块卡片。 -->
+        <section id="sinceLastSeen" class="since-seen" aria-label="自上次看过" hidden>
+          <div class="since-seen-head">
+            <strong id="sinceSeenTitle">自上次看过</strong>
+            <span id="sinceSeenMeta" class="since-seen-meta"></span>
+          </div>
+          <p id="sinceSeenLine" class="since-seen-line" hidden></p>
+          <p id="sinceSeenNote" class="since-seen-note" hidden></p>
+          <div id="sinceSeenGroups" class="since-seen-groups"></div>
+        </section>
         <!-- 工作区内容常驻展开：原来包在外面的 details 折叠条已经去掉，
              这里只留容器；#73 之后只剩「所选项目」一段，全局块都搬走了。 -->
         <section class="workspace" id="workWorkspace">
@@ -472,6 +485,8 @@
   <!-- 操作区视图模型是 ESM（src/focus-ops.mjs）；模块脚本会被推迟到解析完再执行，
        panel.js 只在真正渲染操作区时读 window.OwnerFocusOps，读不到就等 next tick。 -->
   <script type="module" src="./focus-ops-host.mjs"></script>
+  <!-- 「自上次看过」的形态判定（首次查看 / 压成一行）同样只写在 ESM 里，见 since-seen-host.mjs。 -->
+  <script type="module" src="./since-seen-host.mjs"></script>
   <script src="./chat-handoff.cjs"></script>
   <script src="../node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="./panel.js"></script>
