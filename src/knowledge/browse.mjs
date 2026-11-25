@@ -11,6 +11,13 @@
 
 import { flatText } from '../utils.mjs';
 import { LESSON_STATUS_LABELS, lessonStatusOf, lessonStatusLabel } from '../lesson-status.mjs';
+import {
+  decisionDecidedAt,
+  decisionSourceLabel,
+  decisionStatusLabel,
+  decisionStatusOf,
+  isCurrentDecision
+} from '../memory/decision-status.mjs';
 
 const CANDIDATE_CONTRACT = 'knowledge-candidate/v1';
 const DEFAULT_LIMIT = 50;
@@ -154,24 +161,47 @@ export function knowledgeBrowseView({
 
   // 知识：personal_units 行。项目级与域级的规则同处一层，作用域与层写在说明里，
   // 验证状态只做徽章——接受候选后的待验证条目因此不会「凭空消失」。
+  // 决策（#87）用自己的状态列与徽章：「生效中 / 已被取代 / 已放弃」不是「待验证 / 已验证」；
+  // 已结束的决策仍留在列表里，但写明「不算现状」，并在排序上排到生效中的后面。
   const knowledgeItems = units
     .map((row) => {
-      const status = row.verificationStatus ?? 'unverified';
+      const isDecision = row.kind === 'decision';
+      const status = isDecision ? decisionStatusOf(row) : (row.verificationStatus ?? 'unverified');
       const layer = row.layer ?? 'applied';
       const ids = row.scope === 'project' ? projectIdsOf([row.projectId]) : [];
+      const current = isDecision ? isCurrentDecision(row) : true;
+      const reasonMissing = isDecision && row.decision?.reasonMissing === true;
+      const sourceLabel = isDecision ? decisionSourceLabel(row.decision?.source) : '';
+      const decidedAt = isDecision ? decisionDecidedAt(row) : null;
+      const statusText = isDecision ? decisionStatusLabel(row) : badgeOf(status);
+      const detail = isDecision
+        ? [`决策`, statusText, current ? '' : '不算现状', sourceLabel, decidedAt ? `确认于 ${oneLine(decidedAt, 24)}` : '']
+          .filter(Boolean).join(' · ')
+        : `${badgeOf(status)} · ${SCOPE_LABELS[row.scope] ?? row.scope ?? '个人'} · ${layer} 层 · r${row.revision ?? 1}`;
       return {
         id: row.id,
         kind: 'knowledge',
         title: oneLine(row.title, 200) || '未命名知识',
         status,
-        badge: badgeOf(status),
-        detail: `${badgeOf(status)} · ${SCOPE_LABELS[row.scope] ?? row.scope ?? '个人'} · ${layer} 层 · r${row.revision ?? 1}`,
+        badge: isDecision ? statusText : badgeOf(status),
+        detail,
         projectIds: ids,
         projectId: ids[0] ?? null,
+        // 决策专用标记：面板据此加「已被取代 / 已放弃」动作与「缺理由」提示。
+        decision: isDecision,
+        decisionStatus: isDecision ? status : null,
+        current,
+        reasonMissing,
+        sourceLabel,
+        decidedAt,
         at: row.updatedAt ?? row.updated_at ?? null
       };
     })
-    .sort(newestFirst);
+    .sort((a, b) => {
+      // 已结束的决策不算现状：同一时间口径下，生效中的排在前面，但不隐藏后者。
+      if (Boolean(a.current) !== Boolean(b.current)) return a.current ? -1 : 1;
+      return newestFirst(a, b);
+    });
 
   const buckets = { candidates, lessons: lessonItems, knowledge: knowledgeItems };
 

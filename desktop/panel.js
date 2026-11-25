@@ -177,111 +177,282 @@
     return new Date(at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
   };
 
-  const queueAction = async (action, success) => {
+  // #95 灵感收件箱：捕获只入「收件箱」，状态只能按 收件箱 → 已整理 → 已采纳/已丢弃 前进。
+  // 整理（抓链接、写四段结论）是 #96 的事；本段只做捕获、整理与状态动作。
+  // #97 起「已采纳」不再是一个空按钮：已整理只能经「提升为知识 / 提升为任务」到达 adopted。
+  // 丢弃是明确动作：条目留在「已整理」段里可查回，原文与链接都不删。
+  const IDEA_ACTION_TEXT = {
+    sorted: { label: '标记已整理', done: '已移入已整理' },
+    discarded: { label: '丢弃', done: '已丢弃（原文还留着）' }
+  };
+  const IDEA_STATUS_NAMES = { inbox: '收件箱', sorted: '已整理', adopted: '已采纳', discarded: '已丢弃' };
+
+  // 存储层的状态机用英文报「不能从 X 到 Y」；面板翻成中文，并把下一步说清楚。
+  const ideaErrorText = (error) => {
+    const raw = cleanIpcError(error?.message ?? error);
+    const move = /Idea cannot move from (\w+) to (\w+)/u.exec(raw);
+    if (move) {
+      const from = IDEA_STATUS_NAMES[move[1]] ?? move[1];
+      const to = IDEA_STATUS_NAMES[move[2]] ?? move[2];
+      const next = from === '收件箱' ? '先标记已整理。' : '这条已经走到头了。';
+      return `不能从「${from}」直接到「${to}」：${next}`;
+    }
+    if (/Invalid idea status/u.test(raw)) return '未知的灵感状态，没有改。';
+    return raw;
+  };
+
+  const ideaAction = async (action, success) => {
     try {
       const result = await action();
       await refresh();
-      // refresh 可能被轮询占用而提前返回；队列单独重载一次，确保操作立刻可见。
-      try {
-        const snapshot = await window.companion.snapshot();
-        view = { ...view, queue: snapshot.queue };
-        renderQueue();
-      } catch { /* 下一次轮询会补上 */ }
       if (success) toast(success(result), 4200);
       return result;
     } catch (error) {
-      toast(String(error?.message ?? error), 6000);
+      toast(ideaErrorText(error), 6000);
       return null;
     }
   };
 
-  // 想法池状态：复用队列状态机，只是文案按「想法」解释。
-  const IDEA_STATUS = {
-    todo: '新想法', doing: '讨论中', blocked: '搁置', done: '已采纳', failed: '失败'
-  };
-  const IDEA_SOURCE = { conversation: '对话', owner: '手动' };
-
-  const renderQueue = () => {
-    const list = $('queueList');
-    if (!list) return;
-    const items = (view?.queue ?? []).filter((item) => item.kind === 'idea');
-    const active = items.filter((item) => ['todo', 'doing', 'blocked'].includes(item.status)).length;
-    $('queueBadge').textContent = String(active);
-    $('queueBadge').title = `共 ${items.length} 条想法`;
-    list.replaceChildren();
-    if (!items.length) {
-      list.append(el('div', 'queue-empty', '还没有想法。和 Agent 讨论时提到的改进会自动收在这里。'));
+  /**
+   * #97 提升：已整理的条目 → 知识候选（假设类）或项目队列任务。
+   * 任务没有项目时不替用户挑：先让他在这条上选项目；服务端也会再拦一次。
+   */
+  const promoteIdea = async (item, to, button, select) => {
+    const knowledge = to === 'knowledge';
+    const projectId = knowledge ? '' : (item.projectId || select?.value || '');
+    if (!knowledge && !projectId) {
+      toast('这条灵感还没有项目：先在条目里选一个项目，再提升为任务。', 6000);
       return;
     }
-    for (const item of items) {
-      const row = el('div', 'queue-item');
-      row.dataset.id = item.id;
-      row.dataset.status = item.status;
-      const dot = el('span', 'queue-dot');
-      const main = el('div', 'queue-main');
-      const title = el('div', 'queue-title', item.title);
-      const meta = el('div', 'queue-meta');
-      meta.append(el('span', `queue-status ${item.status}`, IDEA_STATUS[item.status] ?? item.status));
-      meta.append(el('span', 'queue-source', IDEA_SOURCE[item.source] ?? item.source));
-      if (item.createdAt) meta.append(el('span', 'queue-time', formatRelative(item.createdAt) || ''));
-      main.append(title, meta);
-      const actions = el('div', 'queue-actions');
-      if (item.status !== 'doing') {
-        const discuss = el('button', 'queue-action primary', '讨论');
-        discuss.type = 'button';
-        discuss.onclick = () => {
-          void window.companion.queue.update({ id: item.id, status: 'doing' }).then(() => refresh());
-          void sendMessage(`讨论这条改进想法（只讨论，不要改代码）：${item.title}`, { capture: false });
-        };
-        actions.append(discuss);
+    if (button?.disabled) return;
+    if (button) {
+      button.disabled = true;
+      button.textContent = '提升中…';
+    }
+    try {
+      const result = await window.companion.ideas.promote({ id: item.id, to, projectId });
+      await refresh();
+      if (knowledge) {
+        toast('已提升为知识候选（假设类），去候选队列审核；灵感已采纳。', 5200);
+      } else {
+        const target = result?.projectId ?? projectId;
+        const name = focusProjects().find((project) => project.id === target)?.name ?? target;
+        toast(`已提升为任务，放进「${name}」的队列；灵感已采纳。`, 5200);
       }
-      if (item.status !== 'done') {
-        const adopt = el('button', 'queue-action', '采纳');
-        adopt.type = 'button';
-        adopt.title = '标记为已采纳，便于以后整理';
-        adopt.onclick = () => {
-          void queueAction(() => window.companion.queue.update({ id: item.id, status: 'done' }), () => '已标记采纳');
-        };
-        actions.append(adopt);
+    } catch (error) {
+      toast(cleanIpcError(error?.message ?? error), 7000);
+      await refresh();
+    } finally {
+      if (button?.isConnected) {
+        button.disabled = false;
+        button.textContent = knowledge ? '提升为知识' : '提升为任务';
       }
-      if (item.status === 'todo' || item.status === 'doing') {
-        const park = el('button', 'queue-action', '搁置');
-        park.type = 'button';
-        park.onclick = () => {
-          void queueAction(() => window.companion.queue.update({ id: item.id, status: 'blocked' }), () => '已搁置');
-        };
-        actions.append(park);
-      }
-      if (item.status === 'blocked' || item.status === 'done') {
-        const reopen = el('button', 'queue-action', '重开');
-        reopen.type = 'button';
-        reopen.onclick = () => {
-          void queueAction(() => window.companion.queue.update({ id: item.id, status: 'todo' }), () => '已重新打开');
-        };
-        actions.append(reopen);
-      }
-      const remove = el('button', 'queue-action danger', '×');
-      remove.type = 'button'; remove.title = '删除';
-      remove.onclick = () => {
-        void queueAction(() => window.companion.queue.remove({ id: item.id }), () => '已删除想法');
-      };
-      actions.append(remove);
-      row.append(dot, main, actions);
-      list.append(row);
     }
   };
 
-  const addQueueItem = async () => {
-    const input = $('queueInput');
-    const title = String(input.value ?? '').trim();
-    if (!title) return;
-    const projectId = view?.config?.projectId ?? '';
-    if (!projectId) { toast('先选择一个项目。'); return; }
-    input.value = '';
-    await queueAction(
-      () => window.companion.queue.add({ projectId, title, kind: 'idea' }),
-      () => '已记下想法'
+  /**
+   * #96 整理：有条目链接就抓一次公网正文，写成四段；抓不到就把原因说清楚。
+   * 抓取失败时存储层一个字都不改，所以条目还在收件箱，再点一次就是重试。
+   * 已整理的条目点的是「重新整理」：走同一接口，但正文已缓存，不会再请求网络。
+   */
+  const sortIdea = async (id, button, again = false) => {
+    if (button?.disabled) return;
+    if (button) {
+      button.disabled = true;
+      button.textContent = '整理中…';
+    }
+    try {
+      const result = await window.companion.ideas.sort({ id });
+      await refresh();
+      const sorted = result?.item?.sorted ?? null;
+      const missing = Array.isArray(sorted?.missing) ? sorted.missing.length : 0;
+      const head = result?.cached
+        ? '整理好了（正文是上次抓的，这次没再请求）'
+        : '整理好了';
+      toast(missing ? `${head}；缺 ${missing} 段，已在条目里标出` : `${head}：四段齐全`, 4800);
+    } catch (error) {
+      toast(`${cleanIpcError(error?.message ?? error)}　条目没改动，可以再点一次重试。`, 7000);
+      await refresh();
+    } finally {
+      if (button?.isConnected) {
+        button.disabled = false;
+        button.textContent = again ? '重新整理' : '整理';
+      }
+    }
+  };
+
+  /** 四段一行一段：缺的那段直接写「缺」与原因，不空着让人误以为没问题。 */
+  const ideaSortedBlock = (sorted) => {
+    const box = el('div', 'idea-sorted');
+    for (const section of sorted.sections) {
+      const line = el('div', 'idea-section');
+      line.dataset.section = section.key;
+      line.dataset.missing = section.missing ? 'true' : 'false';
+      line.append(el('span', 'idea-section-label', section.label));
+      line.append(el(
+        'span',
+        section.missing ? 'idea-section-missing' : 'idea-section-text',
+        section.missing ? `缺：${section.reason || '这一段没有内容'}` : section.text
+      ));
+      box.append(line);
+    }
+    let host = '';
+    try { host = new URL(sorted.fetch?.url ?? '').hostname; } catch { host = ''; }
+    // 抓取次数是缓存证据：同一条链接第二次整理仍然是 1 次，说明没有再发请求。
+    box.append(el('div', 'idea-sorted-meta', sorted.fetch
+      ? `抓取 ${host}：${sorted.fetch.status} · ${(sorted.fetch.bytes / 1024).toFixed(1)} KB · 抓取 ${sorted.fetch.attempts} 次`
+      : '没有链接：四段只看原文'));
+    return box;
+  };
+
+  const ideaRow = (item) => {
+    const row = el('div', 'queue-item');
+    row.dataset.id = item.id;
+    row.dataset.status = item.status;
+    row.dataset.source = item.source || 'paste';
+    const dot = el('span', 'queue-dot');
+    const main = el('div', 'queue-main');
+    const title = el('div', 'queue-title', item.title);
+    // 列表只占一行；原文完整挂在 title 上，悬停能看回原话（不另做弹窗）。
+    if (item.rawText) title.title = item.rawText;
+    const meta = el('div', 'queue-meta');
+    meta.append(el('span', `queue-status ${item.status}`, item.statusLabel));
+    meta.append(el('span', 'queue-source', item.sourceLabel));
+    const when = formatRelative(item.at ?? item.createdAt);
+    if (when) meta.append(el('span', 'queue-time', when));
+    // 链接来源没有抓取结果：标题就是地址，这里只补一个域名，悬停能看全地址。
+    if (item.source === 'link' && item.link) {
+      let host = item.link;
+      try { host = new URL(item.link).hostname || item.link; } catch { /* 地址不完整时保底显示原样 */ }
+      const link = el('span', 'queue-link', host);
+      link.title = item.link;
+      meta.append(link);
+    }
+    main.append(title, meta);
+    const actions = el('div', 'queue-actions');
+    // #96 整理按钮放在最前：收件箱里的条目先整理，再决定采纳还是丢弃。
+    // 已整理的条目留一个「重新整理」：正文已在条目上缓存，重排不会再发请求。
+    if (item.status === 'inbox' || item.status === 'sorted') {
+      const again = item.status === 'sorted';
+      const sortButton = el('button', 'queue-action', again
+        ? '重新整理'
+        : (item.source === 'link' ? '整理链接' : '整理'));
+      sortButton.type = 'button';
+      sortButton.dataset.sort = 'true';
+      sortButton.title = again
+        ? '用上次抓到的正文重写四段，不会再请求网络'
+        : (item.source === 'link'
+          ? '抓一次这条链接的公网正文，写成「问题 / 想法 / 预期收益 / 风险」四段'
+          : '把原文整理成四段');
+      sortButton.onclick = () => { void sortIdea(item.id, sortButton, again); };
+      actions.append(sortButton);
+    }
+    const addAction = (status, className = 'queue-action') => {
+      const text = IDEA_ACTION_TEXT[status];
+      const button = el('button', className, text.label);
+      button.type = 'button';
+      button.dataset.next = status;
+      button.onclick = () => {
+        void ideaAction(
+          () => window.companion.ideas.status({ id: item.id, status }),
+          () => text.done
+        );
+      };
+      actions.append(button);
+    };
+    // 按钮只给合法的那一步：收件箱只能去已整理；已整理只能提升（知识 / 任务）或丢弃。
+    if (item.status === 'inbox') addAction('sorted');
+    if (item.status === 'sorted') {
+      // #97 提升是两条明确去处，取代 #95 泛化的「采纳」：adopted 就是「提升过」的终态，
+      // 不允许既不进知识也不进任务就走到终点（状态机仍保留 adopted，见 idea-entry / owner-store）。
+      const addPromote = (to, label) => {
+        const button = el('button', 'queue-action', label);
+        button.type = 'button';
+        button.dataset.promote = to;
+        button.title = to === 'knowledge'
+          ? '落成假设类知识候选，走既有候选审核；不改动原文与整理结果'
+          : '放进对应项目的任务队列；本条没有项目时要先选项目';
+        button.onclick = () => {
+          const select = row.querySelector('select[data-idea-project]');
+          void promoteIdea(item, to, button, select);
+        };
+        actions.append(button);
+      };
+      addPromote('knowledge', '提升为知识');
+      // 条目没有项目：给一个明确的选择，不默认第一个项目；选中前按钮只提示。
+      if (!item.projectId && focusProjects().length) {
+        const pick = el('select', 'idea-project');
+        pick.dataset.ideaProject = 'true';
+        pick.title = '这条灵感还没有项目：选一个再提升为任务';
+        const placeholder = el('option', '', '选项目…');
+        placeholder.value = '';
+        placeholder.selected = true;
+        pick.append(placeholder);
+        for (const project of focusProjects()) {
+          const option = el('option', '', project.name || project.id);
+          option.value = project.id;
+          pick.append(option);
+        }
+        actions.append(pick);
+      }
+      addPromote('task', '提升为任务');
+      addAction('discarded', 'queue-action danger');
+    }
+    row.append(dot, main, actions);
+    // 整理结果整段铺在条目下方（跨三列），原文仍挂在 title 上可对照。
+    if (item.sorted?.sections?.length) row.append(ideaSortedBlock(item.sorted));
+    return row;
+  };
+
+  const renderIdeas = () => {
+    const list = $('ideaList');
+    if (!list) return;
+    const badge = $('queueBadge');
+    const hint = $('ideaHint');
+    const ideas = view?.ideas ?? null;
+    list.replaceChildren();
+    if (!ideas) {
+      if (badge) { badge.textContent = '—'; badge.title = '灵感收件箱读不出来'; }
+      if (hint) { hint.textContent = '收件箱暂时读不出来，稍后会自动重试。'; hint.hidden = false; }
+      return;
+    }
+    const groups = ideas.groups ?? [];
+    const inbox = groups.find((group) => group.key === 'inbox') ?? null;
+    const sorted = groups.find((group) => group.key === 'sorted') ?? null;
+    const inboxCount = ideas.counts?.inbox ?? 0;
+    const sortedCount = ideas.counts?.sorted ?? 0;
+    if (badge) {
+      badge.textContent = String(inboxCount);
+      badge.title = `收件箱 ${inboxCount} 条 · 已整理 ${sortedCount} 条（已采纳 / 已丢弃也在里面）`;
+    }
+    if (hint) {
+      // 空收件箱的提示来自视图模型，面板不另编一句；有内容时不占版面。
+      hint.textContent = inbox?.empty ? String(inbox.emptyHint ?? '') : '';
+      hint.hidden = !hint.textContent;
+    }
+    if (inbox && !inbox.empty) {
+      list.append(el('div', 'idea-group-title', `${inbox.label} ${inbox.count}`));
+      for (const item of inbox.items) list.append(ideaRow(item));
+    }
+    if (sorted && !sorted.empty) {
+      list.append(el('div', 'idea-group-title', `${sorted.label} ${sorted.count}`));
+      for (const item of sorted.items) list.append(ideaRow(item));
+    }
+    if (inbox?.empty && sorted?.empty) {
+      list.append(el('div', 'queue-empty', '还没有条目。'));
+    }
+  };
+
+  const captureIdea = async () => {
+    const input = $('ideaInput');
+    const text = String(input?.value ?? '');
+    if (!text.trim()) { toast('先粘贴一段话或一个链接。'); return; }
+    const result = await ideaAction(
+      () => window.companion.ideas.capture({ text }),
+      (saved) => (saved?.duplicate ? '收件箱里已经有这一条了' : '已存入收件箱')
     );
+    // 只有真的写进去了才清空输入框：失败时把用户粘的内容留在原地。
+    if (result && input) input.value = '';
   };
 
   const DIAGRAM_LABELS = {
@@ -789,7 +960,7 @@
       else if (action.command === 'tidy') void openKnowledgeTidy();
       else if (action.command === 'queue') {
         $('queueSection')?.scrollIntoView({ block: 'start' });
-        $('queueInput')?.focus();
+        $('ideaInput')?.focus();
       } else if (action.command === 'decide') {
         const section = $('needsSection');
         if (section && !section.hidden) section.scrollIntoView({ block: 'start' });
@@ -1067,13 +1238,17 @@
     }
   };
 
+  // 决策状态文案：列表与详情只显示决策自己的状态，不拿验证状态冒充（#87）。
+  const DECISION_STATUS_TEXT = { active: '生效中', superseded: '已被取代', abandoned: '已放弃' };
+
   const knowledgeItem = (item) => {
     const button = el('button', 'knowledge-item');
     button.type = 'button';
+    const statusText = DECISION_STATUS_TEXT[item.status] ?? item.status ?? 'unknown';
     button.append(el('strong', undefined, item.title));
     button.append(el('span', undefined,
       `${item.type === 'lesson' ? '经验' : item.type === 'candidate' ? '候选' : '知识'} · ` +
-      `${item.status ?? 'unknown'}${item.layer ? ` · ${item.layer}` : ''}` +
+      `${statusText}${item.layer ? ` · ${item.layer}` : ''}` +
       `${item.revision ? ` · r${item.revision}` : ''}`));
     if (item.detail) button.append(el('span', undefined, item.detail));
     button.onclick = () => { void openKnowledgeDetail(item.id); };
@@ -1085,11 +1260,23 @@
       const data = await window.companion.knowledge.detail({ id });
       const nodes = [];
       if (data.kind === 'knowledge') {
+        const isDecision = data.item.kind === 'decision';
+        const decision = data.item.decision ?? {};
+        const reasonText = decision.reasonMissing === true || !decision.reason
+          ? '缺理由（确认时没补）'
+          : decision.reason;
         nodes.push(el('p', 'result-summary', data.item.content));
         nodes.push(detailRows([
           ['层级', data.item.layer],
           ['范围', data.item.scope === 'project' ? `项目 ${data.item.projectId}` : data.item.scope],
-          ['验证', data.item.verificationStatus],
+          // 决策不显示「验证」：它的状态是生效中 / 已被取代 / 已放弃。
+          ...(isDecision ? [
+            ['决策状态', DECISION_STATUS_TEXT[data.item.decisionStatus] ?? data.item.decisionStatus ?? ''],
+            ['理由', reasonText],
+            ['来源', decision.source?.source === 'claude' ? 'Claude Code 会话' : 'Codex 会话'],
+            ['确认', decision.decidedAt ?? ''],
+            ['原话', decision.quote?.user ?? '']
+          ] : [['验证', data.item.verificationStatus]]),
           ['版本', `r${data.item.revision}`],
           ['证据', String((data.item.evidenceRefs ?? []).length)],
           ['复用', String(data.usages.length)]
@@ -2215,6 +2402,10 @@
         handoffProjectId = '';
         renderComposerTarget();
       }
+      // #84：视图项目变了才算「进入项目」——这时才重算差异并推进水位。
+      // 快照自己的 2 秒轮询不重算，否则差异会被下一次刷新吃掉。
+      const entryProjectId = String(view?.config?.projectId ?? '');
+      if (entryProjectId !== sinceSeenProjectId) void loadSinceSeen(entryProjectId);
       if (view?.knowledge?.projectId) knowledgeCache.set(view.knowledge.projectId, view.knowledge);
       // 知识数量变了就重读一次浏览列表，避免用户在别处提炼/确认后看到旧列表。
       const knowledgeSignature = JSON.stringify(view?.knowledge?.counts ?? {});
@@ -2230,8 +2421,9 @@
       renderProjectSummary();
       renderProjectGithub();
       renderNextAction();
-      renderQueue();
+      renderIdeas();
       renderDiagrams();
+      renderLibrary();
       renderOps();
       renderRunning();
       renderResult();
@@ -2527,6 +2719,16 @@
     renderPlaybookResult();
     lastAnswer = null;
     renderAnswer(null);
+    // 库与「上次看过」也是按项目取的：刷新回来之前先把它们收起，
+    // 否则切换瞬间会显示上一个项目的画像与图谱（数字可能看起来还挺合理，更容易误读）。
+    const librarySection = $('librarySection');
+    if (librarySection) librarySection.hidden = true;
+    $('librarySections')?.replaceChildren();
+    $('libraryAssets')?.replaceChildren();
+    sinceSeenProjectId = '';
+    sinceSeenData = null;
+    sinceSeenError = '';
+    renderSinceSeen();
     await refresh();
     void loadPlaybooks();
   };
@@ -2670,6 +2872,7 @@
 
   $('openSettings').onclick = () => { void openSettings(); };
   $('kbRefresh').onclick = () => { void loadKnowledgeBrowse(); };
+  $('kbScanSessions').onclick = () => { void runSessionScan(); };
   $('skillRefresh').onclick = () => { void loadSkillCatalog({ refresh: true }); };
   $('mobileRefreshCode').onclick = () => { void renderMobileInfo(true); };
   $('closeSettings').onclick = () => { $('settings').hidden = true; };
@@ -2838,11 +3041,42 @@
   };
 
   $('tidyKnowledge').onclick = () => { void openKnowledgeTidy(); };
-  $('queueAdd').onclick = () => { void addQueueItem(); };
-  $('queueInput').addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter') return;
+  // #91 发布卡片：只回报投递状态，不在这里补发；重发入口在库段的「重新发送」。
+  const cardStatusText = (delivery) => (delivery?.status === 'sent'
+    ? '飞书卡片已发送'
+    : `飞书卡片未发送（${delivery?.detail || '原因未知'}）`);
+  // 项目库：生成草稿可反复点（覆盖同一份），发布按钮在没有草稿时禁用。
+  $('libraryDraft').onclick = () => {
+    void libraryAction(
+      (projectId) => window.companion.library.draft({ projectId }),
+      () => '已生成草稿'
+    );
+  };
+  $('libraryPublish').onclick = () => {
+    // #92：说明可空；空字符串照常发布，主进程会保留空说明，界面不显示占位。
+    const note = String($('libraryNote')?.value ?? '').trim();
+    void libraryAction(
+      (projectId) => window.companion.library.publish({ projectId, note }),
+      (result) => {
+        const label = result?.published?.label ?? '新版本';
+        const dir = result?.published?.export?.dir;
+        const card = cardStatusText(result?.published?.delivery);
+        if ($('libraryNote')) $('libraryNote').value = '';
+        // 发布成功就把可预测的导出路径写进提示；路径本身在库段里长期可见，不靠 toast 留住。
+        if (dir) return `已发布 ${label}，导出到 ${dir}；${card}`;
+        if (result?.published?.exportError) return `已发布 ${label}，但导出失败：${result.published.exportError}；${card}`;
+        return `已发布 ${label}（导出未完成）；${card}`;
+      }
+    );
+  };
+  // #93 删除项目：打开一个列清单的确认框；取消就什么都不动。
+  $('libraryDeleteProject').onclick = () => { void openProjectDeleteDialog(); };
+  $('ideaCapture').onclick = () => { void captureIdea(); };
+  // 捕获框要能粘贴多行：Enter 只换行，Ctrl/Cmd+Enter 才存入，避免粘贴时被截断。
+  $('ideaInput').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return;
     event.preventDefault();
-    void addQueueItem();
+    void captureIdea();
   });
   $('reflectDistill').onclick = () => { reflectAndDistill('reflect'); };
 
@@ -3051,6 +3285,593 @@
     }
   };
 
+  // ---- 项目库（#89）：两节（已验证 / 观察中）+ 计数 + 生成草稿 / 发布 ----
+  //
+  // 聚合与分节由主进程的 src/project-library.mjs 算好（快照里的 view.library），
+  // 这里只画 DOM、只读 snapshot 摘要；不在渲染层再算一次归属或计数。
+
+  const libraryEntryRow = (item) => {
+    const row = el('div', 'library-item');
+    const main = el('div', 'library-item-main');
+    main.append(el('div', 'library-item-title', item.title || '未命名条目'));
+    const meta = el('div', 'library-item-meta');
+    meta.append(el('span', `library-badge ${item.status || 'unknown'}`, item.badge || item.status || '未知'));
+    if (item.detail) meta.append(el('span', 'library-item-detail', item.detail));
+    // 只显示证据条数，不把证据正文铺进库：引用留在快照里，详情留给后续票。
+    // 快照条目带 evidence，面板视图带 evidenceRefs；两者都按同一个前缀读。
+    const evidenceCount = (item.evidenceRefs ?? item.evidence ?? []).length || countOf(item.evidenceCount);
+    if (evidenceCount > 0) meta.append(el('span', 'library-item-evidence', `证据 ${evidenceCount}`));
+    main.append(meta);
+    row.append(main);
+    return row;
+  };
+
+  // ---- 项目库（#92）：历史版本浏览与相邻两版自动 diff ----
+  //
+  // 版本列表与 diff 都是只读：点开历史版本只发一次读取 IPC，不生成草稿、不写库。
+  // 判定逻辑在 src/project-version-diff.mjs（纯函数，按 ref.kind + ref.id 认条目），
+  // 这里只画结构，不再算一次新增/变更/消失。
+
+  let libraryVersionProjectId = '';
+  let libraryVersionSelection = null;
+  let libraryVersionDetail = null;
+  let libraryVersionPending = '';
+  let libraryVersionError = '';
+  let libraryVersionToken = 0;
+
+  /** 版本的缓存键：内容哈希也进键，万一同一版本被替换（不应该）也不会读到旧详情。 */
+  const libraryVersionKeyOf = (projectId, meta) =>
+    `${projectId}:${meta?.version ?? ''}:${meta?.contentHash ?? ''}`;
+
+  /** 一行字段变化：旧值 → 新值；空值写「（空）」，不显示空箭头。 */
+  const libraryDiffChangeLine = (change) => {
+    const line = el('div', 'library-diff-change');
+    line.append(el('span', 'library-diff-field', `${change.label}：`));
+    line.append(el('span', 'library-diff-before', change.before || '（空）'));
+    line.append(el('span', 'library-diff-arrow', '→'));
+    line.append(el('span', 'library-diff-after', change.after || '（空）'));
+    return line;
+  };
+
+  /** 三类之一：标题固定，条目为空时给一句空说明，不画假条目。 */
+  const libraryDiffGroup = (key, label, items, emptyHint) => {
+    const group = el('div', `library-diff-group library-diff-${key}`);
+    const head = el('div', 'library-diff-group-head');
+    head.append(el('span', 'library-diff-group-name', label));
+    head.append(el('span', 'library-diff-group-count', `${items.length} 条`));
+    group.append(head);
+    if (!items.length) {
+      group.append(el('p', 'library-diff-empty', emptyHint));
+      return group;
+    }
+    for (const entry of items) {
+      const row = el('div', 'library-diff-item');
+      const rowHead = el('div', 'library-diff-item-head');
+      rowHead.append(el('span', 'library-diff-item-title', entry.title || '未命名条目'));
+      if (entry.sectionLabel) rowHead.append(el('span', 'library-diff-item-section', entry.sectionLabel));
+      row.append(rowHead);
+      for (const change of entry.changes ?? []) row.append(libraryDiffChangeLine(change));
+      group.append(row);
+    }
+    return group;
+  };
+
+  /**
+   * 画一版的只读内容 + diff。入口只有读 IPC 回来的那一份数据；
+   * 首版不给三类计数（否则会被读成「0 变化」），只显示「首版，无可比对象」。
+   */
+  const renderLibraryVersionDetail = (library) => {
+    const holder = $('libraryVersionDetail');
+    if (!holder) return;
+    holder.replaceChildren();
+    const rows = library?.snapshot?.versions ?? [];
+    const meta = rows.find((item) => item.version === libraryVersionSelection);
+    if (!meta) {
+      holder.hidden = true;
+      return;
+    }
+    holder.hidden = false;
+
+    const head = el('div', 'library-version-detail-head');
+    head.append(el('strong', 'library-version-detail-label', meta.label));
+    head.append(el('span', 'library-version-detail-time', meta.publishedAt
+      ? `发布于 ${String(meta.publishedAt).replace('T', ' ').slice(0, 19)}`
+      : '发布时间未知'));
+    head.append(el('span', 'library-version-readonly', '只读'));
+    holder.append(head);
+
+    const key = libraryVersionKeyOf(libraryVersionProjectId, meta);
+    if (libraryVersionDetail?.key !== key) {
+      holder.append(el('p', 'library-version-hint', libraryVersionError || '正在读取这一版…'));
+      return;
+    }
+    const data = libraryVersionDetail.data ?? {};
+
+    // 说明与 diff 并列：说明可空，空就整块不出现（不留空引号或「无说明」占位）。
+    const brief = el('div', 'library-version-brief');
+    if (data.note) {
+      const note = el('div', 'library-version-note');
+      note.append(el('span', 'library-version-note-label', '发布说明'));
+      note.append(el('p', 'library-version-note-text', data.note));
+      brief.append(note);
+    }
+    const diff = data.diff ?? {};
+    const diffBox = el('div', 'library-version-diff');
+    diffBox.append(el('p', 'library-diff-headline', diff.headline || '无法比对'));
+    if (diff.comparable) {
+      diffBox.append(libraryDiffGroup('added', '新增', diff.added ?? [], '没有新增条目。'));
+      diffBox.append(libraryDiffGroup('changed', '变更', diff.changed ?? [], '没有变更的条目。'));
+      diffBox.append(libraryDiffGroup('removed', '消失', diff.removed ?? [], '没有消失的条目。'));
+    }
+    brief.append(diffBox);
+    holder.append(brief);
+
+    // 两节清单与计数：只读渲染，不出现输入框或动作按钮。
+    const sections = el('div', 'library-version-sections');
+    for (const sectionModel of data.content?.sections ?? []) {
+      const card = el('section', `library-block library-${sectionModel.key}`);
+      const sectionHead = el('div', 'library-block-head');
+      sectionHead.append(el('h4', 'library-block-name', sectionModel.label));
+      sectionHead.append(el('span', 'library-block-count', `${countOf(sectionModel.count)} 条`));
+      card.append(sectionHead);
+      if (!(sectionModel.items ?? []).length) {
+        card.append(el('p', 'library-block-empty', '这一版这一节没有条目。'));
+      } else {
+        for (const item of sectionModel.items) card.append(libraryEntryRow(item));
+      }
+      sections.append(card);
+    }
+    holder.append(sections);
+
+    const counts = data.content?.counts ?? data.counts ?? {};
+    holder.append(el('p', 'library-version-counts',
+      `共 ${countOf(counts.total)} 条 · 已验证 ${countOf(counts.verified)} 条 · 观察中 ${countOf(counts.observing)} 条`));
+  };
+
+  /**
+   * 打开某一版：先给选中态，再读详情。同一版本（含内容哈希）只读一次；
+   * 重新渲染不会重复发 IPC，也不会生成草稿。
+   */
+  const openLibraryVersion = (library, version) => {
+    const project = workspaceProject();
+    const meta = (library?.snapshot?.versions ?? []).find((item) => item.version === version);
+    if (!project || !meta) return;
+    libraryVersionSelection = meta.version;
+    for (const node of document.querySelectorAll('#libraryVersions .library-version')) {
+      const on = Number(node.dataset.version) === meta.version;
+      node.classList.toggle('on', on);
+      node.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    const key = libraryVersionKeyOf(project.id, meta);
+    if (libraryVersionDetail?.key === key || libraryVersionPending === key) {
+      renderLibraryVersionDetail(library);
+      return;
+    }
+    libraryVersionPending = key;
+    libraryVersionError = '';
+    libraryVersionToken += 1;
+    const token = libraryVersionToken;
+    renderLibraryVersionDetail(library);
+    void window.companion.library.version({ projectId: project.id, version: meta.version })
+      .then((data) => {
+        if (token !== libraryVersionToken) return;
+        libraryVersionDetail = { key, data };
+        libraryVersionPending = '';
+      })
+      .catch((error) => {
+        if (token !== libraryVersionToken) return;
+        libraryVersionError = cleanIpcError(error?.message ?? error);
+        libraryVersionPending = '';
+      })
+      .finally(() => {
+        if (token !== libraryVersionToken) return;
+        if (view?.library) renderLibraryVersionDetail(view.library);
+      });
+  };
+
+  // ---- 项目库（#90）：导出到固定目录 ----
+  //
+  // 导出只读已发布的快照，路径由主进程算好（library.export），渲染层不再拼一次，
+  // 免得界面显示的路径和真正写出的目录不一致。
+  const renderLibraryExport = (library, project) => {
+    const holder = $('libraryExport');
+    if (!holder) return;
+    holder.replaceChildren();
+    const info = library?.export;
+    const versions = library?.snapshot?.versions ?? [];
+    const delivery = library?.delivery;
+    if (!versions.length) { holder.hidden = true; return; }
+    holder.hidden = false;
+
+    if (info) {
+      const line = el('div', 'library-export-line');
+      line.append(el('span', 'library-export-path',
+        info.exists ? `导出：${info.dir}` : `还没有导出 ${info.label}`));
+      if (info.exists) {
+        const open = el('button', 'ghost small', '打开目录');
+        open.type = 'button';
+        open.title = '在文件管理器里打开这一版的导出目录';
+        open.onclick = () => {
+          void window.companion.library.openExport({ path: info.dir })
+            .catch((error) => toast(cleanIpcError(error?.message ?? error), 6000));
+        };
+        line.append(open);
+      } else {
+        const run = el('button', 'ghost small', `导出 ${info.label}`);
+        run.type = 'button';
+        run.title = '把这一版已发布快照重新写到固定目录（重复导出内容不变）';
+        run.onclick = () => {
+          void libraryAction(
+            (projectId) => window.companion.library.export({ projectId, version: info.version }),
+            (result) => (result?.exported?.dir
+              ? `已导出 ${result.exported.label}：${result.exported.dir}`
+              : '已导出')
+          );
+        };
+        line.append(run);
+      }
+      holder.append(line);
+    }
+
+    // #91 飞书卡片：状态来自主进程的投递账本（成功 / 未发送 + 原因）。
+    // 只有「未发送」时才出现「重新发送」——点了才会再发一次，没有自动重试。
+    if (delivery) {
+      const row = el('div', 'library-delivery-line');
+      const sent = delivery.status === 'sent';
+      const status = el('span', `library-delivery ${sent ? 'sent' : 'unsent'}`,
+        sent
+          ? `飞书：已发送 ${delivery.label}${delivery.attemptedAt ? ` · ${formatRelative(delivery.attemptedAt)}` : ''}`
+          : `飞书：未发送 ${delivery.label} · ${delivery.detail || '原因未知'}`);
+      status.title = delivery.detail || '';
+      row.append(status);
+      if (!sent) {
+        const resend = el('button', 'ghost small', '重新发送');
+        resend.type = 'button';
+        resend.title = '只有点了才会再发一次；不会自动重试';
+        resend.onclick = async () => {
+          resend.disabled = true;
+          try {
+            const result = await window.companion.library.resend({
+              projectId: project.id,
+              version: delivery.version
+            });
+            if (view) view = { ...view, library: result };
+            renderLibrary();
+            await refresh();
+            const okSent = result?.resent?.status === 'sent';
+            toast(okSent ? '飞书卡片已重新发送' : `仍然未发送：${result?.resent?.detail ?? '原因未知'}`,
+              okSent ? 4200 : 6000);
+          } catch (error) {
+            toast(cleanIpcError(error?.message ?? error), 6000);
+            resend.disabled = false;
+          }
+        };
+        row.append(resend);
+      }
+      holder.append(row);
+    }
+  };
+
+  const renderLibrary = () => {
+    const section = $('librarySection');
+    if (!section) return;
+    const library = view?.library;
+    const project = workspaceProject();
+    section.hidden = !(project && library);
+    if (!project || !library) return;
+
+    const counts = library.counts ?? {};
+    $('libraryBadge').textContent = String(countOf(counts.total));
+    $('libraryBadge').title = `已验证 ${countOf(counts.verified)} 条 · 观察中 ${countOf(counts.observing)} 条`;
+
+    const empty = $('libraryEmpty');
+    empty.hidden = !library.empty;
+    empty.replaceChildren();
+    if (library.empty) {
+      empty.append(el('strong', undefined, library.empty.title || '这个项目的库还是空的'));
+      empty.append(el('span', undefined, library.empty.detail || ''));
+    }
+
+    const holder = $('librarySections');
+    holder.replaceChildren();
+    for (const sectionModel of library.sections ?? []) {
+      const card = el('section', `library-block library-${sectionModel.key}`);
+      const head = el('div', 'library-block-head');
+      head.append(el('h4', 'library-block-name', sectionModel.label));
+      head.append(el('span', 'library-block-count', `${countOf(sectionModel.count)} 条`));
+      card.append(head);
+      if (!(sectionModel.items ?? []).length) {
+        card.append(el('p', 'library-block-empty', sectionModel.emptyHint || '没有条目。'));
+      } else {
+        for (const item of sectionModel.items) card.append(libraryEntryRow(item));
+        if (sectionModel.truncated) {
+          card.append(el('p', 'library-more',
+            `显示前 ${countOf(sectionModel.shown)} 条，共 ${countOf(sectionModel.count)} 条；发布时快照包含全部。`));
+        }
+      }
+      holder.append(card);
+    }
+
+    // 画像与图谱是库里的另两类只读资产，不参与两节分节；缺的类别写明缺。
+    const assetHolder = $('libraryAssets');
+    const profile = library.assets?.profile;
+    const diagrams = library.assets?.diagrams ?? [];
+    const parts = [
+      profile?.available
+        ? `画像：${profile.oneLiner || profile.title || '已生成'}${profile.basedOnCommit ? `（基于 ${String(profile.basedOnCommit).slice(0, 7)}）` : ''}`
+        : '画像：还没有生成',
+      `图谱：${diagrams.filter((item) => item.available).length}/${diagrams.length || 0} 类`
+    ];
+    const missing = library.assets?.missingDiagrams ?? [];
+    if (missing.length) parts.push(`缺 ${missing.join(' / ')}`);
+    assetHolder.hidden = false;
+    assetHolder.textContent = parts.join(' · ');
+
+    const snapshot = library.snapshot ?? {};
+    const draft = snapshot.draft;
+    const publishButton = $('libraryPublish');
+    if (draft) {
+      const draftCounts = draft.counts ?? {};
+      $('libraryStatus').textContent =
+        `草稿：已验证 ${countOf(draftCounts.verified)} 条 · 观察中 ${countOf(draftCounts.observing)} 条 · ` +
+        `生成于 ${formatRelative(draft.generatedAt) || '—'}（没有版本号）`;
+    } else {
+      $('libraryStatus').textContent = '还没有草稿；先生成草稿，再决定要不要发布。';
+    }
+    publishButton.textContent = `发布 ${snapshot.nextLabel || 'v1'}`;
+    publishButton.disabled = !draft;
+
+    // #92：版本按从新到旧列全（store 已按 version DESC），点开只读查看。
+    // 换项目时清掉选中与缓存，别把 A 的版本内容留在 B 上。
+    if (libraryVersionProjectId !== project.id) {
+      libraryVersionProjectId = project.id;
+      libraryVersionSelection = null;
+      libraryVersionDetail = null;
+      libraryVersionPending = '';
+      libraryVersionError = '';
+      // 加一让旧项目里还在路上的响应作废。
+      libraryVersionToken += 1;
+    }
+    const versions = $('libraryVersions');
+    versions.replaceChildren();
+    const rows = snapshot.versions ?? [];
+    if (!rows.some((item) => item.version === libraryVersionSelection)) {
+      libraryVersionSelection = rows[0]?.version ?? null;
+    }
+    if (rows.length) {
+      versions.append(el('span', 'library-versions-label', `已发布 ${rows.length} 版（从新到旧）：`));
+      for (const item of rows) {
+        const chip = el('button', 'library-version', `${item.label} · ${formatRelative(item.publishedAt) || '—'}`);
+        chip.type = 'button';
+        chip.dataset.version = String(item.version);
+        chip.title = `${item.label} · ${String(item.publishedAt ?? '').replace('T', ' ').slice(0, 19)}`
+          + (item.note ? ` · ${item.note}` : '')
+          + ' · 点开只读查看这一版';
+        chip.classList.toggle('on', item.version === libraryVersionSelection);
+        chip.setAttribute('aria-pressed', item.version === libraryVersionSelection ? 'true' : 'false');
+        chip.onclick = () => openLibraryVersion(library, item.version);
+        versions.append(chip);
+      }
+      // 默认打开最新一版；打开只读详情，不会生成草稿、也不会发版。
+      if (libraryVersionSelection !== null) openLibraryVersion(library, libraryVersionSelection);
+    } else {
+      libraryVersionDetail = null;
+      libraryVersionPending = '';
+      libraryVersionError = '';
+      const detail = $('libraryVersionDetail');
+      if (detail) { detail.hidden = true; detail.replaceChildren(); }
+    }
+    renderLibraryExport(library, project);
+  };
+
+  /**
+   * 生成草稿 / 发布：都是显式动作。成功后用主进程返回的 library 直接重画，
+   * 再 refresh 一次让知识计数等其它段同步；失败只 toast，不清掉已有草稿与版本。
+   */
+  const libraryAction = async (action, success) => {
+    const project = workspaceProject();
+    if (!project) { toast('先选择一个项目。'); return null; }
+    const draftButton = $('libraryDraft');
+    const publishButton = $('libraryPublish');
+    draftButton.disabled = true;
+    publishButton.disabled = true;
+    try {
+      const result = await action(project.id);
+      if (view) view = { ...view, library: result };
+      // 发布成功后默认打开刚发布的这一版；其余动作保留用户正在看的版本。
+      if (Number.isSafeInteger(result?.published?.version)) {
+        libraryVersionSelection = result.published.version;
+      }
+      renderLibrary();
+      await refresh();
+      if (success) toast(success(result), 4200);
+      return result;
+    } catch (error) {
+      // Electron 会给 IPC 错误加前缀，先去掉再展示；发布不可变等原因由主进程给出。
+      toast(cleanIpcError(error?.message ?? error), 6000);
+      return null;
+    } finally {
+      draftButton.disabled = false;
+      // 发布按钮的可用性回到「有没有草稿」，由 renderLibrary 决定。
+      if (view?.library) renderLibrary();
+    }
+  };
+
+  // ---- 删除项目（#93）：先列清单，确认后才删 ----
+  //
+  // 清单由主进程算（导出路径来自 exportFilesOf，渲染层不另拼一遍）：这里只负责展示
+  // 与二次确认。未点「确认删除」时不会调用 run，数据库与文件都不会动。
+  const showProjectDeleteFailures = (result) => {
+    const failed = result?.files?.failed ?? [];
+    const body = [
+      el('p', 'result-summary',
+        '项目已从库里删除，但下面这些路径没删掉，请手动清理；这里不会把它当成删除成功。'),
+      (() => {
+        const list = el('ul', 'delete-failed');
+        for (const item of failed) list.append(el('li', undefined, `${item.path} —— ${item.reason}`));
+        return list;
+      })()
+    ];
+    const ack = el('button', 'primary', '知道了');
+    ack.onclick = closeModal;
+    openModal('删除未完成', body, [ack]);
+  };
+
+  const openProjectDeleteDialog = async () => {
+    const project = workspaceProject();
+    if (!project) { toast('先选择一个项目。'); return; }
+    let plan;
+    try {
+      // 只读：拿将删清单，打开确认框这一步本身不删任何东西。
+      plan = await window.companion.projectDelete.plan({ projectId: project.id });
+    } catch (error) {
+      toast(cleanIpcError(error?.message ?? error), 6000);
+      return;
+    }
+    const body = [
+      el('p', 'result-summary', '删除后不可恢复。下面这些会一起删掉，确认前什么都没删：'),
+      (() => {
+        const list = el('ul', 'delete-plan-list');
+        for (const line of plan?.items ?? []) list.append(el('li', undefined, line));
+        return list;
+      })(),
+      el('p', 'delete-warning',
+        '项目源码目录不受影响；已发出去的飞书卡片里的本地导出路径会失效（ADR-0009）。')
+    ];
+    const cancel = el('button', 'ghost', '取消');
+    cancel.onclick = closeModal;
+    const confirmButton = el('button', 'danger', '确认删除');
+    confirmButton.onclick = async () => {
+      confirmButton.disabled = true;
+      cancel.disabled = true;
+      try {
+        const result = await window.companion.projectDelete.run({ projectId: project.id, confirm: true });
+        closeModal();
+        await refresh();
+        if (result?.files?.failed?.length) showProjectDeleteFailures(result);
+        else toast(result?.message || `已删除项目「${plan?.projectName ?? project.id}」`, 4200);
+      } catch (error) {
+        confirmButton.disabled = false;
+        cancel.disabled = false;
+        toast(cleanIpcError(error?.message ?? error), 6000);
+      }
+    };
+    openModal(`删除项目：${plan?.projectName ?? project.name ?? project.id}`, body, [cancel, confirmButton]);
+  };
+
+  // ---- 自上次看过（#84） ----
+  //
+  // 语义：进入项目时先算差异、再把水位推到当前（顺序在 src/memory/since-last-seen.mjs 里）。
+  // 因此这里只在「视图项目变了」时调用有副作用的 IPC；快照每 2 秒刷新一次，如果刷新也重算，
+  // 差异最多活 2 秒就被自己吃掉——那正是这个功能最典型的 bug。
+  // 形态判定（首次查看 / 三类全空压成一行）来自 window.OwnerSinceSeen，不在渲染里另写一套。
+  let sinceSeenProjectId = '';
+  let sinceSeenData = null;
+  let sinceSeenError = '';
+  let sinceSeenToken = 0;
+
+  /** 「上次看过」的时刻：当天只给时分，跨天补月/日，避免旧水位看起来像刚发生。 */
+  const fmtSeenMoment = (value) => {
+    const at = new Date(String(value ?? ''));
+    if (Number.isNaN(at.getTime())) return '';
+    const sameDay = at.toDateString() === new Date().toDateString();
+    return sameDay
+      ? fmtTime(value)
+      : `${at.getMonth() + 1}/${at.getDate()} ${fmtTime(value)}`;
+  };
+
+  const sinceSeenGroup = (group) => {
+    const box = el('div', 'since-seen-group');
+    const head = el('div', 'since-seen-group-head');
+    head.append(el('span', undefined, group.title));
+    head.append(el('span', 'count', `${group.count} 条`));
+    box.append(head);
+    const list = el('ul', 'since-seen-items');
+    for (const item of group.items) {
+      const row = el('li', 'since-seen-item');
+      row.append(el('span', 'since-seen-item-text', item.text));
+      const at = fmtSeenMoment(item.at);
+      if (at) row.append(el('span', 'since-seen-item-at', at));
+      list.append(row);
+    }
+    box.append(list);
+    if (group.more > 0) {
+      box.append(el('p', 'since-seen-more', `还有 ${group.more} 条，只列最近 ${group.items.length} 条。`));
+    }
+    return box;
+  };
+
+  /**
+   * 画「自上次看过」。
+   * - 数据只画当前视图项目的那一份：换项目时旧结论立刻收掉，不把 A 的差异留在 B 上；
+   * - 首次查看 / 算不全 / 三类全空 三种文案由 sinceSeenSection 决定，这里只填 DOM；
+   * - 三类全空时给整段加 .compact，CSS 去掉外框与标题，只留一行，不占一块卡片。
+   */
+  const renderSinceSeen = () => {
+    const holder = $('sinceLastSeen');
+    if (!holder) return;
+    const project = workspaceProject();
+    const projectId = project?.id ?? '';
+    const model = window.OwnerSinceSeen;
+    holder.classList.remove('compact');
+    const hide = () => {
+      holder.hidden = true;
+      $('sinceSeenGroups').replaceChildren();
+    };
+    if (!projectId || projectId !== sinceSeenProjectId) { hide(); return; }
+    if (sinceSeenError) {
+      holder.hidden = false;
+      $('sinceSeenTitle').textContent = '自上次看过';
+      $('sinceSeenMeta').textContent = '';
+      $('sinceSeenLine').hidden = true;
+      $('sinceSeenNote').hidden = false;
+      $('sinceSeenNote').textContent = `这次没能算出变化窗口：${sinceSeenError}`;
+      $('sinceSeenGroups').replaceChildren();
+      return;
+    }
+    // 还在读取或模块尚未就绪：先收起，等结果 / ready 事件补画，不画半截。
+    if (!sinceSeenData || !model?.sinceSeenSection) { hide(); return; }
+    const section = model.sinceSeenSection(sinceSeenData);
+    holder.hidden = false;
+    holder.classList.toggle('compact', section.compressed);
+    $('sinceSeenTitle').textContent = section.headline;
+    $('sinceSeenMeta').textContent = section.firstView
+      ? '从这次开始记'
+      : (section.since ? `上次看过 ${fmtSeenMoment(section.since)}` : '');
+    const line = $('sinceSeenLine');
+    line.textContent = section.compressed ? section.compactLine : section.line;
+    line.hidden = !line.textContent;
+    const note = $('sinceSeenNote');
+    note.textContent = section.note;
+    note.hidden = !section.note;
+    $('sinceSeenGroups').replaceChildren(...section.groups.map(sinceSeenGroup));
+  };
+
+  /**
+   * 读一次「自上次看过」：这个 IPC 会推进水位，所以只有「进入项目」才调用。
+   * 请求期间换了项目就丢掉旧结果（token），不让 A 的差异画到 B 上。
+   */
+  const loadSinceSeen = async (projectId) => {
+    const id = String(projectId ?? '');
+    const token = (sinceSeenToken += 1);
+    sinceSeenProjectId = id;
+    sinceSeenData = null;
+    sinceSeenError = '';
+    renderSinceSeen();
+    if (!id) return;
+    try {
+      const data = await window.companion.sinceLastSeen({ projectId: id });
+      if (token !== sinceSeenToken) return;
+      sinceSeenData = data;
+    } catch (error) {
+      if (token !== sinceSeenToken) return;
+      sinceSeenError = String(error?.message ?? error)
+        .replace(/^Error invoking remote method '[^']+':\s*/, '');
+    }
+    if (token !== sinceSeenToken) return;
+    renderSinceSeen();
+  };
+
   // ---- 三种视图模式：专注（A） / 待办（B） / 对话（C） ----
   // ---- 知识模式：浏览与筛选（只读本地 SQLite） ----
 
@@ -3081,6 +3902,13 @@
       meta.textContent += ` · ${projectLabel(item.projectId)}`;
     }
     main.append(meta);
+    // 决策的两种状态：缺理由要显眼（确认时没补），已结束要写清「不算现状」。
+    if (item.decision && item.reasonMissing) {
+      main.append(el('span', 'kb-item-flag', '缺理由'));
+    }
+    if (item.decision && item.current === false) {
+      main.append(el('span', 'kb-item-flag ended', '不算现状'));
+    }
     main.onclick = () => { void openKnowledgeDetail(item.id); };
     row.append(main);
 
@@ -3136,6 +3964,42 @@
         }
       };
       actions.append(promote);
+      row.append(actions);
+    }
+
+    // #87：生效中的决策可以结束成「已被取代 / 已放弃」。状态只改决策自己那一列，
+    // 验证状态与内容原样不动；结束后这一条不再算现状，但仍留在列表里可查。
+    if (item.decision && item.current !== false) {
+      const actions = el('div', 'kb-item-actions');
+      const mark = async (status, label, button) => {
+        button.disabled = true;
+        try {
+          const result = await window.companion.memory.setDecisionStatus({
+            id: item.id,
+            status,
+            note: ''
+          });
+          if (!result?.ok) {
+            toast(result?.reason ?? '改状态失败，请稍后再试。', 6000);
+            button.disabled = false;
+            return;
+          }
+          toast(`已标为「${label}」，这条决策不再算现状`, 4000);
+          await loadKnowledgeBrowse();
+        } catch (error) {
+          toast(String(error?.message ?? error), 6000);
+          button.disabled = false;
+        }
+      };
+      const supersede = el('button', 'kb-act reject', '已被取代');
+      const abandon = el('button', 'kb-act reject', '已放弃');
+      supersede.type = 'button';
+      abandon.type = 'button';
+      supersede.dataset.role = 'decision-supersede';
+      abandon.dataset.role = 'decision-abandon';
+      supersede.onclick = () => { void mark('superseded', '已被取代', supersede); };
+      abandon.onclick = () => { void mark('abandoned', '已放弃', abandon); };
+      actions.append(supersede, abandon);
       row.append(actions);
     }
     return row;
@@ -3249,6 +4113,138 @@
       box.append(el('div', 'kb-empty-title', '读取知识库失败'));
       box.append(el('div', 'kb-empty-sub', String(error?.message ?? error)));
       holder.append(box);
+    }
+  };
+
+  // ---- 会话扫描（#86）：显式动作，结果只在本面板显示，扫描本身不写库 ----
+
+  let sessionScanResult = null;
+
+  // 一条候选：原话 + 出处 + 可选理由 + 确认。确认前不写任何数据；
+  // 缺理由的候选用醒目标记（不是隐藏），因为「补一句为什么」正是确认时要问人的事。
+  const scanCandidateRow = (candidate, index) => {
+    const row = el('div', `kb-scan-item${candidate.missingReason ? ' missing-reason' : ''}`);
+    row.dataset.index = String(index);
+    if (candidate.fingerprint) row.dataset.fingerprint = candidate.fingerprint;
+    row.append(el('span', 'kb-scan-quote', candidate.quote?.user || candidate.phenomenon || '（无原话）'));
+
+    const meta = [
+      candidate.projectName || projectLabel(candidate.projectId),
+      candidate.source === 'codex' ? 'Codex' : 'Claude Code',
+      candidate.partial ? '只有用户原话' : '成对',
+      candidate.missingReason ? '缺理由' : ''
+    ].filter(Boolean).join(' · ');
+    row.append(el('span', 'kb-scan-item-meta', meta));
+    if (candidate.missingReason) {
+      row.append(el('span', 'kb-scan-missing', '原话里没有理由；确认时可以补一句，不补会记为「缺理由」。'));
+    }
+
+    const form = el('div', 'kb-scan-confirm');
+    const reason = el('input', 'kb-scan-reason');
+    reason.type = 'text';
+    reason.placeholder = '补一句为什么（可选）';
+    reason.dataset.role = 'decision-reason';
+    const confirm = el('button', 'kb-act accept', '确认入库');
+    confirm.type = 'button';
+    confirm.dataset.role = 'decision-confirm';
+    // 不做乐观更新：只有 IPC 成功后才把这条标成已入库；失败时按钮恢复、候选留在原处。
+    confirm.onclick = async () => {
+      confirm.disabled = true;
+      const label = confirm.textContent;
+      confirm.textContent = '确认中…';
+      try {
+        const result = await window.companion.memory.confirmDecision({
+          candidate,
+          reason: reason.value
+        });
+        if (!result?.ok) {
+          toast(result?.reason ?? '确认失败，请稍后再试。', 6000);
+          confirm.disabled = false;
+          confirm.textContent = label;
+          return;
+        }
+        toast(result.created ? '已确认入库：这条决策现在是「生效中」' : '这条决策已经确认过了', 4000);
+        row.classList.add('done');
+        form.replaceChildren(el('span', 'kb-scan-done',
+          result.created ? '已入库 · 生效中' : '已入库过 · 生效中'));
+        // 决策进了知识层，刷新一次让「生效中」条目当场出现。
+        await loadKnowledgeBrowse();
+      } catch (error) {
+        toast(String(error?.message ?? error), 6000);
+        confirm.disabled = false;
+        confirm.textContent = label;
+      }
+    };
+    form.append(reason, confirm);
+    row.append(form);
+    return row;
+  };
+
+  // 计数先写清楚（扫了多少 / 匹配上多少 / 丢了多少），再看候选：
+  // 第一次扫出 0 条时要能从这几项里看出「扫了但没命中」，而不是「像坏了」。
+  const renderSessionScan = () => {
+    const data = sessionScanResult;
+    if (!data) return;
+    const box = $('kbScan');
+    box.hidden = false;
+    const counts = data.counts ?? {};
+    $('kbScanSummary').textContent = [
+      `扫了 ${counts.files ?? 0} 段会话`,
+      `匹配 ${counts.matched ?? 0} 段`,
+      `已扫过 ${counts.alreadyScanned ?? 0} 段`,
+      `丢弃 ${counts.dropped ?? 0} 段`,
+      `候选 ${counts.candidates ?? 0} 条`
+    ].join(' · ');
+
+    const reasons = $('kbScanReasons');
+    const parts = (data.droppedReasons ?? []).map((reason) => `${reason.label} ${reason.count} 段`);
+    if (data.truncated) parts.push(`超出本次上限未扫 ${data.truncated} 段`);
+    reasons.textContent = parts.length ? `丢弃原因：${parts.join(' · ')}` : '没有丢弃的会话。';
+    reasons.hidden = false;
+
+    // 0 也是结论：脱敏 0 处要照常显示，不能藏起来让人以为没做这件事。
+    const redactions = Number(data.redactions ?? 0);
+    $('kbScanRedactions').textContent = `本次脱敏 ${Number.isFinite(redactions) ? redactions : 0} 处`;
+
+    const list = $('kbScanCandidates');
+    list.replaceChildren();
+    const shown = Array.isArray(data.candidates) ? data.candidates : [];
+    if (!shown.length) {
+      // 0 条候选的两种原因分开说，免得看起来像扫描没跑。
+      list.append(el('p', 'kb-scan-empty', counts.matched
+        ? '这段会话里没有像取舍的用户原话：提问、工具输出和注入的环境上下文都不算候选。'
+        : '没有会话匹配到已登记的项目：只有工作目录正好是项目根或在其子目录下才算命中。'));
+    } else {
+      shown.slice(0, 8).forEach((candidate, index) => list.append(scanCandidateRow(candidate, index)));
+      if ((counts.candidates ?? 0) > shown.slice(0, 8).length) {
+        list.append(el('p', 'kb-scan-more', `共 ${counts.candidates} 条候选，这里只列前 ${shown.slice(0, 8).length} 条。`));
+      }
+    }
+    // e2e 直接读这几个属性，不用解析中文文案。
+    box.dataset.files = String(counts.files ?? 0);
+    box.dataset.matched = String(counts.matched ?? 0);
+    box.dataset.dropped = String(counts.dropped ?? 0);
+    box.dataset.candidates = String(counts.candidates ?? 0);
+    box.dataset.redactions = String(Number.isFinite(redactions) ? redactions : 0);
+  };
+
+  const runSessionScan = async () => {
+    const button = $('kbScanSessions');
+    if (button.disabled) return;
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = '扫描中…';
+    try {
+      sessionScanResult = await window.companion.memory.scanSessions();
+      renderSessionScan();
+      const counts = sessionScanResult?.counts ?? {};
+      toast(`扫描完成：匹配 ${counts.matched ?? 0} 段会话，候选 ${counts.candidates ?? 0} 条`, 4000);
+    } catch (error) {
+      // 失败不动已有数据：上一次的结果留在屏幕上。
+      toast(String(error?.message ?? error), 6000);
+    } finally {
+      button.disabled = false;
+      button.textContent = label;
     }
   };
 
@@ -3431,6 +4427,8 @@
     renderOps();
     renderWorkProjectBar();
     renderWorkEntries();
+    renderLibrary();
+    renderSinceSeen();
   };
 
   // ---- 对话：会话持久化（按项目分组、切换、重命名、删除） ----
@@ -4002,6 +5000,12 @@
   // 模块脚本晚于本脚本执行，就绪时补画一次，不用等下一次 2 秒轮询。
   window.addEventListener('owner-focus-ops-ready', () => {
     if (panelMode === 'focus') renderOps();
+  });
+
+  // 「自上次看过」的形态判定也是 ESM（src/memory/since-last-seen.mjs），
+  // 就绪前已算好的数据在这里补画一次，不用等下一次进入项目。
+  window.addEventListener('owner-since-seen-ready', () => {
+    if (panelMode === 'focus') renderSinceSeen();
   });
 
   void refresh().then(() => {

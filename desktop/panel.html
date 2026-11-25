@@ -137,6 +137,57 @@
               title="选择一个本地 Git 仓库目录，添加为项目">添加项目</button>
           </div>
 
+        <!-- 自上次看过（#84）：进入项目时先算差异、再把水位推到当前。
+             没有水位时写「首次查看」，不写「没有变化」；三类全空时整段压成一行（见 panel.js
+             的 renderSinceSeen / src/memory/since-last-seen.mjs），不占一块卡片。 -->
+        <section id="sinceLastSeen" class="since-seen" aria-label="自上次看过" hidden>
+          <div class="since-seen-head">
+            <strong id="sinceSeenTitle">自上次看过</strong>
+            <span id="sinceSeenMeta" class="since-seen-meta"></span>
+          </div>
+          <p id="sinceSeenLine" class="since-seen-line" hidden></p>
+          <p id="sinceSeenNote" class="since-seen-note" hidden></p>
+          <div id="sinceSeenGroups" class="since-seen-groups"></div>
+        </section>
+
+          <!-- 项目库（#89）：一个项目的知识聚合视图，不是新存储。两节固定为「已验证 / 观察中」，
+               计数按全量、列表只铺一屏；底部两个显式动作——生成草稿（可反复覆盖，没有版本号）
+               与发布（分配 v1、v2…，发布后不可修改）。发布时可写一句说明（可空）。
+               #92：已发布版本按时间倒序列出，点开只读查看，并与上一版自动 diff。 -->
+          <section id="librarySection" class="library-section" hidden>
+            <div class="section-title">
+              <h3>项目库</h3>
+              <span id="libraryBadge" class="count">0</span>
+            </div>
+            <p class="section-sub">本项目的经验、所属领域知识、本项目升上去的知识，以及画像与图谱；发布只是把这份视图固化成一份快照。</p>
+            <div id="libraryEmpty" class="library-empty" hidden></div>
+            <div id="librarySections" class="library-sections"></div>
+            <div id="libraryAssets" class="library-assets" hidden></div>
+            <div class="library-footer">
+              <div id="libraryStatus" class="library-status">还没有草稿。</div>
+              <div class="library-actions">
+                <button id="libraryDraft" class="ghost small" type="button"
+                  title="按当前内容生成草稿；重复生成会覆盖上一份草稿">生成草稿</button>
+                <button id="libraryPublish" class="primary small" type="button" disabled
+                  title="把当前草稿固化成新版本；发布后不可修改">发布 v1</button>
+                <!-- #93 删除项目：先列出将删的快照与导出目录，二次确认后才删。 -->
+                <button id="libraryDeleteProject" class="ghost small danger" type="button"
+                  title="删除这个项目，连带删除它的快照与本地导出目录（先列清单再确认）">删除项目…</button>
+              </div>
+            </div>
+            <!-- #92：发布说明可空；写了就随这一版存下来，并与自动 diff 并列显示。 -->
+            <div class="library-publish-note">
+              <input id="libraryNote" class="library-note" type="text" maxlength="500"
+                placeholder="这一版为什么发（可空）" aria-label="发布说明（可空）" />
+            </div>
+            <div id="libraryVersions" class="library-versions"></div>
+            <!-- #92：点开任一版本后，只读内容与相邻两版 diff 画在这里。 -->
+            <div id="libraryVersionDetail" class="library-version-detail" hidden></div>
+            <!-- #90：导出只读已发布的快照；这里给出可预测的路径，并给「打开目录」动作。 -->
+            <div id="libraryExport" class="library-export" hidden></div>
+          </section>
+
+
         <!-- 四个入口（知识 / 测试 / 补丁 / 运行）：原只读详情卡的计数搬到这里（#72）。
              工作区现在是唯一看到项目的地方，四条入口留在工作区里：点哪一项就跳到
              它原来的位置，目标不存在时退回模式顶部（见 panel.js 的 renderWorkEntries）。
@@ -163,6 +214,7 @@
             <span class="work-entry-note"></span>
           </button>
         </div>
+
         <!-- 工作区内容常驻展开：原来包在外面的 details 折叠条已经去掉，
              这里只留容器；#73 之后只剩「所选项目」一段，全局块都搬走了。 -->
         <section class="workspace" id="workWorkspace">
@@ -202,15 +254,17 @@
 
           <section id="queueSection" class="queue-section">
             <div class="section-title">
-              <h3>想法</h3>
+              <h3>灵感收件箱</h3>
               <span id="queueBadge" class="count">0</span>
             </div>
-            <p class="section-sub">和 Agent 聊到的改进意见收在这里；只收集，不直接改代码。</p>
+            <p class="section-sub">粘贴一段话或一个链接就进收件箱；链接只记地址，不抓取。</p>
             <div class="queue-add">
-              <input id="queueInput" class="queue-input" type="text" maxlength="1200" placeholder="记一条想法…（Enter 保存）" />
-              <button id="queueAdd" class="primary small" type="button">记下</button>
+              <textarea id="ideaInput" class="queue-input" rows="2" maxlength="8000"
+                placeholder="粘贴一段想法或一个链接…（Ctrl+Enter 存入）"></textarea>
+              <button id="ideaCapture" class="primary small" type="button">存入</button>
             </div>
-            <div id="queueList" class="queue-list"></div>
+            <div id="ideaHint" class="idea-hint" hidden></div>
+            <div id="ideaList" class="queue-list"></div>
           </section>
 
           <section class="knowledge-section compact" id="knowledgeSection">
@@ -231,6 +285,7 @@
               <button id="openKnowledge" class="ghost small">完整知识库</button>
             </div>
           </section>
+
 
           <section id="playbookSection" class="playbook-section" hidden>
             <div class="section-title">
@@ -283,9 +338,23 @@
         <div class="kb-head">
           <h3>知识</h3>
           <span id="kbTotal" class="count">0</span>
+          <button id="kbScanSessions" class="ghost small" type="button"
+            title="读本机 Codex 与 Claude Code 的会话，按工作目录匹配到项目并产出决策候选（只读，不写库）">扫描会话</button>
           <button id="kbRefresh" class="ghost small" type="button" title="重新读取本地知识库">刷新</button>
         </div>
         <p class="kb-hint">知识分三层：候选待审核，经验是从执行里提炼的教训，知识是收敛后的规则。状态看徽章，不分组。</p>
+        <!-- #86 会话扫描：显式动作。第一次扫出 0 条时要看得见「扫了多少、匹配上多少、丢了多少」，
+             否则会被当成坏了。#87 起候选可以确认入库：可选补一句理由，缺理由会标出来。 -->
+        <div id="kbScan" class="kb-scan" aria-live="polite" hidden>
+          <div class="kb-scan-head">
+            <span class="kb-scan-title">会话扫描</span>
+            <span id="kbScanSummary" class="kb-scan-summary">还没扫过</span>
+          </div>
+          <p id="kbScanReasons" class="kb-scan-reasons" hidden></p>
+          <p id="kbScanRedactions" class="kb-scan-redactions">本次脱敏 0 处</p>
+          <div id="kbScanCandidates" class="kb-scan-candidates"></div>
+          <p class="kb-scan-hint">只扫 Codex 与 Claude Code；OpenCode 的会话库体量太大，不在扫描范围内。扫描不写库；确认一条才会作为决策入库，同一段会话不会被重复提炼。</p>
+        </div>
         <div id="kbFilters" class="kb-filters" role="group" aria-label="按项目筛选"></div>
         <div id="kbGroups" class="kb-groups" aria-live="polite"></div>
       </section>
@@ -459,6 +528,8 @@
   <!-- 操作区视图模型是 ESM（src/focus-ops.mjs）；模块脚本会被推迟到解析完再执行，
        panel.js 只在真正渲染操作区时读 window.OwnerFocusOps，读不到就等 next tick。 -->
   <script type="module" src="./focus-ops-host.mjs"></script>
+  <!-- 「自上次看过」的形态判定（首次查看 / 压成一行）同样只写在 ESM 里，见 since-seen-host.mjs。 -->
+  <script type="module" src="./since-seen-host.mjs"></script>
   <script src="./chat-handoff.cjs"></script>
   <script src="../node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="./panel.js"></script>

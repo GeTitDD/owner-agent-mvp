@@ -4,6 +4,8 @@ const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
 contextBridge.exposeInMainWorld('companion', Object.freeze({
   snapshot: (input) => invoke('companion:snapshot', input),
+  // #84：进入项目时算「自上次看过」并推进水位（有副作用，不要放进轮询）。
+  sinceLastSeen: (input) => invoke('companion:since-last-seen', input),
   submit: (input) => invoke('companion:submit', input),
   chat: Object.freeze({
     ask: (input) => invoke('companion:chat-ask', input),
@@ -24,12 +26,38 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   projectBrief: Object.freeze({
     local: (input) => invoke('companion:project-brief-local', input)
   }),
+  // #89 项目库：生成草稿与发布是两个显式动作；读取随 snapshot 一起回来。
+  // #90 导出：发布时自动导出；这两个入口用于补导某一版与打开导出目录。
+  // #91 发布卡片：发布时发一条飞书文本卡片；「重新发送」只有人点才发，不自动重试。
+  // #92 版本浏览：只读打开某一版，diff 随详情一起回来。
+  library: Object.freeze({
+    draft: (input) => invoke('companion:library-draft', input),
+    publish: (input) => invoke('companion:library-publish', input),
+    version: (input) => invoke('companion:library-version', input),
+    export: (input) => invoke('companion:library-export', input),
+    openExport: (input) => invoke('companion:library-export-open', input),
+    resend: (input) => invoke('companion:library-resend', input)
+  }),
+  // #93 删除项目：先 plan（只读列清单），确认后 run（confirm 必须为 true）。
+  projectDelete: Object.freeze({
+    plan: (input) => invoke('companion:project-delete-plan', input),
+    run: (input) => invoke('companion:project-delete', input)
+  }),
   queue: Object.freeze({
     add: (input) => invoke('companion:queue-add', input),
     update: (input) => invoke('companion:queue-update', input),
     remove: (input) => invoke('companion:queue-remove', input),
     move: (input) => invoke('companion:queue-move', input),
     dispatch: (input) => invoke('companion:queue-dispatch', input)
+  }),
+  // #95 灵感收件箱：列表随快照下发（view.ideas），这里只有捕获与状态流转两条写路径。
+  // #96 补一条整理：抓一次链接正文并写四段，抓取结果缓存在条目上。
+  // #97 补一条提升：已整理的条目 → 知识候选（假设类）或项目队列任务。
+  ideas: Object.freeze({
+    capture: (input) => invoke('companion:idea-capture', input),
+    status: (input) => invoke('companion:idea-status', input),
+    sort: (input) => invoke('companion:idea-sort', input),
+    promote: (input) => invoke('companion:idea-promote', input)
   }),
   diagrams: Object.freeze({
     dependency: (input) => invoke('companion:diagram-dependency', input),
@@ -58,6 +86,14 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   }),
   skills: Object.freeze({
     catalog: (input) => invoke('companion:skill-catalog', input)
+  }),
+  // #86 会话扫描：显式点击才跑；只读本机会话文件，不写库。
+  // #87 决策：确认才入库；状态只写决策自己那一列（生效中 / 已被取代 / 已放弃）。
+  memory: Object.freeze({
+    scanSessions: () => invoke('companion:session-scan'),
+    confirmDecision: (input) => invoke('companion:decision-confirm', input),
+    setDecisionStatus: (input) => invoke('companion:decision-status', input),
+    decisions: (input) => invoke('companion:decision-retrieve', input)
   }),
   playbooks: Object.freeze({
     list: (input) => invoke('companion:playbooks', input),

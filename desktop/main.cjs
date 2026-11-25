@@ -94,9 +94,38 @@ let knowledgeTidyModule = null;
 let diagramModule = null;
 let executionStatusModule = null;
 let ideaCaptureModule = null;
+// #96 整理要访问外网：验收机用假的抓取器，真实环境才走网络（见 ideaFetchForAcceptance）。
+let ideaSortModule = null;
+// #86 会话扫描：模块按需加载；扫描是显式动作，不在启动或轮询里调用。
+let sessionScanModule = null;
+// #87 决策确认：候选确认入库与状态流转；同样按需加载。
+let decisionConfirmModule = null;
+let decisionRetrievalModule = null;
 let chatModule = null;
 let chatService = null;
 let chatSessionStore = null;
+// #89：项目库视图与快照存储。视图复用 src/project-library.mjs，快照落 owner 库的同一连接。
+let projectLibraryModule = null;
+let snapshotModule = null;
+let snapshotStore = null;
+// #90：把已发布的快照导出到 <userData>/exports/<projectId>/vN/（只读快照，不重新聚合）。
+let exportModule = null;
+// #93：删除项目连带清理快照与导出目录；清单（plan）与执行分开，未确认不删。
+let projectDeletionModule = null;
+// #91：发布后发一条飞书文本卡片，投递结果记在单独的账本表上（快照本身不可变）。
+let publishCardModule = null;
+let publishCardStore = null;
+let feishuConfigModule = null;
+// #92：历史版本浏览时的相邻版本 diff（纯函数，只读两份快照内容）。
+let versionDiffModule = null;
+// #84：水位与「自上次看过」。
+// - memoryWatermarks：每项目一个时间点，与 OwnerStore 共用同一条连接（同一份本地库）；
+// - observerEventStore：只读观察员事件，独立连接（观察员可以和桌面端同时开着）；
+// - 两个模块按需 import，启动时不额外加载。
+let memoryWatermarks = null;
+let observerEventStore = null;
+let sinceLastSeenModule = null;
+let observerProbeModule = null;
 const githubCache = new Map();
 const githubActivityCache = new Map();
 const briefCache = new Map();
@@ -160,6 +189,38 @@ const knowledgeDbPath = () =>
   || process.env.DOMAIN_CONTEXT_DB
   || path.join(os.homedir(), '.domain-context', 'index.sqlite');
 
+// #86 会话扫描的本地状态：已扫过的会话键（重复点击不重复提炼），
+// 以及留给下一张票的「库里已有决策的指纹」位（现在是空数组）。
+// 只存这一份 JSON，不进知识库——扫描本身不写任何数据，确认入库是下一张票。
+// 上限只为防无限增长：一年也到不了 5000 条，真到了丢最旧的会话键也不会重扫出重复候选
+// （重复问答还有指纹兜底）。
+const sessionScanStatePath = () => path.join(app.getPath('userData'), 'memory-scan.json');
+const SESSION_SCAN_STATE_LIMIT = 5000;
+const loadSessionScanState = () => {
+  try {
+    const raw = fs.readFileSync(sessionScanStatePath(), 'utf8').replace(/^\uFEFF/u, '');
+    const parsed = JSON.parse(raw);
+    return {
+      sessions: Array.isArray(parsed.sessions) ? parsed.sessions.filter((key) => typeof key === 'string') : [],
+      fingerprints: Array.isArray(parsed.fingerprints) ? parsed.fingerprints.filter((key) => typeof key === 'string') : []
+    };
+  } catch {
+    return { sessions: [], fingerprints: [] };
+  }
+};
+const saveSessionScanState = ({ sessions = [], fingerprints = [] } = {}) => {
+  try {
+    const state = {
+      sessions: [...new Set(sessions)].slice(-SESSION_SCAN_STATE_LIMIT),
+      fingerprints: [...new Set(fingerprints)].slice(-SESSION_SCAN_STATE_LIMIT)
+    };
+    fs.mkdirSync(path.dirname(sessionScanStatePath()), { recursive: true });
+    fs.writeFileSync(sessionScanStatePath(), JSON.stringify(state, null, 2), 'utf8');
+  } catch (error) {
+    logError('session-scan-state', error);
+  }
+};
+
 const digestCache = new Map();
 const resolveDigest = (imageRef = 'node:22-alpine') => {
   const explicit = process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST;
@@ -177,6 +238,18 @@ const resolveDigest = (imageRef = 'node:22-alpine') => {
   }
   digestCache.set(imageRef, digest);
   return digest;
+};
+
+/**
+ * 视觉验收用的假抓取：验收机不该为了截图去访问外网。
+ * 只由 OWNER_COMPANION_FAKE_SORT=1 打开，页面按地址预置；守卫、限时、限大小、四段整理
+ * 全走真路径，换掉的只是最外面这一层 fetch —— 与 OWNER_COMPANION_FAKE_SOURCE 同一思路。
+ */
+const ideaFetchForAcceptance = async () => {
+  if (process.env.OWNER_COMPANION_FAKE_SORT !== '1') return { fetch: null, resolve: null };
+  const mod = (ideaSortModule ??= await importEsm('../src/idea-sort.mjs'));
+  const fake = mod.fakeIdeaFetch();
+  return { fetch: fake.fetch, resolve: fake.resolve };
 };
 
 const fakeSourceAgent = async () => {
@@ -240,6 +313,34 @@ async function startServices() {
     console.error('chat session store unavailable:', error.message);
     chatSessionStore = null;
   }
+  // #89：项目库快照。表建在 owner 库上，复用同一条连接；不可用只影响库的发布，
+  // 不阻塞其余功能，所以失败只记日志、退回「没有草稿/版本」的空快照状态。
+  try {
+    snapshotModule = await importEsm('../src/project-snapshots.mjs');
+    snapshotStore = new snapshotModule.ProjectSnapshotStore({ db: store.db });
+  } catch (error) {
+    console.error('project snapshot store unavailable:', error.message);
+    snapshotModule = null;
+    snapshotStore = null;
+  }
+  // #90：导出模块。纯渲染 + 落盘，不依赖 Electron；失败只让导出入入口报错，
+  // 已发布快照与库本身不受影响。
+  try {
+    exportModule = await importEsm('../src/project-exports.mjs');
+  } catch (error) {
+    console.error('project export module unavailable:', error.message);
+    exportModule = null;
+  }
+  // #91：发布卡片。投递账本复用同一条连接；模块不可用时只影响「发卡片」这个动作，
+  // 发布 / 导出照旧，面板会显示卡片未发送。
+  try {
+    publishCardModule = await importEsm('../src/project-publish-card.mjs');
+    publishCardStore = new publishCardModule.PublishCardStore({ db: store.db });
+  } catch (error) {
+    console.error('publish card module unavailable:', error.message);
+    publishCardModule = null;
+    publishCardStore = null;
+  }
   try {
     const { PersonalKnowledgeStore } = await importEsm('../src/personal-store.mjs');
     const knowledgeFile = knowledgeDbPath();
@@ -254,6 +355,27 @@ async function startServices() {
     // 「后台自己写经验」的入口。提炼改为人在知识模式里按需触发（LessonDistiller /
     // distillOnDemand），这里只保留读取用的提炼器实例（见 knowledgeDistiller）。
     console.log('knowledge store ready: manual distillation only (ADR-0007)');
+  }
+
+  // #84 水位：新表建在同一个 owner.sqlite 里（老库打开时只多一张空表）。
+  // 复用 OwnerStore 的连接，避免第二条写连接与它抢锁。
+  try {
+    const { MemoryWatermarkStore } = await importEsm('../src/memory/watermark.mjs');
+    memoryWatermarks = new MemoryWatermarkStore({ db: store.db });
+  } catch (error) {
+    console.error('watermark store unavailable:', error.message);
+    memoryWatermarks = null;
+  }
+  // #84 观察员事件：观察员写的是审计库，桌面端只读同一份。
+  // 路径优先级沿用 db-path.mjs（OWNER_OBSERVER_DB → OWNER_AGENT_DB → userData/owner.sqlite），
+  // 所以命令行观察员与桌面端在默认布局和 e2e 的临时库下都指向同一个文件。
+  try {
+    const { ObserverStore } = await importEsm('../src/observer/store.mjs');
+    const { resolveObserverDbPath } = await importEsm('../src/observer/db-path.mjs');
+    observerEventStore = new ObserverStore(resolveObserverDbPath({ fallback: file }));
+  } catch (error) {
+    console.error('observer event store unavailable:', error.message);
+    observerEventStore = null;
   }
   broker = new WorkspaceBroker(store, {
     workspacesRoot: path.join(app.getPath('userData'), 'workspaces')
@@ -271,12 +393,16 @@ async function startServices() {
   });
   readToken = resolveSidecarToken({ dbPath: file });
   approvalToken = resolveApprovalToken({ dbPath: file });
+  const ideaFetcher = await ideaFetchForAcceptance();
   sidecar = await startSidecar({
     store,
     brokerFactory: () => broker,
     worker,
     token: readToken,
     approvalToken,
+    ideaFetch: ideaFetcher.fetch,
+    ideaResolve: ideaFetcher.resolve,
+    personalStore,
     imageDigest: resolveDigest(),
     sandboxRoot: path.join(app.getPath('userData'), 'sandbox'),
     port: 0,
@@ -331,7 +457,7 @@ async function startServices() {
   }
 }
 
-const api = async (route, { method = 'GET', body, decision = false } = {}) => {
+const api = async (route, { method = 'GET', body, decision = false, timeoutMs = 8000 } = {}) => {
   const headers = { authorization: `Bearer ${readToken}` };
   if (decision) headers['x-owner-approval-token'] = approvalToken;
   if (method !== 'GET') {
@@ -346,7 +472,7 @@ const api = async (route, { method = 'GET', body, decision = false } = {}) => {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(8000)
+    signal: AbortSignal.timeout(timeoutMs)
   });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
@@ -736,6 +862,10 @@ const skillCatalogPayload = async ({ refresh = false } = {}) => {
 const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) => {
   if (!personalStore) return { answer: '知识库尚未建立；完成任务并提炼执行记录后会出现在这里。', items: [], basis: [] };
   const units = personalStore.list({ limit: 2000 });
+  // 决策有自己的状态列（#87）：已结束的决策不再算现状，检索默认不返回，
+  // 也不再与「待验证 / 已验证」的知识混在一句里。
+  const currentUnit = (row) => row.kind !== 'decision' || row.decisionStatus === 'active';
+  const decisions = units.filter((row) => row.kind === 'decision');
   // 旧 experience/v1 已退役（#62）：问答只读三层沉淀的 lesson/v1。
   const allLessons = personalStore.listLessons({ limit: 1000 });
   // 跨项目合并后的经验只挂在最早项目下，第二个项目靠来源台账反查。
@@ -745,7 +875,10 @@ const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) =>
   const item = (type, row, extra = {}) => ({
     type, id: row.id,
     title: type === 'lesson' ? row.phenomenon : row.title,
-    status: type === 'lesson' ? (row.verificationStatus ?? 'inferred') : row.verificationStatus,
+    // 决策读自己的状态列，不拿验证状态冒充（#87）。
+    status: type === 'lesson'
+      ? (row.verificationStatus ?? 'inferred')
+      : (row.kind === 'decision' ? (row.decisionStatus ?? 'active') : row.verificationStatus),
     layer: type === 'lesson' ? (row.scope?.layer ?? row.layer ?? null) : (row.layer ?? null),
     revision: row.revision ?? null,
     projectId: row.projectId ?? row.project_id ?? null,
@@ -765,7 +898,7 @@ const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) =>
   if (kind === 'similar') {
     const latest = lessons[0]?.phenomenon;
     const q = query || latest || '';
-    const matched = personalStore.list({ q, limit: 10 });
+    const matched = personalStore.list({ q, limit: 10 }).filter(currentUnit);
     const found = lessons.filter((row) =>
       `${row.phenomenon} ${row.mechanism} ${row.countermeasure}`.toLowerCase().includes(q.toLowerCase())
     ).slice(0, 10);
@@ -797,14 +930,18 @@ const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) =>
     };
   }
   // project
+  // 决策状态与验证状态分开：已结束的决策不进「相关知识」，但要在回答里说明还有几条旧决策。
   const projectKnowledge = units.filter((row) =>
-    row.scope === 'project'
+    (row.scope === 'project'
       ? row.projectId === projectId
-      : Boolean(domain) && row.domains.includes(domain)
+      : Boolean(domain) && row.domains.includes(domain)) && currentUnit(row)
   );
+  const endedDecisions = decisions.filter((row) => row.decisionStatus !== 'active'
+    && row.scope === 'project' && row.projectId === projectId).length;
   const projectLessons = lessons.filter(inProject);
   return {
-    answer: `${projectId || '当前项目'}：${projectLessons.length} 条经验，${projectKnowledge.length} 条相关知识。`,
+    answer: `${projectId || '当前项目'}：${projectLessons.length} 条经验，${projectKnowledge.length} 条相关知识`
+      + (endedDecisions ? `；另有 ${endedDecisions} 条决策已被取代或已放弃，不再算现状。` : '。'),
     items: [...projectLessons.slice(0, 10).map((row) => item('lesson', row)),
       ...projectKnowledge.slice(0, 10).map((row) => item('knowledge', row))],
     basis: [...projectLessons.map((row) => `lesson:${row.id}`),
@@ -1126,6 +1263,149 @@ const knowledgeDetail = ({ id } = {}) => {
     };
   };
 
+  // ---- #89 项目库：视图复用 project-library，快照走 project-snapshots ----
+
+  const loadProjectLibrary = async () =>
+    (projectLibraryModule ??= await importEsm('../src/project-library.mjs'));
+
+  // #92：版本 diff 是纯函数；按需加载，和库视图一样不在启动时增加加载项。
+  const loadVersionDiff = async () =>
+    (versionDiffModule ??= await importEsm('../src/project-version-diff.mjs'));
+  /** #93 删除项目：按需加载，删除是显式动作，不在启动或轮询里调用。 */
+  const loadProjectDeletion = async () =>
+    (projectDeletionModule ??= await importEsm('../src/project-deletion.mjs'));
+
+  /** 项目图谱：与 buildView 同一口径（stale 按当前 HEAD 判断），给库的图谱摘要复用。 */
+  const diagramsForProject = async (project) => {
+    if (!project?.id) return [];
+    const head = await headForProject(project.root ?? '');
+    const items = (await api(`/owner/v1/projects/${encodeURIComponent(project.id)}/diagrams`)
+      .catch(() => ({ items: [] }))).items ?? [];
+    return items.map((diagram) => ({
+      ...diagram,
+      stale: Boolean(diagram.basedOnCommit && head && diagram.basedOnCommit !== head)
+    }));
+  };
+
+  /** 按项目 id 取 owner 项目行；没给 id 时退回第一个项目（与 buildView 的口径一致）。 */
+  const projectRowFor = async (projectId) => {
+    const items = (await api('/owner/v1/projects')).items ?? [];
+    const wanted = String(projectId ?? '');
+    return (wanted ? items.find((item) => item.id === wanted) : items[0]) ?? null;
+  };
+
+  /**
+   * #90 导出根：<用户配置根>/exports/。userData 就是 %APPDATA%\owner-agent-mvp（打包版）
+   * 或 --user-data-dir 指定的临时目录（e2e），所以路径按「项目 / 版本」可预测，
+   * 便携版与测试实例也各自落在自己的根下，不会写进真实用户目录之外的地方。
+   */
+  const exportsRoot = () => path.join(app.getPath('userData'), 'exports');
+
+  /** 面板要显示的最新版本导出路径：目录是确定的，是否存在单独判断，不靠缓存。 */
+  const exportInfoFor = (projectId, versions, wantedVersion = 0) => {
+    if (!exportModule || !projectId) return null;
+    const latest = versions?.find((item) => item.version === wantedVersion) ?? versions?.[0];
+    if (!latest) return null;
+    const files = exportModule.exportFilesOf({
+      root: exportsRoot(), projectId, version: latest.version
+    });
+    return {
+      version: latest.version,
+      label: `v${latest.version}`,
+      root: exportsRoot(),
+      dir: files.dir,
+      snapshotPath: files.snapshotPath,
+      reportPath: files.reportPath,
+      // 两个文件都在才算这一版导出完整；缺一个就当没导出，让「导出」按钮可用。
+      exists: fs.existsSync(files.snapshotPath) && fs.existsSync(files.reportPath)
+    };
+  };
+
+  /**
+   * #91 飞书 webhook：沿用观察员的同一份配置（env → ~/.owner-agent/feishu.json），
+   * 不新开第二条通道，也不在界面上另存一份凭据。
+   */
+  const loadFeishuWebhook = async () => {
+    try {
+      feishuConfigModule ??= await importEsm('../src/observer/config.mjs');
+      return feishuConfigModule.resolveFeishuWebhook().webhook;
+    } catch (error) {
+      console.error('feishu config unavailable:', error?.message ?? error);
+      return '';
+    }
+  };
+
+  /**
+   * #91 发布卡片：只发一条文本，结果记在投递账本上。
+   * 发布此时已经成功，卡片发不出去不能反过来影响快照与导出：这里不抛异常，只返回状态；
+   * 也不会自动重发，重试只能由人点「重新发送」调 companion:library-resend。
+   */
+  const sendPublishCard = async ({ project, version, exportDir = '', exportError = '' }) => {
+    if (!publishCardModule || !publishCardStore || !snapshotStore) {
+      return { status: 'unsent', detail: '卡片模块尚未就绪，请重启后再试。', delivery: null };
+    }
+    const raw = snapshotStore.getVersionRaw(project.id, version);
+    if (!raw) return { status: 'unsent', detail: '找不到这一版快照。', delivery: null };
+    try {
+      return await publishCardModule.deliverPublishCard({
+        deliveries: publishCardStore,
+        projectId: project.id,
+        version,
+        contentText: raw.contentText,
+        exportDir,
+        exportError,
+        publishedAt: raw.publishedAt,
+        webhookUrl: await loadFeishuWebhook()
+      });
+    } catch (error) {
+      console.error('publish card failed:', error?.message ?? error);
+      return { status: 'unsent', detail: `卡片处理失败：${error?.message ?? error}`, delivery: null };
+    }
+  };
+
+  /**
+   * 项目库视图 + 草稿/版本摘要。库是视图（ADR-0009）：每次按当前知识重新聚合，
+   * 只有「生成草稿 / 发布」才把它固化成快照，所以这里不写库。
+   * limit 只影响面板一屏显示多少条，计数仍按全量；生成快照时用大 limit 取全量。
+   */
+  const libraryForProject = async (project, { profile = null, diagrams = null, limit = 5, full = false } = {}) => {
+    if (!project?.id) return null;
+    const mod = await loadProjectLibrary();
+    let lessons = [];
+    let knowledge = [];
+    if (personalStore) {
+      try { lessons = personalStore.listLessonsForProject(project.id, { limit: 200 }); } catch { lessons = []; }
+      try { knowledge = personalStore.list({ limit: 1000 }); } catch { knowledge = []; }
+    }
+    const profileView = profile ?? await projectBriefFor(project);
+    const diagramView = diagrams ?? await diagramsForProject(project);
+    const view = mod.projectLibraryView({
+      project, lessons, knowledge, profile: profileView, diagrams: diagramView, limit
+    });
+    const draft = snapshotStore?.getDraftState(project.id) ?? null;
+    const versions = snapshotStore?.listVersions(project.id) ?? [];
+    // 只把「最新一版」的投递结果给面板：旧版本的发送状态不该冒充当前这版。
+    const latestDelivery = publishCardStore?.getLatest(project.id) ?? null;
+    const delivery = latestDelivery && latestDelivery.version === versions[0]?.version
+      ? latestDelivery
+      : null;
+    const payload = {
+      ...view,
+      // 快照模块不可用时退回空摘要：库仍能看，只是不能生成/发布（按钮由 hasDraft 置灰）。
+      snapshot: snapshotModule
+        ? snapshotModule.snapshotStateOf({ draft, versions })
+        : { hasDraft: false, draft: null, versions: [], latestVersion: 0, nextVersion: 1, nextLabel: 'v1' },
+      // 导出只读快照：面板拿到的路径就是 publish / export 写出的同一个目录。
+      export: exportInfoFor(project.id, versions),
+      // #91 飞书卡片：最新一版的投递结果（成功 / 未发送 + 原因），重启后仍能读到；
+      // 没有版本或还没有投递记录时给 null，面板据此决定是否显示「重新发送」。
+      delivery
+    };
+    // 面板每 2 秒轮询一次快照，groups 是全量条目，只给生成快照用，不随渲染下发。
+    if (!full) delete payload.groups;
+    return payload;
+  };
+
 
   // 手机端概览：只暴露「看清项目 + 想法 + 知识摘要」，不含审批与写入。
   const mobileOverviewFor = async ({ projectId = '' } = {}) => {
@@ -1216,6 +1496,66 @@ const knowledgeDetail = ({ id } = {}) => {
       windowsHide: true
     });
     return stdout.trim();
+  };
+
+  // ---- #84 自上次看过 ----
+  //
+  // 取数只用现有来源，不重写一套 git 事实：
+  // - 提交清单与未提交文件清单走 src/observer/probe.mjs（与探针同一套只读 git 调用）；
+  //   probeProject 只给 HEAD / lastCommitAt / uncommittedFiles 计数，回答不了「哪几条提交、
+  //   哪些文件」，所以那里补了 readCommitList / readWorkingTreeChanges 两个只读取数。
+  // - 观察员事件走审计库的 ObserverStore.listEvents（同一份库，只读）。
+  // - 比较与推进全部在 src/memory/since-last-seen.mjs：先算差异、再推水位。
+  const loadObserverProbe = async () => (observerProbeModule ??= await importEsm('../src/observer/probe.mjs'));
+  const loadSinceLastSeen = async () => (sinceLastSeenModule ??= await importEsm('../src/memory/since-last-seen.mjs'));
+
+  // 登记时写进项目根的身份标记与夹具目录不是「项目变了」；与 repoFactsFor 的过滤口径一致。
+  const isNoisePath = (file) =>
+    file === '.owner-root-identity' || String(file).startsWith('.fixture-workspaces/');
+
+  /** 读观察员事件；库或表读不到返回 null，变化窗口会据此标「未知」而不是「没有发生」。 */
+  const observerEventsFor = (projectId) => {
+    if (!observerEventStore) return null;
+    try {
+      return observerEventStore.listEvents({ projectId, limit: 50 });
+    } catch (error) {
+      logError('observer.events', error);
+      return null;
+    }
+  };
+
+  /**
+   * 进入项目时调用：先算「自上次看过」的差异，算完才推进水位（顺序在
+   * computeSinceLastSeen 里固定）。面板的 2 秒轮询不调用它，只刷新已算好的结果，
+   * 否则每 2 秒推进一次，差异会被自己吃掉。
+   * @param {string} projectId
+   * @returns {Promise<object>} changeWindowView 的视图模型（带 checkedAt / previousAt）
+   */
+  const sinceLastSeenFor = async (projectId) => {
+    const id = String(projectId ?? '').trim();
+    if (!id) throw new Error('缺少项目 id');
+    const items = (await api('/owner/v1/projects')).items ?? [];
+    const project = findProjectById(items, id);
+    if (!project) throw new Error(`项目不存在：${id}`);
+    if (!memoryWatermarks) throw new Error('水位存储不可用：本地数据库打不开，请重启客户端。');
+    const probe = await loadObserverProbe();
+    // 读不到（不是仓库 / git 失败）就给 null：这一类会被标成 unknown，不会缩成「没有变化」。
+    let commits = null;
+    let dirty = null;
+    if (project.root) {
+      commits = probe.readCommitList({ root: project.root, limit: 50 });
+      const working = probe.readWorkingTreeChanges({ root: project.root });
+      dirty = working === null ? null : working.filter((item) => !isNoisePath(item.path));
+    }
+    const module = await loadSinceLastSeen();
+    const { view } = module.computeSinceLastSeen({
+      projectId: id,
+      store: memoryWatermarks,
+      commits,
+      dirty,
+      events: observerEventsFor(id)
+    });
+    return view;
   };
 
   /**
@@ -1618,14 +1958,15 @@ const buildView = async (requestedProjectId = '') => {
   const queueView = (await api(
     `/owner/v1/queue?projectId=${encodeURIComponent(activeProjectId)}`
   )).items ?? [];
-  const projectHead = await headForProject(activeProject?.root ?? '');
-  const diagramView = ((await api(
-    `/owner/v1/projects/${encodeURIComponent(activeProjectId)}/diagrams`
-  ).catch(() => ({ items: [] }))).items ?? []).map((diagram) => ({
-    ...diagram,
-    stale: Boolean(diagram.basedOnCommit && projectHead && diagram.basedOnCommit !== projectHead)
-  }));
+  // #95 灵感收件箱是全局的（条目在整理前不属于任何项目）：不跟着 activeProjectId 取数，
+  // 没有项目时也要能看能记。取不到就按「读不出来」显示，不要拿空收件箱冒充。
+  const ideasView = (await api('/owner/v1/ideas').catch(() => null))?.view ?? null;
+  // 图谱的「有过更新」判断已经收进 diagramsForProject，这里不再自己取一次提交。
+  const diagramView = await diagramsForProject(activeProject);
   const briefView = await projectBriefFor(activeProject);
+  // #89：项目库是视图，不落库；草稿/版本摘要只读快照表。随快照一起给面板，
+  // 面板不再自己聚合（聚合规则只保留 src/project-library.mjs 一份）。
+  const libraryView = await libraryForProject(activeProject, { profile: briefView, diagrams: diagramView });
   const resultView = finalCycle
     ? {
       cycleId: finalCycle.id,
@@ -1732,8 +2073,11 @@ const buildView = async (requestedProjectId = '') => {
     brief: briefView,
     nextAction,
     queue: queueView,
+    ideas: ideasView,
     diagrams: diagramView,
     knowledge: knowledgeView,
+    // #89：项目库那一段（两节 + 计数 + 草稿/版本状态）；没有项目时为 null。
+    library: libraryView,
     result: resultView
   };
 };
@@ -2472,6 +2816,13 @@ const registerIpc = () => {
     return view;
   });
 
+  // #84：进入项目时算一次「自上次看过」，返回前把水位推到当前。
+  // 这个通道有副作用（写水位），所以只在「进入项目」时调用；快照轮询不碰它。
+  ipcMain.handle('companion:since-last-seen', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return sinceLastSeenFor(String(input?.projectId ?? ''));
+  });
+
   ipcMain.handle('companion:submit', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const text = String(input?.text ?? '');
@@ -2602,6 +2953,55 @@ const registerIpc = () => {
         body: String(input?.body ?? ''),
         source: 'owner',
         kind: input?.kind === 'idea' ? 'idea' : 'task'
+      }
+    });
+  });
+
+  // #95 灵感收件箱：捕获只落库（来源由存储层识别），链接只存地址、不抓取。
+  // 去重也在存储层：同一段正文 + 同一个来源只会有一条，重复粘贴返回 duplicate=true。
+  ipcMain.handle('companion:idea-capture', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return api('/owner/v1/ideas', {
+      method: 'POST',
+      body: { text: String(input?.text ?? '') }
+    });
+  });
+
+  // 状态机在存储层：非法流转返回 409，面板把原因告诉用户，而不是把条目硬改过去。
+  ipcMain.handle('companion:idea-status', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const id = String(input?.id ?? '');
+    if (!id) throw new Error('Missing idea id');
+    return api(`/owner/v1/ideas/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: { status: String(input?.status ?? '') }
+    });
+  });
+
+  // #96 整理：有条目链接时抓一次公网正文，写出四段；抓不到就把原因给面板，条目不动。
+  // 抓取本身限时 5 秒，加上读正文的余量，这一条的状态超时给到 20 秒。
+  ipcMain.handle('companion:idea-sort', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const id = String(input?.id ?? '');
+    if (!id) throw new Error('Missing idea id');
+    return api(`/owner/v1/ideas/${encodeURIComponent(id)}/sort`, {
+      method: 'POST',
+      body: {},
+      timeoutMs: 20000
+    });
+  });
+
+  // #97 提升：to=knowledge 落假设类候选（走既有候选审核），to=task 落目标项目队列。
+  // 没选项目时服务端拒绝并把原因回给面板；灵感状态只在成功后才变 adopted。
+  ipcMain.handle('companion:idea-promote', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const id = String(input?.id ?? '');
+    if (!id) throw new Error('Missing idea id');
+    return api(`/owner/v1/ideas/${encodeURIComponent(id)}/promote`, {
+      method: 'POST',
+      body: {
+        to: String(input?.to ?? ''),
+        projectId: String(input?.projectId ?? '')
       }
     });
   });
@@ -3070,6 +3470,80 @@ const registerIpc = () => {
     await openKnowledgeWorkbench();
   });
 
+  // #86 会话扫描：读本机 Codex / Claude Code 的会话，按工作目录匹配项目后产决策候选。
+  // 只读：不写知识库、不调模型、不联网；已扫过的会话键与候选指纹落在 memory-scan.json，
+  // 所以再点一次不会把同一段会话重新提炼一遍。
+  ipcMain.handle('companion:session-scan', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    sessionScanModule = sessionScanModule ?? await importEsm('../src/memory/session-scan.mjs');
+    const projects = (store?.listProjects() ?? []).map((project) => ({
+      id: project.id,
+      name: project.name ?? '',
+      root: project.root ?? ''
+    }));
+    const state = loadSessionScanState();
+    // 已确认入库的决策指纹从库里读（#87）：同一句话已经被确认过，就不该再作为候选出现。
+    const confirmed = (() => {
+      try { return personalStore?.decisionFingerprints?.() ?? []; } catch { return []; }
+    })();
+    const result = await sessionScanModule.scanSessions({
+      roots: sessionScanModule.sessionRootsFrom({ home: os.homedir(), env: process.env }),
+      projects,
+      seenSessions: state.sessions,
+      fingerprints: [...state.fingerprints, ...confirmed]
+    });
+    saveSessionScanState({
+      sessions: [...state.sessions, ...result.scannedKeys],
+      // 只记「哪些会话扫过」，不把未确认候选的指纹写进去：本轮提过的候选还没入库，
+      // 占住指纹会让它以后再也没机会被提出来。跨轮的同内容去重靠会话键；
+      // 已确认入库的指纹由知识库提供（上面那一步），不落进这份 JSON。
+      fingerprints: state.fingerprints
+    });
+    return result;
+  });
+
+  // #87 决策确认：候选只在人点「确认」时入库；可选补一句理由，缺理由单独标记。
+  // 未确认的候选不经过这里，因此不会写任何数据。
+  ipcMain.handle('companion:decision-confirm', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) return { ok: false, reason: '知识库尚未初始化，暂时不能确认决策。' };
+    decisionConfirmModule = decisionConfirmModule ?? await importEsm('../src/memory/decision-confirm.mjs');
+    return decisionConfirmModule.confirmDecisionCandidate({
+      personalStore,
+      candidate: input?.candidate && typeof input.candidate === 'object' ? input.candidate : {},
+      reason: String(input?.reason ?? ''),
+      actor: 'local-user'
+    });
+  });
+
+  // #87 决策状态：只改 decision_status 一列（生效中 → 已被取代 / 已放弃），验证状态不动。
+  ipcMain.handle('companion:decision-status', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) return { ok: false, reason: '知识库尚未初始化，暂时不能改决策状态。' };
+    decisionConfirmModule = decisionConfirmModule ?? await importEsm('../src/memory/decision-confirm.mjs');
+    return decisionConfirmModule.changeDecisionStatus({
+      personalStore,
+      id: String(input?.id ?? ''),
+      status: String(input?.status ?? ''),
+      note: String(input?.note ?? ''),
+      actor: 'local-user'
+    });
+  });
+
+  // #87 决策检索：默认只给生效中的决策；已被取代 / 已放弃的单独列出，不算现状。
+  ipcMain.handle('companion:decision-retrieve', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) return { items: [], ended: [], counts: { current: 0, ended: 0, matched: 0 }, reason: null };
+    decisionRetrievalModule = decisionRetrievalModule ?? await importEsm('../src/memory/decision-status.mjs');
+    const units = personalStore.list({ limit: 2000 });
+    return decisionRetrievalModule.decisionRetrievalView({
+      units,
+      projectId: String(input?.projectId ?? '') || config.projectId || '',
+      query: String(input?.query ?? ''),
+      limit: input?.limit
+    });
+  });
+
   // 只读 playbook：列表、执行、报告、转提案。
   ipcMain.handle('companion:playbooks', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
@@ -3245,6 +3719,187 @@ const registerIpc = () => {
     const mod = await loadProjectBrief();
     const payload = mod.buildLocalProjectBrief({ project, repoFacts: facts });
     return saveProjectBrief(project, payload, { basedOnCommit: facts.head });
+  });
+
+  // #89 项目库：生成草稿（覆盖上一份）与发布（分配 v1..vN，发布后不可改）。
+  // 两个都是显式动作：只读快照不会生成草稿，改知识也不会自动发布。
+  ipcMain.handle('companion:library-draft', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('还没有项目，先添加一个项目目录。');
+    if (!snapshotStore || !snapshotModule) throw new Error('快照存储尚未就绪，请重启后再试。');
+    // 快照用 groups 取全量，limit 只影响随后的面板渲染；这里仍走一次全量视图。
+    const library = await libraryForProject(project, { full: true });
+    const note = String(input?.note ?? '');
+    const content = snapshotModule.snapshotContentOf(library, { note });
+    snapshotStore.saveDraft({ projectId: project.id, content });
+    return libraryForProject(project);
+  });
+
+  ipcMain.handle('companion:library-publish', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('还没有项目，先添加一个项目目录。');
+    if (!snapshotStore) throw new Error('快照存储尚未就绪，请重启后再试。');
+    const published = snapshotStore.publish({
+      projectId: project.id,
+      note: String(input?.note ?? '')
+    });
+    // #90：发布 = 生成快照 + 导出到固定目录。导出失败不回滚已发布版本（快照不可变、
+    // 版本号不能回收），把原因交给面板，由人点「导出」重试；下次导出仍是同一份字节。
+    let exported = null;
+    let exportError = '';
+    if (exportModule) {
+      try {
+        exported = exportModule.exportPublishedVersion({
+          store: snapshotStore,
+          root: exportsRoot(),
+          projectId: project.id,
+          version: published.version
+        });
+      } catch (error) {
+        exportError = String(error?.message ?? error);
+        console.error('project export failed:', exportError);
+      }
+    } else {
+      exportError = '导出模块尚未就绪，请重启后再试。';
+    }
+    // #91：导出确定之后再发卡片（卡片里有导出路径）；发送失败不回滚发布，
+    // 状态记成「未发送」由人点「重新发送」。
+    const delivery = await sendPublishCard({
+      project,
+      version: published.version,
+      exportDir: exported?.dir ?? '',
+      exportError: exported ? '' : exportError
+    });
+    const library = await libraryForProject(project);
+    return {
+      ...library,
+      published: {
+        version: published.version,
+        label: `v${published.version}`,
+        publishedAt: published.publishedAt,
+        export: exported,
+        exportError,
+        delivery
+      }
+    };
+  });
+
+  // #92 历史版本浏览：只读打开某一版，并给出与上一版的自动 diff。
+  // 这个入口只读：不生成草稿、不写任何表，打开历史版本不会改动已发布数据。
+  ipcMain.handle('companion:library-version', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!snapshotStore) throw new Error('快照存储尚未就绪，请重启后再试。');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('还没有项目，先添加一个项目目录。');
+    const version = Number(input?.version);
+    if (!Number.isSafeInteger(version) || version < 1) throw new Error('版本号无效。');
+    const current = snapshotStore.getVersion(project.id, version);
+    if (!current) throw new Error(`没有找到 v${version}。`);
+    // 相邻两版：v1 没有上一版，明说「首版」；版本号大于 1 却读不到上一版是异常，
+    // 与首版区分开，不把缺失说成「没有变化」。
+    const previous = version > 1 ? snapshotStore.getVersion(project.id, version - 1) : null;
+    const diffModule = await loadVersionDiff();
+    const diff = diffModule.versionDiffOf(previous?.content ?? null, current.content, {
+      previousLabel: previous ? `v${previous.version}` : (version > 1 ? `v${version - 1}` : ''),
+      previousMissing: version > 1 && !previous
+    });
+    return {
+      version: current.version,
+      label: `v${current.version}`,
+      publishedAt: current.publishedAt,
+      note: current.note,
+      counts: current.counts,
+      content: current.content,
+      diff
+    };
+  });
+
+  // #90 导出：把某个已发布版本写进固定目录。默认最新一版；重复导出是幂等的。
+  ipcMain.handle('companion:library-export', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!snapshotStore || !exportModule) throw new Error('快照存储尚未就绪，请重启后再试。');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('还没有项目，先添加一个项目目录。');
+    const versions = snapshotStore.listVersions(project.id);
+    const wanted = Number(input?.version);
+    const version = Number.isSafeInteger(wanted) && wanted > 0 ? wanted : versions[0]?.version;
+    if (!version) throw new Error('还没有已发布的版本，先发布一次再导出。');
+    const exported = exportModule.exportPublishedVersion({
+      store: snapshotStore, root: exportsRoot(), projectId: project.id, version
+    });
+    const library = await libraryForProject(project);
+    return { ...library, exported };
+  });
+
+  // #91「重新发送」：只有人点才会调用——没有自动重试、没有定时发送。
+  // 重发只走投递，不新建版本、也不改快照；导出已存在就把路径再写进卡片。
+  ipcMain.handle('companion:library-resend', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!snapshotStore || !publishCardModule) throw new Error('卡片模块尚未就绪，请重启后再试。');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('还没有项目，先添加一个项目目录。');
+    const versions = snapshotStore.listVersions(project.id);
+    const wanted = Number(input?.version);
+    const version = Number.isSafeInteger(wanted) && wanted > 0 ? wanted : versions[0]?.version;
+    if (!version) throw new Error('还没有已发布的版本，先发布一次。');
+    const info = exportInfoFor(project.id, versions, version);
+    const delivery = await sendPublishCard({
+      project,
+      version,
+      exportDir: info?.exists ? info.dir : '',
+      exportError: info?.exists ? '' : '还没有导出'
+    });
+    const library = await libraryForProject(project);
+    return { ...library, resent: delivery };
+  });
+
+  // #90「打开目录」：只允许打开导出根之内的路径，路径不存在就明确报错。
+  ipcMain.handle('companion:library-export-open', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const root = path.resolve(exportsRoot());
+    const target = path.resolve(String(input?.path ?? ''));
+    if (target !== root && !target.startsWith(root + path.sep)) {
+      throw new Error('只能打开导出目录里的路径。');
+    }
+    if (!fs.existsSync(target)) throw new Error('导出目录不存在；先发布或导出一次。');
+    const failure = await shell.openPath(target);
+    if (failure) throw new Error(`打开目录失败：${failure}`);
+    return { opened: target };
+  });
+
+  // #93 删除项目：plan 只读、run 必须显式确认。
+  ipcMain.handle('companion:project-delete-plan', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const mod = await loadProjectDeletion();
+    if (!snapshotStore) throw new Error('快照存储尚未就绪，请重启后再试。');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('项目不存在或已被删除。');
+    // 只读：列清单不删任何东西，面板据此渲染二次确认。
+    return mod.projectDeletionPlan({
+      project,
+      versions: snapshotStore.listVersions(project.id, { limit: 200 }),
+      draft: snapshotStore.getDraftState(project.id),
+      root: exportsRoot()
+    });
+  });
+
+  ipcMain.handle('companion:project-delete', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const mod = await loadProjectDeletion();
+    // 未确认时直接拒绝：面板必须先展示 plan，再带 confirm=true 回来。
+    if (input?.confirm !== true) throw new Error('删除项目需要二次确认。');
+    if (!snapshotStore) throw new Error('快照存储尚未就绪，请重启后再试。');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('项目不存在或已被删除。');
+    return mod.deleteProject({
+      store,
+      snapshotStore,
+      projectId: project.id,
+      root: exportsRoot(),
+      confirm: true
+    });
   });
 
   ipcMain.handle('companion:github-pr-preview', async (event, input) => {

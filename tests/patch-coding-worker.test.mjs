@@ -28,6 +28,7 @@ import {
   normalizeRelPath,
   validateProposal
 } from '../src/patch-protocol.mjs';
+import { waitFor } from './helpers/wait.mjs';
 
 const clock = (start = '2026-08-01T00:00:00.000Z') => {
   let t = Date.parse(start);
@@ -39,25 +40,6 @@ const clock = (start = '2026-08-01T00:00:00.000Z') => {
     }
   };
 };
-
-const waitFor = (fn, label, ms = 3000) => new Promise((resolve, reject) => {
-  const started = Date.now();
-  const timer = setInterval(() => {
-    try {
-      if (fn()) {
-        clearInterval(timer);
-        resolve();
-        return;
-      }
-    } catch {
-      // retry
-    }
-    if (Date.now() - started > ms) {
-      clearInterval(timer);
-      reject(new Error(`waitFor timeout: ${label}`));
-    }
-  }, 5);
-});
 
 const manualTimers = () => {
   const handles = new Map();

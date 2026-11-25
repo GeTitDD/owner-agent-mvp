@@ -9,17 +9,11 @@ import { OwnerAgent } from '../src/owner-agent.mjs';
 import { PiAnalysisWorker } from '../src/pi-analysis-worker.mjs';
 import { DefaultPiSessionFactory } from '../src/pi-session-factory.mjs';
 import { sha256 } from '../src/utils.mjs';
+import { waitFor } from './helpers/wait.mjs';
 
 // Deterministic fake clock — lease/expiry assertions use injected timestamps, no sleeps.
 const clock=(start='2026-07-01T00:00:00.000Z')=>{let t=Date.parse(start);
   return {now:()=>new Date(t).toISOString(),advanceMs:(ms)=>{t+=ms;return new Date(t).toISOString();}};};
-
-// Condition-based wait: async fs (realpath etc.) is real I/O, so a single setImmediate
-// is not enough. Poll until the expected state appears; bounded by a real timeout.
-const waitFor=(fn,label,ms=2000)=>new Promise((resolve,reject)=>{
-  const start=Date.now();
-  const timer=setInterval(()=>{try{if(fn()){clearInterval(timer);resolve();return;}}catch{/* retry */}if(Date.now()-start>ms){clearInterval(timer);reject(new Error('waitFor timeout: '+label));}},5);
-});
 
 // Manual timers: the worker registers its watchdog/timeout handles through this object;
 // tests fire ticks explicitly, so lease renewal and cancel handling are deterministic.
