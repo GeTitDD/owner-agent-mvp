@@ -110,6 +110,8 @@ let chatService = null;
 let chatSessionStore = null;
 // #89：项目库视图与快照存储。视图复用 src/project-library.mjs，快照落 owner 库的同一连接。
 let projectLibraryModule = null;
+// #107：全局模式的跨项目聚合（复用库视图口径，只读）。
+let globalLibraryModule = null;
 let snapshotModule = null;
 let snapshotStore = null;
 // #90：把已发布的快照导出到 <userData>/exports/<projectId>/vN/（只读快照，不重新聚合）。
@@ -1272,6 +1274,11 @@ const knowledgeDetail = ({ id } = {}) => {
   const loadProjectLibrary = async () =>
     (projectLibraryModule ??= await importEsm('../src/project-library.mjs'));
 
+  // #107 全局模式的跨项目聚合：口径就是 projectLibraryView（每个项目先算一份库视图），
+  // 聚合只做去重与分节，所以按需加载，不在启动时增加加载项。
+  const loadGlobalLibrary = async () =>
+    (globalLibraryModule ??= await importEsm('../src/global-library.mjs'));
+
   // #92：版本 diff 是纯函数；按需加载，和库视图一样不在启动时增加加载项。
   const loadVersionDiff = async () =>
     (versionDiffModule ??= await importEsm('../src/project-version-diff.mjs'));
@@ -1408,6 +1415,25 @@ const knowledgeDetail = ({ id } = {}) => {
     // 面板每 2 秒轮询一次快照，groups 是全量条目，只给生成快照用，不随渲染下发。
     if (!full) delete payload.groups;
     return payload;
+  };
+
+  /**
+   * #107 全局模式：跨项目只读聚合。
+   * 先对每个已登记项目算一份与项目库完全相同的视图（libraryForProject），再交给
+   * src/global-library.mjs 去重、分节、按时间排序；不另写一套取数口径。
+   * 只在进入全局模式或点「刷新」时调用，不参与轮询。
+   */
+  const globalLibraryFor = async ({ limit = 5 } = {}) => {
+    if (!store) return null;
+    const cap = Number.isSafeInteger(Number(limit)) && Number(limit) > 0 ? Number(limit) : 5;
+    const libraries = [];
+    for (const project of store.listProjects()) {
+      // full: true 保留 groups（全量条目）：聚合要去重分节，读的是条目而不是截断后的 sections。
+      const library = await libraryForProject(project, { limit: cap, full: true });
+      if (library) libraries.push({ project: { id: project.id, name: project.name }, library });
+    }
+    const mod = await loadGlobalLibrary();
+    return mod.globalLibraryView({ libraries, limit: Math.max(cap, 8) });
   };
 
 
@@ -2954,6 +2980,31 @@ const registerIpc = () => {
       seq: Number(input?.seq ?? 0),
       answers: input?.answers
     });
+  });
+
+  // #107 项目胶囊的下拉项：只给壳需要的 id / 名字，不把项目整行递到渲染层。
+  ipcMain.handle('companion:card-projects', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return {
+      items: (store?.listProjects() ?? []).map((project) => ({ id: project.id, name: project.name }))
+    };
+  });
+
+  // #107 切「正在看的项目」：只改视图状态（会话绑定 / 历史归属不动）。
+  // 空 projectId = 切回全局。
+  ipcMain.handle('companion:card-session-view', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().setViewProject(
+      String(input?.id ?? ''),
+      String(input?.projectId ?? '')
+    );
+  });
+
+  // #107 全局模式的只读聚合：所有项目的库视图 → 去重分节后的一份视图。
+  // 口径复用 project-library.mjs（与进项目看到的同一套），这里只负责跨项目合并。
+  ipcMain.handle('companion:card-global-library', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return globalLibraryFor({ limit: Number(input?.limit ?? 5) });
   });
 
   ipcMain.handle('companion:chat-session-append', async (event, input) => {
