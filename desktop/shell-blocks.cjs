@@ -9,11 +9,20 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.OwnerShellBlocks = api;
 })(typeof globalThis === 'undefined' ? null : globalThis, () => {
-  // 十二种块。#109 的清单，也是样本回复里的顺序，e2e 按这个顺序断言。
+  // 十二种生成式 UI 块。#109 的清单，也是样本回复里的顺序，e2e 按这个顺序断言。
+  // #113 的确认卡（type=risk）是另一种块：它只在需要写入确认时出现，不进 /blocks 样本，
+  // 所以不塞进这份「全览清单」，否则十二种与样本顺序的验收会被一张业务卡搅乱。
   const BLOCK_TYPES = [
     'card', 'table', 'kpi', 'line', 'donut', 'timeline',
     'kv', 'code', 'diff', 'tool', 'badges', 'ask'
   ];
+
+  // 风险确认卡是 #113 的纯函数模块（desktop/risk-card.cjs）。浏览器里它先于本文件加载，
+  // Node 测试里直接 require；两条路都拿不到时退回一个只会显示「数据不可用」的降级块，
+  // 绝不把一张看不懂的卡当成低风险放过去。
+  const riskApi = (typeof module === 'object' && module.exports)
+    ? require('./risk-card.cjs')
+    : (typeof globalThis === 'undefined' ? null : globalThis.OwnerRiskCard);
 
   // 提问块最多给四个选项：再多就不是「问一句」而是表单了。
   const ASK_OPTION_LIMIT = 4;
@@ -274,6 +283,41 @@
     };
   };
 
+  /**
+   * 写入确认卡（#113）：等级、三轴、逐条路径、可折叠判据、四个动作。
+   * 结构归一化交给 risk-card.cjs：它会把缺等级 / 缺轴 / 空判据的存储数据降为高风险，
+   * 并重建动作的可用状态。这里只负责把 type 补回去，不另判一遍风险。
+   */
+  const normalizeRiskBlock = (data) => {
+    if (riskApi?.normalizeCardBlock) {
+      return { ...riskApi.normalizeCardBlock(data), type: 'risk' };
+    }
+    return {
+      type: 'risk',
+      id: str(data.id),
+      title: str(data.title) || '写入确认',
+      level: 'high',
+      levelLabel: '高风险',
+      conclusion: '风险评估模块未加载：一律按高风险处理。',
+      degraded: true,
+      degradedReason: '风险确认卡模块（desktop/risk-card.cjs）未加载。',
+      escalated: false,
+      escalationReason: '',
+      destination: str(data.destination),
+      axes: [],
+      paths: list(data.paths).map(str).filter(Boolean),
+      criteria: [],
+      basis: [],
+      whyNotOthers: '',
+      originalCriteria: [],
+      overrides: [],
+      overridden: false,
+      originalLevel: 'high',
+      originalLevelLabel: '高风险',
+      actions: []
+    };
+  };
+
   const NORMALIZERS = {
     card: normalizeCard,
     table: normalizeTable,
@@ -286,7 +330,8 @@
     diff: normalizeDiff,
     tool: normalizeTool,
     badges: normalizeBadges,
-    ask: normalizeAsk
+    ask: normalizeAsk,
+    risk: normalizeRiskBlock
   };
 
   /**
@@ -327,7 +372,10 @@
     const blocks = list(reply.blocks).map((block, index) => {
       const model = normalizeBlock(block, index);
       const answer = answers[index];
-      if (model.type === 'ask' && answer !== undefined) model.answered = str(answer);
+      // 提问块与确认卡都靠 answers 收起按钮：同一套「点过就留记录」的机制，不另开字段。
+      if ((model.type === 'ask' || model.type === 'risk') && answer !== undefined) {
+        model.answered = str(answer);
+      }
       return model;
     });
     return { text: str(reply.text), blocks };

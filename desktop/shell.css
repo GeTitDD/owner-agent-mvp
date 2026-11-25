@@ -1099,3 +1099,229 @@ button.session-name { cursor: pointer; }
   font-size: 11.5px;
   overflow-wrap: anywhere;
 }
+
+/* ── 写入确认卡（#113）：等级、三轴、逐条路径、可折叠判据、四个动作 ── */
+.type-risk .block-head {
+  align-items: center;
+}
+
+.risk-badge {
+  flex: none;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.risk-badge.low { background: var(--ok-soft); color: var(--ok); }
+.risk-badge.medium { background: var(--warn-soft); color: var(--warn); }
+.risk-badge.high { background: var(--danger-soft); color: var(--danger); }
+
+.risk-change {
+  flex: none;
+  padding: 0 6px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.risk-degraded,
+.risk-escalated {
+  margin: 0;
+  padding: 7px 11px 0;
+  color: var(--warn);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.risk-conclusion {
+  margin: 0;
+  padding: 7px 11px 4px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.risk-axes {
+  display: grid;
+  margin: 0;
+  padding: 2px 11px 8px;
+  gap: 2px;
+}
+
+.risk-axis {
+  display: grid;
+  grid-template-columns: 5.6em minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+}
+
+.risk-axis dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.risk-axis dd {
+  margin: 0;
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.risk-section-title {
+  padding: 3px 11px 4px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.risk-paths {
+  margin: 0;
+  padding: 0 11px 8px;
+  list-style: none;
+}
+
+.risk-path {
+  padding: 2px 0;
+  font: 11px/1.5 "Cascadia Mono", Consolas, monospace;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.risk-path::before {
+  content: '· ';
+  color: var(--muted);
+}
+
+.risk-basis {
+  border-top: 1px solid var(--line-soft);
+}
+
+.risk-basis summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 7px 11px;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.risk-basis summary::-webkit-details-marker { display: none; }
+
+.risk-basis summary::before {
+  content: '▸';
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.risk-basis[open] summary::before { content: '▾'; }
+
+.risk-basis-count {
+  margin-left: auto;
+  font-size: 10px;
+}
+
+.risk-basis-list {
+  margin: 0;
+  padding: 0 11px 9px;
+  list-style: none;
+}
+
+.risk-basis-list li {
+  padding: 2px 0;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.risk-basis-list li::before {
+  content: '· ';
+  color: var(--muted);
+}
+
+.risk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 11px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.risk-action {
+  flex: 0 1 auto;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.risk-action:hover { background: var(--bg); }
+
+.risk-action.risk-allow-once {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.risk-action.risk-cancel {
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.risk-action:disabled {
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--bg);
+}
+
+.risk-override {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 11px 10px;
+}
+
+.risk-override-level,
+.risk-override-note {
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 11.5px;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.risk-override-level:focus,
+.risk-override-note:focus { border-color: var(--accent); }
+
+.risk-override-note { flex: 1 1 10em; }
+
+.risk-override-submit {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.risk-answered {
+  margin: 0;
+  padding: 7px 11px 10px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
