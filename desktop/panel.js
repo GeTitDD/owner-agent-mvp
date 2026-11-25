@@ -2670,6 +2670,7 @@
 
   $('openSettings').onclick = () => { void openSettings(); };
   $('kbRefresh').onclick = () => { void loadKnowledgeBrowse(); };
+  $('kbScanSessions').onclick = () => { void runSessionScan(); };
   $('skillRefresh').onclick = () => { void loadSkillCatalog({ refresh: true }); };
   $('mobileRefreshCode').onclick = () => { void renderMobileInfo(true); };
   $('closeSettings').onclick = () => { $('settings').hidden = true; };
@@ -3249,6 +3250,84 @@
       box.append(el('div', 'kb-empty-title', '读取知识库失败'));
       box.append(el('div', 'kb-empty-sub', String(error?.message ?? error)));
       holder.append(box);
+    }
+  };
+
+  // ---- 会话扫描（#86）：显式动作，结果只在本面板显示，扫描本身不写库 ----
+
+  let sessionScanResult = null;
+
+  // 计数先写清楚（扫了多少 / 匹配上多少 / 丢了多少），再看候选：
+  // 第一次扫出 0 条时要能从这几项里看出「扫了但没命中」，而不是「像坏了」。
+  const renderSessionScan = () => {
+    const data = sessionScanResult;
+    if (!data) return;
+    const box = $('kbScan');
+    box.hidden = false;
+    const counts = data.counts ?? {};
+    $('kbScanSummary').textContent = [
+      `扫了 ${counts.files ?? 0} 段会话`,
+      `匹配 ${counts.matched ?? 0} 段`,
+      `已扫过 ${counts.alreadyScanned ?? 0} 段`,
+      `丢弃 ${counts.dropped ?? 0} 段`,
+      `候选 ${counts.candidates ?? 0} 条`
+    ].join(' · ');
+
+    const reasons = $('kbScanReasons');
+    const parts = (data.droppedReasons ?? []).map((reason) => `${reason.label} ${reason.count} 段`);
+    if (data.truncated) parts.push(`超出本次上限未扫 ${data.truncated} 段`);
+    reasons.textContent = parts.length ? `丢弃原因：${parts.join(' · ')}` : '没有丢弃的会话。';
+    reasons.hidden = false;
+
+    const list = $('kbScanCandidates');
+    list.replaceChildren();
+    const shown = Array.isArray(data.candidates) ? data.candidates : [];
+    if (!shown.length) {
+      // 0 条候选的两种原因分开说，免得看起来像扫描没跑。
+      list.append(el('p', 'kb-scan-empty', counts.matched
+        ? '这段会话里没有像取舍的用户原话：提问、工具输出和注入的环境上下文都不算候选。'
+        : '没有会话匹配到已登记的项目：只有工作目录正好是项目根或在其子目录下才算命中。'));
+    } else {
+      for (const candidate of shown.slice(0, 8)) {
+        const row = el('div', 'kb-scan-item');
+        row.append(el('span', 'kb-scan-quote', candidate.quote?.user || candidate.phenomenon || '（无原话）'));
+        const meta = [
+          candidate.projectName || projectLabel(candidate.projectId),
+          candidate.source === 'codex' ? 'Codex' : 'Claude Code',
+          candidate.partial ? '只有用户原话' : '成对',
+          candidate.missingReason ? '缺理由' : ''
+        ].filter(Boolean).join(' · ');
+        row.append(el('span', 'kb-scan-item-meta', meta));
+        list.append(row);
+      }
+      if ((counts.candidates ?? 0) > shown.length) {
+        list.append(el('p', 'kb-scan-more', `共 ${counts.candidates} 条候选，这里只列前 ${shown.length} 条。`));
+      }
+    }
+    // e2e 直接读这几个属性，不用解析中文文案。
+    box.dataset.files = String(counts.files ?? 0);
+    box.dataset.matched = String(counts.matched ?? 0);
+    box.dataset.dropped = String(counts.dropped ?? 0);
+    box.dataset.candidates = String(counts.candidates ?? 0);
+  };
+
+  const runSessionScan = async () => {
+    const button = $('kbScanSessions');
+    if (button.disabled) return;
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = '扫描中…';
+    try {
+      sessionScanResult = await window.companion.memory.scanSessions();
+      renderSessionScan();
+      const counts = sessionScanResult?.counts ?? {};
+      toast(`扫描完成：匹配 ${counts.matched ?? 0} 段会话，候选 ${counts.candidates ?? 0} 条`, 4000);
+    } catch (error) {
+      // 失败不动已有数据：上一次的结果留在屏幕上。
+      toast(String(error?.message ?? error), 6000);
+    } finally {
+      button.disabled = false;
+      button.textContent = label;
     }
   };
 

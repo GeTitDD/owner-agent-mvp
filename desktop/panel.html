@@ -283,9 +283,22 @@
         <div class="kb-head">
           <h3>知识</h3>
           <span id="kbTotal" class="count">0</span>
+          <button id="kbScanSessions" class="ghost small" type="button"
+            title="读本机 Codex 与 Claude Code 的会话，按工作目录匹配到项目并产出决策候选（只读，不写库）">扫描会话</button>
           <button id="kbRefresh" class="ghost small" type="button" title="重新读取本地知识库">刷新</button>
         </div>
         <p class="kb-hint">知识分三层：候选待审核，经验是从执行里提炼的教训，知识是收敛后的规则。状态看徽章，不分组。</p>
+        <!-- #86 会话扫描：显式动作。第一次扫出 0 条时要看得见「扫了多少、匹配上多少、丢了多少」，
+             否则会被当成坏了。候选暂不可确认（下一张票才开放）。 -->
+        <div id="kbScan" class="kb-scan" aria-live="polite" hidden>
+          <div class="kb-scan-head">
+            <span class="kb-scan-title">会话扫描</span>
+            <span id="kbScanSummary" class="kb-scan-summary">还没扫过</span>
+          </div>
+          <p id="kbScanReasons" class="kb-scan-reasons" hidden></p>
+          <div id="kbScanCandidates" class="kb-scan-candidates"></div>
+          <p class="kb-scan-hint">只读 Codex 与 Claude Code；OpenCode 的会话不在扫描范围内。扫描不写库，同一段会话不会被重复提炼。</p>
+        </section>
         <div id="kbFilters" class="kb-filters" role="group" aria-label="按项目筛选"></div>
         <div id="kbGroups" class="kb-groups" aria-live="polite"></div>
       </section>
