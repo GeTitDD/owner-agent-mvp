@@ -755,6 +755,36 @@ export class OwnerStore {
     return {moved:true};
   }
   listProjects(){return this.db.prepare('SELECT * FROM owner_projects ORDER BY updated_at DESC,id').all().map(entry);}
+  /**
+   * #93 删除项目行及所有指向它的子表行。
+   *
+   * 只允许在调用方已开启的事务里执行（与快照清理同一个事务，见 src/project-deletion.mjs）：
+   * 这里不 BEGIN / COMMIT，避免嵌套事务。删除顺序按外键依赖从叶子到根：
+   * 修复周期 → 沙箱运行 → 补丁提案 → 工作区 → 任务结果 → Job → 建议 / 知识链接 /
+   * 事件 / 运行 / 任务 → 项目行。项目行自己的简报、图谱与队列由 ON DELETE CASCADE 处理。
+   * 只按项目 id 删，不碰其他项目。
+   */
+  deleteProjectInTx(id){
+    check(!!this.getProject(id),'Unknown project',404);
+    const rows={};
+    const drop=(table,sql)=>{
+      const result=this.db.prepare(sql).run(id);
+      rows[table]=Number(result.changes);
+    };
+    drop('repairCycles','DELETE FROM owner_repair_cycles WHERE project_id=?');
+    drop('sandboxRuns','DELETE FROM owner_sandbox_runs WHERE project_id=?');
+    drop('patchProposals','DELETE FROM owner_patch_proposals WHERE project_id=?');
+    drop('workspaces','DELETE FROM owner_workspaces WHERE project_id=?');
+    drop('jobResults','DELETE FROM owner_job_results WHERE project_id=?');
+    drop('jobs','DELETE FROM owner_jobs WHERE project_id=?');
+    drop('suggestions','DELETE FROM owner_suggestions WHERE source_project_id=? OR target_project_id=?');
+    drop('knowledgeLinks','DELETE FROM owner_project_knowledge_links WHERE project_id=?');
+    drop('events','DELETE FROM owner_events WHERE project_id=?');
+    drop('runs','DELETE FROM owner_runs WHERE project_id=?');
+    drop('tasks','DELETE FROM owner_tasks WHERE project_id=?');
+    drop('projects','DELETE FROM owner_projects WHERE id=?');
+    return {projectId:id,removed:rows.projects,rows};
+  }
   updateProject(id,{status,goal,ownerNote}={}){
     const p=this.getProject(id);check(!!p,'Unknown project',404);
     check(status===undefined||statuses.has(status),'Invalid status');

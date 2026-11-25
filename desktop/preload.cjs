@@ -38,6 +38,11 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     openExport: (input) => invoke('companion:library-export-open', input),
     resend: (input) => invoke('companion:library-resend', input)
   }),
+  // #93 删除项目：先 plan（只读列清单），确认后 run（confirm 必须为 true）。
+  projectDelete: Object.freeze({
+    plan: (input) => invoke('companion:project-delete-plan', input),
+    run: (input) => invoke('companion:project-delete', input)
+  }),
   queue: Object.freeze({
     add: (input) => invoke('companion:queue-add', input),
     update: (input) => invoke('companion:queue-update', input),
