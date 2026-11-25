@@ -228,11 +228,12 @@ test('壳引用的是同一份复制实现：按钮声明在两层，写入点�
   assert.match(stream, /data-copy-active/u, '同一时刻只亮一个的规则在壳里');
 });
 
-test('新文件都在 npm run check 的清单里', () => {
-  const check = JSON.parse(read('package.json')).scripts.check;
+test('新文件都在语法检查清单里', () => {
+  // check 已从长命令链改成脚本 + 清单文件（Windows 8191 上限）。
+  const list = JSON.parse(read('scripts/check-files.json'));
   [
     'desktop/shell-copy.cjs',
     'src/conversation-exports.mjs',
     'scripts/e2e/desktop-copy-export.mjs'
-  ].forEach((file) => assert.ok(check.includes(file), `check 清单缺：${file}`));
+  ].forEach((file) => assert.ok(list.includes(file), `check 清单缺：${file}`));
 });
