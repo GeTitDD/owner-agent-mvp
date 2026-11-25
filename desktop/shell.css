@@ -1749,6 +1749,7 @@ button.session-name { cursor: pointer; }
   color: var(--text);
   font-size: 11px;
   text-align: center;
+}
 /* ── 写入确认卡（#113）：等级、三轴、逐条路径、可折叠判据、四个动作 ── */
 .type-risk .block-head {
   align-items: center;
@@ -2031,6 +2032,7 @@ button.session-name { cursor: pointer; }
 .slash-empty {
   margin: 0;
   padding: 10px 8px;
+}
 .risk-override-level:focus,
 .risk-override-note:focus { border-color: var(--accent); }
 
