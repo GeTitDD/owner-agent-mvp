@@ -1540,14 +1540,6 @@ pre.diff, pre.logs {
 .kb-head .count { margin-left: auto; }
 .kb-hint { margin: 6px 0 10px; font-size: 12px; line-height: 1.6; color: var(--muted); }
 .kb-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-/* #58 提议只是提示：一条浅色说明卡，不带「立即提炼」按钮。 */
-.kb-proposals { display: grid; gap: 8px; margin-bottom: 10px; }
-.kb-proposal {
-  padding: 10px 12px; background: var(--accent-soft); border: 1px solid var(--line);
-  border-radius: 10px;
-}
-.kb-proposal-title { font-size: 12.5px; font-weight: 650; margin-bottom: 4px; }
-.kb-proposal-line { margin: 2px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--muted); }
 .kb-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px;

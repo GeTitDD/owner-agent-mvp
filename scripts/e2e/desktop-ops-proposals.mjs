@@ -5,28 +5,19 @@
 // 全程用临时 userData + 临时 owner / 知识库，不碰真实 %APPDATA%。
 // 截图与探针写到 SHOTS_DIR（缺省为仓库外的 focus-notes/shots-71）。
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { OwnerStore } from '../../src/owner-store.mjs';
 import { PersonalKnowledgeStore } from '../../src/personal-store.mjs';
+import {
+  capture, consoleErrors, createChecker, sleep, startApp, waitFor
+} from './lib/cdp.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
-const electronPath = createRequire(path.join(repoRoot, 'package.json'))('electron');
 const shotsDir = process.env.SHOTS_DIR
   ?? path.join(repoRoot, '..', 'focus-notes', 'shots-71');
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const failures = [];
-const check = (label, condition, detail = '') => {
-  if (condition) console.log(`[OPS-#71] OK   ${label}${detail ? ` (${detail})` : ''}`);
-  else {
-    failures.push(label);
-    console.error(`[OPS-#71] FAIL ${label}${detail ? ` (${detail})` : ''}`);
-  }
-};
+const { check, failures } = createChecker('[OPS-#71]');
 
 /** 逐表行数：提议只读，前后必须一致。 */
 const tableCounts = (file) => {
@@ -78,131 +69,7 @@ const seedProject = (owner, { projectId, name, root, jobs }) => {
   }
 };
 
-const freePort = async () => new Promise((resolve, reject) => {
-  const server = net.createServer();
-  server.on('error', reject);
-  server.listen(0, '127.0.0.1', () => {
-    const { port } = server.address();
-    server.close(() => resolve(port));
-  });
-});
-
-/** 极简 CDP 客户端：只用 Node 自带的 WebSocket，不新增依赖。 */
-const connectCdp = async (url) => {
-  const socket = new WebSocket(url);
-  await new Promise((resolve, reject) => {
-    socket.onopen = () => resolve();
-    socket.onerror = (event) => reject(new Error(`cdp socket error: ${event?.message ?? 'unknown'}`));
-  });
-  let seq = 0;
-  const pending = new Map();
-  const events = [];
-  socket.onmessage = (event) => {
-    const message = JSON.parse(String(event.data));
-    if (message.id === undefined) {
-      events.push(message);
-      return;
-    }
-    const slot = pending.get(message.id);
-    if (!slot) return;
-    pending.delete(message.id);
-    if (message.error) slot.reject(new Error(`${message.error.code}: ${message.error.message}`));
-    else slot.resolve(message.result);
-  };
-  const send = (method, params = {}) => new Promise((resolve, reject) => {
-    const id = (seq += 1);
-    pending.set(id, { resolve, reject });
-    socket.send(JSON.stringify({ id, method, params }));
-  });
-  const evaluate = async (expression) => {
-    const result = await send('Runtime.evaluate', {
-      expression, awaitPromise: true, returnByValue: true
-    });
-    if (result.exceptionDetails) {
-      throw new Error(result.exceptionDetails.exception?.description ?? 'evaluate failed');
-    }
-    return result.result.value;
-  };
-  return { send, evaluate, events, close: () => socket.close() };
-};
-
-const findPanelTarget = async (port) => {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-      const targets = await response.json();
-      const panel = targets.find((target) => String(target.url).includes('panel.html'));
-      if (panel?.webSocketDebuggerUrl) return panel.webSocketDebuggerUrl;
-    } catch {
-      // 端口还没起来：继续等。
-    }
-    await sleep(500);
-  }
-  throw new Error('panel target not found');
-};
-
-const waitFor = async (panel, expression, timeoutMs = 30000) => {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await panel.evaluate(`Boolean(${expression})`)) return true;
-    await sleep(250);
-  }
-  return false;
-};
-
-const startApp = async ({ ownerDb, knowledgeDb, userData }) => {
-  const port = await freePort();
-  const child = spawn(electronPath, [
-    path.join(repoRoot, 'desktop', 'main.cjs'),
-    `--user-data-dir=${userData}`,
-    `--remote-debugging-port=${port}`
-  ], {
-    env: {
-      ...process.env,
-      OWNER_AGENT_DB: ownerDb,
-      OWNER_KNOWLEDGE_DB: knowledgeDb,
-      OWNER_AGENT_NOTIFICATIONS: '0',
-      OWNER_AGENT_E2E_OFFSCREEN: '1'
-    },
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  const log = [];
-  child.stdout.on('data', (chunk) => log.push(String(chunk)));
-  child.stderr.on('data', (chunk) => log.push(String(chunk)));
-  const wsUrl = await findPanelTarget(port);
-  const panel = await connectCdp(wsUrl);
-  await panel.send('Runtime.enable');
-  await panel.send('Log.enable');
-  await panel.send('Page.enable');
-  await panel.evaluate('window.companion.showPanel()');
-  return {
-    panel,
-    log,
-    stop: async () => {
-      try { panel.close(); } catch { /* ignore */ }
-      child.kill();
-      await Promise.race([
-        new Promise((resolve) => child.once('exit', resolve)),
-        sleep(10000)
-      ]);
-    }
-  };
-};
-
-const shot = async (panel, file) => {
-  const result = await panel.send('Page.captureScreenshot', { format: 'png' });
-  fs.writeFileSync(path.join(shotsDir, file), Buffer.from(result.data, 'base64'));
-};
-
-/** 只收集「错误或异常」，用来给验收报告里「控制台是否干净」下结论。 */
-const consoleErrors = (panel) => panel.events
-  .filter((event) => event.method === 'Runtime.exceptionThrown'
-    || (event.method === 'Runtime.consoleAPICalled' && event.params?.type === 'error')
-    || (event.method === 'Log.entryAdded' && event.params?.entry?.level === 'error'))
-  .map((event) => event.method === 'Log.entryAdded'
-    ? String(event.params.entry.text)
-    : String(event.params?.exceptionDetails?.text
-      ?? event.params?.args?.map((arg) => arg.value ?? arg.description).join(' ')));
+const shot = async (panel, file) => capture(panel, path.join(shotsDir, file));
 
 const makeRoot = (label) => {
   const base = process.env.TMP_71 ?? path.join(os.tmpdir());
@@ -258,7 +125,7 @@ const scenarioWithProposals = async (probe) => {
   writeCompanionConfig(userData, 'alpha');
 
   const before = snapshotCounts(ownerDb, knowledgeDb);
-  const app = await startApp({ ownerDb, knowledgeDb, userData });
+  const app = await startApp({ ownerDb, knowledgeDb, userData, showPanel: true });
   const { panel } = app;
   try {
     await waitFor(panel, "document.querySelector('#modeBar button[data-mode=\"focus\"]')");

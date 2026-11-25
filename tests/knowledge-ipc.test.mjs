@@ -40,9 +40,11 @@ test('preload 暴露了对应方法，面板有「提升为候选」入口', () 
   }
   const panel = read('desktop/panel.js');
   assert.ok(panel.includes('提升为候选'), '经验条目上要有提升入口');
-  assert.ok(panel.includes('kbProposals'), '知识模式要有提议提示位');
-  assert.ok(panel.includes('distillProposals'), '面板要读提议信号');
-  assert.ok(panel.includes('lessonList'), '面板要读按项目的经验列表');
+  // #71 是「搬到操作区」：知识页不再渲染同一份提议（不再有 kbProposals 提示位）。
+  assert.equal(panel.includes('kbProposals'), false, '提议只在操作区出现，知识页不重复');
+  assert.ok(panel.includes('distillProposals'), '面板（操作区）要读提议信号');
+  // 知识页只做三层浏览；按项目取经验留给 IPC 的调用方，不在面板里重复读。
+  assert.equal(panel.includes('knowledge.lessonList'), false, '知识页不再为提议文案多读一次经验列表');
 });
 
 test('提议处理器：按项目统计未提炼记录，只提示不写库', () => {

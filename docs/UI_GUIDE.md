@@ -40,27 +40,33 @@
 [状态 pill] 0 运行 · 1 待你
 [专注] [知识] [对话]        ← 模式栏，只切换视图，不是三套数据
 
-专注
-  待你决定（跨项目待办，按项目分组；首组展开 = 第一条待办所属项目）
-  项目详情（视图项目：默认第一个、刷新不记忆）
-    画像 / 图谱 / 想法 / Playbook
-    入口：知识 / 测试 / 补丁 / 运行（只给计数，点击跳转）
-  工作区（默认折叠）
-    项目 / 项目图谱 / 想法 / 知识快捷 / 项目 Playbook
+专注（两区：上面操作区，下面工作区）
+  操作区（跨项目：现在要你处理什么）
+    待办（按项目分组，首组展开；没有待办时整段收起，不留标题与说明）
+    运行中（非终态执行：卡住 / 停止中 / 排队 / 执行中；没有时整段收起）
+    待提炼（达到阈值的项目；没有时整段收起）
+    操作结果下钻：只读分析答案 / 会话记录 / 最近结果（三段都空时整段不出现）
+    三类块全空时操作区压成一行文字，不保留卡片外框
+  工作区（常驻展开，永远绑定一个项目：这个项目现在是什么样）
+    顶部：项目名 + 项目切换标签（只有一个项目时不显示切换）+ 行尾「添加项目」
+    四个入口：知识 / 测试 / 补丁 / 运行（只给计数，点击跳到原位置）
+    项目画像 / 项目图谱 / 想法 / 知识快捷 / Playbook / 运行中与最近活动
+  设置向导（添加项目）在「设置」面板里，不占工作区
   输入框：交办到…（显式选择，未选不放行）+ 一句话 + 发送
 
 知识
   知识浏览（候选 / 经验 / 知识三层；待验证、已验证、已复现、争议是条目上的状态徽章，不是分组；
            每层给出当前项目与全部项目两个口径的计数；空层不占位）
-  候选可直接接受或拒绝；经验可「提升为候选」，同一现象的经验到 3 条时给出提议
+  候选可直接接受或拒绝；经验可「提升为候选」
   技能目录（域包 / pstack / 插件三处合并的只读列表）
+  待提炼提议不在这里重复出现，只在专注页操作区
 
 对话
   会话列表（按项目分组，可新建/切换/改名/删除）
   只读问答 + 「交办」开关（默认关；开＝这次发送走审批链路建任务）
 ```
 
-**视图项目与交办目标是两个状态**：详情卡看哪个项目不决定交办写到哪；点项目标签只换视图，
+**视图项目与交办目标是两个状态**：工作区看哪个项目不决定交办写到哪；点工作区顶部的项目标签只换视图，
 交办目标只能由输入框左侧的「交办到 …」菜单设置。新建会话也必须先选项目，不做静默预选。
 
 ![项目按来源主机分组](assets/companion/panel-projects.png)
@@ -108,6 +114,8 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 ![桌宠皮肤网格与动画包缩略图](assets/companion/ui-mascot-grid.png)
 
 ### 3.5 项目查找（按来源主机分类）
+
+> 修订（#73）：本节描述的项目查找页（搜索 + 按来源主机分组的列表 + 添加）已删除；选项目改到工作区顶部的项目切换标签，「添加项目」挂在切换行尾或在设置面板里。以下内容保留为历史参考。
 
 - 顶部第一屏是**项目查找**，不是卡片墙：按项目根路径推断来源主机，分为 `本机 · HOST` 与 `远程 · HOST` 两组（UNC `\\host\share`、`ssh://` / `sftp://` / `git://` 取主机名）。
 - 组头可折叠，显示该来源下的项目数；本机组排在最前。
@@ -307,8 +315,10 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | 视图数据 | `desktop/main.cjs`（`buildView`、`toPending`、`chain`；按 `projectId` 取数，不读全局当前项目） |
 | 模式切换 | `desktop/panel.js`（`MODE_VIEW`、`setMode`、`renderFocusMode`）；`desktop/panel.html` 的 `data-mode="focus|knowledge|chat"` |
 | 视图项目 / 交办目标 | `desktop/panel-selection.cjs`（`findProject`、`viewProject`、`submitProject`）；`desktop/panel.js` 的 `viewProjectId` / `handoffProjectId` |
-| 待办分组 | `desktop/pending-groups.cjs`（`groupPending`：分组顺序 + 首组展开） |
-| 项目详情卡 | `desktop/focus-detail.cjs`（`buildFocusDetail`：九块内容与四个入口） |
+| 待办分组 | `desktop/pending-groups.cjs`（`groupPending`：分组顺序 + 首组展开；吃操作区模型的 items） |
+| 操作区视图模型 | `src/focus-ops.mjs`（`focusOpsView`：三段块顺序、空态文案、两个计数口径）；`desktop/focus-ops-host.mjs` 把 ESM 挂到 `window.OwnerFocusOps` |
+| 执行状态判定 | `src/execution-status.mjs`（终态 / 审批态 / 相位；`listInFlightExecutions` 给快照 `view.executions`） |
+| 工作区入口条 | `desktop/panel.html` 的 `#workProjectBar` / `#workEntries`；`desktop/panel.js` 的 `renderWorkProjectBar` / `renderWorkEntries`（项目切换只改视图项目，「添加项目」在切换行尾） |
 | 交办开关 | `desktop/chat-handoff.cjs`（`routeOf`、`sendLabel`、`consume`、`resultKind`） |
 | 知识浏览 / 技能目录 | `src/knowledge/browse.mjs`、`src/knowledge/skills.mjs` |
 | 知识详情 | `web/workbench/app.js`（`renderEditor`、`loadHistory`、`loadProvenance`） |
@@ -328,13 +338,13 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 | 验收 | 结果 |
 | --- | --- |
 | `npm run check` | 0 |
-| `npm test` | 302 tests / 299 pass / 3 skip / 0 fail |
+| `npm test` | 582 tests / 578 pass / 4 skip / 0 fail |
 | `npm run e2e:desktop:composer` | PASS（Composer、只读分析、无写入开关、pending） |
 | `npm run e2e:desktop:shell` | PASS（桌宠定位、面板、重启、模型切换、添加项目） |
 | `npm run e2e:desktop:multiproject` | PASS（多项目 pending / stage） |
 | `npm run e2e:desktop:knowledge` | PASS（知识摘要、验证、复用、今日视图） |
 | `npm run e2e:desktop:sandbox-config` | PASS（缺少快照文件 → 失败弹窗 → 补齐后重试） |
 | `npm run e2e:desktop:mascots` | PASS（spritesheet 播放、一键换肤、静态回退、无底盘、有效帧） |
-| `npm run e2e:desktop:projects` | PASS（按来源主机分组、最近进展 + 时间、项目画像、下一步建议、项目待办队列、项目图谱依赖图、知识摘要与整理、GitHub 关联/Issues/PR、PR 预览保护、搜索、折叠、点击切换） |
+| `npm run e2e:desktop:projects` | PASS（工作区顶部项目切换、切换行尾「添加项目」、切换只改视图项目、四个入口计数随项目换、交办菜单仍列出全部项目） |
 | `npm run e2e:desktop:playbooks` | PASS（运行中状态、4 个一键沉淀预设、分析、取消、手动/一键沉淀、去重、提案 HITL） |
 | Workbench UI 冒烟 | 详情 5 个标签、修订对比、使用记录、维护降级提示 |
