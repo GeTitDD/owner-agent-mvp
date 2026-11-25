@@ -137,6 +137,57 @@
               title="选择一个本地 Git 仓库目录，添加为项目">添加项目</button>
           </div>
 
+        <!-- 自上次看过（#84）：进入项目时先算差异、再把水位推到当前。
+             没有水位时写「首次查看」，不写「没有变化」；三类全空时整段压成一行（见 panel.js
+             的 renderSinceSeen / src/memory/since-last-seen.mjs），不占一块卡片。 -->
+        <section id="sinceLastSeen" class="since-seen" aria-label="自上次看过" hidden>
+          <div class="since-seen-head">
+            <strong id="sinceSeenTitle">自上次看过</strong>
+            <span id="sinceSeenMeta" class="since-seen-meta"></span>
+          </div>
+          <p id="sinceSeenLine" class="since-seen-line" hidden></p>
+          <p id="sinceSeenNote" class="since-seen-note" hidden></p>
+          <div id="sinceSeenGroups" class="since-seen-groups"></div>
+        </section>
+
+          <!-- 项目库（#89）：一个项目的知识聚合视图，不是新存储。两节固定为「已验证 / 观察中」，
+               计数按全量、列表只铺一屏；底部两个显式动作——生成草稿（可反复覆盖，没有版本号）
+               与发布（分配 v1、v2…，发布后不可修改）。发布时可写一句说明（可空）。
+               #92：已发布版本按时间倒序列出，点开只读查看，并与上一版自动 diff。 -->
+          <section id="librarySection" class="library-section" hidden>
+            <div class="section-title">
+              <h3>项目库</h3>
+              <span id="libraryBadge" class="count">0</span>
+            </div>
+            <p class="section-sub">本项目的经验、所属领域知识、本项目升上去的知识，以及画像与图谱；发布只是把这份视图固化成一份快照。</p>
+            <div id="libraryEmpty" class="library-empty" hidden></div>
+            <div id="librarySections" class="library-sections"></div>
+            <div id="libraryAssets" class="library-assets" hidden></div>
+            <div class="library-footer">
+              <div id="libraryStatus" class="library-status">还没有草稿。</div>
+              <div class="library-actions">
+                <button id="libraryDraft" class="ghost small" type="button"
+                  title="按当前内容生成草稿；重复生成会覆盖上一份草稿">生成草稿</button>
+                <button id="libraryPublish" class="primary small" type="button" disabled
+                  title="把当前草稿固化成新版本；发布后不可修改">发布 v1</button>
+                <!-- #93 删除项目：先列出将删的快照与导出目录，二次确认后才删。 -->
+                <button id="libraryDeleteProject" class="ghost small danger" type="button"
+                  title="删除这个项目，连带删除它的快照与本地导出目录（先列清单再确认）">删除项目…</button>
+              </div>
+            </div>
+            <!-- #92：发布说明可空；写了就随这一版存下来，并与自动 diff 并列显示。 -->
+            <div class="library-publish-note">
+              <input id="libraryNote" class="library-note" type="text" maxlength="500"
+                placeholder="这一版为什么发（可空）" aria-label="发布说明（可空）" />
+            </div>
+            <div id="libraryVersions" class="library-versions"></div>
+            <!-- #92：点开任一版本后，只读内容与相邻两版 diff 画在这里。 -->
+            <div id="libraryVersionDetail" class="library-version-detail" hidden></div>
+            <!-- #90：导出只读已发布的快照；这里给出可预测的路径，并给「打开目录」动作。 -->
+            <div id="libraryExport" class="library-export" hidden></div>
+          </section>
+
+
         <!-- 四个入口（知识 / 测试 / 补丁 / 运行）：原只读详情卡的计数搬到这里（#72）。
              工作区现在是唯一看到项目的地方，四条入口留在工作区里：点哪一项就跳到
              它原来的位置，目标不存在时退回模式顶部（见 panel.js 的 renderWorkEntries）。
@@ -164,18 +215,6 @@
           </button>
         </div>
 
-        <!-- 自上次看过（#84）：进入项目时先算差异、再把水位推到当前。
-             没有水位时写「首次查看」，不写「没有变化」；三类全空时整段压成一行（见 panel.js
-             的 renderSinceSeen / src/memory/since-last-seen.mjs），不占一块卡片。 -->
-        <section id="sinceLastSeen" class="since-seen" aria-label="自上次看过" hidden>
-          <div class="since-seen-head">
-            <strong id="sinceSeenTitle">自上次看过</strong>
-            <span id="sinceSeenMeta" class="since-seen-meta"></span>
-          </div>
-          <p id="sinceSeenLine" class="since-seen-line" hidden></p>
-          <p id="sinceSeenNote" class="since-seen-note" hidden></p>
-          <div id="sinceSeenGroups" class="since-seen-groups"></div>
-        </section>
         <!-- 工作区内容常驻展开：原来包在外面的 details 折叠条已经去掉，
              这里只留容器；#73 之后只剩「所选项目」一段，全局块都搬走了。 -->
         <section class="workspace" id="workWorkspace">
@@ -247,42 +286,6 @@
             </div>
           </section>
 
-          <!-- 项目库（#89）：一个项目的知识聚合视图，不是新存储。两节固定为「已验证 / 观察中」，
-               计数按全量、列表只铺一屏；底部两个显式动作——生成草稿（可反复覆盖，没有版本号）
-               与发布（分配 v1、v2…，发布后不可修改）。发布时可写一句说明（可空）。
-               #92：已发布版本按时间倒序列出，点开只读查看，并与上一版自动 diff。 -->
-          <section id="librarySection" class="library-section" hidden>
-            <div class="section-title">
-              <h3>项目库</h3>
-              <span id="libraryBadge" class="count">0</span>
-            </div>
-            <p class="section-sub">本项目的经验、所属领域知识、本项目升上去的知识，以及画像与图谱；发布只是把这份视图固化成一份快照。</p>
-            <div id="libraryEmpty" class="library-empty" hidden></div>
-            <div id="librarySections" class="library-sections"></div>
-            <div id="libraryAssets" class="library-assets" hidden></div>
-            <div class="library-footer">
-              <div id="libraryStatus" class="library-status">还没有草稿。</div>
-              <div class="library-actions">
-                <button id="libraryDraft" class="ghost small" type="button"
-                  title="按当前内容生成草稿；重复生成会覆盖上一份草稿">生成草稿</button>
-                <button id="libraryPublish" class="primary small" type="button" disabled
-                  title="把当前草稿固化成新版本；发布后不可修改">发布 v1</button>
-                <!-- #93 删除项目：先列出将删的快照与导出目录，二次确认后才删。 -->
-                <button id="libraryDeleteProject" class="ghost small danger" type="button"
-                  title="删除这个项目，连带删除它的快照与本地导出目录（先列清单再确认）">删除项目…</button>
-              </div>
-            </div>
-            <!-- #92：发布说明可空；写了就随这一版存下来，并与自动 diff 并列显示。 -->
-            <div class="library-publish-note">
-              <input id="libraryNote" class="library-note" type="text" maxlength="500"
-                placeholder="这一版为什么发（可空）" aria-label="发布说明（可空）" />
-            </div>
-            <div id="libraryVersions" class="library-versions"></div>
-            <!-- #92：点开任一版本后，只读内容与相邻两版 diff 画在这里。 -->
-            <div id="libraryVersionDetail" class="library-version-detail" hidden></div>
-            <!-- #90：导出只读已发布的快照；这里给出可预测的路径，并给「打开目录」动作。 -->
-            <div id="libraryExport" class="library-export" hidden></div>
-          </section>
 
           <section id="playbookSection" class="playbook-section" hidden>
             <div class="section-title">
