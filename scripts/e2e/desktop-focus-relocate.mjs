@@ -4,165 +4,20 @@
 // 做法与 desktop-ops-proposals.mjs 相同：临时 userData + 临时库 + 离屏 Electron，
 // 用 Node 自带的 WebSocket 走 CDP，不联网、不起真实模型、不碰 %APPDATA%。
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { OwnerStore } from '../../src/owner-store.mjs';
 import { createSyntheticProject } from '../knowledge-loop/fixtures.mjs';
+import {
+  capture, consoleErrors, createChecker, sleep, startApp, waitFor
+} from './lib/cdp.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
-const electronPath = createRequire(path.join(repoRoot, 'package.json'))('electron');
 const shotsDir = process.env.SHOTS_DIR
   ?? path.join(repoRoot, '..', '..', 'focus-notes', 'shots-73');
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const failures = [];
-const check = (label, condition, detail = '') => {
-  if (condition) console.log(`[FOCUS-#73] OK   ${label}${detail ? ` (${detail})` : ''}`);
-  else {
-    failures.push(label);
-    console.error(`[FOCUS-#73] FAIL ${label}${detail ? ` (${detail})` : ''}`);
-  }
-};
+const { check, failures } = createChecker('[FOCUS-#73]');
 
-const freePort = async () => new Promise((resolve, reject) => {
-  const server = net.createServer();
-  server.on('error', reject);
-  server.listen(0, '127.0.0.1', () => {
-    const { port } = server.address();
-    server.close(() => resolve(port));
-  });
-});
-
-/** 极简 CDP 客户端：只用 Node 自带的 WebSocket，不新增依赖。 */
-const connectCdp = async (url) => {
-  const socket = new WebSocket(url);
-  await new Promise((resolve, reject) => {
-    socket.onopen = () => resolve();
-    socket.onerror = (event) => reject(new Error(`cdp socket error: ${event?.message ?? 'unknown'}`));
-  });
-  let seq = 0;
-  const pending = new Map();
-  const events = [];
-  socket.onmessage = (event) => {
-    const message = JSON.parse(String(event.data));
-    if (message.id === undefined) {
-      events.push(message);
-      return;
-    }
-    const slot = pending.get(message.id);
-    if (!slot) return;
-    pending.delete(message.id);
-    if (message.error) slot.reject(new Error(`${message.error.code}: ${message.error.message}`));
-    else slot.resolve(message.result);
-  };
-  const send = (method, params = {}) => new Promise((resolve, reject) => {
-    const id = (seq += 1);
-    // 单次 CDP 调用给个上限：离屏窗口偶尔不回包，卡死会毁掉整次验收。
-    const timer = setTimeout(() => {
-      pending.delete(id);
-      reject(new Error(`cdp timeout: ${method}`));
-    }, 20000);
-    pending.set(id, {
-      resolve: (value) => { clearTimeout(timer); resolve(value); },
-      reject: (error) => { clearTimeout(timer); reject(error); }
-    });
-    socket.send(JSON.stringify({ id, method, params }));
-  });
-  const evaluate = async (expression) => {
-    const result = await send('Runtime.evaluate', {
-      expression, awaitPromise: true, returnByValue: true
-    });
-    if (result.exceptionDetails) {
-      throw new Error(result.exceptionDetails.exception?.description ?? 'evaluate failed');
-    }
-    return result.result.value;
-  };
-  return { send, evaluate, events, close: () => socket.close() };
-};
-
-const findPanelTarget = async (port) => {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-      const targets = await response.json();
-      const panel = targets.find((target) => String(target.url).includes('panel.html'));
-      if (panel?.webSocketDebuggerUrl) return panel.webSocketDebuggerUrl;
-    } catch {
-      // 端口还没起来：继续等。
-    }
-    await sleep(500);
-  }
-  throw new Error('panel target not found');
-};
-
-const startApp = async ({ ownerDb, knowledgeDb, userData }) => {
-  const port = await freePort();
-  const child = spawn(electronPath, [
-    path.join(repoRoot, 'desktop', 'main.cjs'),
-    `--user-data-dir=${userData}`,
-    `--remote-debugging-port=${port}`
-  ], {
-    env: {
-      ...process.env,
-      OWNER_AGENT_DB: ownerDb,
-      OWNER_KNOWLEDGE_DB: knowledgeDb,
-      OWNER_AGENT_NOTIFICATIONS: '0',
-      OWNER_AGENT_E2E_OFFSCREEN: '1',
-      // 测试环境没有真实模型：让只读分诊快速超时，答案卡就是「这次操作的结果」。
-      OWNER_TRIAGE_TIMEOUT_MS: '4000'
-    },
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  const log = [];
-  child.stdout.on('data', (chunk) => log.push(String(chunk)));
-  child.stderr.on('data', (chunk) => log.push(String(chunk)));
-  const wsUrl = await findPanelTarget(port);
-  const panel = await connectCdp(wsUrl);
-  await panel.send('Runtime.enable');
-  await panel.send('Log.enable');
-  await panel.send('Page.enable');
-  return {
-    panel,
-    log,
-    stop: async () => {
-      panel.close();
-      child.kill();
-      await sleep(500);
-      if (!child.killed) child.kill('SIGKILL');
-    }
-  };
-};
-
-const shot = async (panel, file) => {
-  const result = await panel.send('Page.captureScreenshot', { format: 'png' });
-  fs.writeFileSync(path.join(shotsDir, file), Buffer.from(result.data, 'base64'));
-};
-
-/** 只收集渲染进程的异常与 error 级日志：控制台干净与否看这个。 */
-const consoleErrors = (panel) => panel.events
-  .filter((event) => event.method === 'Runtime.exceptionThrown'
-    || (event.method === 'Runtime.consoleAPICalled' && event.params?.type === 'error')
-    || (event.method === 'Log.entryAdded' && event.params?.entry?.level === 'error'))
-  .map((event) => event.method === 'Log.entryAdded'
-    ? String(event.params.entry.text)
-    : String(event.params?.exceptionDetails?.text
-      ?? event.params?.args?.map((arg) => arg.value ?? arg.description).join(' ')));
-
-const waitFor = async (panel, expression, timeoutMs = 30000) => {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      if (await panel.evaluate(`Boolean(${expression})`)) return true;
-    } catch (error) {
-      console.error(`[FOCUS-#73] waitFor 失败：${error?.message ?? error}`);
-      return false;
-    }
-    await sleep(250);
-  }
-  return false;
-};
+const shot = async (panel, file) => capture(panel, path.join(shotsDir, file));
 
 const makeRoot = () => {
   const base = process.env.TMP_73 ?? path.join(os.tmpdir());
@@ -215,7 +70,13 @@ const run = async () => {
   try { seed(owner, root); } finally { owner.close(); }
 
   const probe = { shotsDir };
-  const app = await startApp({ ownerDb, knowledgeDb, userData });
+  const app = await startApp({
+    ownerDb,
+    knowledgeDb,
+    userData,
+    // 测试环境没有真实模型：让只读分诊快速超时，答案卡就是「这次操作的结果」。
+    env: { OWNER_TRIAGE_TIMEOUT_MS: '4000' }
+  });
   const { panel } = app;
   try {
     await waitFor(panel, "document.querySelector('#modeBar button[data-mode=\"focus\"]')");

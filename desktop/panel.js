@@ -7,10 +7,9 @@
     done: '已完成',
     error: '遇到异常'
   };
-  // 「进行中」状态集合：页头计数与工作区「运行」入口共用一份，避免两处各写一套。
-  const ACTIVE_STATUSES = new Set([
-    'running', 'leased', 'provisioning', 'collecting', 'test_pending', 'queued'
-  ]);
+  // 终态 / 审批态 / 相位的判定只在 src/execution-status.mjs 一处（ESM 经典脚本读不到，
+  // 但主进程已经把结果算进快照的 view.executions）。这里不再维护任何状态集合：
+  // 页头计数与工作区「运行」入口都直接用快照里已筛好的非终态执行。
   // 补丁待办：补丁提案与补丁应用都算「待审补丁」（沿用详情卡时代的口径）。
   const PATCH_ENTRY_KINDS = new Set(['patch', 'patch-apply']);
   const countOf = (value) => {
@@ -76,16 +75,17 @@
     // 这里只维护页头计数，避免同一件事在两处各算一遍。
     const running = view?.worker?.running;
     const playbookRunning = view?.playbook?.running === true;
+    // 页头的「运行中」直接读主进程筛好的非终态执行（execution-status.mjs 的语义），
+    // 不在本层再判一次状态；chain 只用来判断「有没有最近任务」这句文案。
+    const executions = Array.isArray(view?.executions) ? view.executions : [];
     const chainItems = [view?.chain?.job, view?.chain?.patch, view?.chain?.sandbox, view?.chain?.cycle]
       .filter(Boolean);
-    const activeSteps = chainItems
-      .filter((item) => ACTIVE_STATUSES.has(String(item.status ?? '').toLowerCase())).length;
     const totalSteps = chainItems.length;
-    const activeCount = activeSteps + (playbookRunning ? 1 : 0);
+    const activeCount = executions.length + (playbookRunning ? 1 : 0);
     $('runningBadge').textContent = String(activeCount || totalSteps);
     $('runningCount').textContent = String(activeCount);
-    $('runningChip').classList.toggle('active', Boolean(running || playbookRunning || activeSteps > 0));
-    $('runningTitle').textContent = (activeSteps > 0 || playbookRunning)
+    $('runningChip').classList.toggle('active', Boolean(running || playbookRunning || executions.length > 0));
+    $('runningTitle').textContent = (executions.length > 0 || playbookRunning)
       ? '运行中'
       : (totalSteps > 0 ? '最近任务' : '运行中');
     const hasProjects = (view?.projects?.length ?? 0) > 0;
@@ -1522,11 +1522,19 @@
 
   const tierLabel = (tier) => ({ write: '写请求', run: '测试运行', danger: '高风险' }[tier] ?? '需批准');
   const tierClass = (tier) => ['write', 'run', 'danger'].includes(tier) ? tier : 'write';
+  /**
+   * 唯一一处「状态 → 色调 / 文案」映射（显示层）。
+   *
+   * 语义来源仍是 src/execution-status.mjs（终态 / 等审批 / 在场 / 相位）；panel.js 是
+   * 经典脚本读不到 ESM，所以这里只做显示翻译，不再另存状态集合或第二份判断。
+   * 操作区运行中块的颜色直接读模型给的 phase（见 OPS_PHASE），与这里不重叠。
+   */
   const statusMeta = (status) => {
     const value = String(status ?? '').toLowerCase();
     if (['succeeded', 'completed', 'tested_pass', 'applied'].includes(value)) return { tone: 'done', label: '完成' };
     if (['running', 'leased', 'provisioning', 'collecting', 'test_pending'].includes(value)) return { tone: 'running', label: '进行中' };
     if (['failed', 'cancelled', 'tested_fail', 'needs_reconciliation'].includes(value)) return { tone: 'failed', label: '失败' };
+    if (value === 'cancel_requested') return { tone: 'pending', label: '停止中' };
     if (['pending_approval', 'proposal_ready', 'approved', 'queued'].includes(value)) return { tone: 'pending', label: '等你' };
     return { tone: 'muted', label: status ? String(status) : '未知' };
   };
@@ -1595,8 +1603,12 @@
       list.append(el('div', 'ledger-empty', '现在没有运行中的任务。交办后会在这里看到步骤账本。'));
       return;
     }
-    const activeStatuses = new Set(['running', 'leased', 'provisioning', 'collecting', 'test_pending', 'queued']);
-    const hasActive = steps.some((step) => activeStatuses.has(String(step.status ?? '').toLowerCase()));
+    // 「正在跑」以主进程筛好的非终态执行为准（本项目），不在这一层再抄一份状态集合。
+    // 账本里的 chain 可能退回最近一条已终态记录，所以不能拿它判断。
+    const projectId = workspaceProject()?.id ?? '';
+    const hasActive = view?.playbook?.running === true
+      || (Array.isArray(view?.executions) ? view.executions : [])
+        .some((item) => !projectId || item.projectId === projectId);
     $('runningTitle').textContent = hasActive ? '运行中' : '最近任务';
     steps.forEach((step, index) => {
       const meta = statusMeta(step.status);
@@ -1772,10 +1784,16 @@
     return card;
   };
 
+  // 操作区视图模型最近一次的输出：待办的标题 / 计数 / 空态与列表都从同一份模型读，
+  // 不再出现「模型说空了、列表却还有」的两套来源（见 renderOps）。
+  let opsModel = null;
+
   const renderPending = () => {
     const list = $('pendingList');
     list.replaceChildren();
-    const pending = view?.pending ?? [];
+    // 输入统一来自模型：空态由模型的 pendingBlock.empty 决定，这里只按 items 画。
+    const block = opsModel?.blocks?.find((item) => item.key === 'pending');
+    const pending = Array.isArray(block?.items) ? block.items : [];
     if (pending.length === 0) return;
 
     // 分组与首组展开是纯函数（pending-groups.cjs）；首组 = 第一条待办所属项目。
@@ -1975,17 +1993,24 @@
     });
     // 三类块全空时压成一行：文案来自模型，卡片外框由 .ops-empty 去掉。
     // 但「结果下钻」也算操作区的内容，有结果时保留区头（见 applyOpsEmptyState）。
+    opsModel = model;
     opsBodyEmpty = model.empty;
     emptyLine.textContent = model.empty ? model.emptyText : '';
     applyOpsEmptyState();
     const blockOf = (key) => model.blocks.find((block) => block.key === key);
     const pendingBlock = blockOf('pending');
-    if (pendingBlock) {
+    const needsSection = $('needsSection');
+    if (pendingBlock && needsSection) {
+      // 待办为空时整段收起（连标题与说明一起），与运行中 / 待提炼一致，不留占位。
+      // 三类全空时整个 opsBody 已经隐藏，两种空态不会互相打架（见 applyOpsEmptyState）。
+      needsSection.hidden = pendingBlock.empty;
       // 标题与计数也读模型：以后块里加内容时不会出现「标题写死、数字另算」。
       $('opsPendingTitle').textContent = pendingBlock.title;
       $('pendingBadge').textContent = String(pendingBlock.count);
       $('pendingBadge').hidden = pendingBlock.count === 0;
     }
+    // 待办列表与待办块同源：都吃模型里的 items（分组仍交给 pending-groups.cjs）。
+    renderPending();
     // 运行中块：没有非终态执行时整段 hidden，不留标题、说明和空壳。
     const runningBlock = blockOf('running');
     const runningSection = $('opsRunning');
@@ -2208,7 +2233,6 @@
       renderQueue();
       renderDiagrams();
       renderOps();
-      renderPending();
       renderRunning();
       renderResult();
       if (panelMode === 'focus') renderFocusMode();
@@ -2966,11 +2990,10 @@
       .filter((item) => item.projectId === projectId);
     const chain = view?.chain ?? {};
     const pendingPatches = pending.filter((item) => PATCH_ENTRY_KINDS.has(item.kind)).length;
-    // chain 在没有进行中项时会退回最近一条，所以必须按状态过滤，不能「有 chain」就当在跑。
-    const activeChain = ['job', 'patch', 'sandbox', 'cycle']
-      .map((key) => chain[key])
-      .filter((item) => item && ACTIVE_STATUSES.has(String(item.status ?? '').toLowerCase()))
-      .length;
+    // chain 在没有进行中项时会退回最近一条，不能「有 chain」就当在跑。
+    // 非终态执行已在主进程按 execution-status.mjs 筛好（view.executions），这里只数本项目几条。
+    const activeChain = (Array.isArray(view?.executions) ? view.executions : [])
+      .filter((item) => item.projectId === projectId).length;
     // 主进程给快照的是 testStatus（camelCase）；仍兼容原始行的 test_status。
     const testStatus = String(chain?.sandbox?.testStatus ?? chain?.sandbox?.test_status ?? '');
     const testNote = testStatus === 'pass'
@@ -3044,30 +3067,6 @@
   let knowledgeBrowseProject = '';
   let knowledgeBrowseToken = 0;
   let knowledgeBrowseSignature = '';
-  // #58 提议信号与 #61 经验列表：都只读，只用来提示与提供「提升为候选」入口。
-  let knowledgeProposals = [];
-  let knowledgeProposalThreshold = 0;
-  let knowledgeLessonCount = null;
-
-  // 提示卡：某项目还没提炼的执行记录达到阈值时显示一条，只提示不提炼。
-  const renderKnowledgeProposals = () => {
-    const holder = $('kbProposals');
-    if (!holder) return;
-    holder.replaceChildren();
-    if (!knowledgeProposals.length) return;
-    const card = el('div', 'kb-proposal');
-    card.append(el('div', 'kb-proposal-title', '有执行记录还没提炼'));
-    for (const item of knowledgeProposals.slice(0, 3)) {
-      const lessonText = knowledgeLessonCount === null || knowledgeBrowseProject
-        ? ''
-        : `；已有经验 ${knowledgeLessonCount} 条`;
-      card.append(el('p', 'kb-proposal-line',
-        `${projectLabel(item.projectId)} 有 ${item.count} 条执行记录还没提炼成经验`
-        + `${lessonText}。阈值是 ${knowledgeProposalThreshold || 3} 条；这里只提示，不会自动提炼。`));
-    }
-    card.append(el('p', 'kb-proposal-line', '提炼由人决定：这条提示不会自动触发提炼；提炼出的经验会出现在「经验」层，并可在那里一键提为知识候选。'));
-    holder.append(card);
-  };
 
   // 候选条目带审核动作；经验条目带「提升为候选」；其余条目仍是整行按钮，点开看详情。
   const knowledgeItemRow = (item) => {
@@ -3167,7 +3166,6 @@
     const filters = $('kbFilters');
     holder.replaceChildren();
     filters.replaceChildren();
-    renderKnowledgeProposals();
     const data = knowledgeBrowseData;
 
     const chip = (id, label, count) => {
@@ -3226,15 +3224,8 @@
       const data = await window.companion.knowledge.browse({ projectId: knowledgeBrowseProject });
       if (token !== knowledgeBrowseToken) return;
       knowledgeBrowseData = data;
-      // 提议信号与经验计数只做提示：任一失败都不影响三层列表。
-      const [proposals, lessons] = await Promise.all([
-        window.companion.knowledge.distillProposals({ projectId: knowledgeBrowseProject }).catch(() => null),
-        window.companion.knowledge.lessonList({ projectId: knowledgeBrowseProject }).catch(() => null)
-      ]);
-      if (token !== knowledgeBrowseToken) return;
-      knowledgeProposals = Array.isArray(proposals?.proposals) ? proposals.proposals : [];
-      knowledgeProposalThreshold = Number(proposals?.threshold ?? 0) || 0;
-      knowledgeLessonCount = Array.isArray(lessons?.lessons) ? lessons.lessons.length : null;
+      // 提议只在操作区出现（#71 是「搬」不是「复制」）：知识页不再读提议信号，
+      // 这里只留三层浏览所需的读库结果。
       // 所选项目在新数据里已经不存在时才退回「全部」。项目还在、只是还没有
       // 知识条目时保留筛选：从操作区「去提炼」跳过来时，那个项目很可能正是空的。
       const projectExists = (data.projects ?? []).some((item) => item.id === knowledgeBrowseProject)

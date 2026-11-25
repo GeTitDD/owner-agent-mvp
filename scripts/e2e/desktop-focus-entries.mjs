@@ -10,144 +10,21 @@
 // 全程用临时 userData + 临时 owner / 知识库，不碰真实 %APPDATA%。
 // 截图与探针写到 SHOTS_DIR（缺省 focus-notes/shots-72）。
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { OwnerStore } from '../../src/owner-store.mjs';
 import { PersonalKnowledgeStore } from '../../src/personal-store.mjs';
 import { createPassingProject, createSyntheticProject } from '../knowledge-loop/fixtures.mjs';
+import {
+  capture, consoleErrors, createChecker, sleep, startApp, waitFor
+} from './lib/cdp.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
-const electronPath = createRequire(path.join(repoRoot, 'package.json'))('electron');
 const shotsDir = process.env.SHOTS_DIR
   ?? path.resolve(repoRoot, '..', '..', 'focus-notes', 'shots-72');
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const failures = [];
-const check = (label, condition, detail = '') => {
-  if (condition) console.log(`[FOCUS-#72] OK   ${label}${detail ? ` (${detail})` : ''}`);
-  else {
-    failures.push(label);
-    console.error(`[FOCUS-#72] FAIL ${label}${detail ? ` (${detail})` : ''}`);
-  }
-};
+const { check, failures } = createChecker('[FOCUS-#72]');
 
-const freePort = async () => new Promise((resolve, reject) => {
-  const server = net.createServer();
-  server.on('error', reject);
-  server.listen(0, '127.0.0.1', () => {
-    const { port } = server.address();
-    server.close(() => resolve(port));
-  });
-});
-
-/** 极简 CDP 客户端：只用 Node 自带的 WebSocket，不新增依赖。 */
-const connectCdp = async (url) => {
-  const socket = new WebSocket(url);
-  await new Promise((resolve, reject) => {
-    socket.onopen = () => resolve();
-    socket.onerror = (event) => reject(new Error(`cdp socket error: ${event?.message ?? 'unknown'}`));
-  });
-  let seq = 0;
-  const pending = new Map();
-  const events = [];
-  socket.onmessage = (event) => {
-    const message = JSON.parse(String(event.data));
-    if (message.id === undefined) {
-      events.push(message);
-      return;
-    }
-    const slot = pending.get(message.id);
-    if (!slot) return;
-    pending.delete(message.id);
-    if (message.error) slot.reject(new Error(`${message.error.code}: ${message.error.message}`));
-    else slot.resolve(message.result);
-  };
-  const send = (method, params = {}) => new Promise((resolve, reject) => {
-    const id = (seq += 1);
-    pending.set(id, { resolve, reject });
-    socket.send(JSON.stringify({ id, method, params }));
-  });
-  const evaluate = async (expression) => {
-    const result = await send('Runtime.evaluate', {
-      expression, awaitPromise: true, returnByValue: true
-    });
-    if (result.exceptionDetails) {
-      throw new Error(result.exceptionDetails.exception?.description ?? 'evaluate failed');
-    }
-    return result.result.value;
-  };
-  return { send, evaluate, events, close: () => socket.close() };
-};
-
-const findPanelTarget = async (port) => {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-      const targets = await response.json();
-      const panel = targets.find((target) => String(target.url).includes('panel.html'));
-      if (panel?.webSocketDebuggerUrl) return panel.webSocketDebuggerUrl;
-    } catch {
-      // 端口还没起来：继续等。
-    }
-    await sleep(500);
-  }
-  throw new Error('panel target not found');
-};
-
-const waitFor = async (panel, expression, timeoutMs = 30000) => {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await panel.evaluate(`Boolean(${expression})`)) return true;
-    await sleep(250);
-  }
-  return false;
-};
-
-const startApp = async ({ ownerDb, knowledgeDb, userData }) => {
-  const port = await freePort();
-  const child = spawn(electronPath, [
-    path.join(repoRoot, 'desktop', 'main.cjs'),
-    `--user-data-dir=${userData}`,
-    `--remote-debugging-port=${port}`
-  ], {
-    env: {
-      ...process.env,
-      OWNER_AGENT_DB: ownerDb,
-      OWNER_KNOWLEDGE_DB: knowledgeDb,
-      OWNER_AGENT_NOTIFICATIONS: '0',
-      OWNER_AGENT_E2E_OFFSCREEN: '1'
-    },
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  const log = [];
-  child.stdout.on('data', (chunk) => log.push(String(chunk)));
-  child.stderr.on('data', (chunk) => log.push(String(chunk)));
-  const wsUrl = await findPanelTarget(port);
-  const panel = await connectCdp(wsUrl);
-  await panel.send('Runtime.enable');
-  await panel.send('Log.enable');
-  await panel.send('Page.enable');
-  await panel.evaluate('window.companion.showPanel()');
-  return {
-    panel,
-    log,
-    stop: async () => {
-      try { panel.close(); } catch { /* ignore */ }
-      child.kill();
-      await Promise.race([
-        new Promise((resolve) => child.once('exit', resolve)),
-        sleep(10000)
-      ]);
-    }
-  };
-};
-
-const shot = async (panel, file) => {
-  const result = await panel.send('Page.captureScreenshot', { format: 'png' });
-  fs.writeFileSync(path.join(shotsDir, file), Buffer.from(result.data, 'base64'));
-};
+const shot = async (panel, file) => capture(panel, path.join(shotsDir, file));
 
 /** 全貌截图：面板是 440×640 的固定窗口，先临时把视口抬高再截，才能一屏看到两区。 */
 const shotTall = async (panel, file, height = 1240) => {
@@ -159,16 +36,6 @@ const shotTall = async (panel, file, height = 1240) => {
   await panel.send('Emulation.clearDeviceMetricsOverride');
   await sleep(200);
 };
-
-/** 只收集「错误或异常」，用来给验收报告里「控制台是否干净」下结论。 */
-const consoleErrors = (panel) => panel.events
-  .filter((event) => event.method === 'Runtime.exceptionThrown'
-    || (event.method === 'Runtime.consoleAPICalled' && event.params?.type === 'error')
-    || (event.method === 'Log.entryAdded' && event.params?.entry?.level === 'error'))
-  .map((event) => event.method === 'Log.entryAdded'
-    ? String(event.params.entry.text)
-    : String(event.params?.exceptionDetails?.text
-      ?? event.params?.args?.map((arg) => arg.value ?? arg.description).join(' ')));
 
 const makeRoot = (label) => {
   const base = process.env.TMP_72 ?? os.tmpdir();
@@ -269,7 +136,7 @@ const scenarioWithProjects = async (probe) => {
   seedKnowledge(knowledgeDb, 'alpha');
   writeCompanionConfig(userData, 'alpha');
 
-  const app = await startApp({ ownerDb, knowledgeDb, userData });
+  const app = await startApp({ ownerDb, knowledgeDb, userData, showPanel: true });
   const { panel } = app;
   try {
     await waitFor(panel, "document.querySelector('#modeBar button[data-mode=\"focus\"]')");
@@ -478,12 +345,13 @@ const scenarioWithoutProjects = async (probe) => {
   const personal = new PersonalKnowledgeStore(knowledgeDb);
   personal.close();
   writeCompanionConfig(userData, '');
-  const app = await startApp({ ownerDb, knowledgeDb, userData });
+  const app = await startApp({ ownerDb, knowledgeDb, userData, showPanel: true });
   const { panel } = app;
   try {
     await waitFor(panel, "document.querySelector('#modeBar button[data-mode=\"focus\"]')");
-    // 等面板自己的首次刷新把项目列表画出来，再切模式：否则点的是一个还没绑定事件的按钮。
-    await waitFor(panel, "document.getElementById('projectList').textContent.trim() !== ''");
+    // 等面板第一次刷新跑完（操作区模型就绪、模式栏事件已绑）再点模式：
+    // 否则点的是一个还没绑定事件的按钮。
+    await waitFor(panel, 'window.OwnerFocusOps && document.getElementById(\'modeBar\')');
     await panel.evaluate("document.querySelector('#modeBar button[data-mode=\"focus\"]').click()");
     await waitFor(panel, "!document.getElementById('modeA').hidden");
     await sleep(1200);
@@ -491,16 +359,18 @@ const scenarioWithoutProjects = async (probe) => {
       entriesHidden: document.getElementById('workEntries').hidden,
       entriesText: document.getElementById('workEntries').textContent.trim(),
       projectBarHidden: document.getElementById('workProjectBar').hidden,
+      addProjectInBar: Boolean(document.querySelector('#workProjectBar #addProjectTop')),
       workspacePresent: Boolean(document.getElementById('workWorkspace')),
-      projectRows: document.querySelectorAll('#projectList .project-row').length,
-      projectListText: (document.getElementById('projectList').textContent || '').slice(0, 80),
-      setupHidden: document.getElementById('setup').hidden,
+      oldProjectListGone: document.getElementById('projectList') === null,
+      setupInSettings: Boolean(document.querySelector('#settings #setup')),
       focusVisible: !document.getElementById('modeA').hidden
     }))()`);
     probe.withoutProjects = dom;
     check('没有项目时四个入口整段收起', dom.entriesHidden === true, dom.entriesText);
     check('没有项目时工作区仍在、项目条收起', dom.workspacePresent === true && dom.projectBarHidden === true);
-    check('没有项目时显示空态文案', /还没有项目/u.test(dom.projectListText), dom.projectListText);
+    check('「添加项目」挂在项目切换行尾，旧的搜索列表已不存在',
+      dom.addProjectInBar === true && dom.oldProjectListGone === true);
+    check('设置向导在设置面板里，不占工作区', dom.setupInSettings === true);
     check('没有项目时不崩、仍停在专注页', dom.focusVisible === true);
     await shotTall(panel, 'focus-no-project.png', 900);
     const errors = consoleErrors(panel);

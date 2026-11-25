@@ -1392,7 +1392,7 @@ const buildView = async (requestedProjectId = '') => {
   // （activeJob ?? jobsInProject[0]），回答不了「别的项目是不是还活着」。
   // 这里从同一批 limit=20 的四张表摊平，终态与审批态由 execution-status.mjs 滤掉；
   // 已知限制：超出最近 20 条的旧执行不会出现，只影响很忙的大项目。
-  const { listInFlightExecutions } = await loadExecutionStatus();
+  const { listInFlightExecutions, isInFlight } = await loadExecutionStatus();
   const executions = listInFlightExecutions({
     jobs: allJobs,
     patches: allPatches,
@@ -1405,15 +1405,11 @@ const buildView = async (requestedProjectId = '') => {
   const patchesInProject = allPatches.filter(inProject);
   const sandboxesInProject = allSandboxes.filter(inProject);
   const repairsInProject = allRepairs.filter(inProject);
-  const activeJob = jobsInProject.find((job) =>
-    ['pending_approval', 'queued', 'leased', 'running', 'cancel_requested'].includes(job.status)
-  );
-  const activeCycle = repairsInProject.find((cycle) =>
-    ['pending_approval', 'queued', 'proposal_ready', 'applied', 'test_pending'].includes(cycle.status)
-  );
-  const activeSandbox = sandboxesInProject.find((run) =>
-    ['pending_approval', 'queued', 'provisioning', 'running', 'collecting'].includes(run.status)
-  );
+  // 「进行中」不再抄一份状态数组：能直接读 execution-status.mjs 就 import，
+  // 与操作区、执行记录用同一套终态 / 审批态判定（见 src/execution-status.mjs）。
+  const activeJob = jobsInProject.find((job) => isInFlight('job', job.status));
+  const activeCycle = repairsInProject.find((cycle) => isInFlight('cycle', cycle.status));
+  const activeSandbox = sandboxesInProject.find((run) => isInFlight('sandbox', run.status));
   const latestPatch = patchesInProject[0] ?? null;
   const chain = {
     job: activeJob ?? jobsInProject[0] ?? null,
