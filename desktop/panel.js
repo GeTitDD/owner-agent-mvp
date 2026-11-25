@@ -2908,6 +2908,8 @@
       }
     );
   };
+  // #93 删除项目：打开一个列清单的确认框；取消就什么都不动。
+  $('libraryDeleteProject').onclick = () => { void openProjectDeleteDialog(); };
   $('ideaCapture').onclick = () => { void captureIdea(); };
   // 捕获框要能粘贴多行：Enter 只换行，Ctrl/Cmd+Enter 才存入，避免粘贴时被截断。
   $('ideaInput').addEventListener('keydown', (event) => {
@@ -3296,6 +3298,68 @@
       // 发布按钮的可用性回到「有没有草稿」，由 renderLibrary 决定。
       if (view?.library) renderLibrary();
     }
+  };
+
+  // ---- 删除项目（#93）：先列清单，确认后才删 ----
+  //
+  // 清单由主进程算（导出路径来自 exportFilesOf，渲染层不另拼一遍）：这里只负责展示
+  // 与二次确认。未点「确认删除」时不会调用 run，数据库与文件都不会动。
+  const showProjectDeleteFailures = (result) => {
+    const failed = result?.files?.failed ?? [];
+    const body = [
+      el('p', 'result-summary',
+        '项目已从库里删除，但下面这些路径没删掉，请手动清理；这里不会把它当成删除成功。'),
+      (() => {
+        const list = el('ul', 'delete-failed');
+        for (const item of failed) list.append(el('li', undefined, `${item.path} —— ${item.reason}`));
+        return list;
+      })()
+    ];
+    const ack = el('button', 'primary', '知道了');
+    ack.onclick = closeModal;
+    openModal('删除未完成', body, [ack]);
+  };
+
+  const openProjectDeleteDialog = async () => {
+    const project = workspaceProject();
+    if (!project) { toast('先选择一个项目。'); return; }
+    let plan;
+    try {
+      // 只读：拿将删清单，打开确认框这一步本身不删任何东西。
+      plan = await window.companion.projectDelete.plan({ projectId: project.id });
+    } catch (error) {
+      toast(cleanIpcError(error?.message ?? error), 6000);
+      return;
+    }
+    const body = [
+      el('p', 'result-summary', '删除后不可恢复。下面这些会一起删掉，确认前什么都没删：'),
+      (() => {
+        const list = el('ul', 'delete-plan-list');
+        for (const line of plan?.items ?? []) list.append(el('li', undefined, line));
+        return list;
+      })(),
+      el('p', 'delete-warning',
+        '项目源码目录不受影响；已发出去的飞书卡片里的本地导出路径会失效（ADR-0009）。')
+    ];
+    const cancel = el('button', 'ghost', '取消');
+    cancel.onclick = closeModal;
+    const confirmButton = el('button', 'danger', '确认删除');
+    confirmButton.onclick = async () => {
+      confirmButton.disabled = true;
+      cancel.disabled = true;
+      try {
+        const result = await window.companion.projectDelete.run({ projectId: project.id, confirm: true });
+        closeModal();
+        await refresh();
+        if (result?.files?.failed?.length) showProjectDeleteFailures(result);
+        else toast(result?.message || `已删除项目「${plan?.projectName ?? project.id}」`, 4200);
+      } catch (error) {
+        confirmButton.disabled = false;
+        cancel.disabled = false;
+        toast(cleanIpcError(error?.message ?? error), 6000);
+      }
+    };
+    openModal(`删除项目：${plan?.projectName ?? project.name ?? project.id}`, body, [cancel, confirmButton]);
   };
 
   // ---- 自上次看过（#84） ----

@@ -298,6 +298,7 @@ textarea:focus { border-color: var(--accent); }
 .sheet-head h2 { margin: 0; font-size: 14px; }
 .sheet-body { flex: 1; overflow-y: auto; padding: 14px; display: grid; gap: 12px; align-content: start; }
 .sheet-foot { padding: 10px 14px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; }
+.sheet-foot button.danger, .sheet-body button.danger { color: var(--danger); border-color: currentColor; }
 
 .field { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
 .field input {
@@ -1874,6 +1875,11 @@ pre.diff, pre.logs {
 }
 .library-status { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .library-actions { display: flex; gap: 6px; }
+.library-actions button.danger { color: var(--danger); border-color: currentColor; }
+.delete-plan-list { margin: 8px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.6; word-break: break-all; }
+.delete-plan-list li { margin: 2px 0; }
+.delete-warning { margin: 10px 0 0; padding: 8px 10px; border-left: 3px solid var(--danger); background: rgba(239, 68, 68, 0.06); font-size: 12px; color: var(--danger); }
+.delete-failed { margin: 8px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.6; word-break: break-all; color: var(--danger); }
 .library-versions {
   display: flex;
   flex-wrap: wrap;

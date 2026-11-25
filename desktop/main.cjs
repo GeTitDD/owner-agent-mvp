@@ -108,6 +108,8 @@ let snapshotModule = null;
 let snapshotStore = null;
 // #90：把已发布的快照导出到 <userData>/exports/<projectId>/vN/（只读快照，不重新聚合）。
 let exportModule = null;
+// #93：删除项目连带清理快照与导出目录；清单（plan）与执行分开，未确认不删。
+let projectDeletionModule = null;
 // #84：水位与「自上次看过」。
 // - memoryWatermarks：每项目一个时间点，与 OwnerStore 共用同一条连接（同一份本地库）；
 // - observerEventStore：只读观察员事件，独立连接（观察员可以和桌面端同时开着）；
@@ -1231,6 +1233,10 @@ const knowledgeDetail = ({ id } = {}) => {
 
   const loadProjectLibrary = async () =>
     (projectLibraryModule ??= await importEsm('../src/project-library.mjs'));
+
+  /** #93 删除项目：按需加载，删除是显式动作，不在启动或轮询里调用。 */
+  const loadProjectDeletion = async () =>
+    (projectDeletionModule ??= await importEsm('../src/project-deletion.mjs'));
 
   /** 项目图谱：与 buildView 同一口径（stale 按当前 HEAD 判断），给库的图谱摘要复用。 */
   const diagramsForProject = async (project) => {
@@ -3685,6 +3691,39 @@ const registerIpc = () => {
     const failure = await shell.openPath(target);
     if (failure) throw new Error(`打开目录失败：${failure}`);
     return { opened: target };
+  });
+
+  // #93 删除项目：plan 只读、run 必须显式确认。
+  ipcMain.handle('companion:project-delete-plan', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const mod = await loadProjectDeletion();
+    if (!snapshotStore) throw new Error('快照存储尚未就绪，请重启后再试。');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('项目不存在或已被删除。');
+    // 只读：列清单不删任何东西，面板据此渲染二次确认。
+    return mod.projectDeletionPlan({
+      project,
+      versions: snapshotStore.listVersions(project.id, { limit: 200 }),
+      draft: snapshotStore.getDraftState(project.id),
+      root: exportsRoot()
+    });
+  });
+
+  ipcMain.handle('companion:project-delete', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const mod = await loadProjectDeletion();
+    // 未确认时直接拒绝：面板必须先展示 plan，再带 confirm=true 回来。
+    if (input?.confirm !== true) throw new Error('删除项目需要二次确认。');
+    if (!snapshotStore) throw new Error('快照存储尚未就绪，请重启后再试。');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('项目不存在或已被删除。');
+    return mod.deleteProject({
+      store,
+      snapshotStore,
+      projectId: project.id,
+      root: exportsRoot(),
+      confirm: true
+    });
   });
 
   ipcMain.handle('companion:github-pr-preview', async (event, input) => {

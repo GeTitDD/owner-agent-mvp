@@ -9,8 +9,8 @@
 //   直接 ABORT，任何绕过本类的写法也会失败，不依赖调用方自觉。
 // 版本号在发布事务里按 MAX(version)+1 分配，所以同一项目单调递增，不同项目各自从 v1 开始。
 //
-// 本张票不做删除项目；删除连坐（ADR-0009）留给删除项目那张票，这里不提供删版本的公开方法，
-// 也保证保存草稿、发布新版本都不会动到已有版本。
+// #93 的删除项目走 purgeProjectData：只按项目整批清理，仍然不提供删单个版本的方法；
+// 删除连坐的语义见 ADR-0009，这里只负责把该项目的草稿与版本删干净。
 
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
@@ -461,6 +461,19 @@ export class ProjectSnapshotStore {
       note: row.note ?? '',
       publishedAt: row.published_at
     }));
+  }
+
+  /**
+   * #93 删除项目时清理该项目的快照（草稿 + 全部版本）。
+   *
+   * 只按 project_id 删，不碰别的项目；不自己 BEGIN——项目行与快照要落在调用方的
+   * 同一个事务里（先删库、后删文件），否则会出现「项目还在、快照没了」的半删状态。
+   */
+  purgeProjectData(projectId) {
+    const id = projectIdOf(projectId);
+    const drafts = this.db.prepare('DELETE FROM project_snapshot_drafts WHERE project_id=?').run(id);
+    const versions = this.db.prepare('DELETE FROM project_snapshot_versions WHERE project_id=?').run(id);
+    return { projectId: id, drafts: Number(drafts.changes), versions: Number(versions.changes) };
   }
 
   /**
