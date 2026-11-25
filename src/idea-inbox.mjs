@@ -39,6 +39,52 @@ const SECTION_DEFS = [
 const oneLine = (value, max = 200) => flatText(value, max);
 const valueOf = (row, camel, snake, fallback = '') => row?.[camel] ?? row?.[snake] ?? fallback;
 
+/**
+ * 整理结果（#96）的视图归一：四段 + 缺段标记 + 抓取元信息。
+ *
+ * 读不回来就是 null——不补四段空壳冒充「整理过」。缺段的 reason 由整理那一侧写好，
+ * 这里只保证形状稳定，面板不用猜字段。
+ */
+const sortedView = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const sections = (Array.isArray(value.sections) ? value.sections : [])
+    .filter((section) => section && typeof section === 'object')
+    .map((section) => {
+      const text = String(section.text ?? '');
+      return {
+        key: String(section.key ?? ''),
+        label: String(section.label ?? section.key ?? ''),
+        text,
+        missing: typeof section.missing === 'boolean' ? section.missing : text.trim() === '',
+        reason: String(section.reason ?? '')
+      };
+    });
+  const missing = Array.isArray(value.missing)
+    ? value.missing.map((key) => String(key))
+    : sections.filter((section) => section.missing).map((section) => section.key);
+  const fetch = value.fetch && typeof value.fetch === 'object' && value.fetch.ok
+    ? {
+        url: String(value.fetch.url ?? ''),
+        status: Number(value.fetch.status ?? 0) || 0,
+        bytes: Number(value.fetch.bytes ?? 0) || 0,
+        title: String(value.fetch.title ?? ''),
+        at: value.fetch.at ?? null,
+        attempts: Number.isSafeInteger(value.fetch.attempts) ? value.fetch.attempts : 0
+      }
+    : null;
+  return {
+    version: Number(value.version ?? 0) || 0,
+    at: value.at ?? null,
+    source: value.source === 'link' ? 'link' : 'text',
+    link: String(value.link ?? ''),
+    sections,
+    missing,
+    complete: sections.length > 0 && missing.length === 0,
+    note: String(value.note ?? ''),
+    fetch
+  };
+};
+
 // 时间倒序；时间相同按 id 兜底，保证同一份数据每次渲染顺序一致。
 const newestFirst = (a, b) =>
   String(b.at ?? '').localeCompare(String(a.at ?? '')) || String(a.id).localeCompare(String(b.id));
@@ -79,7 +125,7 @@ export function ideaInboxView({ items = [], limit = DEFAULT_LIMIT } = {}) {
         projectId,
         // 全局收件箱的条目不属于任何项目：显示「未归属」，不要露出 null。
         projectLabel: projectId ?? '未归属',
-        sorted: row.sorted ?? null,
+        sorted: sortedView(row.sorted),
         sortedAt: valueOf(row, 'sortedAt', 'sorted_at', null) || null,
         at
       };

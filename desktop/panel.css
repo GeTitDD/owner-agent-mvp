@@ -974,6 +974,22 @@ pre.diff, pre.logs {
 .queue-status.adopted { color: var(--ok); }
 .queue-status.discarded { color: var(--danger); }
 .queue-link { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* #96 整理结果：四段一行一段铺在条目下面；缺段用警示色，不空着。 */
+.idea-sorted {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 2px;
+  margin-top: 3px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--line);
+}
+.idea-section { display: grid; grid-template-columns: 44px 1fr; gap: 4px; font-size: 9px; line-height: 1.45; }
+.idea-section-label { color: var(--muted); }
+.idea-section-text { color: var(--text); overflow-wrap: anywhere; }
+.idea-section-missing { color: var(--warn); overflow-wrap: anywhere; }
+.idea-section[data-missing='true'] .idea-section-label { color: var(--warn); }
+.idea-sorted-meta { font-size: 9px; color: var(--muted); }
+.queue-action[disabled] { opacity: 0.55; cursor: default; }
 .project-brief {
   display: grid;
   gap: 5px;
