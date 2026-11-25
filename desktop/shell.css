@@ -1393,3 +1393,113 @@ button.session-name { cursor: pointer; }
 .confirm-cancel { color: var(--muted); }
 .confirm-exit:hover { border-color: var(--accent); }
 .confirm-cancel:hover { color: var(--text); }
+
+/* ── 复制与导出（#110） ───────────────────────────────────────────
+   复制按钮跟着消息/块的悬停出现。块在消息里面，若两者都用 :hover，
+   同一个指针会同时命中两层；所以「亮哪一个」由 shell.js 的 data-copy-active
+   统一决定，CSS 只负责显示和收起。 */
+.msg {
+  position: relative;
+}
+
+.block {
+  position: relative;
+}
+
+.copy-affordance {
+  opacity: 0;
+  pointer-events: none;
+  padding: 0 6px;
+  height: 17px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 15px;
+  cursor: pointer;
+}
+
+.copy-affordance::before { content: "复制"; }
+
+.msg[data-copy-active] > .who > .msg-copy,
+.copy-affordance:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.block[data-copy-active] > .block-copy {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.block-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  box-shadow: 0 2px 8px rgba(38, 38, 38, 0.12);
+}
+
+.msg.user[data-copy-active] > .who > .msg-copy { background: var(--panel); }
+
+/* ── 导出会话：按钮在输入框下面，不占顶栏（顶栏本轮仍是状态位） ── */
+.shell-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 12px 10px;
+}
+
+.export-button {
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.export-button:hover { color: var(--text); border-color: var(--accent); }
+
+.export-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 10.5px;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 复制/导出的回执：成功与失败共用一条，失败换色。 */
+.toast {
+  position: absolute;
+  left: 50%;
+  bottom: 78px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: var(--shadow);
+  z-index: 5;
+}
+
+.toast[data-tone="error"] {
+  background: var(--danger);
+  color: #fff;
+}

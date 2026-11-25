@@ -11,9 +11,9 @@
 </head>
 <body>
   <div class="shell">
-    <!-- 顶栏只放状态位：#105 定了五个位置；#106 只把「会话」这一个位从占位换成入口
-         （胶囊 + 一个浮层），其余四位仍是占位。浮层里承载列表/搜索/新建/重命名/置顶/删除，
-         所以顶栏本身没有多出第二个按钮。 -->
+    <!-- 顶栏只放状态位：#105 定了五个位置。#106 把「会话」做成入口（胶囊 + 浮层），
+         #107 把「项目」也做成入口（全局 / 已登记项目 + 切换确认），写范围改由 gate 文案回答；
+         监控与导出仍是状态位，顶栏不变成第二个菜单。 -->
     <header class="top" id="shellHeader">
       <div class="session-entry">
         <button type="button" class="capsule" id="sessionToggle" data-slot="session"
@@ -88,6 +88,16 @@
       <textarea id="input" rows="1" placeholder="说点什么。回车发送，Shift+回车换行"></textarea>
       <button type="submit" class="send" id="send" disabled>发送</button>
     </form>
+
+    <!-- #110 导出会话：按钮放在输入框下面，不占顶栏。
+         顶栏本轮仍是状态位（#105 的口径），把「导出」做成操作是后续票的事。 -->
+    <div class="shell-actions">
+      <button type="button" class="export-button" id="exportConversation">导出 Markdown</button>
+      <span class="export-path" id="exportPath" hidden></span>
+    </div>
+
+    <!-- 复制/导出的可见回执：失败也走这里，不静默。 -->
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   </div>
 
   <!-- #107 切项目确认：四条后果固定写在弹窗里，两个出口并排；取消什么都不改。 -->
@@ -112,6 +122,7 @@
   <script src="./shell-sessions.cjs"></script>
   <script src="./shell-projects.cjs"></script>
   <script src="./shell-blocks.cjs"></script>
+  <script src="./shell-copy.cjs"></script>
   <script src="./shell-blocks-view.js"></script>
   <script type="module" src="./card-scope-host.mjs"></script>
   <script src="./shell.js"></script>
