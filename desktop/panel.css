@@ -1607,6 +1607,24 @@ pre.diff, pre.logs {
 .kb-head h3 { margin: 0; font-size: 15px; letter-spacing: -.01em; }
 .kb-head .count { margin-left: auto; }
 .kb-hint { margin: 6px 0 10px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+/* #86 会话扫描：计数与候选预览并排放在知识页顶部，0 条候选时也要看得出扫描确实跑过。 */
+.kb-scan {
+  margin: 0 0 10px; padding: 10px 12px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+}
+.kb-scan-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.kb-scan-title { font-size: 13px; font-weight: 650; }
+.kb-scan-summary { font-size: 11.5px; line-height: 1.5; color: var(--muted); text-align: right; }
+.kb-scan-reasons { margin: 6px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--muted); }
+.kb-scan-candidates { display: grid; gap: 6px; margin-top: 8px; }
+.kb-scan-item {
+  display: grid; gap: 2px; padding: 6px 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+}
+.kb-scan-quote { font-size: 12px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere; }
+.kb-scan-item-meta { font-size: 10.5px; color: var(--muted); }
+.kb-scan-empty, .kb-scan-more, .kb-scan-hint { margin: 0; font-size: 11px; line-height: 1.6; color: var(--muted); }
+.kb-scan-hint { margin-top: 8px; }
 .kb-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .kb-chip {
   display: inline-flex; align-items: center; gap: 6px;

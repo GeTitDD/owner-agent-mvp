@@ -94,6 +94,8 @@ let knowledgeTidyModule = null;
 let diagramModule = null;
 let executionStatusModule = null;
 let ideaCaptureModule = null;
+// #86 会话扫描：模块按需加载；扫描是显式动作，不在启动或轮询里调用。
+let sessionScanModule = null;
 let chatModule = null;
 let chatService = null;
 let chatSessionStore = null;
@@ -167,6 +169,38 @@ const knowledgeDbPath = () =>
   process.env.OWNER_KNOWLEDGE_DB
   || process.env.DOMAIN_CONTEXT_DB
   || path.join(os.homedir(), '.domain-context', 'index.sqlite');
+
+// #86 会话扫描的本地状态：已扫过的会话键（重复点击不重复提炼），
+// 以及留给下一张票的「库里已有决策的指纹」位（现在是空数组）。
+// 只存这一份 JSON，不进知识库——扫描本身不写任何数据，确认入库是下一张票。
+// 上限只为防无限增长：一年也到不了 5000 条，真到了丢最旧的会话键也不会重扫出重复候选
+// （重复问答还有指纹兜底）。
+const sessionScanStatePath = () => path.join(app.getPath('userData'), 'memory-scan.json');
+const SESSION_SCAN_STATE_LIMIT = 5000;
+const loadSessionScanState = () => {
+  try {
+    const raw = fs.readFileSync(sessionScanStatePath(), 'utf8').replace(/^\uFEFF/u, '');
+    const parsed = JSON.parse(raw);
+    return {
+      sessions: Array.isArray(parsed.sessions) ? parsed.sessions.filter((key) => typeof key === 'string') : [],
+      fingerprints: Array.isArray(parsed.fingerprints) ? parsed.fingerprints.filter((key) => typeof key === 'string') : []
+    };
+  } catch {
+    return { sessions: [], fingerprints: [] };
+  }
+};
+const saveSessionScanState = ({ sessions = [], fingerprints = [] } = {}) => {
+  try {
+    const state = {
+      sessions: [...new Set(sessions)].slice(-SESSION_SCAN_STATE_LIMIT),
+      fingerprints: [...new Set(fingerprints)].slice(-SESSION_SCAN_STATE_LIMIT)
+    };
+    fs.mkdirSync(path.dirname(sessionScanStatePath()), { recursive: true });
+    fs.writeFileSync(sessionScanStatePath(), JSON.stringify(state, null, 2), 'utf8');
+  } catch (error) {
+    logError('session-scan-state', error);
+  }
+};
 
 const digestCache = new Map();
 const resolveDigest = (imageRef = 'node:22-alpine') => {
@@ -3164,6 +3198,34 @@ const registerIpc = () => {
   ipcMain.handle('companion:knowledge-open', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     await openKnowledgeWorkbench();
+  });
+
+  // #86 会话扫描：读本机 Codex / Claude Code 的会话，按工作目录匹配项目后产决策候选。
+  // 只读：不写知识库、不调模型、不联网；已扫过的会话键与候选指纹落在 memory-scan.json，
+  // 所以再点一次不会把同一段会话重新提炼一遍。
+  ipcMain.handle('companion:session-scan', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    sessionScanModule = sessionScanModule ?? await importEsm('../src/memory/session-scan.mjs');
+    const projects = (store?.listProjects() ?? []).map((project) => ({
+      id: project.id,
+      name: project.name ?? '',
+      root: project.root ?? ''
+    }));
+    const state = loadSessionScanState();
+    const result = await sessionScanModule.scanSessions({
+      roots: sessionScanModule.sessionRootsFrom({ home: os.homedir(), env: process.env }),
+      projects,
+      seenSessions: state.sessions,
+      fingerprints: state.fingerprints
+    });
+    saveSessionScanState({
+      sessions: [...state.sessions, ...result.scannedKeys],
+      // 只记「哪些会话扫过」，不把未确认候选的指纹写进去：本轮提过的候选还没入库，
+      // 占住指纹会让它以后再也没机会被提出来。跨轮的同内容去重靠会话键；
+      // 指纹去重在本轮跨会话时生效，等确认入库后由库提供已有指纹（下一张票）。
+      fingerprints: state.fingerprints
+    });
+    return result;
   });
 
   // 只读 playbook：列表、执行、报告、转提案。

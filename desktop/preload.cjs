@@ -61,6 +61,10 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   skills: Object.freeze({
     catalog: (input) => invoke('companion:skill-catalog', input)
   }),
+  // #86 会话扫描：显式点击才跑；只读本机会话文件，不写库。
+  memory: Object.freeze({
+    scanSessions: () => invoke('companion:session-scan')
+  }),
   playbooks: Object.freeze({
     list: (input) => invoke('companion:playbooks', input),
     run: (input) => invoke('companion:playbook-run', input),
