@@ -1503,3 +1503,237 @@ button.session-name { cursor: pointer; }
   background: var(--danger);
   color: #fff;
 }
+
+/* ── #108 `/` 技能面板：两段（数字快捷 / 全部技能），共用一个滚动区 ──
+   面板浮在输入框上方，不挤对话流；两段都在同一个 scroll 容器里，
+   所以「滚动到底」只有一条滚动条，不会出现两个各自滚动的小窗。 */
+.slash-panel {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 64px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  max-height: 420px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.slash-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.slash-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.slash-count {
+  min-width: 0;
+  margin-right: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slash-link,
+.slash-close {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 17px;
+  cursor: pointer;
+}
+
+.slash-link:hover,
+.slash-close:hover,
+.slash-link[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.slash-close {
+  border-color: transparent;
+  font-size: 11px;
+}
+
+.slash-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 4px 6px 6px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.slash-scroll::-webkit-scrollbar { width: 8px; }
+.slash-scroll::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 8px;
+}
+
+/* 分组标题贴在滚动区顶部：滚到中间时仍知道这一段是什么。 */
+.slash-group {
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  padding: 7px 6px 3px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.slash-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.slash-item:hover { background: var(--bg); }
+.slash-item.is-on { background: var(--accent-soft); }
+
+/* 冲突行要压过悬停底色：两个命令抢同一个数字是当前最该看见的事。 */
+.slash-item.is-conflict { background: var(--warn-soft); }
+.slash-item.is-conflict.is-on { outline: 1px solid var(--warn); }
+
+.slash-num {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.slash-item.is-on .slash-num {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.slash-num.is-empty {
+  background: none;
+  color: var(--muted);
+}
+
+.slash-num-input {
+  flex: none;
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11px;
+  text-align: center;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.slash-num-input:focus { border-color: var(--accent); }
+
+.slash-num-input.is-conflict {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.slash-cmd {
+  flex: none;
+  width: 128px;
+  overflow: hidden;
+  color: var(--text);
+  font: 11px/20px "Cascadia Mono", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slash-text {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.slash-name {
+  color: var(--text);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.slash-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* 数字快捷一行只留一行说明：保证「全部技能」分组标题一打开就看得见。 */
+.slash-item[data-kind="command"] .slash-desc { -webkit-line-clamp: 1; }
+
+.slash-src {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.slash-src.src-domain { background: var(--accent-soft); color: var(--muted); }
+.slash-src.src-pstack { background: rgba(47, 109, 246, 0.14); color: #2f6df6; }
+.slash-src.src-matt { background: var(--ok-soft); color: var(--ok); }
+.slash-src.src-plugin { background: var(--warn-soft); color: var(--warn); }
+.slash-src.is-missing { background: var(--danger-soft); color: var(--danger); }
+
+.slash-hint,
+.slash-warn,
+.slash-error {
+  flex: none;
+  margin: 0;
+  padding: 5px 10px 6px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+}
+
+.slash-hint { color: var(--muted); }
+.slash-warn { background: var(--warn-soft); color: var(--warn); font-size: 10.5px; }
+.slash-error { color: var(--danger); font-size: 10.5px; }
+
+.slash-empty {
+  margin: 0;
+  padding: 10px 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}

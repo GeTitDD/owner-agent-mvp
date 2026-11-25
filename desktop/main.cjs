@@ -861,18 +861,21 @@ const skillCatalogPayload = async ({ refresh = false } = {}) => {
           playbookLabel: item.label,
           // 图谱 playbook 由面板按钮直接生成，磁盘上没有 SKILL.md 是设计如此。
           noSkillDir: Boolean(item.diagramKind)
-        }))
+        })),
+        // #108 的 `/` 面板要滚动看全部技能：分组仍按 12 条截断，
+        // 另外带回未截断的 items；面板视图忽略这个字段，互不影响。
+        withItems: true
       })
     });
   }
-  return skillCatalogCache.read({ refresh: Boolean(refresh) }).then(async (view) => {
-    // 顺带把「哪些技能用于对话」带出去：面板要据此勾选，默认七个由 pi-chat 定义。
-    const chatMod = await importEsm('../src/pi-chat.mjs');
-    const picked = Array.isArray(config.chatSkills) && config.chatSkills.length
-      ? config.chatSkills
-      : chatMod.DEFAULT_SKILL_IDS;
-    return { ...view, implicitSkillIds: [...picked] };
-  });
+  // 缓存读是同步的（TTL 内直接返回旧值）；这里只补对话技能那几个 id。
+  const view = skillCatalogCache.read({ refresh: Boolean(refresh) });
+  // 顺带把「哪些技能用于对话」带出去：面板要据此勾选，默认七个由 pi-chat 定义。
+  const chatMod = await importEsm('../src/pi-chat.mjs');
+  const picked = Array.isArray(config.chatSkills) && config.chatSkills.length
+    ? config.chatSkills
+    : chatMod.DEFAULT_SKILL_IDS;
+  return { ...view, implicitSkillIds: [...picked] };
 };
 
 const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) => {
