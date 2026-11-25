@@ -16,6 +16,10 @@
           <small id="stateText">空闲</small>
         </div>
         <div class="state-counts">
+          <!-- 写范围（ADR-0012 / #112）：只显示当前会话能写到哪儿，判定与文案都由
+               src/write-gate.mjs 的 writeScopeLabel 给出，这里不自造第三种说法。 -->
+          <span id="writeScope" class="count-chip write-scope" data-scope="own"
+            title="本次会话的写范围">写·自有</span>
           <span id="runningChip" class="count-chip"><span class="chip-dot"></span><span id="runningCount">0</span> 运行</span>
           <span id="needsChip" class="count-chip warn"><span class="chip-dot"></span><span id="needsCount">0</span> 待你</span>
         </div>
@@ -530,6 +534,9 @@
   <script type="module" src="./focus-ops-host.mjs"></script>
   <!-- 「自上次看过」的形态判定（首次查看 / 压成一行）同样只写在 ESM 里，见 since-seen-host.mjs。 -->
   <script type="module" src="./since-seen-host.mjs"></script>
+  <!-- 写范围判定（放行 / 需确认 / 拒绝）是 ESM（src/write-gate.mjs），见 write-gate-host.mjs；
+       顶栏只读它的文案，不自己判目的地。 -->
+  <script type="module" src="./write-gate-host.mjs"></script>
   <script src="./chat-handoff.cjs"></script>
   <script src="../node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="./panel.js"></script>
