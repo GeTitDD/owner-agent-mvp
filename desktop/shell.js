@@ -25,6 +25,9 @@
   if (!copyApi) throw new Error('shell-copy.cjs 未加载');
 
   const store = window.companion?.cardSessions ?? null;
+  // #114：自有目录写入的判定与回执由 src/own-write.mjs 提供，经 own-write-host.mjs
+  // 挂到窗口。模块脚本晚于经典脚本，所以不在加载时断言存在，而是在发送时读。
+  const ownWrites = () => window.OwnerOwnWrite ?? null;
   // #107：项目列表与全局聚合是两个只读通道；拿不到就当没有登记项目（顶栏只剩「全局」）。
   const projectStore = window.companion?.cardProjects ?? null;
   const scopeStore = window.companion?.cardScope ?? null;
@@ -519,8 +522,8 @@
     // 提示里说清落点为空，要写项目先选项目。
     input.placeholder = open
       ? (viewProjectId
-        ? '说点什么，或打 / 调技能。回车发送，Shift+回车换行'
-        : '全局模式：读所有项目的记忆（只读），也可打 / 调技能。先选项目才能写项目目录；回车发送。')
+        ? '说点什么，/ 技能，@@ 方法。回车发送，Shift+回车换行'
+        : '全局模式：可以问所有项目的记忆（只读），先选项目再写。回车发送，/ 技能，@@ 方法'
       : '没有会话时不能发消息：先在顶栏新建一个会话。';
     sendButton.disabled = !open || !threadApi.canSend(input.value);
   };
@@ -1023,10 +1026,67 @@
     openConfirm(target);
   });
 
+  /**
+   * 自有目录写入（#114）：判定 → 执行 → 回执。
+   *
+   * 这条路不画确认卡：write-gate 对「自有目录 + 不删除」只会给 allow；全局模式也只是
+   * 「不写项目」，写自己的库照样放行。若判定不给 allow（调用方声明删除，或将来混进
+   * 项目目录 / 外发动作），这里不执行、也不伪造回执，只说清「要确认」——确认卡是
+   * #116 的事，不能借这条路偷偷放行。
+   */
+  const runOwnWriteTurn = async (command, raw) => {
+    const api = ownWrites();
+    if (!api) {
+      setError('自有目录写入模块还没加载好，稍等一下再试。');
+      return;
+    }
+    busy = true;
+    try {
+      // 先把「我要写什么」落进流里：失败时也看得出是哪一句没写成。
+      await store.append({ id: currentId, role: 'user', text: raw });
+      const result = await api.run({
+        kind: command.kind,
+        text: command.text,
+        execute: async (payload) => {
+          // 注入点只给验收用：用它复现「写失败」，证明失败回执带原因、不静默。
+          const injected = window.OwnerOwnWriteExecutor;
+          if (typeof injected === 'function') return injected(payload);
+          if (!window.companion || typeof window.companion.ownWrite !== 'function') {
+            throw new Error('主进程没有提供自有目录写入接口');
+          }
+          return window.companion.ownWrite({ kind: payload.kind, text: payload.text });
+        }
+      });
+      if (result.receipt) {
+        // 回执是一条普通回复：文字 + 键值块，复制与导出沿用 #109 / #110 的能力。
+        await store.append({
+          id: currentId,
+          role: 'assistant',
+          text: result.receipt.text,
+          blocks: result.receipt.blocks
+        });
+      } else {
+        notify(`这个动作不在自有目录免确认范围内：${result.decision?.gate?.reason ?? ''}`, 'error');
+      }
+      input.value = threadApi.draftAfterSend();
+      resizeInput();
+      await refreshThread();
+      input.focus();
+    } finally {
+      busy = false;
+    }
+  };
+
   const send = () => report('发送', async () => {
     if (busy || !listApi.canCompose(currentId)) return;
     const raw = input.value;
     if (!threadApi.canSend(raw)) return;
+    // 自有目录写入（/记灵感 …）：直接执行并留回执，不产生确认卡。
+    const command = ownWrites()?.parseCommand(raw) ?? null;
+    if (command) {
+      await runOwnWriteTurn(command, raw);
+      return;
+    }
     // 这一版仍然没有真模型：普通输入回一条占位回复，/blocks 回一条脚本化样本。
     // 两者都按普通消息落库，所以切走再回来看到的是同一条流。
     const reply = blocksApi.isSampleCommand(raw)
