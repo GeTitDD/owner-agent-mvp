@@ -3257,6 +3257,11 @@
   let skillCatalogData = null;
   let skillCatalogToken = 0;
 
+  // 对话的隐式技能：由服务端给出（配置或默认七个），面板只读。
+  const skillImplicitIds = () => (
+    Array.isArray(skillCatalogData?.implicitSkillIds) ? skillCatalogData.implicitSkillIds : []
+  );
+
   // 只渲染主进程给的数据；来源标签与缺失标注都由视图模型算好，面板不重新判断。
   const renderSkillCatalog = () => {
     const holder = $('skillGroups');
@@ -3298,6 +3303,35 @@
         const summary = el('summary', 'skill-summary');
         summary.append(el('span', 'skill-name', item.name));
         summary.append(el('span', 'skill-source', item.sourceLabel));
+        if (!item.missing) {
+          const implicit = skillImplicitIds();
+          const box = el('input', 'skill-implicit');
+          box.type = 'checkbox';
+          box.title = '用于对话（隐式可用，最多 12 个）';
+          box.setAttribute('aria-label', `把 ${item.name} 用于对话`);
+          box.checked = implicit.includes(item.id);
+          box.onclick = (event) => event.stopPropagation();
+          box.onchange = async () => {
+            const next = new Set(skillImplicitIds());
+            if (box.checked) next.add(item.id);
+            else next.delete(item.id);
+            const picked = [...next];
+            if (picked.length > 12) {
+              box.checked = false;
+              toast('对话技能最多 12 个：再多会把提示词撑爆。', 6000);
+              return;
+            }
+            try {
+              await window.companion.settings.set({ chatSkills: picked });
+              if (skillCatalogData) skillCatalogData.implicitSkillIds = picked;
+              void loadSkillCatalog();
+            } catch (error) {
+              box.checked = !box.checked;
+              toast(String(error?.message ?? error), 6000);
+            }
+          };
+          summary.append(box);
+        }
         // playbook 本来就没有 skill 目录（面板按钮直接生成），如实标注，不当成缺失报警。
         if (item.playbookOnly) {
           summary.append(el('span', 'skill-badge-playbook', 'playbook · 无 skill 目录'));

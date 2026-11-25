@@ -15,6 +15,7 @@ import {
   composeChatAnswer,
   createChatSessionFactory,
   createSkillTool,
+  parseSkillCommand,
   verifyChatCitations
 } from '../src/pi-chat.mjs';
 
@@ -304,19 +305,53 @@ const fakeSkills = () => ([
   { id: 'how', name: 'how', description: '这段代码怎么工作', path: '', origin: 'pstack' },
   { id: 'why', name: 'why', description: '为什么这么设计', path: '', origin: 'pstack' },
   { id: 'poteto-mode', name: 'poteto-mode', description: '分阶段交付工作流', path: '', origin: 'pstack' },
-  { id: 'tdd', name: 'tdd', description: '测试先行', path: '', origin: 'pstack' }
+  { id: 'tdd', name: 'tdd', description: '测试先行', path: '', origin: 'pstack' },
+  { id: 'to-spec', name: 'to-spec', description: '把想法写成规格', path: '', origin: 'engineering' }
 ]);
 
-test('技能索引：常用的详写，pstack 其余只列在「显式调用」里', () => {
+test('技能索引：隐式集合详写，其余一律只能显式调用（不分来源）', () => {
   const lines = buildSkillSection(fakeSkills()).join('\n');
-  // how / why 是 pstack 里唯一允许隐式的两个
   assert.match(lines, /^- how：/mu);
   assert.match(lines, /^- why：/mu);
-  // 其余 pstack 技能只能点名才能用
-  assert.match(lines, /只能显式调用（2 个/u);
-  assert.match(lines, /poteto-mode, tdd|tdd, poteto-mode/u);
-  // 显式调用那一段里不能再出现「可用」的措辞，避免模型误判
-  assert.doesNotMatch(lines, /- pstack: poteto-mode/u);
+  // 隐式之外的全部——包括 matt 来源的 to-spec——都只能点名
+  assert.match(lines, /只能显式调用（3 个/u);
+  assert.match(lines, /- pstack: poteto-mode, tdd/u);
+  assert.match(lines, /- engineering: to-spec/u);
+});
+
+test('隐式集合可配置：只详写配置里的那几个', () => {
+  const lines = buildSkillSection(fakeSkills(), ['how', 'to-spec']).join('\n');
+  assert.match(lines, /^- how：/mu);
+  assert.match(lines, /^- to-spec：/mu);
+  assert.doesNotMatch(lines, /^- why：/mu);
+  assert.match(lines, /只能显式调用（4 个/u);
+});
+
+test('/skill:id 解析：命中注入正文，写错报错并列出可用 id', async () => {
+  assert.deepEqual(parseSkillCommand('/skill:tdd 给支付加测试'), { id: 'tdd', question: '给支付加测试' });
+  assert.equal(parseSkillCommand('普通问题'), null);
+  assert.equal(parseSkillCommand('/skill:tdd'), null);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-fs-'));
+  const bodyFile = path.join(root, 'tdd', 'SKILL.md');
+  fs.mkdirSync(path.dirname(bodyFile), { recursive: true });
+  fs.writeFileSync(bodyFile, '---\nname: tdd\ndescription: x\n---\n\n# TDD\n\n先写失败测试。\n', 'utf8');
+  const skills = [{ id: 'tdd', name: 'tdd', description: '测试先行', path: bodyFile, origin: 'pstack' }];
+
+  const forced = buildChatPrompt({
+    project: { id: 'p', root }, question: '加测试', skills, forcedSkill: skills[0]
+  });
+  assert.match(forced, /【指定技能 tdd】/u);
+  assert.match(forced, /先写失败测试/u);
+  assert.doesNotMatch(forced, /只能显式调用/u);
+
+  // 写错 id：走服务层失败分支，不静默忽略
+  const service = new PiChatService({ model: 'fake/model', skills, sessionFactory: { create: async () => { throw new Error('should not create'); } } });
+  const failed = await service.ask({ project: { id: 'p', root }, question: '/skill:nope 加测试', model: 'fake/model' });
+  assert.equal(failed.status, 'error');
+  assert.equal(failed.category, 'unknown-skill');
+  assert.match(failed.answer, /没有这个技能：nope/u);
+  service.disposeAll();
 });
 
 test('只有 how 与 why 留在默认隐式集合里', () => {

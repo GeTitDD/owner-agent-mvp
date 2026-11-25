@@ -33,17 +33,38 @@ export const DEFAULT_SKILL_IDS = Object.freeze([
 ]);
 
 /**
- * 只有显式点名才用的技能（pstack 除 how / why 之外的全部）。
+ * 只有显式点名才用的技能：除隐式集合之外的全部。
  *
- * 为什么：pstack 里大量是「工作流」性质的技能（poteto-mode、swarm、arena…），
+ * 为什么：这些多是工作流性质的技能（poteto-mode、swarm、to-spec、pr…），
  * 它们自带阶段划分与产出物，模型自行判定「现在该走这套流程」几乎总是错的。
- * 索引里仍然列出来，但用法写成「Owner 点名时才用」。
  */
 export const EXPLICIT_ONLY_ORIGINS = Object.freeze(['pstack']);
 
 const skillCache = { at: 0, value: null };
 const SKILL_CACHE_MS = 60_000;
 const MAX_SKILL_BODY = 6000;
+
+/** 对话隐式技能上限：超过就把索引撑回五千 token。 */
+export const MAX_IMPLICIT_SKILLS = 12;
+
+/** 解析 `/skill:id 问题`；不是这个形状返回 null。 */
+export function parseSkillCommand(question) {
+  const text = String(question ?? '').trim();
+  const match = /^\/skill:([a-zA-Z0-9._:-]{1,80})\s+([\s\S]+)$/u.exec(text);
+  if (!match) return null;
+  return { id: match[1], question: match[2].trim() };
+}
+
+/** 读技能正文：去 front-matter，截断。读不到返回空串。 */
+export function readSkillBody(skillPath, maxChars = MAX_SKILL_BODY) {
+  try {
+    const raw = readFileSync(skillPath, 'utf8');
+    const body = raw.startsWith('---\n') ? raw.slice(raw.indexOf('\n---', 4) + 4).trim() : raw.trim();
+    return body.slice(0, maxChars);
+  } catch {
+    return '';
+  }
+}
 
 /**
  * 扫两处技能根，返回统一形状 `[{ id, name, description, path, origin }]`。
@@ -99,36 +120,38 @@ export function chatSkillCatalogue(options = {}) {
  * 提示词里的技能段：常用的详写，其余只列 id。
  * 全部 92 条都带描述约 5700 token，每轮都背不起；常用 8 条约 500 token。
  */
-export function buildSkillSection(skills = []) {
+export function buildSkillSection(skills = [], implicitIds = DEFAULT_SKILL_IDS) {
   if (!Array.isArray(skills) || skills.length === 0) return [];
+  const implicit = Array.isArray(implicitIds) && implicitIds.length ? implicitIds : DEFAULT_SKILL_IDS;
   const byId = new Map(skills.map((item) => [item.id, item]));
-  const common = DEFAULT_SKILL_IDS.map((id) => byId.get(id)).filter(Boolean);
-  const rest = skills.filter((item) => !DEFAULT_SKILL_IDS.includes(item.id));
-  const explicitOnly = rest.filter((item) => EXPLICIT_ONLY_ORIGINS.includes(item.origin));
-  const implicitRest = rest.filter((item) => !EXPLICIT_ONLY_ORIGINS.includes(item.origin));
+  const common = implicit.map((id) => byId.get(id)).filter(Boolean);
+  const rest = skills.filter((item) => !implicit.includes(item.id));
 
   const lines = ['', '可用技能（只读；需要全文时用 skill(id) 取）：'];
   for (const item of common) lines.push(`- ${item.id}：${String(item.description ?? '').slice(0, 160)}`);
 
-  if (implicitRest.length) {
+  // 除隐式集合之外的全部技能都只能点名：它们多是工作流技能，模型自判何时进入几乎总是错的。
+  if (rest.length) {
+    lines.push(`只能显式调用（${rest.length} 个，Owner 用 /skill:id 点名时才用，不要自行启动）：`);
     const byOrigin = new Map();
-    for (const item of implicitRest) {
+    for (const item of rest) {
       const key = item.origin || 'other';
       if (!byOrigin.has(key)) byOrigin.set(key, []);
       byOrigin.get(key).push(item.id);
     }
-    lines.push(`其余 ${implicitRest.length} 个（id 逗号分隔，同样可用）：`);
     for (const [origin, ids] of byOrigin) lines.push(`- ${origin}: ${ids.join(', ')}`);
-  }
-
-  // pstack 的工作流类技能只在点名时用：它们自带阶段划分，模型自己判定何时进入几乎总是错的。
-  if (explicitOnly.length) {
-    lines.push(`只能显式调用（${explicitOnly.length} 个，Owner 点名时才用，不要自行启动）：`);
-    lines.push(`- ${explicitOnly.map((item) => item.id).join(', ')}`);
   }
 
   lines.push('规则：先判断需不需要技能；需要时取一次全文，按它的步骤做，不要凭印象复述技能内容。');
   return lines;
+}
+
+/** 强制技能：只给这一个的全文，不列索引。 */
+export function buildForcedSkillSection(skill) {
+  if (!skill) return [];
+  const body = readSkillBody(skill.path);
+  if (!body) return ['', `【指定技能 ${skill.id}】正文读不到，按下面的问题直接回答即可。`];
+  return ['', `【指定技能 ${skill.id}】以下是它的说明，按它的步骤处理这次提问：`, body];
 }
 
 export const MAX_QUESTION = 1200;
@@ -142,6 +165,7 @@ export const CHAT_FAILURE_ADVICE = Object.freeze({
   'no-model': '还没有配置模型：先在设置里选一个模型（需要 Pi 登录或 API key），再回到对话提问。',
   'no-project': '还没有登记项目：先在设置里添加一个项目目录，对话才能读文件回答。',
   'empty-question': '请先输入问题。',
+  'unknown-skill': '没有这个技能：请检查 /skill: 后面的 id，或从技能目录里复制。',
   'question-too-long': `问题最多 ${MAX_QUESTION} 字。`,
   busy: '上一个问题还在处理中，等它答完再问。',
   'readonly-violation': '只读工具校验失败，已中止本次会话；这是客户端缺陷，请不要继续。',
@@ -155,7 +179,10 @@ export const CHAT_FAILURE_ADVICE = Object.freeze({
 });
 
 /** 组装对话提示词：只读边界 + 路径引用格式 + 本会话最近几轮上下文。 */
-export function buildChatPrompt({ project, question, history = [], skills = [] }) {
+export function buildChatPrompt({
+  project, question, history = [], skills = [],
+  implicitIds = DEFAULT_SKILL_IDS, forcedSkill = null
+}) {
   const root = String(project?.root ?? '');
   const id = String(project?.id ?? '');
   const value = String(question ?? '').trim().slice(0, MAX_QUESTION);
@@ -174,7 +201,7 @@ export function buildChatPrompt({ project, question, history = [], skills = [] }
   return [
     `你正在只读查看项目 ${id}（根目录 ${root}）。`,
     ...context,
-    ...buildSkillSection(skills),
+    ...(forcedSkill ? buildForcedSkillSection(forcedSkill) : buildSkillSection(skills, implicitIds)),
     `Owner 的问题：${value}`,
     '',
     '回答要求：',
@@ -439,6 +466,7 @@ export class PiChatService {
     timeoutMs = DEFAULT_TIMEOUT_MS,
     sessionFactory = null,
     skills = null,
+    implicitSkillIds = null,
     maxSessions = 2,
     logger = console
   } = {}) {
@@ -446,6 +474,11 @@ export class PiChatService {
     this.timeoutMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_TIMEOUT_MS;
     // 技能目录可注入：主进程只扫一次，测试不碰磁盘。
     this.skills = Array.isArray(skills) ? skills : null;
+    // 隐式集合来自配置；空/非法值退回默认七个，并保证不超过上限。
+    const wanted = Array.isArray(implicitSkillIds) && implicitSkillIds.length
+      ? implicitSkillIds
+      : DEFAULT_SKILL_IDS;
+    this.implicitIds = wanted.slice(0, MAX_IMPLICIT_SKILLS);
     this.sessionFactory = sessionFactory ?? createChatSessionFactory({ skills: this.skills });
     this.maxSessions = Math.max(1, Number(maxSessions) || 2);
     this.logger = logger;
@@ -504,7 +537,9 @@ export class PiChatService {
   async ask({ project = null, question = '', model = this.model, signal, sessionId = '', history = [] } = {}) {
     const began = Date.now();
     const projectId = String(project?.id ?? '');
-    const text = String(question ?? '').trim();
+    // /skill:id 的问题：id 单独解析，问题正文去掉前缀。
+    const command = parseSkillCommand(question);
+    const text = String(command ? command.question : (question ?? '')).trim();
 
     if (!project?.root) return this.failure({ projectId, category: 'no-project', began });
     if (!text) return this.failure({ projectId, category: 'empty-question', began });
@@ -514,6 +549,23 @@ export class PiChatService {
     const resolvedModel = String(model ?? '').trim();
     if (!resolvedModel) return this.failure({ projectId, category: 'no-model', began, model: resolvedModel });
     if (resolvedModel !== this.model) this.setModel(resolvedModel);
+
+    // 点名的技能必须存在：写错就报错并列可用 id，不静默忽略、也不模糊匹配。
+    let forcedSkill = null;
+    if (command) {
+      const catalogue = this.skills ?? chatSkillCatalogue();
+      forcedSkill = catalogue.find((item) => item.id === command.id) ?? null;
+      if (!forcedSkill) {
+        const available = this.implicitIds.join(', ');
+        return this.failure({
+          projectId,
+          category: 'unknown-skill',
+          began,
+          model: resolvedModel,
+          detail: `没有这个技能：${command.id}。可用：${available}`
+        });
+      }
+    }
 
     const root = path.resolve(project.root);
     // 每个持久化会话一个进程内 Pi 会话；同一个会话切换回来后仍能连续追问。
@@ -570,7 +622,9 @@ export class PiChatService {
           project: { id: projectId, root },
           question: text,
           history: freshSession ? history : [],
-          skills: this.skills ?? chatSkillCatalogue()
+          skills: this.skills ?? chatSkillCatalogue(),
+          implicitIds: this.implicitIds,
+          forcedSkill
         })),
         timedOut,
         canceled
@@ -595,12 +649,15 @@ export class PiChatService {
       }
       const { citations, missing } = verifyChatCitations(root, raw);
       const tools = this.sessions.get(key)?.tools ?? CHAT_TOOLS;
+      const answer = composeChatAnswer(raw, missing);
       return {
         status: 'ok',
         ok: true,
         projectId,
         sessionId: String(session.sessionId?.() ?? ''),
-        answer: composeChatAnswer(raw, missing),
+        // 点名的技能在末尾单独标一行：让 Owner 能核对它有没有照做。
+        answer: forcedSkill ? `${answer}\n\n技能：${forcedSkill.id}` : answer,
+        skill: forcedSkill?.id ?? '',
         rawAnswer: raw.trim().slice(0, MAX_ANSWER),
         citations,
         missingCitations: missing,
