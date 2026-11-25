@@ -28,11 +28,13 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   }),
   // #89 项目库：生成草稿与发布是两个显式动作；读取随 snapshot 一起回来。
   // #90 导出：发布时自动导出；这两个入口用于补导某一版与打开导出目录。
+  // #91 发布卡片：发布时发一条飞书文本卡片；「重新发送」只有人点才发，不自动重试。
   library: Object.freeze({
     draft: (input) => invoke('companion:library-draft', input),
     publish: (input) => invoke('companion:library-publish', input),
     export: (input) => invoke('companion:library-export', input),
-    openExport: (input) => invoke('companion:library-export-open', input)
+    openExport: (input) => invoke('companion:library-export-open', input),
+    resend: (input) => invoke('companion:library-resend', input)
   }),
   queue: Object.freeze({
     add: (input) => invoke('companion:queue-add', input),
