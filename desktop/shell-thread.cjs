@@ -55,6 +55,39 @@
   /** 一次发送 = 我的一条 + 一条占位回复。空输入返回原数组（渲染层据此不重画）。 */
   const sendTurn = (messages, text) => addPlaceholderReply(addUserMessage(messages, text), text);
 
+  /**
+   * 追加一条回复。回复形状固定为 `{ text?, blocks? }`：只有文字、只有块、
+   * 两者都有都合法；两样都没有就不产生消息（不画空气泡）。
+   * 块本身不在这里解释，原样带过去，由 shell-blocks 归一化后再画。
+   */
+  const addReply = (messages, reply) => {
+    if (!reply || typeof reply !== 'object') return messages;
+    const body = normalize(reply.text ?? '');
+    const blocks = Array.isArray(reply.blocks) ? [...reply.blocks] : [];
+    if (!body && blocks.length === 0) return messages;
+    const message = { role: 'agent', text: body };
+    if (blocks.length > 0) message.blocks = blocks;
+    return [...messages, message];
+  };
+
+  /**
+   * 记录回复里某个提问块的选择：返回新数组，旧帧不动。
+   * 记录挂在那条消息上（answers: { 块序号: 选择文案 }），重新渲染时
+   * 提问块据此收起按钮，不会出现「点过又冒出来」。
+   */
+  const answerBlock = (messages, messageIndex, blockIndex, label) => {
+    const value = normalize(label);
+    const target = messages[messageIndex];
+    if (!value || !Number.isInteger(messageIndex) || !Number.isInteger(blockIndex)) return messages;
+    if (target === undefined || blockIndex < 0) return messages;
+    const next = [...messages];
+    next[messageIndex] = {
+      ...target,
+      answers: { ...(target.answers ?? {}), [blockIndex]: value }
+    };
+    return next;
+  };
+
   /** 判断某条消息是不是占位回复；渲染与测试共用同一个口径。 */
   const isPlaceholder = (message) =>
     Boolean(message) && message.placeholder === true && message.source === PLACEHOLDER_SOURCE;
@@ -71,6 +104,8 @@
     addPlaceholderReply,
     placeholderText,
     sendTurn,
+    addReply,
+    answerBlock,
     isPlaceholder,
     draftAfterSend
   };
