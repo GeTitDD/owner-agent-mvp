@@ -2,7 +2,7 @@
 //
 // 进程内启动 Owner sidecar + 常驻 Worker；审批令牌只留在主进程。
 // 渲染进程（桌宠/面板）只能通过受控 IPC 读取视图模型与触发操作。
-const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, dialog, Notification, shell } =
+const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, dialog, Notification, shell, clipboard } =
   require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -110,10 +110,14 @@ let chatService = null;
 let chatSessionStore = null;
 // #89：项目库视图与快照存储。视图复用 src/project-library.mjs，快照落 owner 库的同一连接。
 let projectLibraryModule = null;
+// #107：全局模式的跨项目聚合（复用库视图口径，只读）。
+let globalLibraryModule = null;
 let snapshotModule = null;
 let snapshotStore = null;
 // #90：把已发布的快照导出到 <userData>/exports/<projectId>/vN/（只读快照，不重新聚合）。
 let exportModule = null;
+// #110：会话导出到 <userData>/conversations/<sessionId>.md；正文转换复用界面那份 shell-copy。
+let conversationExportModule = null;
 // #93：删除项目连带清理快照与导出目录；清单（plan）与执行分开，未确认不删。
 let projectDeletionModule = null;
 // #91：发布后发一条飞书文本卡片，投递结果记在单独的账本表上（快照本身不可变）。
@@ -334,6 +338,14 @@ async function startServices() {
   } catch (error) {
     console.error('project export module unavailable:', error.message);
     exportModule = null;
+  }
+  // #110：会话导出模块（纯转换 + 落盘）。不可用时只让「导出会话」报错，
+  // 复制与对话流本身不受影响。
+  try {
+    conversationExportModule = await importEsm('../src/conversation-exports.mjs');
+  } catch (error) {
+    console.error('conversation export module unavailable:', error.message);
+    conversationExportModule = null;
   }
   // #91：发布卡片。投递账本复用同一条连接；模块不可用时只影响「发卡片」这个动作，
   // 发布 / 导出照旧，面板会显示卡片未发送。
@@ -1272,6 +1284,11 @@ const knowledgeDetail = ({ id } = {}) => {
   const loadProjectLibrary = async () =>
     (projectLibraryModule ??= await importEsm('../src/project-library.mjs'));
 
+  // #107 全局模式的跨项目聚合：口径就是 projectLibraryView（每个项目先算一份库视图），
+  // 聚合只做去重与分节，所以按需加载，不在启动时增加加载项。
+  const loadGlobalLibrary = async () =>
+    (globalLibraryModule ??= await importEsm('../src/global-library.mjs'));
+
   // #92：版本 diff 是纯函数；按需加载，和库视图一样不在启动时增加加载项。
   const loadVersionDiff = async () =>
     (versionDiffModule ??= await importEsm('../src/project-version-diff.mjs'));
@@ -1408,6 +1425,25 @@ const knowledgeDetail = ({ id } = {}) => {
     // 面板每 2 秒轮询一次快照，groups 是全量条目，只给生成快照用，不随渲染下发。
     if (!full) delete payload.groups;
     return payload;
+  };
+
+  /**
+   * #107 全局模式：跨项目只读聚合。
+   * 先对每个已登记项目算一份与项目库完全相同的视图（libraryForProject），再交给
+   * src/global-library.mjs 去重、分节、按时间排序；不另写一套取数口径。
+   * 只在进入全局模式或点「刷新」时调用，不参与轮询。
+   */
+  const globalLibraryFor = async ({ limit = 5 } = {}) => {
+    if (!store) return null;
+    const cap = Number.isSafeInteger(Number(limit)) && Number(limit) > 0 ? Number(limit) : 5;
+    const libraries = [];
+    for (const project of store.listProjects()) {
+      // full: true 保留 groups（全量条目）：聚合要去重分节，读的是条目而不是截断后的 sections。
+      const library = await libraryForProject(project, { limit: cap, full: true });
+      if (library) libraries.push({ project: { id: project.id, name: project.name }, library });
+    }
+    const mod = await loadGlobalLibrary();
+    return mod.globalLibraryView({ libraries, limit: Math.max(cap, 8) });
   };
 
 
@@ -2956,6 +2992,31 @@ const registerIpc = () => {
     });
   });
 
+  // #107 项目胶囊的下拉项：只给壳需要的 id / 名字，不把项目整行递到渲染层。
+  ipcMain.handle('companion:card-projects', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return {
+      items: (store?.listProjects() ?? []).map((project) => ({ id: project.id, name: project.name }))
+    };
+  });
+
+  // #107 切「正在看的项目」：只改视图状态（会话绑定 / 历史归属不动）。
+  // 空 projectId = 切回全局。
+  ipcMain.handle('companion:card-session-view', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().setViewProject(
+      String(input?.id ?? ''),
+      String(input?.projectId ?? '')
+    );
+  });
+
+  // #107 全局模式的只读聚合：所有项目的库视图 → 去重分节后的一份视图。
+  // 口径复用 project-library.mjs（与进项目看到的同一套），这里只负责跨项目合并。
+  ipcMain.handle('companion:card-global-library', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return globalLibraryFor({ limit: Number(input?.limit ?? 5) });
+  });
+
   ipcMain.handle('companion:chat-session-append', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return requireChatSessions().appendMessage({
@@ -2964,6 +3025,29 @@ const registerIpc = () => {
       text: String(input?.text ?? ''),
       status: input?.status === 'error' ? 'error' : 'ok',
       citations: Array.isArray(input?.citations) ? input.citations : []
+    });
+  });
+
+  // #110 复制：渲染进程在 sandbox + contextIsolation 下不直接碰系统剪贴板，
+  // 统一由主进程写。写入失败原样抛回，界面据此给可见提示，不静默。
+  ipcMain.handle('companion:clipboard-write', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const text = String(input?.text ?? '');
+    if (!text) throw new Error('没有可复制的文本');
+    clipboard.writeText(text);
+    return { ok: true, length: text.length };
+  });
+
+  // #110 会话导出：<userData>/conversations/<sessionId>.md。
+  // 正文转换与界面同源（desktop/shell-copy.cjs），时间取会话自己的 startedAt，重复导出幂等。
+  ipcMain.handle('companion:conversation-export', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!conversationExportModule) throw new Error('会话导出模块尚未就绪，请重启后再试。');
+    return conversationExportModule.writeConversationExport({
+      root: app.getPath('userData'),
+      sessionId: String(input?.sessionId ?? ''),
+      context: input?.context,
+      messages: input?.messages
     });
   });
 

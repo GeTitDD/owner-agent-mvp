@@ -34,6 +34,14 @@
     const node = el('section', `block type-${model.type}`);
     node.dataset.block = model.type;
     node.dataset.blockIndex = String(model.index ?? 0);
+    // #110 悬停复制：按钮只声明「复制这个块」，点击与写剪贴板都由 shell.js 代理。
+    // 它跟着模型走，所以复制的是画这个块用的同一份结构，不是另抓一次 DOM。
+    // 文案放在 CSS 伪元素里，块自身的 textContent 不被按钮污染（#109 按文本断言）。
+    const copy = el('button', 'copy-affordance block-copy');
+    copy.type = 'button';
+    copy.dataset.copyBlock = '1';
+    copy.setAttribute('aria-label', '复制这个块为 Markdown');
+    node.append(copy);
     return node;
   };
 

@@ -11,15 +11,16 @@
 </head>
 <body>
   <div class="shell">
-    <!-- 顶栏只放状态位：#105 定了五个位置；#106 只把「会话」这一个位从占位换成入口
-         （胶囊 + 一个浮层），其余四位仍是占位。浮层里承载列表/搜索/新建/重命名/置顶/删除，
-         所以顶栏本身没有多出第二个按钮。 -->
+    <!-- 顶栏只放状态位：#105 定了五个位置。#106 把「会话」做成入口（胶囊 + 浮层），
+         #107 把「项目」也做成入口（全局 / 已登记项目 + 切换确认），写范围改由 gate 文案回答；
+         监控与导出仍是状态位，顶栏不变成第二个菜单。 -->
     <header class="top" id="shellHeader">
       <div class="session-entry">
         <button type="button" class="capsule" id="sessionToggle" data-slot="session"
                 aria-haspopup="dialog" aria-expanded="false" title="会话">
           <span class="slot-key">会话</span>
           <span class="slot-value" id="sessionLabel">还没有会话</span>
+          <span class="cross-mark" id="sessionCross" hidden>跨项目</span>
           <span class="caret" aria-hidden="true">▾</span>
         </button>
         <div class="sessions" id="sessionPopover" role="dialog" aria-label="会话列表" hidden>
@@ -37,13 +38,21 @@
           </div>
         </div>
       </div>
-      <span class="slot" data-slot="project">
-        <span class="slot-key">项目</span>
-        <span class="slot-value">占位</span>
-      </span>
+      <div class="project-entry">
+        <button type="button" class="capsule" id="projectToggle" data-slot="project"
+                aria-haspopup="dialog" aria-expanded="false" title="项目：不选就是全局（只读）">
+          <span class="slot-key">项目</span>
+          <span class="slot-value" id="projectLabel">全局</span>
+          <span class="caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="projects" id="projectPopover" role="dialog" aria-label="项目列表" hidden>
+          <p class="projects-hint" id="projectHint">不选项目就是全局：读所有项目的记忆，不写入任何项目。</p>
+          <ul class="projects-list" id="projectList"></ul>
+        </div>
+      </div>
       <span class="slot" data-slot="write">
         <span class="slot-key">写范围</span>
-        <span class="slot-value">占位</span>
+        <span class="slot-value" id="writeScope" data-scope="global">只读·全局</span>
       </span>
       <span class="slot" data-slot="monitor">
         <span class="slot-key">监控</span>
@@ -56,6 +65,20 @@
     </header>
 
     <main class="thread" id="thread">
+      <!-- #107 全局模式：跨项目聚合只读视图。选项目后隐藏，回到对话流本身。 -->
+      <section class="global-view" id="globalView" hidden aria-label="全局只读聚合">
+        <div class="global-head">
+          <span class="global-badge">只读</span>
+          <span class="global-title" id="globalTitle">全局 · 跨项目记忆</span>
+          <button type="button" class="global-refresh" id="globalRefresh">刷新</button>
+        </div>
+        <p class="global-hint" id="globalHint"></p>
+        <p class="global-counts" id="globalCounts"></p>
+        <p class="global-status" id="globalStatus" role="status"></p>
+        <ul class="global-projects" id="globalProjects"></ul>
+        <ul class="global-entries" id="globalEntries"></ul>
+        <p class="global-empty" id="globalEmpty" hidden></p>
+      </section>
       <p class="empty" id="emptyState">还没有会话。点顶栏的「会话」新建一个。</p>
       <ol class="messages" id="messages"></ol>
     </main>
@@ -65,14 +88,45 @@
       <textarea id="input" rows="1" placeholder="说点什么。回车发送，Shift+回车换行"></textarea>
       <button type="submit" class="send" id="send" disabled>发送</button>
     </form>
+
+    <!-- #110 导出会话：按钮放在输入框下面，不占顶栏。
+         顶栏本轮仍是状态位（#105 的口径），把「导出」做成操作是后续票的事。 -->
+    <div class="shell-actions">
+      <button type="button" class="export-button" id="exportConversation">导出 Markdown</button>
+      <span class="export-path" id="exportPath" hidden></span>
+    </div>
+
+    <!-- 复制/导出的可见回执：失败也走这里，不静默。 -->
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </div>
+
+  <!-- #107 切项目确认：四条后果固定写在弹窗里，两个出口并排；取消什么都不改。 -->
+  <div class="confirm-backdrop" id="projectConfirm" hidden>
+    <div class="confirm" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h2 id="confirmTitle">切换项目？</h2>
+      <p class="confirm-target" id="confirmTarget"></p>
+      <ul class="confirm-items" id="confirmItems"></ul>
+      <p class="confirm-hint">
+        「在本会话切换」保留历史归属、只改正在看与写入落点，会话会打「跨项目」标；
+        「新开会话并切换」让会话与项目一致，从零开始。
+      </p>
+      <div class="confirm-actions">
+        <button type="button" class="confirm-exit primary" id="confirmInSession">在本会话切换</button>
+        <button type="button" class="confirm-exit" id="confirmNewSession">新开会话并切换</button>
+        <button type="button" class="confirm-cancel" id="confirmCancel">取消</button>
+      </div>
+    </div>
   </div>
 
   <script src="./shell-thread.cjs"></script>
   <script src="./shell-sessions.cjs"></script>
+  <script src="./shell-projects.cjs"></script>
   <!-- #113 风险评级与确认卡：先于块渲染加载，块归一化要直接读它的纯函数。 -->
   <script src="./risk-card.cjs"></script>
   <script src="./shell-blocks.cjs"></script>
+  <script src="./shell-copy.cjs"></script>
   <script src="./shell-blocks-view.js"></script>
+  <script type="module" src="./card-scope-host.mjs"></script>
   <script src="./shell.js"></script>
 </body>
 </html>
