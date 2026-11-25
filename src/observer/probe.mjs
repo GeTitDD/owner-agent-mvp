@@ -154,3 +154,58 @@ export function probeProject({ projectId, projectName = '', root, gitBin = 'git'
     manifest: readManifest(root)
   };
 }
+
+/**
+ * 最近提交清单（只读）。
+ *
+ * 为什么要补：probeProject 只给 HEAD 与最后提交时间，回答不了「上次看过之后是哪几条提交」——
+ * 它只有一条时间点，没有逐条的 sha / 时间 / 标题。变化窗口需要清单才能逐条列给人看；
+ * 比较与分桶在 src/memory/change-window.mjs，这里只负责把 git 事实读出来。
+ * 与探针共用同一套固定参数向量、只读全局选项（--no-optional-locks）与超时，不另开一扇门。
+ *
+ * @param {{root:string, limit?:number, gitBin?:string}} options
+ * @returns {Array<{sha:string, author:string, at:string, subject:string}>|null}
+ *   读不到仓库（不是仓库、没有提交、git 失败）时返回 null —— 调用方据此标「未知」，
+ *   不能当成空清单，否则会把「读不到」显示成「没有变化」。
+ */
+export function readCommitList({ root, limit = 50, gitBin = 'git' } = {}) {
+  if (typeof root !== 'string' || !root.trim()) throw new ObserverProbeError('Invalid project root');
+  // 上限收在 200：面板只列最近几条，读太多只是让大仓库的主进程白等。
+  const count = Number.isSafeInteger(limit) && limit > 0 && limit <= 200 ? limit : 50;
+  const output = tryGit(gitBin, root, [
+    'log', `--max-count=${count}`, '--format=%H%x1f%an%x1f%aI%x1f%s'
+  ]);
+  if (output === null) return null;
+  return output
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => {
+      // %x1f 是 ASCII 单元分隔符：出现在提交标题里的概率远低于制表符或竖线。
+      const [sha = '', author = '', at = '', subject = ''] = line.split('\x1f');
+      return { sha, author, at, subject };
+    });
+}
+
+/**
+ * 未提交改动清单（文件路径 + 状态码，只读）。
+ *
+ * 为什么要补：probeProject 只给 uncommittedFiles 这个数量，回答不了「改了哪些文件」。
+ * 变化窗口的「未提交改动」是按文件列的，所以补一份清单；status 保留 git 的两位状态码，
+ * 目录/重命名行也原样给（change-window 只把 status 当徽章，空着也能显示路径）。
+ *
+ * @param {{root:string, gitBin?:string}} options
+ * @returns {Array<{status:string, path:string}>|null} 读不到仓库时返回 null
+ */
+export function readWorkingTreeChanges({ root, gitBin = 'git' } = {}) {
+  if (typeof root !== 'string' || !root.trim()) throw new ObserverProbeError('Invalid project root');
+  const output = tryGit(gitBin, root, ['status', '--porcelain=v1', '--untracked-files=all']);
+  if (output === null) return null;
+  return output
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => ({
+      // porcelain v1 的格式固定：前两位是状态，第三位是空格，之后是路径。
+      status: line.slice(0, 2).trim(),
+      path: line.slice(3).trim()
+    }));
+}

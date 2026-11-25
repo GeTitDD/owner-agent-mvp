@@ -2215,6 +2215,10 @@
         handoffProjectId = '';
         renderComposerTarget();
       }
+      // #84：视图项目变了才算「进入项目」——这时才重算差异并推进水位。
+      // 快照自己的 2 秒轮询不重算，否则差异会被下一次刷新吃掉。
+      const entryProjectId = String(view?.config?.projectId ?? '');
+      if (entryProjectId !== sinceSeenProjectId) void loadSinceSeen(entryProjectId);
       if (view?.knowledge?.projectId) knowledgeCache.set(view.knowledge.projectId, view.knowledge);
       // 知识数量变了就重读一次浏览列表，避免用户在别处提炼/确认后看到旧列表。
       const knowledgeSignature = JSON.stringify(view?.knowledge?.counts ?? {});
@@ -2671,6 +2675,7 @@
 
   $('openSettings').onclick = () => { void openSettings(); };
   $('kbRefresh').onclick = () => { void loadKnowledgeBrowse(); };
+  $('kbScanSessions').onclick = () => { void runSessionScan(); };
   $('skillRefresh').onclick = () => { void loadSkillCatalog({ refresh: true }); };
   $('mobileRefreshCode').onclick = () => { void renderMobileInfo(true); };
   $('closeSettings').onclick = () => { $('settings').hidden = true; };
@@ -3198,6 +3203,119 @@
     }
   };
 
+  // ---- 自上次看过（#84） ----
+  //
+  // 语义：进入项目时先算差异、再把水位推到当前（顺序在 src/memory/since-last-seen.mjs 里）。
+  // 因此这里只在「视图项目变了」时调用有副作用的 IPC；快照每 2 秒刷新一次，如果刷新也重算，
+  // 差异最多活 2 秒就被自己吃掉——那正是这个功能最典型的 bug。
+  // 形态判定（首次查看 / 三类全空压成一行）来自 window.OwnerSinceSeen，不在渲染里另写一套。
+  let sinceSeenProjectId = '';
+  let sinceSeenData = null;
+  let sinceSeenError = '';
+  let sinceSeenToken = 0;
+
+  /** 「上次看过」的时刻：当天只给时分，跨天补月/日，避免旧水位看起来像刚发生。 */
+  const fmtSeenMoment = (value) => {
+    const at = new Date(String(value ?? ''));
+    if (Number.isNaN(at.getTime())) return '';
+    const sameDay = at.toDateString() === new Date().toDateString();
+    return sameDay
+      ? fmtTime(value)
+      : `${at.getMonth() + 1}/${at.getDate()} ${fmtTime(value)}`;
+  };
+
+  const sinceSeenGroup = (group) => {
+    const box = el('div', 'since-seen-group');
+    const head = el('div', 'since-seen-group-head');
+    head.append(el('span', undefined, group.title));
+    head.append(el('span', 'count', `${group.count} 条`));
+    box.append(head);
+    const list = el('ul', 'since-seen-items');
+    for (const item of group.items) {
+      const row = el('li', 'since-seen-item');
+      row.append(el('span', 'since-seen-item-text', item.text));
+      const at = fmtSeenMoment(item.at);
+      if (at) row.append(el('span', 'since-seen-item-at', at));
+      list.append(row);
+    }
+    box.append(list);
+    if (group.more > 0) {
+      box.append(el('p', 'since-seen-more', `还有 ${group.more} 条，只列最近 ${group.items.length} 条。`));
+    }
+    return box;
+  };
+
+  /**
+   * 画「自上次看过」。
+   * - 数据只画当前视图项目的那一份：换项目时旧结论立刻收掉，不把 A 的差异留在 B 上；
+   * - 首次查看 / 算不全 / 三类全空 三种文案由 sinceSeenSection 决定，这里只填 DOM；
+   * - 三类全空时给整段加 .compact，CSS 去掉外框与标题，只留一行，不占一块卡片。
+   */
+  const renderSinceSeen = () => {
+    const holder = $('sinceLastSeen');
+    if (!holder) return;
+    const project = workspaceProject();
+    const projectId = project?.id ?? '';
+    const model = window.OwnerSinceSeen;
+    holder.classList.remove('compact');
+    const hide = () => {
+      holder.hidden = true;
+      $('sinceSeenGroups').replaceChildren();
+    };
+    if (!projectId || projectId !== sinceSeenProjectId) { hide(); return; }
+    if (sinceSeenError) {
+      holder.hidden = false;
+      $('sinceSeenTitle').textContent = '自上次看过';
+      $('sinceSeenMeta').textContent = '';
+      $('sinceSeenLine').hidden = true;
+      $('sinceSeenNote').hidden = false;
+      $('sinceSeenNote').textContent = `这次没能算出变化窗口：${sinceSeenError}`;
+      $('sinceSeenGroups').replaceChildren();
+      return;
+    }
+    // 还在读取或模块尚未就绪：先收起，等结果 / ready 事件补画，不画半截。
+    if (!sinceSeenData || !model?.sinceSeenSection) { hide(); return; }
+    const section = model.sinceSeenSection(sinceSeenData);
+    holder.hidden = false;
+    holder.classList.toggle('compact', section.compressed);
+    $('sinceSeenTitle').textContent = section.headline;
+    $('sinceSeenMeta').textContent = section.firstView
+      ? '从这次开始记'
+      : (section.since ? `上次看过 ${fmtSeenMoment(section.since)}` : '');
+    const line = $('sinceSeenLine');
+    line.textContent = section.compressed ? section.compactLine : section.line;
+    line.hidden = !line.textContent;
+    const note = $('sinceSeenNote');
+    note.textContent = section.note;
+    note.hidden = !section.note;
+    $('sinceSeenGroups').replaceChildren(...section.groups.map(sinceSeenGroup));
+  };
+
+  /**
+   * 读一次「自上次看过」：这个 IPC 会推进水位，所以只有「进入项目」才调用。
+   * 请求期间换了项目就丢掉旧结果（token），不让 A 的差异画到 B 上。
+   */
+  const loadSinceSeen = async (projectId) => {
+    const id = String(projectId ?? '');
+    const token = (sinceSeenToken += 1);
+    sinceSeenProjectId = id;
+    sinceSeenData = null;
+    sinceSeenError = '';
+    renderSinceSeen();
+    if (!id) return;
+    try {
+      const data = await window.companion.sinceLastSeen({ projectId: id });
+      if (token !== sinceSeenToken) return;
+      sinceSeenData = data;
+    } catch (error) {
+      if (token !== sinceSeenToken) return;
+      sinceSeenError = String(error?.message ?? error)
+        .replace(/^Error invoking remote method '[^']+':\s*/, '');
+    }
+    if (token !== sinceSeenToken) return;
+    renderSinceSeen();
+  };
+
   // ---- 三种视图模式：专注（A） / 待办（B） / 对话（C） ----
   // ---- 知识模式：浏览与筛选（只读本地 SQLite） ----
 
@@ -3399,6 +3517,84 @@
     }
   };
 
+  // ---- 会话扫描（#86）：显式动作，结果只在本面板显示，扫描本身不写库 ----
+
+  let sessionScanResult = null;
+
+  // 计数先写清楚（扫了多少 / 匹配上多少 / 丢了多少），再看候选：
+  // 第一次扫出 0 条时要能从这几项里看出「扫了但没命中」，而不是「像坏了」。
+  const renderSessionScan = () => {
+    const data = sessionScanResult;
+    if (!data) return;
+    const box = $('kbScan');
+    box.hidden = false;
+    const counts = data.counts ?? {};
+    $('kbScanSummary').textContent = [
+      `扫了 ${counts.files ?? 0} 段会话`,
+      `匹配 ${counts.matched ?? 0} 段`,
+      `已扫过 ${counts.alreadyScanned ?? 0} 段`,
+      `丢弃 ${counts.dropped ?? 0} 段`,
+      `候选 ${counts.candidates ?? 0} 条`
+    ].join(' · ');
+
+    const reasons = $('kbScanReasons');
+    const parts = (data.droppedReasons ?? []).map((reason) => `${reason.label} ${reason.count} 段`);
+    if (data.truncated) parts.push(`超出本次上限未扫 ${data.truncated} 段`);
+    reasons.textContent = parts.length ? `丢弃原因：${parts.join(' · ')}` : '没有丢弃的会话。';
+    reasons.hidden = false;
+
+    const list = $('kbScanCandidates');
+    list.replaceChildren();
+    const shown = Array.isArray(data.candidates) ? data.candidates : [];
+    if (!shown.length) {
+      // 0 条候选的两种原因分开说，免得看起来像扫描没跑。
+      list.append(el('p', 'kb-scan-empty', counts.matched
+        ? '这段会话里没有像取舍的用户原话：提问、工具输出和注入的环境上下文都不算候选。'
+        : '没有会话匹配到已登记的项目：只有工作目录正好是项目根或在其子目录下才算命中。'));
+    } else {
+      for (const candidate of shown.slice(0, 8)) {
+        const row = el('div', 'kb-scan-item');
+        row.append(el('span', 'kb-scan-quote', candidate.quote?.user || candidate.phenomenon || '（无原话）'));
+        const meta = [
+          candidate.projectName || projectLabel(candidate.projectId),
+          candidate.source === 'codex' ? 'Codex' : 'Claude Code',
+          candidate.partial ? '只有用户原话' : '成对',
+          candidate.missingReason ? '缺理由' : ''
+        ].filter(Boolean).join(' · ');
+        row.append(el('span', 'kb-scan-item-meta', meta));
+        list.append(row);
+      }
+      if ((counts.candidates ?? 0) > shown.length) {
+        list.append(el('p', 'kb-scan-more', `共 ${counts.candidates} 条候选，这里只列前 ${shown.length} 条。`));
+      }
+    }
+    // e2e 直接读这几个属性，不用解析中文文案。
+    box.dataset.files = String(counts.files ?? 0);
+    box.dataset.matched = String(counts.matched ?? 0);
+    box.dataset.dropped = String(counts.dropped ?? 0);
+    box.dataset.candidates = String(counts.candidates ?? 0);
+  };
+
+  const runSessionScan = async () => {
+    const button = $('kbScanSessions');
+    if (button.disabled) return;
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = '扫描中…';
+    try {
+      sessionScanResult = await window.companion.memory.scanSessions();
+      renderSessionScan();
+      const counts = sessionScanResult?.counts ?? {};
+      toast(`扫描完成：匹配 ${counts.matched ?? 0} 段会话，候选 ${counts.candidates ?? 0} 条`, 4000);
+    } catch (error) {
+      // 失败不动已有数据：上一次的结果留在屏幕上。
+      toast(String(error?.message ?? error), 6000);
+    } finally {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  };
+
   // ---- 技能目录：三处来源合并的只读列表 ----
 
   let skillCatalogData = null;
@@ -3579,6 +3775,7 @@
     renderWorkProjectBar();
     renderWorkEntries();
     renderLibrary();
+    renderSinceSeen();
   };
 
   // ---- 对话：会话持久化（按项目分组、切换、重命名、删除） ----
@@ -4150,6 +4347,12 @@
   // 模块脚本晚于本脚本执行，就绪时补画一次，不用等下一次 2 秒轮询。
   window.addEventListener('owner-focus-ops-ready', () => {
     if (panelMode === 'focus') renderOps();
+  });
+
+  // 「自上次看过」的形态判定也是 ESM（src/memory/since-last-seen.mjs），
+  // 就绪前已算好的数据在这里补画一次，不用等下一次进入项目。
+  window.addEventListener('owner-since-seen-ready', () => {
+    if (panelMode === 'focus') renderSinceSeen();
   });
 
   void refresh().then(() => {

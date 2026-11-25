@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { rm } from 'node:fs/promises';
-import { probeProject } from '../src/observer/probe.mjs';
+import { probeProject, readCommitList, readWorkingTreeChanges } from '../src/observer/probe.mjs';
 import { git, makeRepo, makeTempDir, statusText, treeDigest, writeFiles } from './helpers/observer-fixture.mjs';
 
 const withDir = async (fn) => {
@@ -131,4 +131,45 @@ test('探针在多包仓库上不崩溃', () => withDir(async (dir) => {
   assert.equal(snapshot.hasCommits, true);
   assert.equal(snapshot.uncommittedFiles, 0);
   assert.equal(snapshot.manifest.isWorkspace, true);
+}));
+
+// ---- #84：变化窗口需要的两份清单（probeProject 只有计数与最后提交时间，回答不了「哪几条 / 哪些文件」）----
+
+test('#84 提交清单：逐条给 sha / 作者 / 时间 / 标题，最新在前', () => withDir(async (dir) => {
+  const root = makeRepo({ root: path.join(dir, 'commits'), commitAt: '2026-11-20T09:00:00+08:00' });
+  fs.writeFileSync(path.join(root, 'a'), 'second\n');
+  git(root, ['add', '-A']);
+  git(root, ['commit', '-q', '-m', '第二条提交'], { GIT_AUTHOR_DATE: '2026-11-21T10:00:00+08:00', GIT_COMMITTER_DATE: '2026-11-21T10:00:00+08:00' });
+
+  const commits = readCommitList({ root });
+
+  assert.equal(commits.length, 2);
+  assert.equal(commits[0].subject, '第二条提交');
+  assert.equal(commits[0].at, '2026-11-21T10:00:00+08:00');
+  assert.match(commits[0].sha, /^[0-9a-f]{40}$/);
+  assert.equal(commits[0].author, 'Observer Test');
+  assert.equal(commits[1].subject, 'init');
+  // 只读：读清单不改仓库。
+  assert.equal(statusText(root), '');
+}));
+
+test('#84 提交清单读不到时返回 null（无提交历史 / 目录不存在），不返回空清单', () => withDir(async (dir) => {
+  const unborn = path.join(dir, 'unborn');
+  fs.mkdirSync(unborn, { recursive: true });
+  git(unborn, ['init', '-q', '-b', 'main']);
+  assert.equal(readCommitList({ root: unborn }), null);
+  // 目录不存在时 git 直接失败：同样按「读不到」而不是「没有提交」处理。
+  assert.equal(readCommitList({ root: path.join(dir, 'missing-repo') }), null);
+}));
+
+test('#84 未提交改动清单：按文件给状态码与路径，读不到时返回 null', () => withDir(async (dir) => {
+  const root = makeRepo({ root: path.join(dir, 'working'), commitAt: '2026-11-20T09:00:00+08:00' });
+  fs.writeFileSync(path.join(root, 'a'), 'changed\n');
+  writeFiles(root, { 'src/new-file.txt': 'untracked\n' });
+
+  const changes = readWorkingTreeChanges({ root });
+
+  assert.deepEqual(changes.map((item) => item.path).sort(), ['a', 'src/new-file.txt']);
+  assert.deepEqual(changes.map((item) => item.status).sort(), ['??', 'M']);
+  assert.equal(readWorkingTreeChanges({ root: path.join(dir, 'missing-worktree') }), null);
 }));
