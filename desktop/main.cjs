@@ -94,6 +94,8 @@ let knowledgeTidyModule = null;
 let diagramModule = null;
 let executionStatusModule = null;
 let ideaCaptureModule = null;
+// #96 整理要访问外网：验收机用假的抓取器，真实环境才走网络（见 ideaFetchForAcceptance）。
+let ideaSortModule = null;
 // #86 会话扫描：模块按需加载；扫描是显式动作，不在启动或轮询里调用。
 let sessionScanModule = null;
 // #87 决策确认：候选确认入库与状态流转；同样按需加载。
@@ -234,6 +236,18 @@ const resolveDigest = (imageRef = 'node:22-alpine') => {
   }
   digestCache.set(imageRef, digest);
   return digest;
+};
+
+/**
+ * 视觉验收用的假抓取：验收机不该为了截图去访问外网。
+ * 只由 OWNER_COMPANION_FAKE_SORT=1 打开，页面按地址预置；守卫、限时、限大小、四段整理
+ * 全走真路径，换掉的只是最外面这一层 fetch —— 与 OWNER_COMPANION_FAKE_SOURCE 同一思路。
+ */
+const ideaFetchForAcceptance = async () => {
+  if (process.env.OWNER_COMPANION_FAKE_SORT !== '1') return { fetch: null, resolve: null };
+  const mod = (ideaSortModule ??= await importEsm('../src/idea-sort.mjs'));
+  const fake = mod.fakeIdeaFetch();
+  return { fetch: fake.fetch, resolve: fake.resolve };
 };
 
 const fakeSourceAgent = async () => {
@@ -377,12 +391,15 @@ async function startServices() {
   });
   readToken = resolveSidecarToken({ dbPath: file });
   approvalToken = resolveApprovalToken({ dbPath: file });
+  const ideaFetcher = await ideaFetchForAcceptance();
   sidecar = await startSidecar({
     store,
     brokerFactory: () => broker,
     worker,
     token: readToken,
     approvalToken,
+    ideaFetch: ideaFetcher.fetch,
+    ideaResolve: ideaFetcher.resolve,
     imageDigest: resolveDigest(),
     sandboxRoot: path.join(app.getPath('userData'), 'sandbox'),
     port: 0,
@@ -437,7 +454,7 @@ async function startServices() {
   }
 }
 
-const api = async (route, { method = 'GET', body, decision = false } = {}) => {
+const api = async (route, { method = 'GET', body, decision = false, timeoutMs = 8000 } = {}) => {
   const headers = { authorization: `Bearer ${readToken}` };
   if (decision) headers['x-owner-approval-token'] = approvalToken;
   if (method !== 'GET') {
@@ -452,7 +469,7 @@ const api = async (route, { method = 'GET', body, decision = false } = {}) => {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(8000)
+    signal: AbortSignal.timeout(timeoutMs)
   });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
@@ -2952,6 +2969,19 @@ const registerIpc = () => {
     return api(`/owner/v1/ideas/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: { status: String(input?.status ?? '') }
+    });
+  });
+
+  // #96 整理：有条目链接时抓一次公网正文，写出四段；抓不到就把原因给面板，条目不动。
+  // 抓取本身限时 5 秒，加上读正文的余量，这一条的状态超时给到 20 秒。
+  ipcMain.handle('companion:idea-sort', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const id = String(input?.id ?? '');
+    if (!id) throw new Error('Missing idea id');
+    return api(`/owner/v1/ideas/${encodeURIComponent(id)}/sort`, {
+      method: 'POST',
+      body: {},
+      timeoutMs: 20000
     });
   });
 

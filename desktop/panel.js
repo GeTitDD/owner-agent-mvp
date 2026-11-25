@@ -213,6 +213,61 @@
     }
   };
 
+  /**
+   * #96 整理：有条目链接就抓一次公网正文，写成四段；抓不到就把原因说清楚。
+   * 抓取失败时存储层一个字都不改，所以条目还在收件箱，再点一次就是重试。
+   * 已整理的条目点的是「重新整理」：走同一接口，但正文已缓存，不会再请求网络。
+   */
+  const sortIdea = async (id, button, again = false) => {
+    if (button?.disabled) return;
+    if (button) {
+      button.disabled = true;
+      button.textContent = '整理中…';
+    }
+    try {
+      const result = await window.companion.ideas.sort({ id });
+      await refresh();
+      const sorted = result?.item?.sorted ?? null;
+      const missing = Array.isArray(sorted?.missing) ? sorted.missing.length : 0;
+      const head = result?.cached
+        ? '整理好了（正文是上次抓的，这次没再请求）'
+        : '整理好了';
+      toast(missing ? `${head}；缺 ${missing} 段，已在条目里标出` : `${head}：四段齐全`, 4800);
+    } catch (error) {
+      toast(`${cleanIpcError(error?.message ?? error)}　条目没改动，可以再点一次重试。`, 7000);
+      await refresh();
+    } finally {
+      if (button?.isConnected) {
+        button.disabled = false;
+        button.textContent = again ? '重新整理' : '整理';
+      }
+    }
+  };
+
+  /** 四段一行一段：缺的那段直接写「缺」与原因，不空着让人误以为没问题。 */
+  const ideaSortedBlock = (sorted) => {
+    const box = el('div', 'idea-sorted');
+    for (const section of sorted.sections) {
+      const line = el('div', 'idea-section');
+      line.dataset.section = section.key;
+      line.dataset.missing = section.missing ? 'true' : 'false';
+      line.append(el('span', 'idea-section-label', section.label));
+      line.append(el(
+        'span',
+        section.missing ? 'idea-section-missing' : 'idea-section-text',
+        section.missing ? `缺：${section.reason || '这一段没有内容'}` : section.text
+      ));
+      box.append(line);
+    }
+    let host = '';
+    try { host = new URL(sorted.fetch?.url ?? '').hostname; } catch { host = ''; }
+    // 抓取次数是缓存证据：同一条链接第二次整理仍然是 1 次，说明没有再发请求。
+    box.append(el('div', 'idea-sorted-meta', sorted.fetch
+      ? `抓取 ${host}：${sorted.fetch.status} · ${(sorted.fetch.bytes / 1024).toFixed(1)} KB · 抓取 ${sorted.fetch.attempts} 次`
+      : '没有链接：四段只看原文'));
+    return box;
+  };
+
   const ideaRow = (item) => {
     const row = el('div', 'queue-item');
     row.dataset.id = item.id;
@@ -238,6 +293,23 @@
     }
     main.append(title, meta);
     const actions = el('div', 'queue-actions');
+    // #96 整理按钮放在最前：收件箱里的条目先整理，再决定采纳还是丢弃。
+    // 已整理的条目留一个「重新整理」：正文已在条目上缓存，重排不会再发请求。
+    if (item.status === 'inbox' || item.status === 'sorted') {
+      const again = item.status === 'sorted';
+      const sortButton = el('button', 'queue-action', again
+        ? '重新整理'
+        : (item.source === 'link' ? '整理链接' : '整理'));
+      sortButton.type = 'button';
+      sortButton.dataset.sort = 'true';
+      sortButton.title = again
+        ? '用上次抓到的正文重写四段，不会再请求网络'
+        : (item.source === 'link'
+          ? '抓一次这条链接的公网正文，写成「问题 / 想法 / 预期收益 / 风险」四段'
+          : '把原文整理成四段');
+      sortButton.onclick = () => { void sortIdea(item.id, sortButton, again); };
+      actions.append(sortButton);
+    }
     const addAction = (status, className = 'queue-action') => {
       const text = IDEA_ACTION_TEXT[status];
       const button = el('button', className, text.label);
@@ -258,6 +330,8 @@
       addAction('discarded', 'queue-action danger');
     }
     row.append(dot, main, actions);
+    // 整理结果整段铺在条目下方（跨三列），原文仍挂在 title 上可对照。
+    if (item.sorted?.sections?.length) row.append(ideaSortedBlock(item.sorted));
     return row;
   };
 

@@ -16,6 +16,7 @@ import { execFileSync } from 'node:child_process';
 import { OwnerInputError } from './owner-store.mjs';
 import { ideaInboxView } from './idea-inbox.mjs';
 import { parseIdeaCapture } from './idea-entry.mjs';
+import { sortIdeaEntry } from './idea-sort.mjs';
 import { applyApprovedPatch } from './patch-service.mjs';
 import { approveRepairCycle, submitRepairCycle } from './repair-service.mjs';
 import { approveSandboxRun, submitSandboxRun } from './sandbox-service.mjs';
@@ -284,7 +285,8 @@ const isDecisionRoute = (rest, method) => {
  *
  * @param {{store: object, brokerFactory: () => object, token: string,
  *          approvalToken?: string|null, version?: string, imageDigest?: string,
- *          sandboxRoot?: string, getExpectedPort?: () => number|null}} options
+ *          sandboxRoot?: string, getExpectedPort?: () => number|null,
+ *          ideaFetch?: Function|null, ideaResolve?: Function|null}} options
  */
 export function createSidecarHandler({
   store,
@@ -295,7 +297,10 @@ export function createSidecarHandler({
   version = '1.0.0',
   imageDigest = '',
   sandboxRoot = '',
-  getExpectedPort = () => null
+  getExpectedPort = () => null,
+  // #96 整理要访问外网：抓取器与 DNS 解析从这里注入，缺省用真实网络。
+  ideaFetch = null,
+  ideaResolve = null
 } = {}) {
   if (!store) throw new Error('store is required');
   if (typeof brokerFactory !== 'function') throw new Error('brokerFactory is required');
@@ -550,6 +555,27 @@ export function createSidecarHandler({
       requireMethod(method, 'PATCH');
       const body = await readJson(req);
       send(res, 200, store.setIdeaStatus(rest[1], str(body.status, 'status', 20)));
+      return;
+    }
+
+    // #96 整理：有条目链接时抓一次公网正文，写出「问题 / 想法 / 预期收益 / 风险」四段。
+    // 抓取结果缓存进条目本身，二次整理不再发请求；抓不到就 400 + 原因，条目一个字不改。
+    if (rest.length === 3 && head === 'ideas' && rest[2] === 'sort') {
+      requireMethod(method, 'POST');
+      const result = await sortIdeaEntry({
+        store,
+        id: rest[1],
+        fetchImpl: ideaFetch,
+        resolveHost: ideaResolve
+      });
+      if (!result.ok) {
+        throw new OwnerInputError(result.reason, result.code === 'missing' ? 404 : 400);
+      }
+      send(res, 200, {
+        item: result.item,
+        cached: result.cached,
+        attempts: result.attempts
+      });
       return;
     }
 
@@ -894,7 +920,9 @@ export async function startSidecar({
   port = SIDECAR_DEFAULT_PORT,
   version = '1.0.0',
   imageDigest = '',
-  sandboxRoot = ''
+  sandboxRoot = '',
+  ideaFetch = null,
+  ideaResolve = null
 } = {}) {
   if (host !== '127.0.0.1') throw new OwnerInputError('Sidecar may only bind to 127.0.0.1');
   const state = { port: 0 };
@@ -907,6 +935,8 @@ export async function startSidecar({
     version,
     imageDigest,
     sandboxRoot,
+    ideaFetch,
+    ideaResolve,
     getExpectedPort: () => state.port || null
   });
   const server = http.createServer(handler);
