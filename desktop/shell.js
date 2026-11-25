@@ -1,14 +1,20 @@
-// #106 会话入口：顶栏胶囊 + 会话列表 + 每会话一条对话流。
+// 卡片壳的渲染层：#106 的会话入口 + #109 的块渲染。
 //
-// 分层与 #105 一致：纯规则在 shell-thread.cjs（消息与占位回复）和 shell-sessions.cjs
-// （排序 / 搜索 / 空态 / 删除落点）里，这里只做 DOM、IPC 和刷新时序。
-// 持久化走主进程的 owner_chat_sessions（src/chat-sessions.mjs）：会话、置顶、软删除，
-// 连「当前选的是哪条」也落在会话行的 last_opened_at 上，重启后回到同一条。
+// 分层：
+// - shell-thread.cjs：消息流规则（能不能发、占位回复、块与回答的挂载）；
+// - shell-sessions.cjs：会话列表规则（排序 / 搜索 / 空态 / 删除落点）；
+// - shell-blocks.cjs / shell-blocks-view.js：块自身的归一化与绘制。
+// 这里只做 DOM、IPC 与刷新时序。持久化走主进程的 owner_chat_sessions：
+// 会话、置顶、软删除、当前选择（last_opened_at）都在库里，重启后原样回来。
 (() => {
   const threadApi = window.OwnerShellThread;
   const listApi = window.OwnerShellSessions;
+  const blocksApi = window.OwnerShellBlocks;
+  const blocksView = window.OwnerShellBlocksView;
   if (!threadApi) throw new Error('shell-thread.cjs 未加载');
   if (!listApi) throw new Error('shell-sessions.cjs 未加载');
+  if (!blocksApi) throw new Error('shell-blocks.cjs 未加载');
+  if (!blocksView) throw new Error('shell-blocks-view.js 未加载');
 
   const store = window.companion?.cardSessions ?? null;
 
@@ -56,17 +62,25 @@
 
   // ── 对话流 ────────────────────────────────────────────────────────
 
-  /** 一条消息：谁说的 + 气泡；占位回复额外挂一个常驻徽章。 */
-  const renderMessage = (message) => {
+  /**
+   * 一条消息：谁说的 + 文字气泡 + 块。
+   * 气泡只在有文字时画（只有块的回复不该多一个空气泡）；
+   * 块由 view 挂在同一个 li 里，所以块是长在对话流里的，不是另一个容器。
+   */
+  const renderMessage = (message, index) => {
     const item = el('li', `msg ${message.role === 'user' ? 'user' : 'agent'}`);
     item.dataset.role = message.role;
+    // 块内按钮的点击要能找回「哪条消息的哪个提问块」，序号跟着消息走。
+    item.dataset.index = String(index);
     if (message.role === 'agent' && threadApi.isPlaceholder(message)) {
       item.classList.add('is-placeholder');
       item.dataset.placeholder = 'true';
     }
     const who = el('span', 'who', message.role === 'user' ? '我' : 'Companion');
     if (item.dataset.placeholder === 'true') who.append(el('span', 'badge', threadApi.PLACEHOLDER_PREFIX));
-    item.append(who, el('p', 'bubble', message.text));
+    item.append(who);
+    if (message.text) item.append(el('p', 'bubble', message.text));
+    item.append(blocksView.renderReply(message));
     return item;
   };
 
@@ -247,6 +261,15 @@
     messages = threadApi.fromStored(detail?.messages);
   };
 
+  /** 发完一条消息之后要刷的几件事：列表（标题/轮数/排序）、当前流、输入框。 */
+  const refreshThread = async () => {
+    await loadSessions();
+    await loadMessages();
+    renderThread();
+    syncComposer();
+    renderSessions();
+  };
+
   /**
    * 切换当前会话：记住它（last_opened_at），再把这一条的消息读回来。
    * boot 时不写 last_opened_at——启动只是「回到上次那条」，不是一次新的选择。
@@ -267,7 +290,7 @@
     renderSessions();
   };
 
-  // ── 动作：新建 / 切换 / 重命名 / 置顶 / 删除 / 找回 ────────────────
+  // ── 动作：新建 / 切换 / 重命名 / 置顶 / 删除 / 找回 / 发送 / 回答 ──
 
   const report = async (label, action) => {
     try {
@@ -330,24 +353,72 @@
 
   const send = () => report('发送', async () => {
     if (busy || !listApi.canCompose(currentId)) return;
-    const text = input.value;
-    if (!threadApi.canSend(text)) return;
+    const raw = input.value;
+    if (!threadApi.canSend(raw)) return;
+    // 这一版仍然没有真模型：普通输入回一条占位回复，/blocks 回一条脚本化样本。
+    // 两者都按普通消息落库，所以切走再回来看到的是同一条流。
+    const reply = blocksApi.isSampleCommand(raw)
+      ? blocksApi.sampleReply()
+      : { text: threadApi.placeholderText(raw), blocks: [] };
     busy = true;
     try {
-      // 这一版仍然只有占位回复：问题与占位回复都落库，切回来还能看到同一条流。
-      await store.append({ id: currentId, role: 'user', text });
-      await store.append({ id: currentId, role: 'assistant', text: threadApi.placeholderText(text) });
+      await store.append({ id: currentId, role: 'user', text: raw });
+      await store.append({
+        id: currentId,
+        role: 'assistant',
+        text: reply.text ?? '',
+        blocks: Array.isArray(reply.blocks) ? reply.blocks : []
+      });
       input.value = threadApi.draftAfterSend();
       resizeInput();
-      await loadSessions();
-      await loadMessages();
-      renderThread();
-      syncComposer();
-      renderSessions();
+      await refreshThread();
       input.focus();
     } finally {
       busy = false;
     }
+  });
+
+  /**
+   * 提问块按钮的唯一落点。按钮只声明「选了什么」（data-ask-*），
+   * 这里用纯函数算出下一轮，再按两条普通消息落库：提问块不在块里执行动作。
+   */
+  const answerAsk = (button) => report('回答', async () => {
+    if (!listApi.canCompose(currentId)) return;
+    const askNode = button.closest('[data-block="ask"]');
+    const item = button.closest('.msg');
+    if (!askNode || !item) return;
+    const question = askNode.dataset.askQuestion ?? '';
+    const blockIndex = Number(askNode.dataset.blockIndex ?? -1);
+    const messageIndex = Number(item.dataset.index);
+    const target = messages[messageIndex];
+    // 同一个提问块只回答一次：旧节点若被重复点到，不再追加第二轮。
+    if (!target || target.answers?.[blockIndex] !== undefined) return;
+    let action = null;
+    if (button.dataset.askChoice !== undefined) {
+      action = blocksApi.askAction({ question, kind: 'option', value: button.dataset.askChoice });
+    } else if (button.dataset.askSkip !== undefined) {
+      action = blocksApi.askAction({ question, kind: 'skip' });
+    } else if (button.dataset.askFreeSubmit !== undefined) {
+      const field = askNode.querySelector('[data-ask-free]');
+      action = blocksApi.askAction({ question, kind: 'free', value: field?.value ?? '' });
+    }
+    // 自由回答为空：不改流，也不假装收到。
+    if (!action) return;
+    // 先记「这一块已经答过」，重画之后按钮不会再冒出来；再追加我问的一句与一条回复。
+    const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, action.answeredLabel);
+    const answers = answered[messageIndex]?.answers ?? {};
+    if (Number.isInteger(target.seq)) {
+      await store.answers({ id: currentId, seq: target.seq, answers });
+    }
+    await store.append({ id: currentId, role: 'user', text: action.userText });
+    await store.append({
+      id: currentId,
+      role: 'assistant',
+      text: action.reply?.text ?? '',
+      blocks: Array.isArray(action.reply?.blocks) ? action.reply.blocks : []
+    });
+    await refreshThread();
+    input.focus();
   });
 
   // ── 事件 ──────────────────────────────────────────────────────────
@@ -357,7 +428,7 @@
     capsule.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) {
       // 每次打开都重新读一遍库：别处删过会话时不会展示过期列表。
-      report('读取会话', async () => {
+      void report('读取会话', async () => {
         await loadSessions();
         renderSessions();
       });
@@ -413,6 +484,23 @@
     }
   });
 
+  messagesNode.addEventListener('click', (event) => {
+    const button = event.target.closest?.(
+      '[data-ask-choice], [data-ask-skip], [data-ask-free-submit]'
+    );
+    if (button) void answerAsk(button);
+  });
+
+  // 自由回答框里的回车等同点「回答」；输入法组字中的回车照样交给输入法。
+  messagesNode.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    const field = event.target.closest?.('[data-ask-free]');
+    if (!field) return;
+    event.preventDefault();
+    const submit = field.closest('[data-block="ask"]')?.querySelector('[data-ask-free-submit]');
+    if (submit) void answerAsk(submit);
+  });
+
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     if (!popover.hidden) {
@@ -448,7 +536,7 @@
     void send();
   });
 
-  // ── 启动：先读库，再决定当前会话（记住的那条优先，否则第一条） ────
+  // ── 启动：先读库，再决定当前会话（上次打开的那条优先，否则第一条） ──
 
   const boot = () => {
     resizeInput();
@@ -461,7 +549,6 @@
     }
     void report('读取会话', async () => {
       await loadSessions();
-      // 上次打开过的那条优先（last_opened_at），没有就第一条，一条都没有就是空态。
       await selectSession(listApi.pickInitialSession(sessions), { remember: false });
       input.focus();
     });

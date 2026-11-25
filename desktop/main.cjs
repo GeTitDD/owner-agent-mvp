@@ -2940,7 +2940,19 @@ const registerIpc = () => {
     return requireChatSessions().appendMessage({
       sessionId: String(input?.id ?? ''),
       role: String(input?.role ?? ''),
-      text: String(input?.text ?? '')
+      text: String(input?.text ?? ''),
+      // #109 的块原样带过去：存储层不解释块结构。
+      blocks: Array.isArray(input?.blocks) ? input.blocks : []
+    });
+  });
+
+  // 回答提问块：只写那一条消息的 answers（哪一块被答成了什么）。
+  ipcMain.handle('companion:card-session-answer', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().answerMessage({
+      sessionId: String(input?.id ?? ''),
+      seq: Number(input?.seq ?? 0),
+      answers: input?.answers
     });
   });
 

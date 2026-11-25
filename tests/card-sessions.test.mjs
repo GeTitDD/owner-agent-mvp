@@ -257,6 +257,59 @@ test('跨重启保留：标题、置顶、删除标记、当前选择与消息�
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('块与提问回答：按消息行存取，切会话/重启后原样回来', () => {
+  clock = 0;
+  const db = makeDb();
+  const store = new ChatSessionStore({ db, now });
+  const created = store.createSession({});
+  const reply = store.appendMessage({
+    sessionId: created.id,
+    role: 'assistant',
+    text: '带块的回复',
+    blocks: [{ type: 'ask', question: '归到哪个项目？', options: ['A', 'B'] }]
+  });
+  assert.equal(reply.blocks.length, 1);
+  // 只有块、没有文字也合法（不画空气泡）。
+  const onlyBlocks = store.appendMessage({
+    sessionId: created.id,
+    role: 'assistant',
+    text: '',
+    blocks: [{ type: 'kv', rows: [{ key: 'k', value: 'v' }] }]
+  });
+  assert.equal(onlyBlocks.text, '');
+  assert.equal(onlyBlocks.blocks.length, 1);
+  // 两样都没有才拒绝。
+  assert.throws(
+    () => store.appendMessage({ sessionId: created.id, role: 'assistant', text: '  ' }),
+    /消息不能为空/u
+  );
+
+  const answered = store.answerMessage({
+    sessionId: created.id,
+    seq: reply.seq,
+    answers: { 0: 'A' }
+  });
+  assert.deepEqual(answered.answers, { 0: 'A' });
+
+  const restored = store.getSession(created.id).messages;
+  assert.deepEqual(restored[0].blocks[0], { type: 'ask', question: '归到哪个项目？', options: ['A', 'B'] });
+  assert.deepEqual(restored[0].answers, { 0: 'A' });
+  assert.deepEqual(restored[1].answers, {}, '没答过的消息不该凭空带上回答');
+  assert.throws(
+    () => store.answerMessage({ sessionId: created.id, seq: 99999, answers: { 0: 'A' } }),
+    /消息不存在/u
+  );
+  assert.throws(
+    () => store.appendMessage({
+      sessionId: created.id,
+      role: 'assistant',
+      text: '太大',
+      blocks: [{ type: 'kv', rows: Array.from({ length: 4000 }, (_, i) => ({ key: `k${i}`, value: 'x'.repeat(40) })) }]
+    }),
+    /块数据过大/u
+  );
+});
+
 test('老库迁移：project_id NOT NULL 被放宽，旧行与消息一条不丢', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'card-sessions-old-'));
   const file = path.join(dir, 'owner.sqlite');

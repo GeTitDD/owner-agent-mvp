@@ -18,6 +18,8 @@ export const CHAT_TITLE_MAX = 60;
 export const DEFAULT_CHAT_TITLE = '新会话';
 /** 单条消息上限：回答本身限制 8000，这里留出引用提醒的余量。 */
 export const CHAT_MESSAGE_MAX = 16000;
+/** 单条消息的块数据上限：十二种块的全量样本约 4KB，留足余量。 */
+const CHAT_BLOCKS_MAX = 64 * 1024;
 /** 一轮提问带给模型的上下文条数；只用于理解，不代替历史落库。 */
 export const CHAT_HISTORY_LIMIT = 8;
 /** 一次读取会话消息的上限，避免异常大的会话把渲染进程拖慢。 */
@@ -68,12 +70,24 @@ export function titleFromQuestion(question) {
 }
 
 /** 消息文本校验：保留换行与制表符，拒绝 NUL 等控制字符。 */
-function normalizeMessageText(value) {
+function normalizeMessageText(value, { allowEmpty = false } = {}) {
   const text = String(value ?? '').trim();
-  if (!text) fail('消息不能为空');
+  if (!text && !allowEmpty) fail('消息不能为空');
   if (text.length > CHAT_MESSAGE_MAX) fail(`消息最多 ${CHAT_MESSAGE_MAX} 字`);
-  if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/u.test(text)) fail('消息含有非法字符');
+  if (text && /[\x00-\x08\x0b\x0c\x0e-\x1f]/u.test(text)) fail('消息含有非法字符');
   return text;
+}
+
+/**
+ * 块原样落库：存储层不解释块结构（归一化在 shell-blocks.cjs），
+ * 只保证是对象数组并且不会把库撑爆。#109 的十二种块都在这个上限之内。
+ */
+function normalizeBlocks(value) {
+  if (!Array.isArray(value)) return [];
+  const blocks = value.filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+  const json = JSON.stringify(blocks);
+  if (json.length > CHAT_BLOCKS_MAX) fail(`块数据过大（上限 ${CHAT_BLOCKS_MAX} 字节）`);
+  return blocks;
 }
 
 /** 引用只存路径与行号，避免把模型输出的任意结构写进库。 */
@@ -108,12 +122,15 @@ const sessionRow = (row) => row
   : null;
 
 const messageRow = (row) => ({
-  seq: row.seq,
+  seq: Number(row.seq),
   sessionId: row.session_id,
   role: row.role,
   text: row.text,
   status: row.status,
   citations: safeParse(row.citations),
+  // #109 的块与提问回答：原样存取，存储层不解释块的结构。
+  blocks: safeParse(row.blocks),
+  answers: safeParseObject(row.answers),
   createdAt: row.created_at
 });
 
@@ -123,6 +140,15 @@ const safeParse = (value) => {
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  }
+};
+
+const safeParseObject = (value) => {
+  try {
+    const parsed = JSON.parse(String(value ?? '{}'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
   }
 };
 
@@ -149,6 +175,8 @@ export class ChatSessionStore {
         text TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'ok' CHECK(status IN ('ok','error')),
         citations TEXT NOT NULL DEFAULT '[]',
+        blocks TEXT NOT NULL DEFAULT '[]',
+        answers TEXT NOT NULL DEFAULT '{}',
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS owner_chat_messages_session
@@ -197,6 +225,16 @@ export class ChatSessionStore {
     }
     if (!names.has('last_opened_at')) {
       this.db.exec('ALTER TABLE owner_chat_sessions ADD COLUMN last_opened_at TEXT');
+    }
+    // #109 的块与提问回答也落在消息行上：切会话/重启后，带块的回复还是原样。
+    const messageColumns = new Set(
+      this.db.prepare('PRAGMA table_info(owner_chat_messages)').all().map((column) => column.name)
+    );
+    if (!messageColumns.has('blocks')) {
+      this.db.exec(`ALTER TABLE owner_chat_messages ADD COLUMN blocks TEXT NOT NULL DEFAULT '[]'`);
+    }
+    if (!messageColumns.has('answers')) {
+      this.db.exec(`ALTER TABLE owner_chat_messages ADD COLUMN answers TEXT NOT NULL DEFAULT '{}'`);
     }
   }
 
@@ -353,22 +391,26 @@ export class ChatSessionStore {
   /**
    * 追加一条消息。首个用户问题会自动把默认标题换成问题摘要，
    * 这样「自动命名 + 可重命名」不需要额外的命名步骤。
+   *
+   * #109 起回复可以带块：块原样存成 JSON（存储层不解释块结构），
+   * 所以「只有块、没有文字」的回复也合法；两样都没有才拒绝。
    */
-  appendMessage({ sessionId, role, text, status = 'ok', citations = [] } = {}) {
+  appendMessage({ sessionId, role, text, status = 'ok', citations = [], blocks = [] } = {}) {
     const key = String(sessionId ?? '').trim();
     if (!key) fail('缺少会话 ID');
     if (role !== 'user' && role !== 'assistant') fail('消息角色不合法');
     if (status !== 'ok' && status !== 'error') fail('消息状态不合法');
-    const body = normalizeMessageText(text);
+    const blockList = normalizeBlocks(blocks);
+    const body = normalizeMessageText(text, { allowEmpty: blockList.length > 0 });
     const session = this.db.prepare('SELECT * FROM owner_chat_sessions WHERE id=?').get(key);
     if (!session) fail('会话不存在', 404);
     // 软删除的会话是只读的：要接着聊先找回，避免「删了还能写」的半截状态。
     if (session.deleted_at) fail('会话已删除，请先找回', 409);
     const now = this.now();
     const result = this.db.prepare(`
-      INSERT INTO owner_chat_messages(session_id,role,text,status,citations,created_at)
-      VALUES(?,?,?,?,?,?)
-    `).run(key, role, body, status, JSON.stringify(normalizeCitations(citations)), now);
+      INSERT INTO owner_chat_messages(session_id,role,text,status,citations,blocks,created_at)
+      VALUES(?,?,?,?,?,?,?)
+    `).run(key, role, body, status, JSON.stringify(normalizeCitations(citations)), JSON.stringify(blockList), now);
     let title = session.title;
     if (role === 'user' && (!title.trim() || title === DEFAULT_CHAT_TITLE)) {
       const firstUser = this.db.prepare(
@@ -387,9 +429,35 @@ export class ChatSessionStore {
       text: body,
       status,
       citations: normalizeCitations(citations),
+      blocks: blockList,
+      answers: {},
       createdAt: now,
       title
     };
+  }
+
+  /**
+   * 记下某个提问块被怎么回答的：只写那一条消息的 answers。
+   * 回答本身（我问的一句 + 一条回复）走 appendMessage，两条路径互不混。
+   */
+  answerMessage({ sessionId, seq, answers } = {}) {
+    const key = String(sessionId ?? '').trim();
+    if (!key) fail('缺少会话 ID');
+    const rowSeq = Number(seq);
+    if (!Number.isInteger(rowSeq) || rowSeq <= 0) fail('缺少消息序号');
+    const map = answers && typeof answers === 'object' && !Array.isArray(answers) ? answers : null;
+    if (!map) fail('回答记录不合法');
+    const clean = {};
+    for (const [index, label] of Object.entries(map)) {
+      if (!/^\d+$/u.test(index)) continue;
+      const text = String(label ?? '').trim().slice(0, 200);
+      if (text) clean[index] = text;
+    }
+    const changed = this.db.prepare(
+      'UPDATE owner_chat_messages SET answers=? WHERE seq=? AND session_id=?'
+    ).run(JSON.stringify(clean), rowSeq, key);
+    if (!changed.changes) fail('消息不存在', 404);
+    return { seq: rowSeq, sessionId: key, answers: clean };
   }
 
   /**

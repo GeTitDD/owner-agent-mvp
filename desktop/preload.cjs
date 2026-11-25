@@ -30,7 +30,8 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     remove: (input) => invoke('companion:card-session-soft-delete', input),
     restore: (input) => invoke('companion:card-session-restore', input),
     touch: (input) => invoke('companion:card-session-touch', input),
-    append: (input) => invoke('companion:card-session-append', input)
+    append: (input) => invoke('companion:card-session-append', input),
+    answers: (input) => invoke('companion:card-session-answer', input)
   }),
   decide: (input) => invoke('companion:decide', input),
   patchDetail: (input) => invoke('companion:patch-detail', input),
