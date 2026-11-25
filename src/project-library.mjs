@@ -63,6 +63,22 @@ const oneLine = (value, max = 120) => String(value ?? '')
 const asArray = (value) => (Array.isArray(value) ? value : []);
 
 /**
+ * 证据引用只留「指向哪条记录」：快照固化的是结论与引用，不把证据正文带进去。
+ * 经验侧是 evidence 行对象（带 kind/ref），知识侧是 evidenceRefs 字符串，这里统一成
+ * { kind, ref }，快照与面板读同一份形状。
+ */
+const evidenceRefsOf = (value) => asArray(value)
+  .map((item) => {
+    if (typeof item === 'string') {
+      const ref = item.trim().slice(0, 300);
+      return ref ? { kind: 'evidence', ref } : null;
+    }
+    const ref = String(item?.ref ?? item?.id ?? '').trim().slice(0, 300);
+    return ref ? { kind: String(item?.kind ?? 'evidence').slice(0, 40), ref } : null;
+  })
+  .filter(Boolean);
+
+/**
  * 条目状态：决策读自己的状态列（decisionStatus），其余读验证状态。
  * 两者不互相冒充——决策的「生效中」不是「已验证」，决策的「已放弃」也不是「待验证」。
  */
@@ -132,6 +148,7 @@ const entryOfLesson = (row) => {
     badge: badgeOf(status),
     detail: `${layer} · ${badgeOf(status)} · 证据 ${evidenceCount} 条`,
     evidenceCount,
+    evidenceRefs: evidenceRefsOf(row?.evidence),
     at: row?.lastMergedAt ?? row?.createdAt ?? row?.created_at ?? null,
     section: isVerifiedStatus(status) ? 'verified' : 'observing'
   };
@@ -163,6 +180,9 @@ const entryOfKnowledge = (row, source) => {
       `证据 ${evidenceCount} 条`
     ].filter(Boolean).join(' · '),
     evidenceCount,
+    evidenceRefs: evidenceRefsOf(row?.evidenceRefs),
+    // 知识条目带修订号：快照里的引用要能指回「当时是哪一版」。
+    ...(Number.isSafeInteger(row?.revision) ? { revision: row.revision } : {}),
     at: row?.updatedAt ?? row?.updated_at ?? row?.createdAt ?? row?.created_at ?? null,
     // 生效中的决策属于现状，进「已验证」一节；结束状态与其它未验证条目一起进「观察中」。
     section: isVerifiedStatus(status) ? 'verified' : 'observing'

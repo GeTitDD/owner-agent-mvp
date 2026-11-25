@@ -215,15 +215,17 @@
 
           <section id="queueSection" class="queue-section">
             <div class="section-title">
-              <h3>想法</h3>
+              <h3>灵感收件箱</h3>
               <span id="queueBadge" class="count">0</span>
             </div>
-            <p class="section-sub">和 Agent 聊到的改进意见收在这里；只收集，不直接改代码。</p>
+            <p class="section-sub">粘贴一段话或一个链接就进收件箱；链接只记地址，不抓取。</p>
             <div class="queue-add">
-              <input id="queueInput" class="queue-input" type="text" maxlength="1200" placeholder="记一条想法…（Enter 保存）" />
-              <button id="queueAdd" class="primary small" type="button">记下</button>
+              <textarea id="ideaInput" class="queue-input" rows="2" maxlength="8000"
+                placeholder="粘贴一段想法或一个链接…（Ctrl+Enter 存入）"></textarea>
+              <button id="ideaCapture" class="primary small" type="button">存入</button>
             </div>
-            <div id="queueList" class="queue-list"></div>
+            <div id="ideaHint" class="idea-hint" hidden></div>
+            <div id="ideaList" class="queue-list"></div>
           </section>
 
           <section class="knowledge-section compact" id="knowledgeSection">
@@ -243,6 +245,32 @@
               <button id="tidyKnowledge" class="ghost small" title="扫描重复、需复核、冲突和未验证知识">整理知识</button>
               <button id="openKnowledge" class="ghost small">完整知识库</button>
             </div>
+          </section>
+
+          <!-- 项目库（#89）：一个项目的知识聚合视图，不是新存储。两节固定为「已验证 / 观察中」，
+               计数按全量、列表只铺一屏；底部两个显式动作——生成草稿（可反复覆盖，没有版本号）
+               与发布（分配 v1、v2…，发布后不可修改）。版本浏览的详情是下一张票，这里只列版本与时间。 -->
+          <section id="librarySection" class="library-section" hidden>
+            <div class="section-title">
+              <h3>项目库</h3>
+              <span id="libraryBadge" class="count">0</span>
+            </div>
+            <p class="section-sub">本项目的经验、所属领域知识、本项目升上去的知识，以及画像与图谱；发布只是把这份视图固化成一份快照。</p>
+            <div id="libraryEmpty" class="library-empty" hidden></div>
+            <div id="librarySections" class="library-sections"></div>
+            <div id="libraryAssets" class="library-assets" hidden></div>
+            <div class="library-footer">
+              <div id="libraryStatus" class="library-status">还没有草稿。</div>
+              <div class="library-actions">
+                <button id="libraryDraft" class="ghost small" type="button"
+                  title="按当前内容生成草稿；重复生成会覆盖上一份草稿">生成草稿</button>
+                <button id="libraryPublish" class="primary small" type="button" disabled
+                  title="把当前草稿固化成新版本；发布后不可修改">发布 v1</button>
+              </div>
+            </div>
+            <div id="libraryVersions" class="library-versions"></div>
+            <!-- #90：导出只读已发布的快照；这里给出可预测的路径，并给「打开目录」动作。 -->
+            <div id="libraryExport" class="library-export" hidden></div>
           </section>
 
           <section id="playbookSection" class="playbook-section" hidden>
@@ -310,6 +338,7 @@
           </div>
           <p id="kbScanReasons" class="kb-scan-reasons" hidden></p>
           <div id="kbScanCandidates" class="kb-scan-candidates"></div>
+<<<<<<< HEAD
           <p class="kb-scan-hint">只读 Codex 与 Claude Code；OpenCode 的会话不在扫描范围内。扫描不写库；确认一条才会作为决策入库，同一段会话不会被重复提炼。</p>
         </div>
         <div id="kbFilters" class="kb-filters" role="group" aria-label="按项目筛选"></div>
