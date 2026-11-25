@@ -2,7 +2,7 @@
 //
 // 进程内启动 Owner sidecar + 常驻 Worker；审批令牌只留在主进程。
 // 渲染进程（桌宠/面板）只能通过受控 IPC 读取视图模型与触发操作。
-const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, dialog, Notification, shell } =
+const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, dialog, Notification, shell, clipboard } =
   require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -114,6 +114,8 @@ let snapshotModule = null;
 let snapshotStore = null;
 // #90：把已发布的快照导出到 <userData>/exports/<projectId>/vN/（只读快照，不重新聚合）。
 let exportModule = null;
+// #110：会话导出到 <userData>/conversations/<sessionId>.md；正文转换复用界面那份 shell-copy。
+let conversationExportModule = null;
 // #93：删除项目连带清理快照与导出目录；清单（plan）与执行分开，未确认不删。
 let projectDeletionModule = null;
 // #91：发布后发一条飞书文本卡片，投递结果记在单独的账本表上（快照本身不可变）。
@@ -334,6 +336,14 @@ async function startServices() {
   } catch (error) {
     console.error('project export module unavailable:', error.message);
     exportModule = null;
+  }
+  // #110：会话导出模块（纯转换 + 落盘）。不可用时只让「导出会话」报错，
+  // 复制与对话流本身不受影响。
+  try {
+    conversationExportModule = await importEsm('../src/conversation-exports.mjs');
+  } catch (error) {
+    console.error('conversation export module unavailable:', error.message);
+    conversationExportModule = null;
   }
   // #91：发布卡片。投递账本复用同一条连接；模块不可用时只影响「发卡片」这个动作，
   // 发布 / 导出照旧，面板会显示卡片未发送。
@@ -2964,6 +2974,29 @@ const registerIpc = () => {
       text: String(input?.text ?? ''),
       status: input?.status === 'error' ? 'error' : 'ok',
       citations: Array.isArray(input?.citations) ? input.citations : []
+    });
+  });
+
+  // #110 复制：渲染进程在 sandbox + contextIsolation 下不直接碰系统剪贴板，
+  // 统一由主进程写。写入失败原样抛回，界面据此给可见提示，不静默。
+  ipcMain.handle('companion:clipboard-write', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const text = String(input?.text ?? '');
+    if (!text) throw new Error('没有可复制的文本');
+    clipboard.writeText(text);
+    return { ok: true, length: text.length };
+  });
+
+  // #110 会话导出：<userData>/conversations/<sessionId>.md。
+  // 正文转换与界面同源（desktop/shell-copy.cjs），时间取会话自己的 startedAt，重复导出幂等。
+  ipcMain.handle('companion:conversation-export', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!conversationExportModule) throw new Error('会话导出模块尚未就绪，请重启后再试。');
+    return conversationExportModule.writeConversationExport({
+      root: app.getPath('userData'),
+      sessionId: String(input?.sessionId ?? ''),
+      context: input?.context,
+      messages: input?.messages
     });
   });
 

@@ -65,11 +65,22 @@
       <textarea id="input" rows="1" placeholder="说点什么。回车发送，Shift+回车换行"></textarea>
       <button type="submit" class="send" id="send" disabled>发送</button>
     </form>
+
+    <!-- #110 导出会话：按钮放在输入框下面，不占顶栏。
+         顶栏本轮仍是状态位（#105 的口径），把「导出」做成操作是后续票的事。 -->
+    <div class="shell-actions">
+      <button type="button" class="export-button" id="exportConversation">导出 Markdown</button>
+      <span class="export-path" id="exportPath" hidden></span>
+    </div>
+
+    <!-- 复制/导出的可见回执：失败也走这里，不静默。 -->
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   </div>
 
   <script src="./shell-thread.cjs"></script>
   <script src="./shell-sessions.cjs"></script>
   <script src="./shell-blocks.cjs"></script>
+  <script src="./shell-copy.cjs"></script>
   <script src="./shell-blocks-view.js"></script>
   <script src="./shell.js"></script>
 </body>
