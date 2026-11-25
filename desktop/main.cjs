@@ -710,6 +710,8 @@ const skillCatalogPayload = async ({ refresh = false } = {}) => {
         domainRoot: path.join(__dirname, '..', 'domains'),
         pluginsDir: path.join(__dirname, '..', 'plugins'),
         pstackSkillsDir: resolvePstackSkillsDir(),
+        mattSkillsDir: process.env.MATT_SKILLS_DIR
+          || path.join(os.homedir(), '.owner-agent', 'skills', 'matt'),
         pstackSkillIds: registry.PLAYBOOKS.map((item) => ({
           id: item.id,
           playbookLabel: item.label,

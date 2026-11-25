@@ -16,6 +16,7 @@ import path from 'node:path';
 export const SKILL_SOURCES = Object.freeze([
   { key: 'domain', label: '域包' },
   { key: 'pstack', label: 'pstack' },
+  { key: 'matt', label: 'matt' },
   { key: 'plugin', label: '插件' }
 ]);
 
@@ -255,6 +256,36 @@ export function scanPstackSkills({ skillsDir, expectedIds = [] } = {}) {
 }
 
 /**
+ * matt 的技能：matt 仓库是两级结构 `<分类>/<技能>/SKILL.md`，pstack 是一级。
+ *
+ * 不拍平：分类本身是有用的信息（engineering / productivity / misc / in-progress），
+ * 拍平之后同名技能会互相覆盖，而且丢掉「这套技能是干什么用的」这层语义。
+ * `deprecated` 目录整组跳过——它们已被上游标记为废弃，列出来只会误导。
+ */
+export function scanMattSkills({ skillsRoot } = {}) {
+  const items = [];
+  if (!exists(skillsRoot)) return items;
+  for (const category of listDirs(skillsRoot)) {
+    if (category === 'deprecated') continue;
+    for (const name of listDirs(path.join(skillsRoot, category))) {
+      const skillPath = path.join(skillsRoot, category, name, 'SKILL.md');
+      const meta = readSkillFile(skillPath, name);
+      items.push(makeEntry({
+        key: 'matt',
+        id: `matt:${category}/${name}`,
+        name: meta.name,
+        skillPath,
+        description: meta.description,
+        missing: !meta.ok,
+        reason: meta.reason,
+        origin: category
+      }));
+    }
+  }
+  return items;
+}
+
+/**
  * 插件技能：读 plugins/<name>/ghost.json 的 skill.items，按 dir 找 SKILL.md。
  * 没有 ghost.json 的目录不是技能载体，直接忽略；ghost.json 坏掉才算「缺失」。
  */
@@ -336,6 +367,7 @@ export function skillCatalogView({ items = [], scannedAt = null, limit = DEFAULT
     present: items.length - missing,
     domain: groups.find((group) => group.key === 'domain')?.count ?? 0,
     pstack: groups.find((group) => group.key === 'pstack')?.count ?? 0,
+    matt: groups.find((group) => group.key === 'matt')?.count ?? 0,
     plugin: groups.find((group) => group.key === 'plugin')?.count ?? 0
   };
   // 全空时说明「为什么空」，而不是留一片空白。
@@ -343,8 +375,8 @@ export function skillCatalogView({ items = [], scannedAt = null, limit = DEFAULT
     ? null
     : {
         kind: 'no-skills',
-        title: '三处都没有找到技能',
-        detail: '域包看 domains/*/*/manifest.json 的 skillDirs，pstack 看 PSTACK_DIR，插件看 ghost.json 的 skill.items；确认目录后点刷新。'
+        title: '四处都没有找到技能',
+        detail: '域包看 domains/*/*/manifest.json 的 skillDirs，pstack 看 PSTACK_DIR，matt 看 MATT_SKILLS_DIR，插件看 ghost.json 的 skill.items；确认目录后点刷新。'
       };
   return { scannedAt, totals, groups, empty };
 }
@@ -360,12 +392,14 @@ export function skillCatalogFor({
   pluginsDir = '',
   pstackSkillsDir = '',
   pstackSkillIds = [],
+  mattSkillsDir = '',
   limit = DEFAULT_GROUP_LIMIT,
   scannedAt = new Date().toISOString()
 } = {}) {
   const items = [
     ...scanDomainSkills({ domainRoot }),
     ...scanPstackSkills({ skillsDir: pstackSkillsDir, expectedIds: pstackSkillIds }),
+    ...scanMattSkills({ skillsRoot: mattSkillsDir }),
     ...scanPluginSkills({ pluginsDir })
   ];
   return { ...skillCatalogView({ items, scannedAt, limit }), scannedAt };

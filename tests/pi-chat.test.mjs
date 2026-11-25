@@ -7,11 +7,14 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   CHAT_TOOLS,
+  DEFAULT_SKILL_IDS,
   PiChatService,
   assertChatToolSurface,
   buildChatPrompt,
+  buildSkillSection,
   composeChatAnswer,
   createChatSessionFactory,
+  createSkillTool,
   verifyChatCitations
 } from '../src/pi-chat.mjs';
 
@@ -134,11 +137,15 @@ test('会话工厂只注册只读工具并做二次核对', async () => {
     loadSdk: async () => fakeSdk(raw, seen)
   });
   const session = await factory.create({ cwd: project.root, model: 'fake/model' });
-  assert.deepEqual(seen.options.tools, ['read', 'grep', 'find', 'ls']);
+  assert.deepEqual(seen.options.tools, ['read', 'grep', 'find', 'ls', 'skill']);
   assert.deepEqual(seen.options.excludeTools, ['write', 'edit', 'bash', 'powershell']);
+  // 技能正文靠自定义只读工具取，不走 SDK 原生技能加载（保持会话隔离）。
+  assert.equal(seen.options.customTools.length, 1);
+  assert.equal(seen.options.customTools[0].name, 'skill');
   assert.equal(seen.options.cwd, project.root);
   assert.equal(seen.loader.noExtensions, true);
   assert.equal(seen.loader.noContextFiles, true);
+  assert.equal(seen.loader.noSkills, true);
   assert.deepEqual(session.activeTools(), [...CHAT_TOOLS]);
   session.dispose();
   assert.equal(raw.disposed, true);
@@ -180,7 +187,7 @@ test('提问读文件后返回结论，并只把存在的路径列为引用', as
   assert.deepEqual(result.citations, [{ path: 'src/retry.js', line: 1 }]);
   assert.deepEqual(result.missingCitations, ['docs/missing.md']);
   assert.match(result.answer, /请谨慎采信/u);
-  assert.deepEqual(result.tools, ['read', 'grep', 'find', 'ls']);
+  assert.deepEqual(result.tools, ['read', 'grep', 'find', 'ls', 'skill']);
 
   // 同一项目的第二次追问复用同一个会话。
   const second = await service.ask({ project, question: '还有别的吗？', model: 'fake/model' });
@@ -288,4 +295,59 @@ test('只有新建的 Pi 会话才注入落库历史，活会话不重复带上�
   await service.ask({ project, question: '第二问', model: 'fake/model', sessionId: 'chat_h', history });
   assert.doesNotMatch(prompts[1], /更早的问题/u);
   service.disposeAll();
+});
+
+// ── 技能：索引里谁详写、谁只能显式调用、正文怎么取 ─────────────
+
+const fakeSkills = () => ([
+  { id: 'diagnosing-bugs', name: 'diagnosing-bugs', description: '查为什么坏', path: '', origin: 'engineering' },
+  { id: 'how', name: 'how', description: '这段代码怎么工作', path: '', origin: 'pstack' },
+  { id: 'why', name: 'why', description: '为什么这么设计', path: '', origin: 'pstack' },
+  { id: 'poteto-mode', name: 'poteto-mode', description: '分阶段交付工作流', path: '', origin: 'pstack' },
+  { id: 'tdd', name: 'tdd', description: '测试先行', path: '', origin: 'pstack' }
+]);
+
+test('技能索引：常用的详写，pstack 其余只列在「显式调用」里', () => {
+  const lines = buildSkillSection(fakeSkills()).join('\n');
+  // how / why 是 pstack 里唯一允许隐式的两个
+  assert.match(lines, /^- how：/mu);
+  assert.match(lines, /^- why：/mu);
+  // 其余 pstack 技能只能点名才能用
+  assert.match(lines, /只能显式调用（2 个/u);
+  assert.match(lines, /poteto-mode, tdd|tdd, poteto-mode/u);
+  // 显式调用那一段里不能再出现「可用」的措辞，避免模型误判
+  assert.doesNotMatch(lines, /- pstack: poteto-mode/u);
+});
+
+test('只有 how 与 why 留在默认隐式集合里', () => {
+  assert.equal(DEFAULT_SKILL_IDS.includes('how'), true);
+  assert.equal(DEFAULT_SKILL_IDS.includes('why'), true);
+  assert.equal(DEFAULT_SKILL_IDS.includes('figure-it-out'), false);
+  assert.equal(DEFAULT_SKILL_IDS.includes('poteto-mode'), false);
+});
+
+test('skill 工具：按 id 读正文、去 front-matter、拒绝未知 id', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-skill-'));
+  const file = path.join(root, 'how', 'SKILL.md');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '---\nname: how\ndescription: 这段代码怎么工作\n---\n\n# How\n\n第二节：先读入口。\n', 'utf8');
+
+  const tool = createSkillTool({
+    skills: [{ id: 'how', name: 'how', description: '', path: file, origin: 'pstack' }]
+  });
+  assert.equal(tool.name, 'skill');
+
+  const ok = await tool.execute('call-1', { id: 'how' });
+  assert.match(ok.content[0].text, /第二节：先读入口/u);
+  assert.doesNotMatch(ok.content[0].text, /^---/u);
+
+  const missing = await tool.execute('call-2', { id: 'no-such-skill' });
+  assert.equal(missing.isError, true);
+  assert.match(missing.content[0].text, /没有这个技能/u);
+});
+
+test('skill 工具不接受路径：只认索引里的 id', async () => {
+  const tool = createSkillTool({ skills: [{ id: 'how', name: 'how', description: '', path: '/tmp/x/SKILL.md', origin: 'pstack' }] });
+  const escape = await tool.execute('call-3', { id: '../../etc/passwd' });
+  assert.equal(escape.isError, true);
 });

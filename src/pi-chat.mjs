@@ -9,12 +9,127 @@
 //   找不到的路径单独列出并提醒谨慎采信。
 import path from 'node:path';
 import os from 'node:os';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { resolvePiModel } from './pi-model-catalog.mjs';
 import { READONLY_TOOLS, FORBIDDEN_TOOLS } from './pstack/playbooks.mjs';
+import { scanMattSkills, scanPstackSkills } from './knowledge/skills.mjs';
+import { Type } from 'typebox';
 
-/** 对话模式允许使用的工具：与 Playbook 只读会话共用同一份白名单。 */
-export const CHAT_TOOLS = Object.freeze([...READONLY_TOOLS]);
+/** 对话模式允许使用的工具：只读白名单 + 取技能正文的 skill。 */
+export const CHAT_TOOLS = Object.freeze([...READONLY_TOOLS, 'skill']);
+
+/**
+ * 对话模式默认带全文的技能：诊断、设计、术语、自省、查证，加上 pstack 的「怎么工作 / 为什么」。
+ * 其余技能不在索引里详写，但仍可用 skill(id) 取到。
+ */
+export const DEFAULT_SKILL_IDS = Object.freeze([
+  'diagnosing-bugs',
+  'codebase-design',
+  'domain-modeling',
+  'ask-matt',
+  'research',
+  'how',
+  'why'
+]);
+
+/**
+ * 只有显式点名才用的技能（pstack 除 how / why 之外的全部）。
+ *
+ * 为什么：pstack 里大量是「工作流」性质的技能（poteto-mode、swarm、arena…），
+ * 它们自带阶段划分与产出物，模型自行判定「现在该走这套流程」几乎总是错的。
+ * 索引里仍然列出来，但用法写成「Owner 点名时才用」。
+ */
+export const EXPLICIT_ONLY_ORIGINS = Object.freeze(['pstack']);
+
+const skillCache = { at: 0, value: null };
+const SKILL_CACHE_MS = 60_000;
+const MAX_SKILL_BODY = 6000;
+
+/**
+ * 扫两处技能根，返回统一形状 `[{ id, name, description, path, origin }]`。
+ * id 用技能目录名；重名时带上来源前缀，避免对话里点错。
+ */
+export function loadChatSkillCatalogue({ pstackSkillsDir = '', mattSkillsDir = '' } = {}) {
+  const pstackDir = pstackSkillsDir || process.env.PSTACK_DIR
+    || 'D:\\nautilus_trader\\.tmp\\opencode\\pstack-pi\\skills';
+  const mattDir = mattSkillsDir || process.env.MATT_SKILLS_DIR
+    || path.join(os.homedir(), '.owner-agent', 'skills', 'matt');
+
+  const entries = [];
+  // id 一律取目录名：front-matter 的 name 是给人看的显示名（可能是 "Make Bot UI"），
+  // 带空格和大写，不适合当工具参数。
+  const idOf = (skillPath, fallback) => {
+    const base = path.basename(path.dirname(String(skillPath ?? '')));
+    return base || fallback;
+  };
+  try {
+    for (const entry of scanPstackSkills({ skillsDir: pstackDir })) {
+      if (entry.missing || entry.playbookOnly) continue;
+      const id = idOf(entry.path, entry.name);
+      entries.push({ id, name: entry.name, description: entry.description, path: entry.path, origin: 'pstack' });
+    }
+  } catch { /* 目录不可读就当没有这一处 */ }
+  try {
+    for (const entry of scanMattSkills({ skillsRoot: mattDir })) {
+      if (entry.missing) continue;
+      const id = idOf(entry.path, entry.name);
+      entries.push({ id, name: entry.name, description: entry.description, path: entry.path, origin: entry.origin });
+    }
+  } catch { /* 同上 */ }
+
+  // 重名时保留两条，但 id 加来源前缀，保证 skill(id) 不会取错。
+  const seen = new Map();
+  for (const entry of entries) seen.set(entry.id, (seen.get(entry.id) ?? 0) + 1);
+  for (const entry of entries) {
+    if (seen.get(entry.id) > 1) entry.id = `${entry.origin}:${entry.name}`;
+  }
+  return entries;
+}
+
+/** 一分钟缓存，避免每次提问都扫盘。 */
+export function chatSkillCatalogue(options = {}) {
+  if (skillCache.value && Date.now() - skillCache.at < SKILL_CACHE_MS) return skillCache.value;
+  const value = loadChatSkillCatalogue(options);
+  skillCache.at = Date.now();
+  skillCache.value = value;
+  return value;
+}
+
+/**
+ * 提示词里的技能段：常用的详写，其余只列 id。
+ * 全部 92 条都带描述约 5700 token，每轮都背不起；常用 8 条约 500 token。
+ */
+export function buildSkillSection(skills = []) {
+  if (!Array.isArray(skills) || skills.length === 0) return [];
+  const byId = new Map(skills.map((item) => [item.id, item]));
+  const common = DEFAULT_SKILL_IDS.map((id) => byId.get(id)).filter(Boolean);
+  const rest = skills.filter((item) => !DEFAULT_SKILL_IDS.includes(item.id));
+  const explicitOnly = rest.filter((item) => EXPLICIT_ONLY_ORIGINS.includes(item.origin));
+  const implicitRest = rest.filter((item) => !EXPLICIT_ONLY_ORIGINS.includes(item.origin));
+
+  const lines = ['', '可用技能（只读；需要全文时用 skill(id) 取）：'];
+  for (const item of common) lines.push(`- ${item.id}：${String(item.description ?? '').slice(0, 160)}`);
+
+  if (implicitRest.length) {
+    const byOrigin = new Map();
+    for (const item of implicitRest) {
+      const key = item.origin || 'other';
+      if (!byOrigin.has(key)) byOrigin.set(key, []);
+      byOrigin.get(key).push(item.id);
+    }
+    lines.push(`其余 ${implicitRest.length} 个（id 逗号分隔，同样可用）：`);
+    for (const [origin, ids] of byOrigin) lines.push(`- ${origin}: ${ids.join(', ')}`);
+  }
+
+  // pstack 的工作流类技能只在点名时用：它们自带阶段划分，模型自己判定何时进入几乎总是错的。
+  if (explicitOnly.length) {
+    lines.push(`只能显式调用（${explicitOnly.length} 个，Owner 点名时才用，不要自行启动）：`);
+    lines.push(`- ${explicitOnly.map((item) => item.id).join(', ')}`);
+  }
+
+  lines.push('规则：先判断需不需要技能；需要时取一次全文，按它的步骤做，不要凭印象复述技能内容。');
+  return lines;
+}
 
 export const MAX_QUESTION = 1200;
 const MAX_ANSWER = 8000;
@@ -40,7 +155,7 @@ export const CHAT_FAILURE_ADVICE = Object.freeze({
 });
 
 /** 组装对话提示词：只读边界 + 路径引用格式 + 本会话最近几轮上下文。 */
-export function buildChatPrompt({ project, question, history = [] }) {
+export function buildChatPrompt({ project, question, history = [], skills = [] }) {
   const root = String(project?.root ?? '');
   const id = String(project?.id ?? '');
   const value = String(question ?? '').trim().slice(0, MAX_QUESTION);
@@ -59,6 +174,7 @@ export function buildChatPrompt({ project, question, history = [] }) {
   return [
     `你正在只读查看项目 ${id}（根目录 ${root}）。`,
     ...context,
+    ...buildSkillSection(skills),
     `Owner 的问题：${value}`,
     '',
     '回答要求：',
@@ -158,11 +274,54 @@ export function assertChatToolSurface(session, allowed = CHAT_TOOLS) {
 }
 
 /**
+ * 技能正文工具：按 id 读 SKILL.md，去掉 front-matter，截断到 MAX_SKILL_BODY。
+ *
+ * 只按目录里已扫到的条目取，不接受任意路径：id 不在目录里就直接报错，
+ * 这样即便模型编一个 id 也读不到项目之外的任何文件。
+ */
+export function createSkillTool({ skills = [], maxChars = MAX_SKILL_BODY } = {}) {
+  const byId = new Map(skills.map((item) => [item.id, item]));
+  return {
+    name: 'skill',
+    label: 'Skill',
+    description: '读取一个技能的说明（SKILL.md）全文',
+    parameters: Type.Object({ id: Type.String({ description: '技能 id，例如 diagnosing-bugs' }) }),
+    async execute(_callId, params) {
+      const id = String(params?.id ?? '').trim();
+      const entry = byId.get(id);
+      if (!entry) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `没有这个技能：${id}。只能用索引里列出的 id。` }]
+        };
+      }
+      try {
+        const raw = readFileSync(entry.path, 'utf8');
+        const body = raw.startsWith('---\n')
+          ? raw.slice(raw.indexOf('\n---', 4) + 4).trim()
+          : raw.trim();
+        return {
+          content: [{ type: 'text', text: body.slice(0, maxChars) }],
+          details: { id, path: entry.path }
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `读不到技能正文：${String(error?.message ?? error)}` }]
+        };
+      }
+    }
+  };
+}
+
+/**
  * 只读对话会话工厂。
  * loadSdk 可注入，测试用假 SDK 覆盖工具面校验，不联网、不调用真实模型。
+ * skills 可注入，测试不依赖磁盘上的技能目录。
  */
-export function createChatSessionFactory({ loadSdk = null } = {}) {
+export function createChatSessionFactory({ loadSdk = null, skills = null } = {}) {
   const load = loadSdk ?? (() => import('@earendil-works/pi-coding-agent'));
+  const catalogue = () => (Array.isArray(skills) ? skills : chatSkillCatalogue());
   return {
     tools: [...CHAT_TOOLS],
     async create({ cwd, model, signal } = {}) {
@@ -185,6 +344,7 @@ export function createChatSessionFactory({ loadSdk = null } = {}) {
           const { session } = await sdk.createAgentSession({
             cwd,
             tools: [...CHAT_TOOLS],
+            customTools: [createSkillTool({ skills: catalogue() })],
             excludeTools: [...FORBIDDEN_TOOLS],
             sessionManager: sdk.SessionManager.inMemory(),
             resourceLoader: loader,
@@ -278,12 +438,15 @@ export class PiChatService {
     model = '',
     timeoutMs = DEFAULT_TIMEOUT_MS,
     sessionFactory = null,
+    skills = null,
     maxSessions = 2,
     logger = console
   } = {}) {
     this.model = String(model ?? '').trim();
     this.timeoutMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_TIMEOUT_MS;
-    this.sessionFactory = sessionFactory ?? createChatSessionFactory();
+    // 技能目录可注入：主进程只扫一次，测试不碰磁盘。
+    this.skills = Array.isArray(skills) ? skills : null;
+    this.sessionFactory = sessionFactory ?? createChatSessionFactory({ skills: this.skills });
     this.maxSessions = Math.max(1, Number(maxSessions) || 2);
     this.logger = logger;
     this.sessions = new Map();
@@ -406,7 +569,8 @@ export class PiChatService {
         session.prompt(buildChatPrompt({
           project: { id: projectId, root },
           question: text,
-          history: freshSession ? history : []
+          history: freshSession ? history : [],
+          skills: this.skills ?? chatSkillCatalogue()
         })),
         timedOut,
         canceled
