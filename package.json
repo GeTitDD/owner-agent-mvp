@@ -65,11 +65,8 @@
     "e2e:desktop:library-feishu": "node scripts/e2e/desktop-library-feishu.mjs",
     "e2e:desktop:versions": "node scripts/e2e/desktop-library-versions.mjs",
     "e2e:desktop:write-scope": "node scripts/e2e/desktop-write-scope.mjs",
-<<<<<<< HEAD
     "e2e:desktop:own-write": "node scripts/e2e/desktop-own-write.mjs",
-=======
     "e2e:desktop:risk-card": "node scripts/e2e/desktop-risk-card.mjs",
->>>>>>> card/113-risk
     "cindy:pack": "node scripts/build-cindy-plugin.mjs owner-companion",
     "cindy:import": "node scripts/import-owner-data.mjs",
     "cindy:pack:relay": "node scripts/build-cindy-plugin.mjs cindy-relay",
