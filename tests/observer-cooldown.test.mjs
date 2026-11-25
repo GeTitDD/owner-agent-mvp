@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import path from 'node:path';
 import { rm } from 'node:fs/promises';
 import { evaluateCooldown } from '../src/observer/cooldown.mjs';
@@ -18,30 +17,32 @@ const NOW = new Date('2026-11-24T09:00:00+08:00');
 const FOUR_DAYS_AGO = '2026-11-20T09:00:00+08:00';
 const HOUR_MS = 60 * 60 * 1000;
 
-/** 起一个假飞书 webhook；store 由调用方在同一个审计库上开关，用来模拟进程重启。 */
+// #98：原来这里起真 HTTP 服务。四路全量并行时，本机回环请求会偶发 `fetch failed`
+// （连接被系统拒掉，不是超时），导致「本应 sent」变成 failed，测试跟着红。
+// 这里测的是冷却语义，不是传输层实现——把它换成注入的假 fetch：请求照样计数，
+// 但不再受本机网络与负载影响。真实 HTTP 投递由 observer-feishu 的测试覆盖。
+let requests = [];
+const fakeFetch = async (url, init = {}) => {
+  requests.push(String(init.body ?? ''));
+  return {
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ code: 0, msg: 'success' })
+  };
+};
+
+/** 起一个极简 webhook，store 可复用同一份库开关，用来模拟跨进程重启 */
 const withWebhook = async (fn) => {
   const dir = makeTempDir();
-  const requests = [];
-  const server = http.createServer((req, res) => {
-    const chunks = [];
-    req.on('data', (chunk) => chunks.push(chunk));
-    req.on('end', () => {
-      requests.push(Buffer.concat(chunks).toString('utf8'));
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ code: 0, msg: 'success' }));
-    });
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
+  requests = [];
   try {
     return await fn({
       dir,
       dbPath: path.join(dir, 'observer.sqlite'),
       requests,
-      webhookUrl: `http://127.0.0.1:${port}/open-apis/bot/v2/hook/test`
+      webhookUrl: 'http://127.0.0.1:9/open-apis/bot/v2/hook/test'
     });
   } finally {
-    await new Promise((resolve) => server.close(resolve));
     await rm(dir, { recursive: true, force: true });
   }
 };
@@ -94,7 +95,7 @@ test('同一停滞事件连续运行三次：飞书只收到一条，后两次�
   await reopen(dbPath, async (store) => {
     const results = [];
     for (let i = 0; i < 3; i += 1) {
-      results.push(await runStaleCheck({ project, store, webhookUrl, now: NOW }));
+      results.push(await runStaleCheck({ project, store, webhookUrl, fetchImpl: fakeFetch, now: NOW }));
     }
 
     assert.deepEqual(results.map((r) => r.delivery.status), ['sent', 'skipped', 'skipped']);
@@ -114,12 +115,12 @@ test('杀掉进程重启后再运行：冷却状态从审计库恢复，不重�
   const project = { id: 'obs-restart', name: 'Restart', root };
 
   await reopen(dbPath, async (store) => {
-    const first = await runStaleCheck({ project, store, webhookUrl, now: NOW });
+    const first = await runStaleCheck({ project, store, webhookUrl, fetchImpl: fakeFetch, now: NOW });
     assert.equal(first.delivery.status, 'sent');
   });
   // 进程「退出」后重新打开同一个审计库，第二次运行不应再发消息。
   await reopen(dbPath, async (store) => {
-    const second = await runStaleCheck({ project, store, webhookUrl, now: new Date(NOW.getTime() + 2 * HOUR_MS) });
+    const second = await runStaleCheck({ project, store, webhookUrl, fetchImpl: fakeFetch, now: new Date(NOW.getTime() + 2 * HOUR_MS) });
     assert.equal(second.delivery.status, 'skipped');
     assert.equal(second.cooldown.coolingDown, true);
     assert.equal(second.duplicate, true);
@@ -136,8 +137,8 @@ test('超过 24 小时后同一事件可以再次推送', () => withWebhook(asyn
   const later = new Date(NOW.getTime() + 25 * HOUR_MS);
 
   await reopen(dbPath, async (store) => {
-    const first = await runStaleCheck({ project, store, webhookUrl, now: NOW });
-    const after24h = await runStaleCheck({ project, store, webhookUrl, now: later });
+    const first = await runStaleCheck({ project, store, webhookUrl, fetchImpl: fakeFetch, now: NOW });
+    const after24h = await runStaleCheck({ project, store, webhookUrl, fetchImpl: fakeFetch, now: later });
 
     assert.equal(first.delivery.status, 'sent');
     assert.equal(after24h.delivery.status, 'sent');
@@ -160,16 +161,16 @@ test('不同项目、不同分支的同类事件各自独立计算冷却', () =>
   await reopen(dbPath, async (store) => {
     const projectA = { id: 'obs-iso-a', name: 'A', root: rootA };
 
-    const a1 = await runStaleCheck({ project: projectA, store, webhookUrl, now: NOW });
+    const a1 = await runStaleCheck({ project: projectA, store, webhookUrl, fetchImpl: fakeFetch, now: NOW });
     // 另一个项目即使 HEAD、提交时间与分支都相同，也单独通知。
     const projectB = { id: 'obs-iso-b', name: 'B', root: rootB };
-    const b1 = await runStaleCheck({ project: projectB, store, webhookUrl, now: NOW });
+    const b1 = await runStaleCheck({ project: projectB, store, webhookUrl, fetchImpl: fakeFetch, now: NOW });
     // 同一仓库换分支：新分支是独立事件，第一次照样通知。
     git(rootA, ['checkout', '-q', '-b', 'feature']);
-    const a2 = await runStaleCheck({ project: projectA, store, webhookUrl, now: NOW });
+    const a2 = await runStaleCheck({ project: projectA, store, webhookUrl, fetchImpl: fakeFetch, now: NOW });
     // 回到原分支：仍在自己的冷却里，不再通知。
     git(rootA, ['checkout', '-q', 'main']);
-    const a3 = await runStaleCheck({ project: projectA, store, webhookUrl, now: NOW });
+    const a3 = await runStaleCheck({ project: projectA, store, webhookUrl, fetchImpl: fakeFetch, now: NOW });
 
     assert.deepEqual([a1, b1, a2, a3].map((r) => r.delivery.status), ['sent', 'sent', 'sent', 'skipped']);
     assert.notEqual(a1.event.fingerprint, b1.event.fingerprint);
@@ -188,14 +189,14 @@ test('同分支出现新提交且仍然停滞：24 小时内不重复通知', ()
   const project = { id: 'obs-new-commit', name: 'New Commit', root };
 
   await reopen(dbPath, async (store) => {
-    const first = await runStaleCheck({ project, store, webhookUrl, now: NOW });
+    const first = await runStaleCheck({ project, store, webhookUrl, fetchImpl: fakeFetch, now: NOW });
     assert.equal(first.delivery.status, 'sent');
 
     // 新提交本身也已经是 3 天前，停滞条件依旧成立；只换 HEAD，不换项目/分支。
     git(root, ['commit', '-q', '--allow-empty', '-m', 'next'],
       { GIT_AUTHOR_DATE: '2026-11-21T09:00:00+08:00', GIT_COMMITTER_DATE: '2026-11-21T09:00:00+08:00' });
     const again = await runStaleCheck({
-      project, store, webhookUrl, now: new Date(NOW.getTime() + HOUR_MS)
+      project, store, webhookUrl, fetchImpl: fakeFetch, now: new Date(NOW.getTime() + HOUR_MS)
     });
 
     assert.equal(again.delivery.status, 'skipped');
@@ -217,12 +218,12 @@ test('冷却窗口内再次命中有新证据：不新增事件、不重复投�
   const project = { id: 'obs-evidence', name: 'Evidence', root };
 
   await reopen(dbPath, async (store) => {
-    const first = await runProjectCheck({ project, store, webhookUrl, now: NOW });
+    const first = await runProjectCheck({ project, store, webhookUrl, fetchImpl: fakeFetch, now: NOW });
     assert.equal(requests.length, 3);
 
     addUntrackedFiles(root, 5, 'extra');
     const second = await runProjectCheck({
-      project, store, webhookUrl, now: new Date(NOW.getTime() + HOUR_MS)
+      project, store, webhookUrl, fetchImpl: fakeFetch, now: new Date(NOW.getTime() + HOUR_MS)
     });
 
     assert.ok(second.deliveries.every((delivery) => delivery.status === 'skipped'));
@@ -243,20 +244,20 @@ test('全量检查的三类事件各自冷却：第二次全部跳过，24 小�
   const project = { id: 'obs-three-cool', name: 'Three Cool', root };
 
   await reopen(dbPath, async (store) => {
-    const first = await runProjectCheck({ project, store, webhookUrl, now: NOW });
+    const first = await runProjectCheck({ project, store, webhookUrl, fetchImpl: fakeFetch, now: NOW });
     assert.deepEqual(first.events.map((event) => event.type).sort(), ['backlog', 'drift', 'stale']);
     assert.ok(first.deliveries.every((delivery) => delivery.status === 'sent'));
     assert.equal(requests.length, 3);
 
     const second = await runProjectCheck({
-      project, store, webhookUrl, now: new Date(NOW.getTime() + HOUR_MS)
+      project, store, webhookUrl, fetchImpl: fakeFetch, now: new Date(NOW.getTime() + HOUR_MS)
     });
     assert.ok(second.deliveries.every((delivery) => delivery.status === 'skipped'));
     assert.ok(second.results.every((item) => item.cooldown.coolingDown));
     assert.equal(requests.length, 3, '冷却期内不应再发请求');
 
     const third = await runProjectCheck({
-      project, store, webhookUrl, now: new Date(NOW.getTime() + 25 * HOUR_MS)
+      project, store, webhookUrl, fetchImpl: fakeFetch, now: new Date(NOW.getTime() + 25 * HOUR_MS)
     });
     assert.ok(third.deliveries.every((delivery) => delivery.status === 'sent'));
     assert.equal(requests.length, 6);
