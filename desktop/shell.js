@@ -15,12 +15,14 @@
   const projectsApi = window.OwnerShellProjects;
   const blocksApi = window.OwnerShellBlocks;
   const blocksView = window.OwnerShellBlocksView;
+  const riskApi = window.OwnerRiskCard;
   if (!threadApi) throw new Error('shell-thread.cjs 未加载');
   if (!listApi) throw new Error('shell-sessions.cjs 未加载');
   if (!skillsApi) throw new Error('shell-skills.cjs 未加载');
   if (!projectsApi) throw new Error('shell-projects.cjs 未加载');
   if (!blocksApi) throw new Error('shell-blocks.cjs 未加载');
   if (!blocksView) throw new Error('shell-blocks-view.js 未加载');
+  if (!riskApi) throw new Error('risk-card.cjs 未加载');
   const copyApi = window.OwnerShellCopy;
   if (!copyApi) throw new Error('shell-copy.cjs 未加载');
 
@@ -1081,17 +1083,19 @@
     if (busy || !listApi.canCompose(currentId)) return;
     const raw = input.value;
     if (!threadApi.canSend(raw)) return;
-    // 自有目录写入（/记灵感 …）：直接执行并留回执，不产生确认卡。
+    // 自有目录写入（/记灵感 等）：直接执行，不弹确认卡。
     const command = ownWrites()?.parseCommand(raw) ?? null;
     if (command) {
       await runOwnWriteTurn(command, raw);
       return;
     }
-    // 这一版仍然没有真模型：普通输入回一条占位回复，/blocks 回一条脚本化样本。
-    // 两者都按普通消息落库，所以切走再回来看到的是同一条流。
+    // 还没接模型：普通消息回占位回复；/blocks 回块全览；/risk 回一张确认卡（#113）。
+    // 三者都是普通消息，先拦住再回，保证同一个入口。
     const reply = blocksApi.isSampleCommand(raw)
       ? blocksApi.sampleReply()
-      : { text: threadApi.placeholderText(raw), blocks: [] };
+      : riskApi.isRiskCommand(raw)
+        ? await riskApi.buildRiskReply(raw)
+        : { text: threadApi.placeholderText(raw), blocks: [] };
     busy = true;
     try {
       await store.append({ id: currentId, role: 'user', text: raw });
@@ -1137,6 +1141,61 @@
     // 自由回答为空：不改流，也不假装收到。
     if (!action) return;
     // 先记「这一块已经答过」，重画之后按钮不会再冒出来；再追加我问的一句与一条回复。
+    const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, action.answeredLabel);
+    const answers = answered[messageIndex]?.answers ?? {};
+    if (Number.isInteger(target.seq)) {
+      await store.answers({ id: currentId, seq: target.seq, answers });
+    }
+    await store.append({ id: currentId, role: 'user', text: action.userText });
+    await store.append({
+      id: currentId,
+      role: 'assistant',
+      text: action.reply?.text ?? '',
+      blocks: Array.isArray(action.reply?.blocks) ? action.reply.blocks : []
+    });
+    await refreshThread();
+    input.focus();
+  });
+
+  /**
+   * 确认卡动作（#113）：四个动作都落到纯函数 riskAction，再按「我的 + 回复」两条消息落库。
+   * 改判不覆盖原判据：新卡由 riskAction 生成，原卡只记一个 answers 标记。
+   */
+  const actRisk = (button) => report('确认卡', async () => {
+    if (!listApi.canCompose(currentId)) return;
+    const cardNode = button.closest('[data-block="risk"]');
+    const item = button.closest('.msg');
+    if (!cardNode || !item) return;
+    const blockIndex = Number(cardNode.dataset.blockIndex ?? -1);
+    const messageIndex = Number(item.dataset.index);
+    const target = messages[messageIndex];
+    const card = target?.blocks?.[blockIndex];
+    if (!target || !card) return;
+    // 同一个确认卡只选一次：旧节点若被重复点到，不再追加第二轮。
+    if (target.answers?.[blockIndex] !== undefined) return;
+
+    // 「我的判断不同」先展开表单，不改会话。
+    if (button.dataset.riskAction === 'override') {
+      const form = cardNode.querySelector('[data-risk-override-form]');
+      if (!form) return;
+      form.hidden = !form.hidden;
+      if (!form.hidden) form.querySelector('[data-risk-override-level]')?.focus();
+      return;
+    }
+
+    let action = null;
+    if (button.dataset.riskOverrideSubmit !== undefined) {
+      const form = button.closest('[data-risk-override-form]');
+      const level = form?.querySelector('[data-risk-override-level]')?.value ?? '';
+      const note = form?.querySelector('[data-risk-override-note]')?.value ?? '';
+      action = riskApi.riskAction({ card, action: 'override', level, note });
+    } else if (button.dataset.riskAction) {
+      action = riskApi.riskAction({ card, action: button.dataset.riskAction });
+    }
+    // 非低风险点「低风险免问」、或未知动作：不改流，也不假装收到。
+    if (!action) return;
+
+    // 先记「这一张已经选过」，重画之后按钮不会再冒出来；再追加我问的一句与一条回复。
     const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, action.answeredLabel);
     const answers = answered[messageIndex]?.answers ?? {};
     if (Number.isInteger(target.seq)) {
@@ -1343,9 +1402,18 @@
   });
 
   messagesNode.addEventListener('click', (event) => {
+    // 确认卡的动作、复制/导出的按钮、提问块的回答是三套落点，但都只声明「点了什么」；
+    // 真正的行为分别由 actRisk / copyFromButton / answerAsk 负责。
+    const riskButton = event.target.closest?.(
+      '[data-risk-action], [data-risk-override-submit]'
+    );
+    if (riskButton) {
+      void actRisk(riskButton);
+      return;
+    }
     const copyButton = event.target.closest?.('[data-copy-message], [data-copy-block]');
     if (copyButton) {
-      copyFromButton(copyButton);
+      void copyFromButton(copyButton);
       return;
     }
     const button = event.target.closest?.(
@@ -1357,6 +1425,15 @@
   // 自由回答框里的回车等同点「回答」；输入法组字中的回车照样交给输入法。
   messagesNode.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' || event.isComposing) return;
+    // 确认卡的改判理由也支持回车提交；输入法组字中的回车照样交给输入法。
+    const riskField = event.target.closest?.('[data-risk-override-note]');
+    if (riskField) {
+      event.preventDefault();
+      const submit = riskField.closest('[data-risk-override-form]')
+        ?.querySelector('[data-risk-override-submit]');
+      if (submit) void actRisk(submit);
+      return;
+    }
     const field = event.target.closest?.('[data-ask-free]');
     if (!field) return;
     event.preventDefault();

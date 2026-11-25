@@ -365,6 +365,114 @@
     return node;
   };
 
+  /**
+   * 写入确认卡（#113）：标题 + 等级徽章 → 一句话结论 → 三轴 → 逐条完整路径
+   * → 可折叠判据 → 四个动作。
+   *
+   * 只画模型，不判定风险：降级、改判、动作可用性都由 risk-card.cjs 算好。
+   * 判据用原生 details，默认收起；点开是浏览器行为，不额外绑事件。
+   */
+  const renderRisk = (model) => {
+    const node = blockNode(model);
+    node.dataset.riskLevel = model.level;
+    node.dataset.riskId = model.id;
+    node.dataset.riskOverridden = model.overridden ? 'true' : 'false';
+
+    const head = el('div', 'block-head');
+    head.append(el('h4', '', model.title || '写入确认'));
+    if (model.overridden) head.append(el('span', 'risk-change', '人工改判'));
+    head.append(el('span', join('risk-badge', model.level), model.levelLabel));
+    node.append(head);
+
+    // 降级与抬档都要说明白：人看到的是「为什么不是我想要的等级」，不是只有一个红标。
+    if (model.degraded && model.degradedReason) {
+      node.append(el('p', 'risk-degraded', model.degradedReason));
+    }
+    if (model.escalated && model.escalationReason) {
+      node.append(el('p', 'risk-escalated', model.escalationReason));
+    }
+    if (model.conclusion) node.append(el('p', 'risk-conclusion', model.conclusion));
+
+    const axes = el('dl', 'risk-axes');
+    model.axes.forEach((axis) => {
+      const row = el('div', 'risk-axis');
+      row.dataset.axis = axis.key;
+      row.append(el('dt', '', axis.label), el('dd', '', axis.valueLabel));
+      axes.append(row);
+    });
+    node.append(axes);
+
+    node.append(el('div', 'risk-section-title', '写入清单（逐条完整路径）'));
+    if (model.paths.length === 0) {
+      node.append(el('p', 'block-note', '这张卡没有列出写入路径。'));
+    } else {
+      const paths = el('ul', 'risk-paths');
+      model.paths.forEach((path) => {
+        const item = el('li', 'risk-path', path);
+        item.dataset.path = path;
+        paths.append(item);
+      });
+      node.append(paths);
+    }
+
+    // 判据默认收起：卡片第一眼只看结论与三轴，想知道「它是不是偷懒」再展开。
+    const details = el('details', 'risk-basis');
+    const summary = el('summary');
+    summary.append(
+      el('span', '', '评级依据'),
+      el('span', 'risk-basis-count', `${model.basis.length} 条`)
+    );
+    details.append(summary);
+    const basis = el('ul', 'risk-basis-list');
+    model.basis.forEach((line) => basis.append(el('li', '', line)));
+    details.append(basis);
+    node.append(details);
+
+    // 点过动作就收起按钮，只留记录：与提问块同一套「点过不再冒出来」的口径。
+    if (model.answered) {
+      node.append(el('p', 'risk-answered', `已选择：${model.answered}`));
+      return node;
+    }
+
+    const actions = el('div', 'risk-actions');
+    model.actions.forEach((action) => {
+      const button = el('button', join('risk-action', `risk-${action.id}`), action.label);
+      button.type = 'button';
+      button.dataset.riskAction = action.id;
+      button.disabled = action.enabled !== true;
+      if (action.reason) button.title = action.reason;
+      actions.append(button);
+    });
+    node.append(actions);
+
+    // 「我的判断不同」不是立刻改判：先展开一个很小的表单，写清改到哪一档、为什么。
+    const form = el('div', 'risk-override');
+    form.hidden = true;
+    form.dataset.riskOverrideForm = '1';
+    const level = el('select', 'risk-override-level');
+    level.dataset.riskOverrideLevel = '1';
+    level.setAttribute('aria-label', '改判等级');
+    [['low', '低风险'], ['medium', '中风险'], ['high', '高风险']].forEach(([value, label]) => {
+      const option = el('option', '', label);
+      option.value = value;
+      level.append(option);
+    });
+    // 默认退向更宽的一档：高 → 低是「我看过了」，低 → 中是「我更谨慎」。
+    level.value = model.level === 'low' ? 'medium' : 'low';
+    const note = el('input', 'risk-override-note');
+    note.type = 'text';
+    note.maxLength = 120;
+    note.placeholder = '写下你的判断（会进会话）';
+    note.dataset.riskOverrideNote = '1';
+    note.setAttribute('aria-label', '改判理由');
+    const submit = el('button', 'risk-override-submit', '生成新卡');
+    submit.type = 'button';
+    submit.dataset.riskOverrideSubmit = '1';
+    form.append(level, note, submit);
+    node.append(form);
+    return node;
+  };
+
   const renderUnknown = (model) => {
     const node = blockNode(model);
     node.append(el('p', 'block-note', model.text));
@@ -384,6 +492,7 @@
     tool: renderTool,
     badges: renderBadges,
     ask: renderAsk,
+    risk: renderRisk,
     unknown: renderUnknown
   };
 
