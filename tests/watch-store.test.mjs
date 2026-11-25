@@ -206,6 +206,40 @@ test('队列按先进先出给，limit 只截断队列尾部，不重排', () =>
   } finally { store.close(); }
 }));
 
+test('批量入队按 kind + ref + at 去重：同一批写两次只入队一次（#118）', () => withTemp(async (root) => {
+  const store = new WatchStateStore({ dir: path.join(root, 'watch') });
+  try {
+    const batch = [
+      { kind: 'added', ref: 'src/a.mjs', at: '2026-11-08T01:00:00.000Z' },
+      { kind: 'added', ref: 'src/a.mjs', at: '2026-11-08T01:00:00.000Z' },
+      { kind: 'modified', ref: 'src/a.mjs', at: '2026-11-08T02:00:00.000Z' }
+    ];
+    assert.equal(store.appendChanges(alpha, batch).length, 2);
+    // 同一批重跑（例如上次推进失败后重试）不再入队，返回空数组。
+    assert.deepEqual(store.appendChanges(alpha, batch), []);
+    assert.deepEqual(store.listChanges(alpha).map((row) => row.ref), ['src/a.mjs', 'src/a.mjs']);
+    // 只按 kind + ref + at 判重：同一个文件换个时刻仍是新的一条。
+    assert.equal(store.appendChanges(alpha, [
+      { kind: 'modified', ref: 'src/a.mjs', at: '2026-11-08T03:00:00.000Z' }
+    ]).length, 1);
+  } finally { store.close(); }
+}));
+
+test('批量入队先整批校验：批次里有一条坏的，前面几条也不落库', () => withTemp(async (root) => {
+  const store = new WatchStateStore({ dir: path.join(root, 'watch') });
+  try {
+    assert.throws(() => store.appendChanges(alpha, [
+      { kind: 'added', ref: 'src/ok.mjs', at: '2026-11-09T01:00:00.000Z' },
+      { kind: 'renamed', ref: 'src/bad.mjs', at: '2026-11-09T01:01:00.000Z' }
+    ]), /未知的变更类型：renamed/u);
+    assert.deepEqual(store.listChanges(alpha), []);
+    // 事务回滚后库还能照常写。
+    assert.equal(store.appendChanges(alpha, [
+      { kind: 'added', ref: 'src/ok.mjs', at: '2026-11-09T01:00:00.000Z' }
+    ]).length, 1);
+  } finally { store.close(); }
+}));
+
 test('默认位置是自有配置根的 watch/，可用环境变量整体改指', () => {
   const home = path.join(os.tmpdir(), 'watch-home');
   assert.equal(defaultWatchDir({ env: {}, homeDir: home }), path.join(home, '.owner-agent', 'watch'));
