@@ -52,6 +52,19 @@ const sendDraft = async (panel, text) => {
   await pressEnter(panel);
 };
 
+/**
+ * #106 起「没有会话就不能发消息」：块样本也要先有一个会话。
+ * 走界面上的那一个入口（顶栏胶囊 → 新建），不直接调 IPC。
+ */
+const ensureSession = async (panel) => {
+  await panel.evaluate("document.getElementById('sessionToggle').click()");
+  await waitFor(panel, "document.getElementById('sessionPopover').hidden === false", 5000);
+  await panel.evaluate("document.getElementById('sessionNew').click()");
+  const ready = await waitFor(panel, "document.getElementById('input').disabled === false", 10000);
+  await panel.evaluate("document.getElementById('sessionToggle').click()");
+  return ready;
+};
+
 /** 流里每条消息：角色、文字、块数（有没有气泡、块挂在哪都看这里）。 */
 const readThread = (panel) => panel.evaluate(`(() => {
   const items = [...document.querySelectorAll('#messages .msg')];
@@ -181,6 +194,7 @@ const runBlocks = async () => {
   try {
     check('shell page loads through the main-process switch',
       await waitFor(panel, "document.querySelector('#shellHeader')", 30000));
+    check('a session exists before the block sample is sent', await ensureSession(panel));
 
     // ① 一条带全部块的回复。
     await sendDraft(panel, '/blocks');

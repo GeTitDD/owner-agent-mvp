@@ -210,16 +210,6 @@ test('会话头缺字段：有稳定默认值，不写 undefined', () => {
   assert.doesNotMatch(markdown, /undefined|null/u);
 });
 
-test('会话标题：取第一条我说的话，过长截断；没有就回到默认', () => {
-  assert.equal(copy.sessionTitleOf([]), '新会话');
-  assert.equal(copy.sessionTitleOf([{ role: 'agent', text: 'AI 先说' }]), '新会话');
-  assert.equal(copy.sessionTitleOf([{ role: 'user', text: '  第一句  ' }]), '第一句');
-  const long = '这是一句很长的话'.repeat(5);
-  const title = copy.sessionTitleOf([{ role: 'user', text: long }]);
-  assert.equal(title.length, 25);
-  assert.match(title, /…$/u);
-});
-
 test('壳引用的是同一份复制实现：按钮声明在两层，写入点可注入', () => {
   const html = read('desktop/shell.html');
   const shell = read('desktop/shell.js');

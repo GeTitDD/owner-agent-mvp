@@ -86,18 +86,26 @@ test('新壳引用的是自己那份实现，没有拉旧面板进来', () => {
   const js = read('desktop/shell.js');
   assert.match(html, /shell\.css/);
   assert.match(html, /shell-thread\.cjs/);
+  assert.match(html, /shell-sessions\.cjs/);
   assert.match(html, /shell\.js/);
   assert.doesNotMatch(html, /panel\.(html|js|css)/, '新壳不能引用旧面板文件');
   assert.match(js, /OwnerShellThread/);
+  assert.match(js, /OwnerShellSessions/);
   // 旧面板功能的特征名一个都不该出现在新壳里（三档、两区）。
   assert.doesNotMatch(js, /modeBar|opsZone|handoffProjectId/);
 });
 
-test('顶栏只留占位：五个状态位齐全，且没有任何按钮', () => {
+test('顶栏只放开一个入口：会话胶囊，其余四位仍是状态位', () => {
   const html = read('desktop/shell.html');
   for (const slot of ['session', 'project', 'write', 'monitor', 'export']) {
     assert.match(html, new RegExp(`data-slot="${slot}"`), `缺顶栏状态位：${slot}`);
   }
   const header = html.slice(html.indexOf('id="shellHeader"'), html.indexOf('</header>'));
-  assert.doesNotMatch(header, /<button|<select|<input/, '顶栏不放操作，只放状态位');
+  assert.equal((header.match(/class="capsule"/gu) ?? []).length, 1, '顶栏只该有一个会话入口');
+  // 入口之外（胶囊与它自己的浮层）不再有按钮、输入框或链接：顶栏不是第二个菜单。
+  const entryStart = header.indexOf('<div class="session-entry">');
+  const entryEnd = header.indexOf('<span class="slot" data-slot="project">');
+  assert.ok(entryStart > 0 && entryEnd > entryStart, '会话入口与其余状态位的顺序变了');
+  const outsideEntry = header.slice(0, entryStart) + header.slice(entryEnd);
+  assert.doesNotMatch(outsideEntry, /<button|<select|<input|<a /u, '顶栏入口之外不放操作');
 });

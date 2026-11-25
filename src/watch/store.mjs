@@ -308,6 +308,54 @@ export class WatchStateStore {
   }
 
   /**
+   * 批量追加「发现」：先整批校验，再一个事务写完；同一批里重复的、以及队列里已经有的
+   * （同 kind + ref + at）都跳过，只留一条。心跳因此可以放心重跑：同一批变化跑两次
+   * 只入队一次（#118 的「不重复计数」），不会因为上次推进失败而把队列翻倍。
+   *
+   * 不做唯一索引：老库里可能已经有重复行，建唯一索引会让升级直接失败；
+   * WHERE NOT EXISTS 只在写入时判重，旧行一行不动。
+   *
+   * @param {object} target 监控对象描述符
+   * @param {Array<object>} changes 与 appendChange 同形状的批次
+   * @returns {object[]} 这次真正新入队的行（重复的、坏的不在其中）
+   */
+  appendChanges(target, changes = []) {
+    const { ref: key, type } = normalizeWatchTarget(target);
+    if (!Array.isArray(changes)) throw new Error('变更批次必须是数组');
+    // 整批先校验：一条坏的不该让前面几条悄悄落库，也不该留下半批。
+    const prepared = changes.map((change) => {
+      const source = change ?? {};
+      return {
+        kind: kindOf(source.kind),
+        ref: refTextOf(source.ref, 'ref'),
+        at: toIso(source.at ?? new Date()),
+        detail: detailTextOf(source.detail ?? null)
+      };
+    });
+    const insert = this.db.prepare(`INSERT INTO ${WATCH_TABLES.changes}(target_key,target_type,kind,ref,at,detail)
+      SELECT ?,?,?,?,?,? WHERE NOT EXISTS (
+        SELECT 1 FROM ${WATCH_TABLES.changes}
+          WHERE target_key=? AND kind=? AND ref=? AND at=?
+      )`);
+    const read = this.db.prepare(
+      `SELECT seq,target_key,target_type,kind,ref,at,detail FROM ${WATCH_TABLES.changes} WHERE seq=?`
+    );
+    const appended = [];
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const row of prepared) {
+        const result = insert.run(key, type, row.kind, row.ref, row.at, row.detail, key, row.kind, row.ref, row.at);
+        if (Number(result.changes) > 0) appended.push(changeRowOf(read.get(result.lastInsertRowid)));
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return appended;
+  }
+
+  /**
    * 读某个对象的变更队列：先进先出（按 seq 升序），limit 只截断尾部。
    *
    * @param {object} target 监控对象描述符

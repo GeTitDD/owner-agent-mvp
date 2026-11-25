@@ -43,6 +43,19 @@ const sendDraft = async (panel, text) => {
   await pressEnter(panel);
 };
 
+/**
+ * #106 起「没有会话就不能发消息」：复制与导出都挂在一条真实会话上。
+ * 走界面上的入口（顶栏胶囊 → 新建），不直接调 IPC。
+ */
+const ensureSession = async (panel) => {
+  await panel.evaluate("document.getElementById('sessionToggle').click()");
+  await waitFor(panel, "document.getElementById('sessionPopover').hidden === false", 5000);
+  await panel.evaluate("document.getElementById('sessionNew').click()");
+  const ready = await waitFor(panel, "document.getElementById('input').disabled === false", 10000);
+  await panel.evaluate("document.getElementById('sessionToggle').click()");
+  return ready;
+};
+
 const hover = (panel, selector) => panel.evaluate(`(() => {
   const node = document.querySelector(${JSON.stringify(selector)});
   if (!node) return false;
@@ -104,9 +117,9 @@ const readExportPath = (panel) => panel.evaluate(`(() => {
   return { hidden: node.hidden, text: node.textContent };
 })()`);
 
-const readSession = (panel) => panel.evaluate(`(() => {
-  try { return JSON.parse(localStorage.getItem('owner-shell-session')); } catch { return null; }
-})()`);
+const readSession = (panel) => panel.evaluate(
+  "window.companion.cardSessions.list({}).then((result) => result.items[0] ?? null)"
+);
 
 const safeRemove = (target) => {
   try {
@@ -135,6 +148,7 @@ const run = async () => {
   try {
     check('shell page loads through the main-process switch',
       await waitFor(panel, "document.querySelector('#shellHeader')", 30000));
+    check('a session exists before copy and export', await ensureSession(panel));
 
     // 一条带全部块的回复。
     await sendDraft(panel, '/blocks');

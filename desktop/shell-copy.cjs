@@ -293,15 +293,7 @@
     return parts.join('\n\n');
   };
 
-  /** 会话标题：取第一条「我」的话，规则与首问命名一致；没有就退回默认。 */
-  const sessionTitleOf = (messages) => {
-    const first = list(messages).find((message) =>
-      str(message?.role) === 'user' && str(message?.text));
-    const text = oneLine(first?.text);
-    if (!text) return '新会话';
-    return text.length > 24 ? `${text.slice(0, 24)}…` : text;
-  };
-
+  /** 上下文头的四个字段：缺的给稳定默认值，不写 undefined。 */
   const contextOf = (context) => ({
     project: oneLine(context?.project) || '全局（未选项目）',
     session: oneLine(context?.session) || '当前会话',
@@ -337,7 +329,6 @@
     roleLabel,
     blockToMarkdown,
     messageToMarkdown,
-    sessionTitleOf,
     conversationToMarkdown
   };
 });

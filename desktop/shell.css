@@ -84,7 +84,7 @@ button, textarea { font: inherit; color: inherit; }
   overflow: hidden;
 }
 
-/* ── 顶栏：只有一行状态位；超出宽度按顺序压缩，不换行、不折叠成菜单 ─ */
+/* ── 顶栏：一行状态位；#106 只把「会话」这一位换成入口，其余仍是状态 ─ */
 .top {
   flex: none;
   display: flex;
@@ -94,7 +94,8 @@ button, textarea { font: inherit; color: inherit; }
   border-bottom: 1px solid var(--line);
   background: var(--panel);
   white-space: nowrap;
-  overflow: hidden;
+  /* 浮层要从这一行往下探，所以这里不能裁切；横向溢出由 .shell 兜底。 */
+  overflow: visible;
 }
 
 .slot {
@@ -117,8 +118,243 @@ button, textarea { font: inherit; color: inherit; }
   text-overflow: ellipsis;
   color: var(--text);
 }
-/* 五个位都只是占位：不做 hover、不做 focus，读起来就是状态而不是入口。 */
+/* 五个位都只是状态：不做 hover、不做 focus，读起来就是状态而不是入口。
+   唯一的例外是 #106 的会话胶囊——顶栏只放开这一个入口。 */
 .slot[data-slot="export"] { margin-left: auto; }
+
+/* ── #106 会话入口：胶囊 + 一个浮层（列表 / 搜索 / 新建 / 改名 / 置顶 / 删除） ── */
+.session-entry {
+  position: relative;
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.capsule {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  max-width: 210px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 10.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.capsule:hover { border-color: var(--accent); }
+
+/* 打开时给一点底色：用户能看出「这一个位是开关，不是标签」。 */
+.capsule[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.capsule .slot-value { max-width: 150px; }
+
+.caret {
+  flex: none;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.sessions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 320px;
+  max-height: 420px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.sessions-head {
+  display: flex;
+  gap: 6px;
+}
+
+#sessionSearch {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12px;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+#sessionSearch:focus { border-color: var(--accent); }
+
+.sessions-new {
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sessions-hint {
+  margin: 0 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: normal;
+}
+
+.sessions-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  scrollbar-width: thin;
+}
+
+.session-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  padding: 6px 6px 5px;
+  border-radius: 8px;
+}
+
+.session-row:hover { background: var(--bg); }
+/* 当前会话不用悬停才认得出：底色一直在。 */
+.session-row[data-current="true"] { background: var(--accent-soft); }
+.session-row.is-confirming { background: var(--warn-soft); }
+.session-row.is-archived { opacity: 0.7; }
+
+.session-name {
+  /* 标题独占一行：不参与压缩，轮数与动作换到第二行，长标题才有地方显示。 */
+  flex: 1 0 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+button.session-name { cursor: pointer; }
+
+.session-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pin-mark {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 9.5px;
+  line-height: 15px;
+}
+
+.session-meta {
+  flex: none;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.session-actions {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.session-action {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.session-action:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.session-action.danger { color: var(--warn); }
+
+.session-rename {
+  flex: 1 0 100%;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel);
+  font-size: 12px;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.sessions-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.sessions-archive {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.sessions-archive:hover,
+.sessions-archive[aria-pressed="true"] { color: var(--text); }
+
+.sessions-error {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--warn);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ── 中部对话流：唯一可滚动的区域 ───────────────────────────────── */
 .thread {
@@ -235,6 +471,12 @@ button, textarea { font: inherit; color: inherit; }
 }
 
 .composer textarea:focus { border-color: var(--accent); }
+
+/* 没有会话时锁住输入：视觉上也要看得出来是被规则挡住，不是坏了。 */
+.composer textarea[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 
 .send {
   flex: none;
@@ -858,10 +1100,10 @@ button, textarea { font: inherit; color: inherit; }
   overflow-wrap: anywhere;
 }
 
-/* ���� �����뵼����#110�� ��������������������������������������������������������������������������������������
-   ���ư�ť������Ϣ/�����ͣ���֡�������Ϣ���棬�����߶��� :hover��
-   ͬһ��ָ���ͬʱ�������㣻���ԡ�����һ������ shell.js �� data-copy-active
-   ͳһ������CSS ֻ������ʾ������ */
+/* ── 复制与导出（#110） ───────────────────────────────────────────
+   复制按钮跟着消息/块的悬停出现。块在消息里面，若两者都用 :hover，
+   同一个指针会同时命中两层；所以「亮哪一个」由 shell.js 的 data-copy-active
+   统一决定，CSS 只负责显示和收起。 */
 .msg {
   position: relative;
 }
@@ -907,7 +1149,7 @@ button, textarea { font: inherit; color: inherit; }
 
 .msg.user[data-copy-active] > .who > .msg-copy { background: var(--panel); }
 
-/* ���� �����Ự����ť����������棬��ռ������������������״̬λ�� ���� */
+/* ── 导出会话：按钮在输入框下面，不占顶栏（顶栏本轮仍是状态位） ── */
 .shell-actions {
   flex: none;
   display: flex;
@@ -943,7 +1185,7 @@ button, textarea { font: inherit; color: inherit; }
   user-select: text;
 }
 
-/* ����/�����Ļ�ִ���ɹ���ʧ�ܹ���һ����ʧ�ܻ�ɫ�� */
+/* 复制/导出的回执：成功与失败共用一条，失败换色。 */
 .toast {
   position: absolute;
   left: 50%;
