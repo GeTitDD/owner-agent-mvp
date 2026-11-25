@@ -20,6 +20,40 @@
       : '全局模式：可以问所有项目的记忆（只读），先选项目再写。回车发送，/ 技能，@@ 方法';
   };
 
+  /**
+   * 输入框按键的状态迁移：把「面板开没开 / 在不在改数字 / 有没有可选项 / 按了什么」
+   * 与「该做什么」分开，单测直接喂状态，不必起窗口。
+   *
+   * 优先级（从高到低）：
+   *   1. 改数字时 Enter / Esc：先收掉编辑态，不抢发送、也不关面板；
+   *   2. 面板开着时 Esc：关面板；
+   *   3. 面板开着时 ↑↓：移动选中；
+   *   4. 面板开着时 Enter：有可选项就执行选中项；**没有可选项时关面板并照常发送**
+   *      ——这一条是 #132 的根因修复：`/risk high`、`/记灵感` 本来就没有匹配项，
+   *      不能因为面板开着就把 Enter 吃掉；
+   *   5. 其余 Enter（面板关着，或 Shift+Enter 换行之外的普通回车）：发送。
+   *
+   * 返回 preventDefault=false 的只有 Shift+Enter（交给浏览器换行）和无关按键。
+   */
+  const composerKeyAction = ({ slashOpen, slashCustomizing, itemCount, key, shiftKey }) => {
+    if (slashOpen && slashCustomizing && (key === 'Enter' || key === 'Escape')) {
+      return { action: 'finish-customize', preventDefault: true };
+    }
+    if (slashOpen) {
+      if (key === 'Escape') return { action: 'close-panel', preventDefault: true };
+      if (key === 'ArrowDown') return { action: 'move-down', preventDefault: true };
+      if (key === 'ArrowUp') return { action: 'move-up', preventDefault: true };
+      if (key === 'Enter') {
+        // Shift+回车在面板开着时仍然换行，不发送也不调用。
+        if (shiftKey) return { action: 'none', preventDefault: false };
+        if (itemCount > 0) return { action: 'invoke', preventDefault: true };
+        return { action: 'close-and-send', preventDefault: true };
+      }
+    }
+    if (key === 'Enter' && !shiftKey) return { action: 'send', preventDefault: true };
+    return { action: 'none', preventDefault: false };
+  };
+
   /** 建立输入区这一块：查 DOM、绑事件，返回给装配层用的入口。 */
   const create = (ctx) => {
     const threadApi = ctx.threadApi;
@@ -252,7 +286,7 @@
       slashToggle.setAttribute('aria-pressed', slashCustomizing ? 'true' : 'false');
       slashHint.textContent = slashCustomizing
         ? '数字只认 1-9；改成默认数字或清空即回到默认。改完点「完成」。'
-        : '↑↓ 选择 · Enter 调用 · 点任意一行即调用 · Esc 关闭';
+        : '↑↓ 选择 · Enter 调用 · 没有匹配时 Enter 直接发送 · 点任意一行即调用 · Esc 关闭';
       syncConflictText(model.conflicts);
       // 键盘移动后把选中行带进视野；初始选中第一行时等于不滚动。
       slashList.querySelector('.slash-item.is-on')?.scrollIntoView({ block: 'nearest' });
@@ -490,42 +524,42 @@
     input.addEventListener('keydown', (event) => {
       // 组字中的回车属于输入法，不能当发送。
       if (event.isComposing || event.keyCode === 229) return;
-      // 改数字时先把面板的编辑状态收掉，不误抢 Enter/Esc。
-      if (slashOpen && slashCustomizing) {
-        if (event.key === 'Enter' || event.key === 'Escape') {
-          event.preventDefault();
+      // #132：按键优先级集中在 composerKeyAction（纯函数，单测覆盖），这里只执行。
+      const plan = composerKeyAction({
+        slashOpen,
+        slashCustomizing,
+        itemCount: slashFlat.length,
+        key: event.key,
+        shiftKey: event.shiftKey
+      });
+      if (plan.preventDefault) event.preventDefault();
+      switch (plan.action) {
+        case 'finish-customize':
           slashCustomizing = false;
           renderSlash();
           return;
-        }
-      }
-      // 面板打开时，上下选、Enter 调用、Esc 关闭；都不能落成一次普通发送。
-      if (slashOpen) {
-        if (event.key === 'Escape') {
-          event.preventDefault();
+        case 'close-panel':
           setSlashOpen(false);
           return;
-        }
-        if (event.key === 'ArrowDown') {
-          event.preventDefault();
+        case 'move-down':
           moveSlashSelection(1);
           return;
-        }
-        if (event.key === 'ArrowUp') {
-          event.preventDefault();
+        case 'move-up':
           moveSlashSelection(-1);
           return;
-        }
-        if (event.key === 'Enter' && !event.shiftKey) {
-          event.preventDefault();
+        case 'invoke':
           invokeSlashSelection();
           return;
-        }
-      }
-      // 回车发送；Shift+回车换行交给浏览器默认行为，所以只在「要发送」时 preventDefault。
-      if (event.key === 'Enter' && !event.shiftKey) {
-        event.preventDefault();
-        void send();
+        case 'close-and-send':
+          // 没有匹配项：和没有面板时等价——先关面板，再把这条照常发出去。
+          setSlashOpen(false);
+          void send();
+          return;
+        case 'send':
+          void send();
+          return;
+        default:
+          return;
       }
     });
 
@@ -571,7 +605,12 @@
     form.addEventListener('submit', (event) => {
       event.preventDefault();
       if (slashOpen) {
-        invokeSlashSelection();
+        // 与 Enter 同一套规则：有可选项执行，没有匹配就关面板照常发送。
+        if (slashFlat.length) invokeSlashSelection();
+        else {
+          setSlashOpen(false);
+          void send();
+        }
         return;
       }
       void send();
@@ -585,5 +624,5 @@
     };
   };
 
-  return { composerPlaceholder, create };
+  return { composerPlaceholder, composerKeyAction, create };
 });
