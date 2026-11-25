@@ -363,6 +363,11 @@ const run = async () => {
     check('shell reloads', await waitFor(panel, "document.querySelector('#shellHeader')", 30000));
     check('the session still exists after reload',
       await waitFor(panel, "document.getElementById('input').disabled === false", 15000));
+    // #121 壳拆成四个脚本后，「input 可写」会比事件绑定早一步成立：
+    // 不等壳把历史画完就敲 `/`，这一下可能落在绑定之前（旧壳同样有这个窗口，只是单脚本更短）。
+    // 只加等待，不改任何断言。
+    await waitFor(panel,
+      "document.querySelectorAll('#messages .msg').length === 6", 15000);
     check('the panel opens after reload', await openSlash(panel));
     model = await readPanel(panel);
     check('custom numbers survive a reload',
