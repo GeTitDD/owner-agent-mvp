@@ -4,6 +4,8 @@ const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
 contextBridge.exposeInMainWorld('companion', Object.freeze({
   snapshot: (input) => invoke('companion:snapshot', input),
+  // #84：进入项目时算「自上次看过」并推进水位（有副作用，不要放进轮询）。
+  sinceLastSeen: (input) => invoke('companion:since-last-seen', input),
   submit: (input) => invoke('companion:submit', input),
   chat: Object.freeze({
     ask: (input) => invoke('companion:chat-ask', input),
