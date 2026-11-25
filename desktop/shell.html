@@ -104,6 +104,21 @@
       <p class="slash-error" id="skillError" role="status" hidden></p>
     </div>
 
+    <!-- #122：输入 `@@` 打开方法菜单（小卡片，贴着输入框，不铺满窗口）。
+         容器只提供外壳：标题 + 返回 + 关闭；菜单项由 shell-at.cjs 的方法数据逐行画，
+         方法卡的内容由方法自己注册。这一轮只有「生成 prompt / 关联会话」两条，
+         且内容都是占位，随后续票接入。 -->
+    <div class="at-panel" id="atPanel" role="dialog" aria-label="@@ 方法" hidden>
+      <div class="at-head">
+        <button type="button" class="at-back" id="atBack" aria-label="返回方法菜单" hidden>←</button>
+        <b class="at-title" id="atTitle">@@ 要做什么</b>
+        <span class="at-sub" id="atSub"></span>
+        <button type="button" class="at-close" id="atClose" aria-label="关闭 @@ 面板">✕</button>
+      </div>
+      <div class="at-body" id="atBody"></div>
+      <p class="at-hint" id="atHint"></p>
+    </div>
+
     <!-- #110 导出会话：按钮放在输入框下面，不占顶栏。
          顶栏本轮仍是状态位（#105 的口径），把「导出」做成操作是后续票的事。 -->
     <div class="shell-actions">
@@ -144,6 +159,8 @@
   <script src="./shell-blocks-view.js"></script>
   <!-- #121 三块界面：顶栏 / 输入区 / 对话流；shell.js 只做装配与事件接线。 -->
   <script src="./shell-header.cjs"></script>
+  <!-- #122 `@@` 方法菜单：先于输入区加载，输入区要用它的触发判定与面板实例。 -->
+  <script src="./shell-at.cjs"></script>
   <script src="./shell-compose.cjs"></script>
   <script src="./shell-stream.cjs"></script>
   <script type="module" src="./card-scope-host.mjs"></script>

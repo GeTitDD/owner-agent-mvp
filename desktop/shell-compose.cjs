@@ -1,8 +1,10 @@
 // #121 卡片壳的输入区：输入框、发送、`/` 技能面板、占位文案与锁定。
 //
 // 边界：这一块只管输入框与挂在它上面的 `/` 面板（数字快捷 + 全部技能 + 别名编辑），
-// 发出去以后的消息落库与重画交给装配层的 refreshThread；顶栏与对话流分别在
-// shell-header.cjs / shell-stream.cjs。技能目录只认 src/knowledge/skills.mjs 的扫描结果。
+// 以及 `@@` 的触发（#122）：`@@` 面板本身的菜单 / 方法卡由 shell-at.cjs 画，这里只
+// 在输入变化时开合它、在按键优先级里排它。发出去以后的消息落库与重画交给装配层的
+// refreshThread；顶栏与对话流分别在 shell-header.cjs / shell-stream.cjs。
+// 技能目录只认 src/knowledge/skills.mjs 的扫描结果。
 // 双份导出：浏览器当普通脚本加载（挂到 window.OwnerShellCompose），Node 测试用 require 读纯函数。
 (function attach(root, factory) {
   const api = factory();
@@ -26,16 +28,22 @@
    *
    * 优先级（从高到低）：
    *   1. 改数字时 Enter / Esc：先收掉编辑态，不抢发送、也不关面板；
-   *   2. 面板开着时 Esc：关面板；
-   *   3. 面板开着时 ↑↓：移动选中；
-   *   4. 面板开着时 Enter：有可选项就执行选中项；**没有可选项时关面板并照常发送**
+   *   2. `@@` 方法面板开着时 Esc / Enter：Esc 只关面板；Enter **关面板并照常发送**
+   *      ——#122 的约定：菜单没有键盘选中项，普通 Enter 不能被一张小卡吃掉；
+   *   3. `/` 面板开着时 Esc：关面板；
+   *   4. `/` 面板开着时 ↑↓：移动选中；
+   *   5. `/` 面板开着时 Enter：有可选项就执行选中项；**没有可选项时关面板并照常发送**
    *      ——这一条是 #132 的根因修复：`/risk high`、`/记灵感` 本来就没有匹配项，
    *      不能因为面板开着就把 Enter 吃掉；
-   *   5. 其余 Enter（面板关着，或 Shift+Enter 换行之外的普通回车）：发送。
+   *   6. 其余 Enter（面板关着，或 Shift+Enter 换行之外的普通回车）：发送。
    *
+   * `/` 与 `@@` 不会同时开（输入区只开一个），这里仍按「`/` 优先」排，
+   * 让纯函数在两者都给 true 时也有确定答案。
    * 返回 preventDefault=false 的只有 Shift+Enter（交给浏览器换行）和无关按键。
    */
-  const composerKeyAction = ({ slashOpen, slashCustomizing, itemCount, key, shiftKey }) => {
+  const composerKeyAction = ({
+    slashOpen, slashCustomizing, itemCount, atOpen = false, key, shiftKey
+  }) => {
     if (slashOpen && slashCustomizing && (key === 'Enter' || key === 'Escape')) {
       return { action: 'finish-customize', preventDefault: true };
     }
@@ -50,6 +58,14 @@
         return { action: 'close-and-send', preventDefault: true };
       }
     }
+    if (atOpen) {
+      if (key === 'Escape') return { action: 'close-at', preventDefault: true };
+      // 菜单没有选中项：Enter 收起面板，把这条照常发出去；Shift+Enter 仍换行。
+      if (key === 'Enter') {
+        if (shiftKey) return { action: 'none', preventDefault: false };
+        return { action: 'close-at-and-send', preventDefault: true };
+      }
+    }
     if (key === 'Enter' && !shiftKey) return { action: 'send', preventDefault: true };
     return { action: 'none', preventDefault: false };
   };
@@ -59,9 +75,12 @@
     const threadApi = ctx.threadApi;
     const listApi = ctx.listApi;
     const skillsApi = ctx.skillsApi;
+    const atApi = ctx.atApi;
     const blocksApi = ctx.blocksApi;
     const riskApi = ctx.riskApi;
     const store = ctx.store;
+    // #122：`@@` 面板的实例由装配层建，输入区只在运行期取（两块互相引用，不锁构造顺序）。
+    const panelAt = () => ctx.ui.at ?? null;
     // #114：自有目录写入的判定与回执由 src/own-write.mjs 提供，经 own-write-host.mjs
     // 挂到窗口。模块脚本晚于经典脚本，所以不在加载时断言存在，而是在发送时读。
     const ownWrites = () => window.OwnerOwnWrite ?? null;
@@ -374,6 +393,28 @@
     };
 
     /**
+     * `@@` 面板（#122）：只按「输入末尾有没有 @@」开合，怎么画由 shell-at.cjs 负责。
+     *
+     * - 草稿以 `/` 开头时 `/` 优先：两个浮层不同时压着，`@@` 面板收起；
+     * - 菜单是临时提示：正文不再以 @@ 结尾就收起；
+     * - 已经进了方法卡就不跟着正文收起——那是一张有状态的任务卡，只由返回 / 关闭离开。
+     */
+    const syncAtFromInput = () => {
+      const at = panelAt();
+      if (!at) return;
+      if (input.value.startsWith('/')) {
+        if (at.isOpen()) at.close();
+        return;
+      }
+      if (atApi.atTrigger(input.value)) {
+        if (slashOpen) setSlashOpen(false);
+        at.openMenu();
+        return;
+      }
+      if (at.step() === 'menu') at.close();
+    };
+
+    /**
      * 点一行 / 按 Enter：数字行是「命令」，技能行是「调用技能」，
      * 两条都按普通消息落库，所以切走再回来记录与结果卡都还在。
      */
@@ -408,6 +449,7 @@
     const syncComposer = () => {
       const open = listApi.canCompose(currentId());
       if (!open && slashOpen) setSlashOpen(false);
+      if (!open) panelAt()?.close();
       input.disabled = !open;
       // 全局模式不是「不能说话」，而是「不写项目」：消息仍落本机自有库，所以输入框不锁；
       // 提示里说清落点为空，要写项目先选项目。
@@ -585,6 +627,13 @@
       return true;
     };
 
+    /** Esc 的 `@@` 一层：面板开着就收起（焦点在面板里时按约定还回输入框末尾）。 */
+    const dismissAt = () => {
+      const at = panelAt();
+      if (!at || !at.isOpen()) return false;
+      return at.close();
+    };
+
     // ── 事件 ──────────────────────────────────────────────────────────
 
     // `/` 面板也一样：点别处收起，但点输入框本身不算「别处」。
@@ -598,6 +647,7 @@
       resizeInput();
       syncComposer();
       syncSlashFromInput();
+      syncAtFromInput();
     });
 
     input.addEventListener('keydown', (event) => {
@@ -608,6 +658,7 @@
         slashOpen,
         slashCustomizing,
         itemCount: slashFlat.length,
+        atOpen: Boolean(panelAt()?.isOpen()),
         key: event.key,
         shiftKey: event.shiftKey
       });
@@ -619,6 +670,14 @@
           return;
         case 'close-panel':
           setSlashOpen(false);
+          return;
+        case 'close-at':
+          panelAt()?.close();
+          return;
+        case 'close-at-and-send':
+          // `@@` 面板没有键盘选中项：和没有面板时等价——先关面板，再把这条发出去。
+          panelAt()?.close();
+          void send();
           return;
         case 'move-down':
           moveSlashSelection(1);
@@ -692,6 +751,8 @@
         }
         return;
       }
+      // `@@` 面板开着时点发送：与 Enter 同义——收起面板，照常发送。
+      panelAt()?.close();
       void send();
     });
 
@@ -699,7 +760,8 @@
       resize: resizeInput,
       sync: syncComposer,
       focus: () => input.focus(),
-      dismissSlash
+      dismissSlash,
+      dismissAt
     };
   };
 
