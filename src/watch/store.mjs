@@ -1,4 +1,5 @@
 // 监控状态（#117）：水位、变更队列、上次心跳，按监控对象隔离，全部落在自有配置根的 watch/ 下。
+// 定时整理的运行记录（#119：计划时刻、实际时刻、是否迟到）也放在同一份库里——状态只有一处。
 //
 // 为什么不写项目目录：父 spec #102 的硬规矩是「项目目录一个文件都不留」，`git status` 永远干净；
 // 心跳阶段因此零写入项目目录，也就不需要确认（ADR-0012：写自有目录默认允许）。
@@ -29,7 +30,8 @@ export const WATCH_DB_NAME = 'watch.sqlite';
 export const WATCH_TABLES = Object.freeze({
   watermarks: 'watch_watermarks',
   heartbeats: 'watch_heartbeats',
-  changes: 'watch_changes'
+  changes: 'watch_changes',
+  tidies: 'watch_tidies'
 });
 
 /** 变更条目的三种「发现」动作：只记录那一刻看到了什么，不解释内容（心跳的职责）。 */
@@ -157,6 +159,18 @@ const heartbeatRowOf = (row) => (row ? {
   note: row.note ?? ''
 } : null);
 
+const tidyRowOf = (row) => (row ? {
+  key: row.target_key,
+  type: row.target_type,
+  // plannedAt 是「本该什么时候跑」，ranAt 是「实际什么时候跑」：两个都留，迟到的判断才可复算。
+  plannedAt: row.planned_at ?? '',
+  ranAt: row.ran_at,
+  ms: msOf(row.ran_at),
+  late: Number(row.late) === 1,
+  note: row.note ?? '',
+  updatedAt: row.updated_at
+} : null);
+
 const changeRowOf = (row) => ({
   seq: row.seq,
   key: row.target_key,
@@ -179,7 +193,13 @@ const ADDITIVE_COLUMNS = Object.freeze([
   [WATCH_TABLES.heartbeats, 'updated_at', "TEXT NOT NULL DEFAULT ''"],
   [WATCH_TABLES.heartbeats, 'note', "TEXT NOT NULL DEFAULT ''"],
   [WATCH_TABLES.changes, 'target_type', "TEXT NOT NULL DEFAULT ''"],
-  [WATCH_TABLES.changes, 'detail', "TEXT NOT NULL DEFAULT '{}'"]
+  [WATCH_TABLES.changes, 'detail', "TEXT NOT NULL DEFAULT '{}'"],
+  [WATCH_TABLES.tidies, 'target_type', "TEXT NOT NULL DEFAULT ''"],
+  [WATCH_TABLES.tidies, 'planned_at', "TEXT NOT NULL DEFAULT ''"],
+  [WATCH_TABLES.tidies, 'ran_at', "TEXT NOT NULL DEFAULT ''"],
+  [WATCH_TABLES.tidies, 'late', 'INTEGER NOT NULL DEFAULT 0'],
+  [WATCH_TABLES.tidies, 'note', "TEXT NOT NULL DEFAULT ''"],
+  [WATCH_TABLES.tidies, 'updated_at', "TEXT NOT NULL DEFAULT ''"]
 ]);
 
 /** 建表 + 补列。可重复执行：同一份库打开几次结果一样。 */
@@ -207,6 +227,15 @@ function ensureSchema(db) {
       ref TEXT NOT NULL,
       at TEXT NOT NULL,
       detail TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE TABLE IF NOT EXISTS ${WATCH_TABLES.tidies}(
+      target_key TEXT PRIMARY KEY,
+      target_type TEXT NOT NULL DEFAULT '',
+      planned_at TEXT NOT NULL DEFAULT '',
+      ran_at TEXT NOT NULL DEFAULT '',
+      late INTEGER NOT NULL DEFAULT 0,
+      note TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS ${WATCH_TABLES.changes}_target ON ${WATCH_TABLES.changes}(target_key,seq)`);
   for (const [table, column, ddl] of ADDITIVE_COLUMNS) {
@@ -264,6 +293,42 @@ export class WatchStateStore {
     return heartbeatRowOf(this.db.prepare(
       `SELECT target_key,target_type,last_at,updated_at,note FROM ${WATCH_TABLES.heartbeats} WHERE target_key=?`
     ).get(ref));
+  }
+
+  /**
+   * 上次定时整理；没有记录返回 null（调用方按「从没整理过」处理）。
+   * 计划时刻与实际时刻一起存：判断迟到不该靠事后猜，也让状态卡能说清「本该跑的那次」。
+   */
+  getTidy(target) {
+    const { ref } = normalizeWatchTarget(target);
+    return tidyRowOf(this.db.prepare(
+      `SELECT target_key,target_type,planned_at,ran_at,late,note,updated_at
+        FROM ${WATCH_TABLES.tidies} WHERE target_key=?`
+    ).get(ref));
+  }
+
+  /**
+   * 记一次成功的整理：计划时刻、实际时刻、是否迟到、一句附注。
+   * 只在整理成功（候选已提交）之后调用——失败时什么都没写成，下次仍会判定「该跑」，这是可重试的实现方式。
+   *
+   * @param {object} target 监控对象描述符
+   * @param {{plannedAt?:string|number|Date, ranAt?:string|number|Date, late?:boolean, note?:string}} [options]
+   */
+  markTidy(target, { plannedAt = '', ranAt = new Date(), late = false, note = '' } = {}) {
+    const { ref, type } = normalizeWatchTarget(target);
+    const planned = plannedAt === '' || plannedAt === undefined || plannedAt === null
+      ? ''
+      : toIso(plannedAt, '计划整理时间');
+    const ran = toIso(ranAt, '实际整理时间');
+    const textValue = noteOf(note);
+    const stamp = new Date().toISOString();
+    this.db.prepare(`INSERT INTO ${WATCH_TABLES.tidies}(target_key,target_type,planned_at,ran_at,late,note,updated_at)
+      VALUES(?,?,?,?,?,?,?)
+      ON CONFLICT(target_key) DO UPDATE SET
+        target_type=excluded.target_type, planned_at=excluded.planned_at, ran_at=excluded.ran_at,
+        late=excluded.late, note=excluded.note, updated_at=excluded.updated_at`
+    ).run(ref, type, planned, ran, late ? 1 : 0, textValue, stamp);
+    return this.getTidy(target);
   }
 
   /**
