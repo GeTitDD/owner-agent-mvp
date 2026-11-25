@@ -26,6 +26,11 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   projectBrief: Object.freeze({
     local: (input) => invoke('companion:project-brief-local', input)
   }),
+  // #89 项目库：生成草稿与发布是两个显式动作；读取随 snapshot 一起回来。
+  library: Object.freeze({
+    draft: (input) => invoke('companion:library-draft', input),
+    publish: (input) => invoke('companion:library-publish', input)
+  }),
   queue: Object.freeze({
     add: (input) => invoke('companion:queue-add', input),
     update: (input) => invoke('companion:queue-update', input),

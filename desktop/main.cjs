@@ -99,6 +99,10 @@ let sessionScanModule = null;
 let chatModule = null;
 let chatService = null;
 let chatSessionStore = null;
+// #89：项目库视图与快照存储。视图复用 src/project-library.mjs，快照落 owner 库的同一连接。
+let projectLibraryModule = null;
+let snapshotModule = null;
+let snapshotStore = null;
 // #84：水位与「自上次看过」。
 // - memoryWatermarks：每项目一个时间点，与 OwnerStore 共用同一条连接（同一份本地库）；
 // - observerEventStore：只读观察员事件，独立连接（观察员可以和桌面端同时开着）；
@@ -281,6 +285,16 @@ async function startServices() {
   } catch (error) {
     console.error('chat session store unavailable:', error.message);
     chatSessionStore = null;
+  }
+  // #89：项目库快照。表建在 owner 库上，复用同一条连接；不可用只影响库的发布，
+  // 不阻塞其余功能，所以失败只记日志、退回「没有草稿/版本」的空快照状态。
+  try {
+    snapshotModule = await importEsm('../src/project-snapshots.mjs');
+    snapshotStore = new snapshotModule.ProjectSnapshotStore({ db: store.db });
+  } catch (error) {
+    console.error('project snapshot store unavailable:', error.message);
+    snapshotModule = null;
+    snapshotStore = null;
   }
   try {
     const { PersonalKnowledgeStore } = await importEsm('../src/personal-store.mjs');
@@ -1189,6 +1203,63 @@ const knowledgeDetail = ({ id } = {}) => {
     };
   };
 
+  // ---- #89 项目库：视图复用 project-library，快照走 project-snapshots ----
+
+  const loadProjectLibrary = async () =>
+    (projectLibraryModule ??= await importEsm('../src/project-library.mjs'));
+
+  /** 项目图谱：与 buildView 同一口径（stale 按当前 HEAD 判断），给库的图谱摘要复用。 */
+  const diagramsForProject = async (project) => {
+    if (!project?.id) return [];
+    const head = await headForProject(project.root ?? '');
+    const items = (await api(`/owner/v1/projects/${encodeURIComponent(project.id)}/diagrams`)
+      .catch(() => ({ items: [] }))).items ?? [];
+    return items.map((diagram) => ({
+      ...diagram,
+      stale: Boolean(diagram.basedOnCommit && head && diagram.basedOnCommit !== head)
+    }));
+  };
+
+  /** 按项目 id 取 owner 项目行；没给 id 时退回第一个项目（与 buildView 的口径一致）。 */
+  const projectRowFor = async (projectId) => {
+    const items = (await api('/owner/v1/projects')).items ?? [];
+    const wanted = String(projectId ?? '');
+    return (wanted ? items.find((item) => item.id === wanted) : items[0]) ?? null;
+  };
+
+  /**
+   * 项目库视图 + 草稿/版本摘要。库是视图（ADR-0009）：每次按当前知识重新聚合，
+   * 只有「生成草稿 / 发布」才把它固化成快照，所以这里不写库。
+   * limit 只影响面板一屏显示多少条，计数仍按全量；生成快照时用大 limit 取全量。
+   */
+  const libraryForProject = async (project, { profile = null, diagrams = null, limit = 5, full = false } = {}) => {
+    if (!project?.id) return null;
+    const mod = await loadProjectLibrary();
+    let lessons = [];
+    let knowledge = [];
+    if (personalStore) {
+      try { lessons = personalStore.listLessonsForProject(project.id, { limit: 200 }); } catch { lessons = []; }
+      try { knowledge = personalStore.list({ limit: 1000 }); } catch { knowledge = []; }
+    }
+    const profileView = profile ?? await projectBriefFor(project);
+    const diagramView = diagrams ?? await diagramsForProject(project);
+    const view = mod.projectLibraryView({
+      project, lessons, knowledge, profile: profileView, diagrams: diagramView, limit
+    });
+    const draft = snapshotStore?.getDraftState(project.id) ?? null;
+    const versions = snapshotStore?.listVersions(project.id) ?? [];
+    const payload = {
+      ...view,
+      // 快照模块不可用时退回空摘要：库仍能看，只是不能生成/发布（按钮由 hasDraft 置灰）。
+      snapshot: snapshotModule
+        ? snapshotModule.snapshotStateOf({ draft, versions })
+        : { hasDraft: false, draft: null, versions: [], latestVersion: 0, nextVersion: 1, nextLabel: 'v1' }
+    };
+    // 面板每 2 秒轮询一次快照，groups 是全量条目，只给生成快照用，不随渲染下发。
+    if (!full) delete payload.groups;
+    return payload;
+  };
+
 
   // 手机端概览：只暴露「看清项目 + 想法 + 知识摘要」，不含审批与写入。
   const mobileOverviewFor = async ({ projectId = '' } = {}) => {
@@ -1741,14 +1812,11 @@ const buildView = async (requestedProjectId = '') => {
   const queueView = (await api(
     `/owner/v1/queue?projectId=${encodeURIComponent(activeProjectId)}`
   )).items ?? [];
-  const projectHead = await headForProject(activeProject?.root ?? '');
-  const diagramView = ((await api(
-    `/owner/v1/projects/${encodeURIComponent(activeProjectId)}/diagrams`
-  ).catch(() => ({ items: [] }))).items ?? []).map((diagram) => ({
-    ...diagram,
-    stale: Boolean(diagram.basedOnCommit && projectHead && diagram.basedOnCommit !== projectHead)
-  }));
+  const diagramView = await diagramsForProject(activeProject);
   const briefView = await projectBriefFor(activeProject);
+  // #89：项目库是视图，不落库；草稿/版本摘要只读快照表。随快照一起给面板，
+  // 面板不再自己聚合（聚合规则只保留 src/project-library.mjs 一份）。
+  const libraryView = await libraryForProject(activeProject, { profile: briefView, diagrams: diagramView });
   const resultView = finalCycle
     ? {
       cycleId: finalCycle.id,
@@ -1857,6 +1925,8 @@ const buildView = async (requestedProjectId = '') => {
     queue: queueView,
     diagrams: diagramView,
     knowledge: knowledgeView,
+    // #89：项目库那一段（两节 + 计数 + 草稿/版本状态）；没有项目时为 null。
+    library: libraryView,
     result: resultView
   };
 };
@@ -3403,6 +3473,41 @@ const registerIpc = () => {
     const mod = await loadProjectBrief();
     const payload = mod.buildLocalProjectBrief({ project, repoFacts: facts });
     return saveProjectBrief(project, payload, { basedOnCommit: facts.head });
+  });
+
+  // #89 项目库：生成草稿（覆盖上一份）与发布（分配 v1..vN，发布后不可改）。
+  // 两个都是显式动作：只读快照不会生成草稿，改知识也不会自动发布。
+  ipcMain.handle('companion:library-draft', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('还没有项目，先添加一个项目目录。');
+    if (!snapshotStore || !snapshotModule) throw new Error('快照存储尚未就绪，请重启后再试。');
+    // 快照用 groups 取全量，limit 只影响随后的面板渲染；这里仍走一次全量视图。
+    const library = await libraryForProject(project, { full: true });
+    const note = String(input?.note ?? '');
+    const content = snapshotModule.snapshotContentOf(library, { note });
+    snapshotStore.saveDraft({ projectId: project.id, content });
+    return libraryForProject(project);
+  });
+
+  ipcMain.handle('companion:library-publish', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('还没有项目，先添加一个项目目录。');
+    if (!snapshotStore) throw new Error('快照存储尚未就绪，请重启后再试。');
+    const published = snapshotStore.publish({
+      projectId: project.id,
+      note: String(input?.note ?? '')
+    });
+    const library = await libraryForProject(project);
+    return {
+      ...library,
+      published: {
+        version: published.version,
+        label: `v${published.version}`,
+        publishedAt: published.publishedAt
+      }
+    };
   });
 
   ipcMain.handle('companion:github-pr-preview', async (event, input) => {

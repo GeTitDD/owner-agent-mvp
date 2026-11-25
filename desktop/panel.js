@@ -2236,6 +2236,7 @@
       renderNextAction();
       renderQueue();
       renderDiagrams();
+      renderLibrary();
       renderOps();
       renderRunning();
       renderResult();
@@ -2843,6 +2844,19 @@
   };
 
   $('tidyKnowledge').onclick = () => { void openKnowledgeTidy(); };
+  // 项目库：生成草稿可反复点（覆盖同一份），发布按钮在没有草稿时禁用。
+  $('libraryDraft').onclick = () => {
+    void libraryAction(
+      (projectId) => window.companion.library.draft({ projectId }),
+      () => '已生成草稿'
+    );
+  };
+  $('libraryPublish').onclick = () => {
+    void libraryAction(
+      (projectId) => window.companion.library.publish({ projectId }),
+      (result) => `已发布 ${result?.published?.label ?? '新版本'}`
+    );
+  };
   $('queueAdd').onclick = () => { void addQueueItem(); };
   $('queueInput').addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;
@@ -3053,6 +3067,139 @@
       if (note) note.textContent = row.note;
       button.title = `${row.label} · ${row.count} · ${row.note}`;
       button.onclick = () => focusJump(row.key);
+    }
+  };
+
+  // ---- 项目库（#89）：两节（已验证 / 观察中）+ 计数 + 生成草稿 / 发布 ----
+  //
+  // 聚合与分节由主进程的 src/project-library.mjs 算好（快照里的 view.library），
+  // 这里只画 DOM、只读 snapshot 摘要；不在渲染层再算一次归属或计数。
+
+  const libraryEntryRow = (item) => {
+    const row = el('div', 'library-item');
+    const main = el('div', 'library-item-main');
+    main.append(el('div', 'library-item-title', item.title || '未命名条目'));
+    const meta = el('div', 'library-item-meta');
+    meta.append(el('span', `library-badge ${item.status || 'unknown'}`, item.badge || item.status || '未知'));
+    if (item.detail) meta.append(el('span', 'library-item-detail', item.detail));
+    // 只显示证据条数，不把证据正文铺进库：引用留在快照里，详情留给后续票。
+    const evidenceCount = (item.evidenceRefs ?? []).length || countOf(item.evidenceCount);
+    if (evidenceCount > 0) meta.append(el('span', 'library-item-evidence', `证据 ${evidenceCount}`));
+    main.append(meta);
+    row.append(main);
+    return row;
+  };
+
+  const renderLibrary = () => {
+    const section = $('librarySection');
+    if (!section) return;
+    const library = view?.library;
+    const project = workspaceProject();
+    section.hidden = !(project && library);
+    if (!project || !library) return;
+
+    const counts = library.counts ?? {};
+    $('libraryBadge').textContent = String(countOf(counts.total));
+    $('libraryBadge').title = `已验证 ${countOf(counts.verified)} 条 · 观察中 ${countOf(counts.observing)} 条`;
+
+    const empty = $('libraryEmpty');
+    empty.hidden = !library.empty;
+    empty.replaceChildren();
+    if (library.empty) {
+      empty.append(el('strong', undefined, library.empty.title || '这个项目的库还是空的'));
+      empty.append(el('span', undefined, library.empty.detail || ''));
+    }
+
+    const holder = $('librarySections');
+    holder.replaceChildren();
+    for (const sectionModel of library.sections ?? []) {
+      const card = el('section', `library-block library-${sectionModel.key}`);
+      const head = el('div', 'library-block-head');
+      head.append(el('h4', 'library-block-name', sectionModel.label));
+      head.append(el('span', 'library-block-count', `${countOf(sectionModel.count)} 条`));
+      card.append(head);
+      if (!(sectionModel.items ?? []).length) {
+        card.append(el('p', 'library-block-empty', sectionModel.emptyHint || '没有条目。'));
+      } else {
+        for (const item of sectionModel.items) card.append(libraryEntryRow(item));
+        if (sectionModel.truncated) {
+          card.append(el('p', 'library-more',
+            `显示前 ${countOf(sectionModel.shown)} 条，共 ${countOf(sectionModel.count)} 条；发布时快照包含全部。`));
+        }
+      }
+      holder.append(card);
+    }
+
+    // 画像与图谱是库里的另两类只读资产，不参与两节分节；缺的类别写明缺。
+    const assetHolder = $('libraryAssets');
+    const profile = library.assets?.profile;
+    const diagrams = library.assets?.diagrams ?? [];
+    const parts = [
+      profile?.available
+        ? `画像：${profile.oneLiner || profile.title || '已生成'}${profile.basedOnCommit ? `（基于 ${String(profile.basedOnCommit).slice(0, 7)}）` : ''}`
+        : '画像：还没有生成',
+      `图谱：${diagrams.filter((item) => item.available).length}/${diagrams.length || 0} 类`
+    ];
+    const missing = library.assets?.missingDiagrams ?? [];
+    if (missing.length) parts.push(`缺 ${missing.join(' / ')}`);
+    assetHolder.hidden = false;
+    assetHolder.textContent = parts.join(' · ');
+
+    const snapshot = library.snapshot ?? {};
+    const draft = snapshot.draft;
+    const publishButton = $('libraryPublish');
+    if (draft) {
+      const draftCounts = draft.counts ?? {};
+      $('libraryStatus').textContent =
+        `草稿：已验证 ${countOf(draftCounts.verified)} 条 · 观察中 ${countOf(draftCounts.observing)} 条 · ` +
+        `生成于 ${formatRelative(draft.generatedAt) || '—'}（没有版本号）`;
+    } else {
+      $('libraryStatus').textContent = '还没有草稿；先生成草稿，再决定要不要发布。';
+    }
+    publishButton.textContent = `发布 ${snapshot.nextLabel || 'v1'}`;
+    publishButton.disabled = !draft;
+
+    // 版本浏览的详情是下一张票：这里只给版本号与时间，不给可点开的渲染。
+    const versions = $('libraryVersions');
+    versions.replaceChildren();
+    const rows = snapshot.versions ?? [];
+    if (rows.length) {
+      versions.append(el('span', 'library-versions-label', '已发布：'));
+      for (const item of rows.slice(0, 5)) {
+        const chip = el('span', 'library-version', `${item.label} · ${formatRelative(item.publishedAt) || '—'}`);
+        chip.title = `${item.label} · ${String(item.publishedAt ?? '').replace('T', ' ').slice(0, 19)}` +
+          (item.note ? ` · ${item.note}` : '');
+        versions.append(chip);
+      }
+    }
+  };
+
+  /**
+   * 生成草稿 / 发布：都是显式动作。成功后用主进程返回的 library 直接重画，
+   * 再 refresh 一次让知识计数等其它段同步；失败只 toast，不清掉已有草稿与版本。
+   */
+  const libraryAction = async (action, success) => {
+    const project = workspaceProject();
+    if (!project) { toast('先选择一个项目。'); return null; }
+    const draftButton = $('libraryDraft');
+    const publishButton = $('libraryPublish');
+    draftButton.disabled = true;
+    publishButton.disabled = true;
+    try {
+      const result = await action(project.id);
+      if (view) view = { ...view, library: result };
+      renderLibrary();
+      await refresh();
+      if (success) toast(success(result), 4200);
+      return result;
+    } catch (error) {
+      // Electron 会给 IPC 错误加前缀，先去掉再展示；发布不可变等原因由主进程给出。
+      toast(cleanIpcError(error?.message ?? error), 6000);
+      return null;
+    } finally {
+      draftButton.disabled = false;
+      // 发布按钮的可用性回到「有没有草稿」，由 renderLibrary 决定。
+      if (view?.library) renderLibrary();
     }
   };
 
@@ -3627,6 +3774,7 @@
     renderOps();
     renderWorkProjectBar();
     renderWorkEntries();
+    renderLibrary();
     renderSinceSeen();
   };
 
