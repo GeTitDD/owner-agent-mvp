@@ -212,17 +212,20 @@ test('会话头缺字段：有稳定默认值，不写 undefined', () => {
 
 test('壳引用的是同一份复制实现：按钮声明在两层，写入点可注入', () => {
   const html = read('desktop/shell.html');
+  // #121 之后「壳」拆成三块：复制的写入点与悬停规则随对话流搬到 shell-stream.cjs，
+  // 装配层 shell.js 只负责把 OwnerShellCopy 接进去。
   const shell = read('desktop/shell.js');
+  const stream = read('desktop/shell-stream.cjs');
   const view = read('desktop/shell-blocks-view.js');
   // 顺序：块模型 → 复制实现 → 块渲染 → 壳。复制实现必须先于使用它的脚本。
   assert.ok(html.indexOf('shell-blocks.cjs') < html.indexOf('shell-copy.cjs'));
   assert.ok(html.indexOf('shell-copy.cjs') < html.indexOf('shell-blocks-view.js'));
   assert.ok(html.indexOf('shell-blocks-view.js') < html.indexOf('shell.js'));
   assert.match(shell, /OwnerShellCopy/u);
-  assert.match(shell, /window\.OwnerShellClipboard/u, '剪贴板必须留一个可注入的写入点');
-  assert.match(shell, /copyMessage = '1'/u);
+  assert.match(stream, /window\.OwnerShellClipboard/u, '剪贴板必须留一个可注入的写入点');
+  assert.match(stream, /copyMessage = '1'/u);
   assert.match(view, /copyBlock = '1'/u);
-  assert.match(shell, /data-copy-active/u, '同一时刻只亮一个的规则在壳里');
+  assert.match(stream, /data-copy-active/u, '同一时刻只亮一个的规则在壳里');
 });
 
 test('新文件都在 npm run check 的清单里', () => {
