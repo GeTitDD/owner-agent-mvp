@@ -19,8 +19,21 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     })
   }),
   createJob: (input) => invoke('companion:create-job', input),
+  // #110 复制：沙箱里的渲染进程不能直接写系统剪贴板，走主进程。
+  writeClipboard: (text) => invoke('companion:clipboard-write', { text: String(text ?? '') }),
+  // #110 会话导出：正文 + 上下文头落到 <userData>/conversations/<sessionId>.md。
+  conversation: Object.freeze({
+    export: (input) => invoke('companion:conversation-export', input)
+  }),
   // #106 卡片壳：会话列表 / 切换 / 新建 / 重命名 / 置顶 / 软删除 / 找回。
   // 与 chat.sessions 分开，是因为卡片壳允许「不绑项目的会话」且删除是软删除。
+  // #107 起多两个：#107 的「正在看的项目」是会话上的视图状态；项目列表与全局聚合只读。
+  cardProjects: Object.freeze({
+    list: () => invoke('companion:card-projects')
+  }),
+  cardScope: Object.freeze({
+    globalLibrary: (input) => invoke('companion:card-global-library', input)
+  }),
   cardSessions: Object.freeze({
     list: (input) => invoke('companion:card-sessions', input),
     get: (input) => invoke('companion:card-session-get', input),
@@ -30,6 +43,7 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     remove: (input) => invoke('companion:card-session-soft-delete', input),
     restore: (input) => invoke('companion:card-session-restore', input),
     touch: (input) => invoke('companion:card-session-touch', input),
+    view: (input) => invoke('companion:card-session-view', input),
     append: (input) => invoke('companion:card-session-append', input),
     answers: (input) => invoke('companion:card-session-answer', input)
   }),

@@ -4,8 +4,8 @@
 // 不变量：
 // - 会话绑定的项目必须已登记：写入前校验 owner_projects，表上另有外键兜底。
 // - 会话可以不绑项目（#106 的全局会话）：project_id 可空，空即「还没绑项目」。
-// - 只存消息文本与必要元数据（项目、标题、时间、角色、引用、状态、置顶、删除时间），
-//   不把聊天记录当项目状态，也不写回 owner_projects。
+// - 只存消息文本与必要元数据（项目、标题、时间、角色、引用、状态、置顶、删除时间、
+//   正在看的项目），不把聊天记录当项目状态，也不写回 owner_projects。
 // - 只新增 owner_chat_sessions / owner_chat_messages 两张表，
 //   老库通过 CREATE TABLE IF NOT EXISTS + 列迁移平滑升级，不改旧表语义。
 // - 删除会话只动自己与消息，项目数据不受影响；#106 的软删除只写 deleted_at，
@@ -30,7 +30,13 @@ const MESSAGE_PAGE = 500;
  * #106 起允许全局会话，所以要放宽成可空。SQLite 改不了列的 NOT NULL，
  * 只能重建表——和 owner-store 里 #94 队列迁移同一套写法：按列名搬运，一行不丢。
  */
-const SESSION_COLUMNS = ['id', 'project_id', 'title', 'created_at', 'updated_at', 'pinned', 'deleted_at', 'last_opened_at'];
+const SESSION_COLUMNS = [
+  'id', 'project_id', 'title', 'created_at', 'updated_at',
+  'pinned', 'deleted_at', 'last_opened_at', 'view_project_id'
+];
+// view_project_id：正在看的项目（#107）。空串即全局；与 project_id（会话绑定 / 历史归属）
+// 分开存，两者不一致时会话打「跨项目」标。不加外键：项目删掉后视图退回全局，
+// 不该反过来把会话一起级联删掉。
 const SESSION_TABLE_DDL = `(
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES owner_projects(id) ON DELETE CASCADE,
@@ -39,7 +45,8 @@ const SESSION_TABLE_DDL = `(
   updated_at TEXT NOT NULL,
   pinned INTEGER NOT NULL DEFAULT 0,
   deleted_at TEXT,
-  last_opened_at TEXT
+  last_opened_at TEXT,
+  view_project_id TEXT NOT NULL DEFAULT ''
 )`;
 
 export class ChatSessionError extends Error {
@@ -115,6 +122,9 @@ const sessionRow = (row) => row
     deletedAt: row.deleted_at ?? '',
     // 最近打开时间：#106 用它记住「当前选的是哪条」，重启后回到同一条。
     lastOpenedAt: row.last_opened_at ?? '',
+    // #107：正在看的项目（空 = 全局）。它是视图状态，和会话绑定的 projectId 分开；
+    // 两者不一致时界面打「跨项目」标。
+    viewProjectId: row.view_project_id ?? '',
     messageCount: Number(row.message_count ?? 0),
     // 轮数 = 我问过几句；助手回复条数与它成对出现，但没回复时轮数也要能数对。
     turnCount: Number(row.turn_count ?? 0)
@@ -226,6 +236,10 @@ export class ChatSessionStore {
     if (!names.has('last_opened_at')) {
       this.db.exec('ALTER TABLE owner_chat_sessions ADD COLUMN last_opened_at TEXT');
     }
+    // #107：正在看的项目。旧记录按空串补，读出来就是全局；绑定项目仍在 project_id 上。
+    if (!names.has('view_project_id')) {
+      this.db.exec(`ALTER TABLE owner_chat_sessions ADD COLUMN view_project_id TEXT NOT NULL DEFAULT ''`);
+    }
     // #109 的块与提问回答也落在消息行上：切会话/重启后，带块的回复还是原样。
     const messageColumns = new Set(
       this.db.prepare('PRAGMA table_info(owner_chat_messages)').all().map((column) => column.name)
@@ -257,8 +271,9 @@ export class ChatSessionStore {
     const name = normalizeChatTitle(title, { fallback: DEFAULT_CHAT_TITLE });
     try {
       this.db.prepare(
-        'INSERT INTO owner_chat_sessions(id,project_id,title,created_at,updated_at) VALUES(?,?,?,?,?)'
-      ).run(id, project ? project.id : null, name, now, now);
+        `INSERT INTO owner_chat_sessions(id,project_id,title,created_at,updated_at,view_project_id)
+         VALUES(?,?,?,?,?,?)`
+      ).run(id, project ? project.id : null, name, now, now, project ? project.id : '');
     } catch (error) {
       if (/UNIQUE constraint/u.test(String(error?.message ?? ''))) fail('会话 ID 已存在', 409);
       throw error;
@@ -386,6 +401,23 @@ export class ChatSessionStore {
     ).run(at, key);
     if (!changed.changes) fail('会话不存在', 404);
     return { id: key, lastOpenedAt: at };
+  }
+
+  /**
+   * 改「正在看的项目」（#107）：空串 = 全局。
+   * 只动视图状态，不动 project_id（历史归属）与 updated_at（不重排列表）；
+   * 目标项目必须已登记，和新建会话同一条校验，不做「找不到就退回全局」的静默兜底。
+   */
+  setViewProject(id, projectId = '') {
+    const key = String(id ?? '').trim();
+    if (!key) fail('缺少会话 ID');
+    const wanted = String(projectId ?? '').trim();
+    const project = wanted ? this.assertProject(wanted) : null;
+    const changed = this.db.prepare(
+      'UPDATE owner_chat_sessions SET view_project_id=? WHERE id=?'
+    ).run(project ? project.id : '', key);
+    if (!changed.changes) fail('会话不存在', 404);
+    return this.getSession(key);
   }
 
   /**
