@@ -3080,6 +3080,28 @@ const registerIpc = () => {
     });
   });
 
+  // #114 自有目录写入：卡片壳把「记灵感」这类动作交到这里，主进程只负责真正写库。
+  // 判定与回执在渲染层读 src/own-write.mjs（同一份 write-gate 规则），这里不重复判定；
+  // 与既有写通道一样走 sidecar 的 /owner/v1/*，不另开一条写库路径。
+  // 这一版只接了记灵感：其余动作（草稿 / 水位 / 入队 / 导出）还没有免确认的写入实现，
+  // 明确拒绝并把原因交回渲染层，由它写成一条失败回执——不静默、也不假装写过。
+  ipcMain.handle('companion:own-write', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const kind = String(input?.kind ?? '');
+    if (kind !== 'idea') {
+      throw new Error(`自有目录写入还没接上「${kind || '未知动作'}」：这一版只接了记灵感。`);
+    }
+    const text = String(input?.text ?? '');
+    const result = await api('/owner/v1/ideas', { method: 'POST', body: { text } });
+    const item = result?.item ?? {};
+    return {
+      ok: true,
+      // 去重命中时如实说「没有新增」，回执里的「写了什么」才准确。
+      wrote: result?.duplicate ? 'ideas 表 · 已有条目，未新增' : 'ideas 表 · 1 条',
+      result: String(item.id ?? '') || '已记录'
+    };
+  });
+
   // 状态机在存储层：非法流转返回 409，面板把原因告诉用户，而不是把条目硬改过去。
   ipcMain.handle('companion:idea-status', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');

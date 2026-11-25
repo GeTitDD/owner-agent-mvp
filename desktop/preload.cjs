@@ -79,6 +79,9 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     sort: (input) => invoke('companion:idea-sort', input),
     promote: (input) => invoke('companion:idea-promote', input)
   }),
+  // #114 自有目录写入：判定与回执在渲染层（src/own-write.mjs），这里只提供真正写库的一步。
+  // 走这条路的动作不弹确认卡；删除 / 项目目录 / 外发不从这里走（#115 / #116）。
+  ownWrite: (input) => invoke('companion:own-write', input),
   diagrams: Object.freeze({
     dependency: (input) => invoke('companion:diagram-dependency', input),
     generate: (input) => invoke('companion:diagram-generate', input)
