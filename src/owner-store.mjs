@@ -9,6 +9,7 @@ import { sha256 } from './utils.mjs';
 import { canonicalProposalHash } from './patch-protocol.mjs';
 import { SANDBOX_STATUSES, approvalHash as computeSandboxApprovalHash } from './sandbox-protocol.mjs';
 import { PersonalKnowledgeStore } from './personal-store.mjs';
+import { ideaDedupeKey } from './idea-entry.mjs';
 
 export class OwnerInputError extends Error { constructor(message,status=400){super(message);this.status=status;} }
 const check=(ok,msg,status=400)=>{if(!ok)throw new OwnerInputError(msg,status);};
@@ -591,6 +592,19 @@ export class OwnerStore {
     return this.db.prepare(`SELECT * FROM owner_project_queue WHERE kind='idea'
       ORDER BY created_at DESC,id ASC`).all().map(queueRow);
   }
+  // #95 重复入队：同一段正文 + 同一个来源算同一条，命中就返回已有条目，不再插一条。
+  // 比较只在内存里做空白归一（见 idea-entry.mjs），原文仍按用户输入原样保存。
+  // 旧条目（对话自动采集）只有标题没有原文：拿标题当正文比较，同一句不会被记两次。
+  findIdeaByContent({rawText='',captureSource='paste'}={}){
+    const key=ideaDedupeKey({rawText,captureSource});
+    const rows=this.db.prepare(`SELECT * FROM owner_project_queue WHERE kind='idea' AND capture_source=?
+      ORDER BY created_at ASC,id ASC`).all(String(captureSource));
+    const hit=rows.find((row)=>ideaDedupeKey({
+      rawText: row.raw_text || row.title,
+      captureSource: row.capture_source
+    })===key);
+    return hit?queueRow(hit):null;
+  }
   addIdeaItem({projectId=null,title,rawText='',captureSource='paste',link='',body='',source='owner',now=stamp()}={}){
     const project=projectId===undefined||projectId===null||projectId===''?null:ident(projectId,'project id');
     if(project!==null)check(!!this.getProject(project),'Unknown project',404);
@@ -601,6 +615,9 @@ export class OwnerStore {
     const linkText=txt(link,'link',2000,false);
     // 只做存储：这里不抓链接，只保证「来源是链接」的条目确实带链接。
     if(captureSource==='link')check(!!linkText,'Link is required for link items');
+    // 同一条不重复入队：命中已有条目就原样返回，让调用方拿到「还是这一条」。
+    const existing=this.findIdeaByContent({rawText:raw,captureSource});
+    if(existing)return existing;
     const next=project===null
       ? (this.db.prepare('SELECT COALESCE(MAX(position),0)+1 AS pos FROM owner_project_queue WHERE project_id IS NULL').get()?.pos??1)
       : (this.db.prepare('SELECT COALESCE(MAX(position),0)+1 AS pos FROM owner_project_queue WHERE project_id=?').get(project)?.pos??1);
