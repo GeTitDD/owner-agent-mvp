@@ -110,6 +110,10 @@ let snapshotStore = null;
 let exportModule = null;
 // #93：删除项目连带清理快照与导出目录；清单（plan）与执行分开，未确认不删。
 let projectDeletionModule = null;
+// #91：发布后发一条飞书文本卡片，投递结果记在单独的账本表上（快照本身不可变）。
+let publishCardModule = null;
+let publishCardStore = null;
+let feishuConfigModule = null;
 // #84：水位与「自上次看过」。
 // - memoryWatermarks：每项目一个时间点，与 OwnerStore 共用同一条连接（同一份本地库）；
 // - observerEventStore：只读观察员事件，独立连接（观察员可以和桌面端同时开着）；
@@ -310,6 +314,16 @@ async function startServices() {
   } catch (error) {
     console.error('project export module unavailable:', error.message);
     exportModule = null;
+  }
+  // #91：发布卡片。投递账本复用同一条连接；模块不可用时只影响「发卡片」这个动作，
+  // 发布 / 导出照旧，面板会显示卡片未发送。
+  try {
+    publishCardModule = await importEsm('../src/project-publish-card.mjs');
+    publishCardStore = new publishCardModule.PublishCardStore({ db: store.db });
+  } catch (error) {
+    console.error('publish card module unavailable:', error.message);
+    publishCardModule = null;
+    publishCardStore = null;
   }
   try {
     const { PersonalKnowledgeStore } = await importEsm('../src/personal-store.mjs');
@@ -1265,9 +1279,9 @@ const knowledgeDetail = ({ id } = {}) => {
   const exportsRoot = () => path.join(app.getPath('userData'), 'exports');
 
   /** 面板要显示的最新版本导出路径：目录是确定的，是否存在单独判断，不靠缓存。 */
-  const exportInfoFor = (projectId, versions) => {
+  const exportInfoFor = (projectId, versions, wantedVersion = 0) => {
     if (!exportModule || !projectId) return null;
-    const latest = versions?.[0];
+    const latest = versions?.find((item) => item.version === wantedVersion) ?? versions?.[0];
     if (!latest) return null;
     const files = exportModule.exportFilesOf({
       root: exportsRoot(), projectId, version: latest.version
@@ -1282,6 +1296,48 @@ const knowledgeDetail = ({ id } = {}) => {
       // 两个文件都在才算这一版导出完整；缺一个就当没导出，让「导出」按钮可用。
       exists: fs.existsSync(files.snapshotPath) && fs.existsSync(files.reportPath)
     };
+  };
+
+  /**
+   * #91 飞书 webhook：沿用观察员的同一份配置（env → ~/.owner-agent/feishu.json），
+   * 不新开第二条通道，也不在界面上另存一份凭据。
+   */
+  const loadFeishuWebhook = async () => {
+    try {
+      feishuConfigModule ??= await importEsm('../src/observer/config.mjs');
+      return feishuConfigModule.resolveFeishuWebhook().webhook;
+    } catch (error) {
+      console.error('feishu config unavailable:', error?.message ?? error);
+      return '';
+    }
+  };
+
+  /**
+   * #91 发布卡片：只发一条文本，结果记在投递账本上。
+   * 发布此时已经成功，卡片发不出去不能反过来影响快照与导出：这里不抛异常，只返回状态；
+   * 也不会自动重发，重试只能由人点「重新发送」调 companion:library-resend。
+   */
+  const sendPublishCard = async ({ project, version, exportDir = '', exportError = '' }) => {
+    if (!publishCardModule || !publishCardStore || !snapshotStore) {
+      return { status: 'unsent', detail: '卡片模块尚未就绪，请重启后再试。', delivery: null };
+    }
+    const raw = snapshotStore.getVersionRaw(project.id, version);
+    if (!raw) return { status: 'unsent', detail: '找不到这一版快照。', delivery: null };
+    try {
+      return await publishCardModule.deliverPublishCard({
+        deliveries: publishCardStore,
+        projectId: project.id,
+        version,
+        contentText: raw.contentText,
+        exportDir,
+        exportError,
+        publishedAt: raw.publishedAt,
+        webhookUrl: await loadFeishuWebhook()
+      });
+    } catch (error) {
+      console.error('publish card failed:', error?.message ?? error);
+      return { status: 'unsent', detail: `卡片处理失败：${error?.message ?? error}`, delivery: null };
+    }
   };
 
   /**
@@ -1305,6 +1361,11 @@ const knowledgeDetail = ({ id } = {}) => {
     });
     const draft = snapshotStore?.getDraftState(project.id) ?? null;
     const versions = snapshotStore?.listVersions(project.id) ?? [];
+    // 只把「最新一版」的投递结果给面板：旧版本的发送状态不该冒充当前这版。
+    const latestDelivery = publishCardStore?.getLatest(project.id) ?? null;
+    const delivery = latestDelivery && latestDelivery.version === versions[0]?.version
+      ? latestDelivery
+      : null;
     const payload = {
       ...view,
       // 快照模块不可用时退回空摘要：库仍能看，只是不能生成/发布（按钮由 hasDraft 置灰）。
@@ -1312,7 +1373,10 @@ const knowledgeDetail = ({ id } = {}) => {
         ? snapshotModule.snapshotStateOf({ draft, versions })
         : { hasDraft: false, draft: null, versions: [], latestVersion: 0, nextVersion: 1, nextLabel: 'v1' },
       // 导出只读快照：面板拿到的路径就是 publish / export 写出的同一个目录。
-      export: exportInfoFor(project.id, versions)
+      export: exportInfoFor(project.id, versions),
+      // #91 飞书卡片：最新一版的投递结果（成功 / 未发送 + 原因），重启后仍能读到；
+      // 没有版本或还没有投递记录时给 null，面板据此决定是否显示「重新发送」。
+      delivery
     };
     // 面板每 2 秒轮询一次快照，groups 是全量条目，只给生成快照用，不随渲染下发。
     if (!full) delete payload.groups;
@@ -3649,6 +3713,14 @@ const registerIpc = () => {
     } else {
       exportError = '导出模块尚未就绪，请重启后再试。';
     }
+    // #91：导出确定之后再发卡片（卡片里有导出路径）；发送失败不回滚发布，
+    // 状态记成「未发送」由人点「重新发送」。
+    const delivery = await sendPublishCard({
+      project,
+      version: published.version,
+      exportDir: exported?.dir ?? '',
+      exportError: exported ? '' : exportError
+    });
     const library = await libraryForProject(project);
     return {
       ...library,
@@ -3657,7 +3729,8 @@ const registerIpc = () => {
         label: `v${published.version}`,
         publishedAt: published.publishedAt,
         export: exported,
-        exportError
+        exportError,
+        delivery
       }
     };
   });
@@ -3677,6 +3750,28 @@ const registerIpc = () => {
     });
     const library = await libraryForProject(project);
     return { ...library, exported };
+  });
+
+  // #91「重新发送」：只有人点才会调用——没有自动重试、没有定时发送。
+  // 重发只走投递，不新建版本、也不改快照；导出已存在就把路径再写进卡片。
+  ipcMain.handle('companion:library-resend', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!snapshotStore || !publishCardModule) throw new Error('卡片模块尚未就绪，请重启后再试。');
+    const project = await projectRowFor(String(input?.projectId ?? '') || config.projectId);
+    if (!project) throw new Error('还没有项目，先添加一个项目目录。');
+    const versions = snapshotStore.listVersions(project.id);
+    const wanted = Number(input?.version);
+    const version = Number.isSafeInteger(wanted) && wanted > 0 ? wanted : versions[0]?.version;
+    if (!version) throw new Error('还没有已发布的版本，先发布一次。');
+    const info = exportInfoFor(project.id, versions, version);
+    const delivery = await sendPublishCard({
+      project,
+      version,
+      exportDir: info?.exists ? info.dir : '',
+      exportError: info?.exists ? '' : '还没有导出'
+    });
+    const library = await libraryForProject(project);
+    return { ...library, resent: delivery };
   });
 
   // #90「打开目录」：只允许打开导出根之内的路径，路径不存在就明确报错。

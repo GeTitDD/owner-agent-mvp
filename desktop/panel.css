@@ -1908,3 +1908,14 @@ pre.diff, pre.logs {
   line-height: 1.5;
   word-break: break-all;
 }
+/* #91 发布卡片：发送状态与「重新发送」并排；未发送标红，原因不折叠。 */
+.library-delivery-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.library-delivery {
+  flex: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.library-delivery.sent { color: var(--muted); }
+.library-delivery.unsent { color: #b45309; }

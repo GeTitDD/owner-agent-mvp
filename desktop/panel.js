@@ -2888,6 +2888,10 @@
   };
 
   $('tidyKnowledge').onclick = () => { void openKnowledgeTidy(); };
+  // #91 发布卡片：只回报投递状态，不在这里补发；重发入口在库段的「重新发送」。
+  const cardStatusText = (delivery) => (delivery?.status === 'sent'
+    ? '飞书卡片已发送'
+    : `飞书卡片未发送（${delivery?.detail || '原因未知'}）`);
   // 项目库：生成草稿可反复点（覆盖同一份），发布按钮在没有草稿时禁用。
   $('libraryDraft').onclick = () => {
     void libraryAction(
@@ -2901,10 +2905,11 @@
       (result) => {
         const label = result?.published?.label ?? '新版本';
         const dir = result?.published?.export?.dir;
+        const card = cardStatusText(result?.published?.delivery);
         // 发布成功就把可预测的导出路径写进提示；路径本身在库段里长期可见，不靠 toast 留住。
-        if (dir) return `已发布 ${label}，导出到 ${dir}`;
-        if (result?.published?.exportError) return `已发布 ${label}，但导出失败：${result.published.exportError}`;
-        return `已发布 ${label}（导出未完成）`;
+        if (dir) return `已发布 ${label}，导出到 ${dir}；${card}`;
+        if (result?.published?.exportError) return `已发布 ${label}，但导出失败：${result.published.exportError}；${card}`;
+        return `已发布 ${label}（导出未完成）；${card}`;
       }
     );
   };
@@ -3148,42 +3153,83 @@
   //
   // 导出只读已发布的快照，路径由主进程算好（library.export），渲染层不再拼一次，
   // 免得界面显示的路径和真正写出的目录不一致。
-  const renderLibraryExport = (library) => {
+  const renderLibraryExport = (library, project) => {
     const holder = $('libraryExport');
     if (!holder) return;
     holder.replaceChildren();
     const info = library?.export;
     const versions = library?.snapshot?.versions ?? [];
-    if (!info || !versions.length) { holder.hidden = true; return; }
+    const delivery = library?.delivery;
+    if (!versions.length) { holder.hidden = true; return; }
     holder.hidden = false;
 
-    const line = el('div', 'library-export-line');
-    line.append(el('span', 'library-export-path',
-      info.exists ? `导出：${info.dir}` : `还没有导出 ${info.label}`));
-    if (info.exists) {
-      const open = el('button', 'ghost small', '打开目录');
-      open.type = 'button';
-      open.title = '在文件管理器里打开这一版的导出目录';
-      open.onclick = () => {
-        void window.companion.library.openExport({ path: info.dir })
-          .catch((error) => toast(cleanIpcError(error?.message ?? error), 6000));
-      };
-      line.append(open);
-    } else {
-      const run = el('button', 'ghost small', `导出 ${info.label}`);
-      run.type = 'button';
-      run.title = '把这一版已发布快照重新写到固定目录（重复导出内容不变）';
-      run.onclick = () => {
-        void libraryAction(
-          (projectId) => window.companion.library.export({ projectId, version: info.version }),
-          (result) => (result?.exported?.dir
-            ? `已导出 ${result.exported.label}：${result.exported.dir}`
-            : '已导出')
-        );
-      };
-      line.append(run);
+    if (info) {
+      const line = el('div', 'library-export-line');
+      line.append(el('span', 'library-export-path',
+        info.exists ? `导出：${info.dir}` : `还没有导出 ${info.label}`));
+      if (info.exists) {
+        const open = el('button', 'ghost small', '打开目录');
+        open.type = 'button';
+        open.title = '在文件管理器里打开这一版的导出目录';
+        open.onclick = () => {
+          void window.companion.library.openExport({ path: info.dir })
+            .catch((error) => toast(cleanIpcError(error?.message ?? error), 6000));
+        };
+        line.append(open);
+      } else {
+        const run = el('button', 'ghost small', `导出 ${info.label}`);
+        run.type = 'button';
+        run.title = '把这一版已发布快照重新写到固定目录（重复导出内容不变）';
+        run.onclick = () => {
+          void libraryAction(
+            (projectId) => window.companion.library.export({ projectId, version: info.version }),
+            (result) => (result?.exported?.dir
+              ? `已导出 ${result.exported.label}：${result.exported.dir}`
+              : '已导出')
+          );
+        };
+        line.append(run);
+      }
+      holder.append(line);
     }
-    holder.append(line);
+
+    // #91 飞书卡片：状态来自主进程的投递账本（成功 / 未发送 + 原因）。
+    // 只有「未发送」时才出现「重新发送」——点了才会再发一次，没有自动重试。
+    if (delivery) {
+      const row = el('div', 'library-delivery-line');
+      const sent = delivery.status === 'sent';
+      const status = el('span', `library-delivery ${sent ? 'sent' : 'unsent'}`,
+        sent
+          ? `飞书：已发送 ${delivery.label}${delivery.attemptedAt ? ` · ${formatRelative(delivery.attemptedAt)}` : ''}`
+          : `飞书：未发送 ${delivery.label} · ${delivery.detail || '原因未知'}`);
+      status.title = delivery.detail || '';
+      row.append(status);
+      if (!sent) {
+        const resend = el('button', 'ghost small', '重新发送');
+        resend.type = 'button';
+        resend.title = '只有点了才会再发一次；不会自动重试';
+        resend.onclick = async () => {
+          resend.disabled = true;
+          try {
+            const result = await window.companion.library.resend({
+              projectId: project.id,
+              version: delivery.version
+            });
+            if (view) view = { ...view, library: result };
+            renderLibrary();
+            await refresh();
+            const okSent = result?.resent?.status === 'sent';
+            toast(okSent ? '飞书卡片已重新发送' : `仍然未发送：${result?.resent?.detail ?? '原因未知'}`,
+              okSent ? 4200 : 6000);
+          } catch (error) {
+            toast(cleanIpcError(error?.message ?? error), 6000);
+            resend.disabled = false;
+          }
+        };
+        row.append(resend);
+      }
+      holder.append(row);
+    }
   };
 
   const renderLibrary = () => {
@@ -3268,7 +3314,7 @@
         versions.append(chip);
       }
     }
-    renderLibraryExport(library);
+    renderLibraryExport(library, project);
   };
 
   /**
