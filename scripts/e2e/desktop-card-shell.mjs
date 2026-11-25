@@ -180,6 +180,9 @@ const runShell = async () => {
       && fs.existsSync(path.join(repoRoot, 'desktop', 'panel.css')));
   } finally {
     await app.stop();
+    // 成功就清临时 userData / 库，失败留着现场；截图始终留在 shotsDir。
+    if (failures.length === 0) safeRemove(root);
+    else console.warn(`[CARD-SHELL-#105] kept state: ${root}`);
   }
 };
 
@@ -207,7 +210,8 @@ const runDefaultEntry = async () => {
     check('old panel boots with a clean console', errors.length === 0, errors.slice(0, 3).join(' | '));
   } finally {
     await app.stop();
-    safeRemove(root);
+    if (failures.length === 0) safeRemove(root);
+    else console.warn(`[CARD-SHELL-#105] kept state: ${root}`);
   }
 };
 
