@@ -115,7 +115,9 @@ const defaults = () => ({
   sandboxMode: 'auto',
   sandboxByProject: {},
   sandboxProjectDirByProject: {},
-  panelPinned: false
+  panelPinned: false,
+  // 对话的隐式技能：空数组表示用默认七个；上限 12 由 pi-chat 兜住。
+  chatSkills: []
 });
 let config = defaults();
 
@@ -710,6 +712,8 @@ const skillCatalogPayload = async ({ refresh = false } = {}) => {
         domainRoot: path.join(__dirname, '..', 'domains'),
         pluginsDir: path.join(__dirname, '..', 'plugins'),
         pstackSkillsDir: resolvePstackSkillsDir(),
+        mattSkillsDir: process.env.MATT_SKILLS_DIR
+          || path.join(os.homedir(), '.owner-agent', 'skills', 'matt'),
         pstackSkillIds: registry.PLAYBOOKS.map((item) => ({
           id: item.id,
           playbookLabel: item.label,
@@ -719,7 +723,14 @@ const skillCatalogPayload = async ({ refresh = false } = {}) => {
       })
     });
   }
-  return skillCatalogCache.read({ refresh: Boolean(refresh) });
+  return skillCatalogCache.read({ refresh: Boolean(refresh) }).then(async (view) => {
+    // 顺带把「哪些技能用于对话」带出去：面板要据此勾选，默认七个由 pi-chat 定义。
+    const chatMod = await importEsm('../src/pi-chat.mjs');
+    const picked = Array.isArray(config.chatSkills) && config.chatSkills.length
+      ? config.chatSkills
+      : chatMod.DEFAULT_SKILL_IDS;
+    return { ...view, implicitSkillIds: [...picked] };
+  });
 };
 
 const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) => {
@@ -2417,7 +2428,13 @@ const submitCompanionTask = async ({ text, projectId }) => {
 const getChatService = async () => {
   if (chatService) return chatService;
   chatModule ??= await importEsm('../src/pi-chat.mjs');
-  chatService = new chatModule.PiChatService({ model: config.model || '' });
+  // 隐式技能来自 companion.json；空数组表示「用默认七个」，上限由 pi-chat 再兜一层。
+  chatService = new chatModule.PiChatService({
+    model: config.model || '',
+    implicitSkillIds: Array.isArray(config.chatSkills) && config.chatSkills.length
+      ? config.chatSkills
+      : null
+  });
   return chatService;
 };
 
@@ -3368,6 +3385,14 @@ const registerIpc = () => {
     if (typeof input?.gatewayUrl === 'string') config.gatewayUrl = input.gatewayUrl.trim();
     if (typeof input?.model === 'string') config.model = input.model.trim();
     if (typeof input?.diagramModel === 'string') config.diagramModel = input.diagramModel.trim();
+    // 对话隐式技能：最多 12 个；改完立刻重建服务，下一条消息就用新配置。
+    if (Array.isArray(input?.chatSkills)) {
+      const unique = [...new Set(input.chatSkills.map((item) => String(item ?? '').trim()).filter(Boolean))];
+      if (unique.length > 12) throw new Error('对话技能最多 12 个：再多会把提示词撑爆。');
+      config.chatSkills = unique;
+      try { chatService?.disposeAll?.(); } catch { /* 释放失败也不影响下次创建 */ }
+      chatService = null;
+    }
     // 不再接受 projectId：面板的项目选择只存在内存里，不允许通过设置写回配置。
     if (typeof input?.sandboxMode === 'string') {
       const mod = sandboxPlanModule ?? await importEsm('../src/sandbox-plan.mjs');

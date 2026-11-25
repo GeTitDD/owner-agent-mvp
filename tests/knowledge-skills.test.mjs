@@ -8,6 +8,7 @@ import {
   createSkillCatalogCache,
   parseSkillFrontMatter,
   scanDomainSkills,
+  scanMattSkills,
   scanPluginSkills,
   scanPstackSkills,
   skillCatalogFor,
@@ -45,14 +46,14 @@ test('视图模型按来源分组、统计缺失，缺失排在最前', () => {
       { id: 'g1', source: 'plugin', sourceLabel: '插件', name: 'relay', missing: true }
     ]
   });
-  const [domain, pstack, plugin] = view.groups;
-  assert.deepEqual(view.groups.map((group) => group.label), ['域包', 'pstack', '插件']);
+  const [domain, pstack, matt, plugin] = view.groups;
+  assert.deepEqual(view.groups.map((group) => group.label), ['域包', 'pstack', 'matt', '插件']);
   assert.deepEqual(domain.items.map((item) => item.name), ['a-skill', 'z-skill']);
   assert.equal(domain.missing, 1);
   assert.equal(pstack.count, 1);
   assert.equal(plugin.missing, 1);
   assert.deepEqual(view.totals,
-    { all: 4, missing: 2, playbookOnly: 0, present: 2, domain: 2, pstack: 1, plugin: 1 });
+    { all: 4, missing: 2, playbookOnly: 0, present: 2, domain: 2, pstack: 1, matt: 0, plugin: 1 });
   assert.equal(view.empty, null);
   assert.equal(view.scannedAt, '2026-11-24T00:00:00.000Z');
 });
@@ -144,6 +145,26 @@ test('插件扫描：目录不存在或 ghost 缺少 skill 时返回空/跳过',
   assert.deepEqual(scanPluginSkills({ pluginsDir }), []);
 });
 
+test('matt 扫描：两级目录、带分类、跳过 deprecated、缺 SKILL.md 标缺失', (t) => {
+  const root = tempRoot(t);
+  const skillsRoot = path.join(root, 'matt');
+  writeFile(path.join(skillsRoot, 'engineering', 'code-review', 'SKILL.md'), skillMd('code-review', '审代码'));
+  writeFile(path.join(skillsRoot, 'productivity', 'grilling', 'SKILL.md'), skillMd('grilling', '追问'));
+  fs.mkdirSync(path.join(skillsRoot, 'misc', 'hollow'), { recursive: true });
+  writeFile(path.join(skillsRoot, 'deprecated', 'old-skill', 'SKILL.md'), skillMd('old-skill', '已废弃'));
+
+  const items = scanMattSkills({ skillsRoot });
+  // deprecated 整组跳过：3 条（两条真技能 + 一条缺 SKILL.md 的目录）
+  assert.equal(items.length, 3);
+  assert.deepEqual(items.map((item) => item.origin).sort(), ['engineering', 'misc', 'productivity']);
+  const hollow = items.find((item) => item.name === 'hollow');
+  assert.equal(hollow.missing, true);
+  assert.equal(hollow.reason, 'SKILL.md 缺失');
+  assert.equal(items.find((item) => item.name === 'code-review').source, 'matt');
+
+  assert.deepEqual(scanMattSkills({ skillsRoot: path.join(root, 'missing') }), []);
+});
+
 test('pstack 扫描：磁盘上的技能、缺 SKILL.md 的目录、只在注册表里的 id', (t) => {
   const root = tempRoot(t);
   const skillsDir = path.join(root, 'pstack', 'skills');
@@ -208,8 +229,8 @@ test('skillCatalogFor 合并三处来源；某处坏掉不影响其他两组', (
     domainRoot, pluginsDir, pstackSkillsDir: pstackRoot, pstackSkillIds: ['how'],
     scannedAt: '2026-11-24T00:00:00.000Z'
   });
-  const [domain, pstack, plugin] = view.groups;
-  assert.deepEqual([domain.count, pstack.count, plugin.count], [1, 1, 1]);
+  const [domain, pstack, matt, plugin] = view.groups;
+  assert.deepEqual([domain.count, pstack.count, matt.count, plugin.count], [1, 1, 0, 1]);
   assert.equal(domain.items[0].name, 'ok');
   assert.equal(plugin.items[0].name, 'x');
   assert.equal(pstack.items[0].missing, true);
