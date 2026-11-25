@@ -15,6 +15,7 @@ import {
   sessionRootsFrom,
   heuristicExtract
 } from '../src/memory/session-scan.mjs';
+import { decisionFingerprint } from '../src/memory/decision-draft.mjs';
 
 const AT = '2026-11-25T10:00:00.000Z';
 
@@ -308,6 +309,95 @@ test('同内容按指纹去重：两段会话说同一句话只出一条候选',
   }
 });
 
+test('会话原文先脱敏再成候选：六类秘密不落库，占位符与计数都在', async () => {
+  const root = tempRoot();
+  try {
+    const { alpha, projects } = seedProjects(root);
+    const secrets = {
+      openai: `sk-proj-${'a1B2c3D4'.repeat(3)}`,
+      github: `ghp_${'A1b2C3d4'.repeat(4)}`,
+      password: 'hunter2',
+      url: 'https://bob:letmein@example.com/repo',
+      jwt: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
+      privateKey: '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----'
+    };
+    const userText = [
+      '部署别写死密钥',
+      `OpenAI 用 ${secrets.openai}`,
+      `GitHub 用 ${secrets.github}`,
+      `数据库 password=${secrets.password}`,
+      `仓库 ${secrets.url}`,
+      `JWT ${secrets.jwt}`,
+      secrets.privateKey
+    ].join('；');
+
+    writeLines(path.join(root, 'codex', 'sessions', '2026', '11', '25', 'rollout-secrets.jsonl'), [
+      codex.meta(alpha, 'codex-secrets'),
+      codex.user(userText),
+      codex.assistant('好，这些都从文档里删掉，改成占位符')
+    ]);
+
+    const result = await scanSessions({
+      roots: [{ source: 'codex', dir: path.join(root, 'codex', 'sessions') }],
+      projects,
+      extract: echoExtract
+    });
+
+    assert.equal(result.redactions, 6);
+    assert.equal(result.candidates.length, 1);
+    const candidate = result.candidates[0];
+    // 原文秘密一个都不在候选里：库里 / 界面拿到的只有占位符。
+    for (const raw of [secrets.openai, secrets.github, secrets.password, 'letmein', secrets.jwt, 'MIIEowIBAAKCAQEA']) {
+      assert.equal(JSON.stringify(candidate).includes(raw), false, `原文仍留在候选：${raw.slice(0, 12)}`);
+    }
+    assert.match(candidate.quote.user, /sk-…<redacted:api-key>/u);
+    assert.match(candidate.quote.user, /ghp_…<redacted:github-token>/u);
+    assert.match(candidate.quote.user, /password=…<redacted:credential>/u);
+    assert.match(candidate.quote.user, /bob:…<redacted:url-password>@example\.com/u);
+    assert.match(candidate.quote.user, /eyJ…<redacted:jwt>/u);
+    assert.match(candidate.quote.user, /<redacted:private-key>/u);
+    // 指纹基于脱敏后的用户原话，不是原文。
+    assert.equal(
+      candidate.fingerprint,
+      decisionFingerprint({ projectId: 'alpha', text: candidate.quote.user })
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('指纹基于脱敏后文本：同一句话换一个密钥仍只出一条候选', async () => {
+  const root = tempRoot();
+  try {
+    const { alpha, projects } = seedProjects(root);
+    for (const [id, key] of [['codex-key-a', 'a'.repeat(20)], ['codex-key-b', 'b'.repeat(20)]]) {
+      writeLines(path.join(root, 'codex', 'sessions', '2026', '11', '25', `rollout-${id}.jsonl`), [
+        codex.meta(alpha, id),
+        codex.user(`统一用 sk-${key} 这一个密钥，别再换`),
+        codex.assistant('好，只保留这一个')
+      ]);
+    }
+
+    const result = await scanSessions({
+      roots: [{ source: 'codex', dir: path.join(root, 'codex', 'sessions') }],
+      projects,
+      extract: echoExtract
+    });
+
+    assert.equal(result.counts.matched, 2);
+    assert.equal(result.redactions, 2);
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.fingerprints.length, 1);
+    assert.equal(result.counts.skipped.existing, 1);
+    assert.match(result.candidates[0].quote.user, /sk-…<redacted:api-key>/u);
+    // 两个不同的原文密钥都被换成了同一段占位符，所以指纹相同；否则会是两条候选。
+    assert.equal(JSON.stringify(result.candidates).includes('a'.repeat(20)), false);
+    assert.equal(JSON.stringify(result.candidates).includes('b'.repeat(20)), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('只有工具输出的会话单独计数，不混进匹配成功的数字', async () => {
   const root = tempRoot();
   try {
@@ -408,6 +498,97 @@ test('默认会话根目录：CODEX_HOME 覆盖 Codex 的 home，Claude Code 固
   assert.equal(fallback[0].dir, path.join(home, '.codex', 'sessions'));
 });
 
+// #98 扫描入口脱敏：候选的引用、字段与指纹都只该看见占位符。
+// #98 扫描入口脱敏：候选的引用、字段与指纹都只该看见占位符。
+test('会话原文先脱敏再成候选：六类秘密不落库，占位符与计数都在', async () => {
+  const root = tempRoot();
+  try {
+    const { alpha, projects } = seedProjects(root);
+    const secrets = {
+      openai: `sk-proj-${'a1B2c3D4'.repeat(3)}`,
+      github: `ghp_${'A1b2C3d4'.repeat(4)}`,
+      password: 'hunter2',
+      url: 'https://bob:letmein@example.com/repo',
+      jwt: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
+      privateKey: '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----'
+    };
+    const userText = [
+      '部署别写死密钥',
+      `OpenAI 用 ${secrets.openai}`,
+      `GitHub 用 ${secrets.github}`,
+      `数据库 password=${secrets.password}`,
+      `仓库 ${secrets.url}`,
+      `JWT ${secrets.jwt}`,
+      secrets.privateKey
+    ].join('；');
+
+    writeLines(path.join(root, 'codex', 'sessions', '2026', '11', '25', 'rollout-secrets.jsonl'), [
+      codex.meta(alpha, 'codex-secrets'),
+      codex.user(userText),
+      codex.assistant('好，这些都从文档里删掉，改成占位符')
+    ]);
+
+    const result = await scanSessions({
+      roots: [{ source: 'codex', dir: path.join(root, 'codex', 'sessions') }],
+      projects,
+      extract: echoExtract
+    });
+
+    assert.equal(result.redactions, 6);
+    assert.equal(result.candidates.length, 1);
+    const candidate = result.candidates[0];
+    // 原文秘密一个都不在候选里：库里 / 界面拿到的只有占位符。
+    for (const raw of [secrets.openai, secrets.github, secrets.password, 'letmein', secrets.jwt, 'MIIEowIBAAKCAQEA']) {
+      assert.equal(JSON.stringify(candidate).includes(raw), false, `原文仍留在候选：${raw.slice(0, 12)}`);
+    }
+    assert.match(candidate.quote.user, /sk-…<redacted:api-key>/u);
+    assert.match(candidate.quote.user, /ghp_…<redacted:github-token>/u);
+    assert.match(candidate.quote.user, /password=…<redacted:credential>/u);
+    assert.match(candidate.quote.user, /bob:…<redacted:url-password>@example\.com/u);
+    assert.match(candidate.quote.user, /eyJ…<redacted:jwt>/u);
+    assert.match(candidate.quote.user, /<redacted:private-key>/u);
+    // 指纹基于脱敏后的用户原话，不是原文。
+    assert.equal(
+      candidate.fingerprint,
+      decisionFingerprint({ projectId: 'alpha', text: candidate.quote.user })
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('指纹基于脱敏后文本：同一句话换一个密钥仍只出一条候选', async () => {
+  const root = tempRoot();
+  try {
+    const { alpha, projects } = seedProjects(root);
+    for (const [id, key] of [['codex-key-a', 'a'.repeat(20)], ['codex-key-b', 'b'.repeat(20)]]) {
+      writeLines(path.join(root, 'codex', 'sessions', '2026', '11', '25', `rollout-${id}.jsonl`), [
+        codex.meta(alpha, id),
+        codex.user(`统一用 sk-${key} 这一个密钥，别再换`),
+        codex.assistant('好，只保留这一个')
+      ]);
+    }
+
+    const result = await scanSessions({
+      roots: [{ source: 'codex', dir: path.join(root, 'codex', 'sessions') }],
+      projects,
+      extract: echoExtract
+    });
+
+    assert.equal(result.counts.matched, 2);
+    assert.equal(result.redactions, 2);
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.fingerprints.length, 1);
+    assert.equal(result.counts.skipped.existing, 1);
+    assert.match(result.candidates[0].quote.user, /sk-…<redacted:api-key>/u);
+    // 两个不同的原文密钥都被换成了同一段占位符，所以指纹相同；否则会是两条候选。
+    assert.equal(JSON.stringify(result.candidates).includes('a'.repeat(20)), false);
+    assert.equal(JSON.stringify(result.candidates).includes('b'.repeat(20)), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // 界面接线：知识页的入口、预加载桥与主进程处理器必须对上，否则点了没反应。
 test('知识页有「扫描会话」入口，且从面板到主进程是一条完整的线', () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -422,6 +603,13 @@ test('知识页有「扫描会话」入口，且从面板到主进程是一条�
   assert.match(knowledge, /id="kbScanSessions"/u);
   assert.match(knowledge, /id="kbScan"/u);
   assert.match(knowledge, /id="kbScanSummary"/u);
+  // #98：脱敏计数固定显示（0 也显示），且 OpenCode 不在范围内要写清。
+  assert.match(knowledge, /id="kbScanRedactions"/u);
+  assert.match(knowledge, /OpenCode 的会话库体量太大，不在扫描范围内/u);
+  // 合入时残留的冲突标记会把 `<<<<<<< HEAD` 直接画到界面上，这里当回归护栏。
+  assert.equal(/^(?:<{7}|={7}|>{7})/mu.test(html), false);
+  assert.match(panel, /kbScanRedactions'\)\.textContent = `本次脱敏/u);
+  assert.match(panel, /dataset\.redactions/u);
   assert.match(panel, /kbScanSessions'\)\.onclick/u);
   assert.match(panel, /window\.companion\.memory\.scanSessions\(\)/u);
   assert.match(preload, /scanSessions:\s*\(\)\s*=>\s*invoke\('companion:session-scan'\)/u);

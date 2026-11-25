@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { OwnerStore } from '../src/owner-store.mjs';
-import { asIdeaLink, ideaDedupeKey, parseIdeaCapture } from '../src/idea-entry.mjs';
+import { OwnerStore, IDEA_LINK_LIMIT, IDEA_RAW_TEXT_LIMIT } from '../src/owner-store.mjs';
+import { asIdeaLink, ideaDedupeKey, parseIdeaCapture, LINK_LIMIT, RAW_TEXT_LIMIT } from '../src/idea-entry.mjs';
 import { startSidecar } from '../src/sidecar-server.mjs';
 
 const TOKEN = 'idea-capture-token-0123456789';
@@ -110,6 +110,42 @@ test('空内容与超长内容给出明确原因，不静默入库', () => {
   const long = parseIdeaCapture('字'.repeat(8001));
   assert.equal(long.ok, false);
   assert.match(long.reason, /8000/u);
+});
+
+test('列宽只有一份：idea-entry 的上限就是 owner-store 导出的常量', () => {
+  // 两处靠同一个绑定同步；运行期不复制数字，所以改 owner-store 的常量后
+  // idea-entry 的 RAW_TEXT_LIMIT 一定跟着变。这里断言绑定一致，防止有人把它改回硬编码。
+  assert.equal(RAW_TEXT_LIMIT, IDEA_RAW_TEXT_LIMIT);
+  assert.equal(LINK_LIMIT, IDEA_LINK_LIMIT);
+  // 边界按同一常量：正好等于上限可入，超一个字符就拒绝。
+  assert.equal(parseIdeaCapture('字'.repeat(RAW_TEXT_LIMIT)).ok, true);
+  assert.equal(parseIdeaCapture('字'.repeat(RAW_TEXT_LIMIT + 1)).ok, false);
+});
+
+test('列宽只写一份：idea-entry 跟着 owner-store 的常量走，边界用同一个数', () => {
+  // 两处是同一个值（idea-entry 直接 re-export 导入的常量，不是另抄一份）。
+  assert.equal(RAW_TEXT_LIMIT, IDEA_RAW_TEXT_LIMIT);
+  assert.equal(LINK_LIMIT, IDEA_LINK_LIMIT);
+  // 源码里不再出现写死的宽度：改 owner-store 的常量，这里自动跟着变。
+  const repoRoot = path.resolve(import.meta.dirname, '..');
+  const entrySource = fs.readFileSync(path.join(repoRoot, 'src', 'idea-entry.mjs'), 'utf8');
+  assert.doesNotMatch(entrySource, /RAW_TEXT_LIMIT\s*=\s*\d+/u);
+  assert.doesNotMatch(entrySource, /LINK_LIMIT\s*=\s*\d+/u);
+  assert.match(entrySource, /from '\.\/owner-store\.mjs'/u);
+
+  // 边界行为也用导入值验证：恰好等于上限可入库，多一个字拒绝并报同一个数。
+  assert.equal(parseIdeaCapture('字'.repeat(IDEA_RAW_TEXT_LIMIT)).ok, true);
+  const over = parseIdeaCapture('字'.repeat(IDEA_RAW_TEXT_LIMIT + 1));
+  assert.equal(over.ok, false);
+  assert.match(over.reason, new RegExp(String(IDEA_RAW_TEXT_LIMIT), 'u'));
+
+  const linkBase = 'https://example.com/';
+  const exactLink = `${linkBase}${'a'.repeat(IDEA_LINK_LIMIT - linkBase.length)}`;
+  assert.equal(exactLink.length, IDEA_LINK_LIMIT);
+  assert.equal(asIdeaLink(exactLink), exactLink);
+  const overLink = `${exactLink}a`;
+  assert.equal(overLink.length, IDEA_LINK_LIMIT + 1);
+  assert.equal(asIdeaLink(overLink), '');
 });
 
 test('去重键：空白差异算同一条，来源不同算两条', () => {

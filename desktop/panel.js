@@ -4192,6 +4192,10 @@
     reasons.textContent = parts.length ? `丢弃原因：${parts.join(' · ')}` : '没有丢弃的会话。';
     reasons.hidden = false;
 
+    // 0 也是结论：脱敏 0 处要照常显示，不能藏起来让人以为没做这件事。
+    const redactions = Number(data.redactions ?? 0);
+    $('kbScanRedactions').textContent = `本次脱敏 ${Number.isFinite(redactions) ? redactions : 0} 处`;
+
     const list = $('kbScanCandidates');
     list.replaceChildren();
     const shown = Array.isArray(data.candidates) ? data.candidates : [];
@@ -4211,6 +4215,7 @@
     box.dataset.matched = String(counts.matched ?? 0);
     box.dataset.dropped = String(counts.dropped ?? 0);
     box.dataset.candidates = String(counts.candidates ?? 0);
+    box.dataset.redactions = String(Number.isFinite(redactions) ? redactions : 0);
   };
 
   const runSessionScan = async () => {

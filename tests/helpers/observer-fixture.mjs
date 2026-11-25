@@ -5,12 +5,28 @@ import os from 'node:os';
 import path from 'node:path';
 
 // Git 夹具一律关闭可选锁，避免测试准备阶段自己改写 .git/index 污染“只读”断言。
-export const git = (cwd, args, env = {}) => execFileSync('git', args, {
-  cwd,
-  encoding: 'utf8',
-  stdio: ['ignore', 'pipe', 'pipe'],
-  env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', ...env }
-}).trim();
+//
+// 为什么要一次短重试：四路并行跑全量时，临时仓库的 git 启动偶发失败，
+// 实测报错是 `error launching git` 与 `fatal: Out of memory, malloc failed`
+// （t87-npm-test-3.log 的 makeRepo / makeBehindRepo 栈），不是断言失败，也不是仓库状态坏了。
+// 只对这两类机器抖动重试一次、间隔 100ms；命令本身失败（例如坏 ref）照旧立刻抛出，不掩盖错误。
+const TRANSIENT_GIT = /error launching git|Out of memory|malloc failed/iu;
+const retryPause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+export const git = (cwd, args, env = {}) => {
+  const run = () => execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', ...env }
+  }).trim();
+  try {
+    return run();
+  } catch (error) {
+    if (!TRANSIENT_GIT.test(String(error?.message ?? error))) throw error;
+    retryPause();
+    return run();
+  }
+};
 
 export const makeTempDir = (prefix = 'observer-test-') => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 

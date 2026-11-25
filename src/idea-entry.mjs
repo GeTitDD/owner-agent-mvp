@@ -8,14 +8,15 @@
 // 把这种条目只留链接会把正文丢掉。整段只有一条 http(s) 地址时，正文与链接是同一个东西，
 // 才按链接来源记，并让列表可以只显示地址。
 //
-// 去重键也放在这里：同一条 = 同一段正文 + 同一个来源（粘贴 / 链接）。
+// 去重键还从这个文件出口（实现见 idea-dedupe.mjs）：同一条 = 同一段正文 + 同一个来源（粘贴 / 链接）。
 // 比较前只把空白归一（换行、制表、多空格），原文按用户输入原样入库，方便查回。
 
 import { ideaTitle } from './idea-capture.mjs';
+import { IDEA_LINK_LIMIT, IDEA_RAW_TEXT_LIMIT } from './owner-store.mjs';
 
-// 与 owner-store 的列宽保持一致：原文 8000、链接 2000、标题 300。
-export const RAW_TEXT_LIMIT = 8000;
-export const LINK_LIMIT = 2000;
+// 列宽不在这里另写一份：上限由 owner-store 导出，动一处两处同步（改宽会连带迁移，见那边注释）。
+export const RAW_TEXT_LIMIT = IDEA_RAW_TEXT_LIMIT;
+export const LINK_LIMIT = IDEA_LINK_LIMIT;
 
 // 只认 http(s)：其它协议（file:、ftp:、mailto:）不是「网页链接」，当普通文本处理。
 const HTTP_URL = /^https?:\/\/\S+$/iu;
@@ -65,12 +66,7 @@ export function parseIdeaCapture(value) {
 }
 
 /**
- * 去重键：来源 + 空白归一后的正文。
- *
- * 只归空白，不折叠大小写、不改标点：同一条应该真的同一段话，
- * 而不是「看起来差不多」就被吞掉。
+ * 去重键仍在 idea-entry 的公共出口上，但实现已挪到 idea-dedupe.mjs：
+ * owner-store 要用同一个键，而 idea-entry 又从这里导入列宽，留在本文件会形成循环依赖。
  */
-export function ideaDedupeKey({ rawText = '', captureSource = 'paste' } = {}) {
-  const text = String(rawText ?? '').replace(/\s+/gu, ' ').trim();
-  return `${String(captureSource ?? 'paste')}\u0000${text}`;
-}
+export { ideaDedupeKey } from './idea-dedupe.mjs';
