@@ -2880,6 +2880,70 @@ const registerIpc = () => {
     return requireChatSessions().deleteSession(String(input?.id ?? ''));
   });
 
+  // #106 卡片壳的会话入口：与上面的对话模式共用 owner_chat_sessions 两张表，
+  // 但规则不同——会话可以先不绑项目（全局会话），删除是软删除（记录留着、可找回）。
+  // 单独一组通道是为了不把旧面板「新建必须选项目 / 删除即抹掉」的语义改掉。
+  ipcMain.handle('companion:card-sessions', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return {
+      items: requireChatSessions().listSessions({
+        includeDeleted: input?.includeDeleted === true
+      })
+    };
+  });
+
+  ipcMain.handle('companion:card-session-get', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().getSession(String(input?.id ?? ''));
+  });
+
+  ipcMain.handle('companion:card-session-create', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    // #107 才接项目；本轮新会话一律先是全局会话。
+    return requireChatSessions().createSession({
+      projectId: String(input?.projectId ?? ''),
+      title: String(input?.title ?? '')
+    });
+  });
+
+  ipcMain.handle('companion:card-session-rename', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().renameSession(
+      String(input?.id ?? ''),
+      String(input?.title ?? '')
+    );
+  });
+
+  ipcMain.handle('companion:card-session-pin', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().setPinned(String(input?.id ?? ''), input?.pinned === true);
+  });
+
+  ipcMain.handle('companion:card-session-soft-delete', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().softDeleteSession(String(input?.id ?? ''));
+  });
+
+  ipcMain.handle('companion:card-session-restore', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().restoreSession(String(input?.id ?? ''));
+  });
+
+  // 「当前选的是哪条」：落 last_opened_at，重启后回到同一条。
+  ipcMain.handle('companion:card-session-touch', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().markOpened(String(input?.id ?? ''));
+  });
+
+  ipcMain.handle('companion:card-session-append', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().appendMessage({
+      sessionId: String(input?.id ?? ''),
+      role: String(input?.role ?? ''),
+      text: String(input?.text ?? '')
+    });
+  });
+
   ipcMain.handle('companion:chat-session-append', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return requireChatSessions().appendMessage({

@@ -37,16 +37,22 @@ const insertProject = (db, id, name = id) => {
 let clock = 0;
 const now = () => `2026-11-24T10:00:${String(clock++).padStart(2, '0')}.000Z`;
 
-test('新建会话必须绑定已登记项目', () => {
+test('新建会话：绑项目时必须是已登记项目，不绑项目就是全局会话', () => {
   const db = makeDb();
   insertProject(db, 'alpha');
   const store = new ChatSessionStore({ db, now });
-  assert.throws(() => store.createSession({ projectId: '' }), /必须选择一个项目/u);
+  // #106 起会话可以不绑项目（全局会话），但传了项目就必须是真的。
   assert.throws(() => store.createSession({ projectId: 'missing' }), /项目不存在/u);
+  const global = store.createSession({ projectId: '' });
+  assert.equal(global.projectId, '');
+  assert.equal(global.title, DEFAULT_CHAT_TITLE);
+  assert.equal(global.messageCount, 0);
   const session = store.createSession({ projectId: 'alpha' });
   assert.equal(session.projectId, 'alpha');
   assert.equal(session.title, DEFAULT_CHAT_TITLE);
   assert.equal(session.messageCount, 0);
+  assert.equal(session.pinned, false);
+  assert.equal(session.deletedAt, '');
 });
 
 test('列表带项目字段，可按项目过滤；组内按最近更新排序', () => {

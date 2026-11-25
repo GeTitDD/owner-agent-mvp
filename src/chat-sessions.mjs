@@ -2,12 +2,14 @@
 //
 // 目标：让「对话」模式的多条会话留在本地 SQLite 里，重启后还能看到历史。
 // 不变量：
-// - 会话必须绑定已登记项目：写入前校验 owner_projects，表上另有外键兜底。
-// - 只存消息文本与必要元数据（项目、标题、时间、角色、引用、状态），
+// - 会话绑定的项目必须已登记：写入前校验 owner_projects，表上另有外键兜底。
+// - 会话可以不绑项目（#106 的全局会话）：project_id 可空，空即「还没绑项目」。
+// - 只存消息文本与必要元数据（项目、标题、时间、角色、引用、状态、置顶、删除时间），
 //   不把聊天记录当项目状态，也不写回 owner_projects。
 // - 只新增 owner_chat_sessions / owner_chat_messages 两张表，
-//   老库通过 CREATE TABLE IF NOT EXISTS 平滑升级，不改旧表语义。
-// - 删除会话只删自己与消息，项目数据不受影响。
+//   老库通过 CREATE TABLE IF NOT EXISTS + 列迁移平滑升级，不改旧表语义。
+// - 删除会话只动自己与消息，项目数据不受影响；#106 的软删除只写 deleted_at，
+//   记录与消息都留着，按 id 能找回。
 import { randomUUID } from 'node:crypto';
 
 /** 会话标题上限：面板一行能放下，也能从首个问题自动截取。 */
@@ -20,6 +22,23 @@ export const CHAT_MESSAGE_MAX = 16000;
 export const CHAT_HISTORY_LIMIT = 8;
 /** 一次读取会话消息的上限，避免异常大的会话把渲染进程拖慢。 */
 const MESSAGE_PAGE = 500;
+
+/**
+ * 会话表的两套形状：#106 之前 project_id 是 NOT NULL（会话必须绑项目），
+ * #106 起允许全局会话，所以要放宽成可空。SQLite 改不了列的 NOT NULL，
+ * 只能重建表——和 owner-store 里 #94 队列迁移同一套写法：按列名搬运，一行不丢。
+ */
+const SESSION_COLUMNS = ['id', 'project_id', 'title', 'created_at', 'updated_at', 'pinned', 'deleted_at', 'last_opened_at'];
+const SESSION_TABLE_DDL = `(
+  id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES owner_projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  pinned INTEGER NOT NULL DEFAULT 0,
+  deleted_at TEXT,
+  last_opened_at TEXT
+)`;
 
 export class ChatSessionError extends Error {
   constructor(message, status = 400) {
@@ -73,11 +92,18 @@ function normalizeCitations(value) {
 const sessionRow = (row) => row
   ? {
     id: row.id,
-    projectId: row.project_id,
+    projectId: row.project_id ?? '',
     title: row.title,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    messageCount: Number(row.message_count ?? 0)
+    // 置顶与删除：界面只看这两个布尔/时间，不再自己拼 SQL 判定。
+    pinned: Number(row.pinned ?? 0) === 1,
+    deletedAt: row.deleted_at ?? '',
+    // 最近打开时间：#106 用它记住「当前选的是哪条」，重启后回到同一条。
+    lastOpenedAt: row.last_opened_at ?? '',
+    messageCount: Number(row.message_count ?? 0),
+    // 轮数 = 我问过几句；助手回复条数与它成对出现，但没回复时轮数也要能数对。
+    turnCount: Number(row.turn_count ?? 0)
   }
   : null;
 
@@ -111,15 +137,9 @@ export class ChatSessionStore {
     }
     this.db = db;
     this.now = now;
-    // 只新增表；旧库升级不需要额外步骤。
+    // 只新增表；旧库升级在下面按列补齐。
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS owner_chat_sessions(
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL REFERENCES owner_projects(id) ON DELETE CASCADE,
-        title TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
+      CREATE TABLE IF NOT EXISTS owner_chat_sessions ${SESSION_TABLE_DDL};
       CREATE INDEX IF NOT EXISTS owner_chat_sessions_project
         ON owner_chat_sessions(project_id,updated_at DESC);
       CREATE TABLE IF NOT EXISTS owner_chat_messages(
@@ -134,9 +154,53 @@ export class ChatSessionStore {
       CREATE INDEX IF NOT EXISTS owner_chat_messages_session
         ON owner_chat_messages(session_id,seq);
     `);
+    this.migrateSessionColumns();
   }
 
-  /** 项目必须已登记：这是「新建会话绑定项目」的唯一入口校验。 */
+  /**
+   * 老库升级（可重复执行）：
+   * 1) project_id 还是 NOT NULL 的库要重建表放宽约束，否则 #106 的全局会话写不进去；
+   * 2) 缺 pinned / deleted_at 的库直接补列。补列不丢行，重建按列名搬运。
+   */
+  migrateSessionColumns() {
+    let columns = this.db.prepare('PRAGMA table_info(owner_chat_sessions)').all();
+    if (columns.find((column) => column.name === 'project_id')?.notnull === 1) {
+      const oldNames = new Set(columns.map((column) => column.name));
+      const copyColumns = SESSION_COLUMNS.filter((name) => oldNames.has(name)).join(',');
+      // 重建期间关外键：消息表按表名引用会话表，改名后自动指向新表。
+      this.db.exec('PRAGMA foreign_keys=OFF');
+      try {
+        this.db.exec(`BEGIN IMMEDIATE;
+          DROP TABLE IF EXISTS owner_chat_sessions_upgrade;
+          CREATE TABLE owner_chat_sessions_upgrade ${SESSION_TABLE_DDL};
+          INSERT INTO owner_chat_sessions_upgrade(${copyColumns})
+            SELECT ${copyColumns} FROM owner_chat_sessions;
+          DROP TABLE owner_chat_sessions;
+          ALTER TABLE owner_chat_sessions_upgrade RENAME TO owner_chat_sessions;
+          CREATE INDEX IF NOT EXISTS owner_chat_sessions_project
+            ON owner_chat_sessions(project_id,updated_at DESC);
+          COMMIT;`);
+      } catch (error) {
+        try { this.db.exec('ROLLBACK'); } catch { /* 回滚失败时保留原始错误 */ }
+        throw error;
+      } finally {
+        this.db.exec('PRAGMA foreign_keys=ON');
+      }
+      columns = this.db.prepare('PRAGMA table_info(owner_chat_sessions)').all();
+    }
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has('pinned')) {
+      this.db.exec('ALTER TABLE owner_chat_sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!names.has('deleted_at')) {
+      this.db.exec('ALTER TABLE owner_chat_sessions ADD COLUMN deleted_at TEXT');
+    }
+    if (!names.has('last_opened_at')) {
+      this.db.exec('ALTER TABLE owner_chat_sessions ADD COLUMN last_opened_at TEXT');
+    }
+  }
+
+  /** 项目必须已登记：这是「会话绑定项目」的唯一入口校验（不绑项目时调用方不传）。 */
   assertProject(projectId) {
     const id = String(projectId ?? '').trim();
     if (!id) fail('新建会话必须选择一个项目');
@@ -145,8 +209,10 @@ export class ChatSessionStore {
     return row;
   }
 
-  createSession({ projectId, title = '', sessionId = '' } = {}) {
-    const project = this.assertProject(projectId);
+  /** 新建会话：projectId 留空即全局会话（#106），传了就必须是已登记项目。 */
+  createSession({ projectId = '', title = '', sessionId = '' } = {}) {
+    const wanted = String(projectId ?? '').trim();
+    const project = wanted ? this.assertProject(wanted) : null;
     const id = String(sessionId ?? '').trim() || `chat_${randomUUID()}`;
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/u.test(id)) fail('会话 ID 不合法');
     const now = this.now();
@@ -154,7 +220,7 @@ export class ChatSessionStore {
     try {
       this.db.prepare(
         'INSERT INTO owner_chat_sessions(id,project_id,title,created_at,updated_at) VALUES(?,?,?,?,?)'
-      ).run(id, project.id, name, now, now);
+      ).run(id, project ? project.id : null, name, now, now);
     } catch (error) {
       if (/UNIQUE constraint/u.test(String(error?.message ?? ''))) fail('会话 ID 已存在', 409);
       throw error;
@@ -162,15 +228,27 @@ export class ChatSessionStore {
     return this.getSession(id);
   }
 
-  /** 列表按项目聚合所需的最小字段；排序交给面板按项目分组后处理。 */
-  listSessions({ projectId = '' } = {}) {
-    const where = projectId ? 'WHERE s.project_id=?' : '';
+  /**
+   * 列表：默认只给未删除的会话，置顶在前、其余按最近更新排。
+   * 面板按项目分组、卡片壳按搜索过滤，都在这一份结果上做，不各自查库。
+   */
+  listSessions({ projectId = '', includeDeleted = false } = {}) {
+    const clauses = [];
+    const params = [];
+    if (!includeDeleted) clauses.push('s.deleted_at IS NULL');
+    if (projectId) {
+      clauses.push('s.project_id=?');
+      params.push(String(projectId));
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const rows = this.db.prepare(`
-      SELECT s.*, (SELECT COUNT(*) FROM owner_chat_messages m WHERE m.session_id=s.id) AS message_count
+      SELECT s.*,
+        (SELECT COUNT(*) FROM owner_chat_messages m WHERE m.session_id=s.id) AS message_count,
+        (SELECT COUNT(*) FROM owner_chat_messages m WHERE m.session_id=s.id AND m.role='user') AS turn_count
       FROM owner_chat_sessions s
       ${where}
-      ORDER BY s.updated_at DESC,s.id
-    `).all(...(projectId ? [String(projectId)] : []));
+      ORDER BY s.pinned DESC,s.updated_at DESC,s.id
+    `).all(...params);
     return rows.map(sessionRow);
   }
 
@@ -178,7 +256,9 @@ export class ChatSessionStore {
     const key = String(id ?? '').trim();
     if (!key) fail('缺少会话 ID');
     const row = this.db.prepare(`
-      SELECT s.*, (SELECT COUNT(*) FROM owner_chat_messages m WHERE m.session_id=s.id) AS message_count
+      SELECT s.*,
+        (SELECT COUNT(*) FROM owner_chat_messages m WHERE m.session_id=s.id) AS message_count,
+        (SELECT COUNT(*) FROM owner_chat_messages m WHERE m.session_id=s.id AND m.role='user') AS turn_count
       FROM owner_chat_sessions s WHERE s.id=?
     `).get(key);
     if (!row) fail('会话不存在', 404);
@@ -201,7 +281,10 @@ export class ChatSessionStore {
     return this.getSession(key);
   }
 
-  /** 删除会话：先删消息再删会话，即使外键未开启也不会留下孤儿消息。 */
+  /**
+   * 硬删除：先删消息再删会话，即使外键未开启也不会留下孤儿消息。
+   * 卡片壳不用它——#106 的删除是软删除（见 softDeleteSession）。
+   */
   deleteSession(id) {
     const key = String(id ?? '').trim();
     if (!key) fail('缺少会话 ID');
@@ -210,6 +293,61 @@ export class ChatSessionStore {
     this.db.prepare('DELETE FROM owner_chat_messages WHERE session_id=?').run(key);
     this.db.prepare('DELETE FROM owner_chat_sessions WHERE id=?').run(key);
     return { id: key, deleted: true };
+  }
+
+  /**
+   * 软删除：只写 deleted_at，会话与消息都留着。
+   * 列表默认看不到它（listSessions），用 includeDeleted 或按 id getSession 都能找回。
+   * 不动 updated_at：找回后还按原来的时间排队，不会因为删过一次就跳到最后。
+   */
+  softDeleteSession(id) {
+    const key = String(id ?? '').trim();
+    if (!key) fail('缺少会话 ID');
+    const exists = this.db.prepare('SELECT id,deleted_at FROM owner_chat_sessions WHERE id=?').get(key);
+    if (!exists) fail('会话不存在', 404);
+    if (exists.deleted_at) return { id: key, deleted: true, soft: true, deletedAt: exists.deleted_at };
+    const at = this.now();
+    this.db.prepare('UPDATE owner_chat_sessions SET deleted_at=? WHERE id=?').run(at, key);
+    return { id: key, deleted: true, soft: true, deletedAt: at };
+  }
+
+  /** 找回：清掉 deleted_at；没被删过就原样返回，不报错。 */
+  restoreSession(id) {
+    const key = String(id ?? '').trim();
+    if (!key) fail('缺少会话 ID');
+    const exists = this.db.prepare('SELECT id,deleted_at FROM owner_chat_sessions WHERE id=?').get(key);
+    if (!exists) fail('会话不存在', 404);
+    if (exists.deleted_at) {
+      this.db.prepare('UPDATE owner_chat_sessions SET deleted_at=NULL WHERE id=?').run(key);
+    }
+    return this.getSession(key);
+  }
+
+  /** 置顶：只改 pinned，不动 updated_at——置顶是排队规则，不是「刚聊过」。 */
+  setPinned(id, pinned) {
+    const key = String(id ?? '').trim();
+    if (!key) fail('缺少会话 ID');
+    const changed = this.db.prepare(
+      'UPDATE owner_chat_sessions SET pinned=? WHERE id=?'
+    ).run(pinned ? 1 : 0, key);
+    if (!changed.changes) fail('会话不存在', 404);
+    return this.getSession(key);
+  }
+
+  /**
+   * 记「刚打开过这条」：当前选择是视图状态，但重启后要回到同一条，
+   * 所以落在库里的 last_opened_at 上，而不是渲染进程里一份可能丢的副本。
+   * 不动 updated_at：切换会话不该改变列表排队。
+   */
+  markOpened(id) {
+    const key = String(id ?? '').trim();
+    if (!key) fail('缺少会话 ID');
+    const at = this.now();
+    const changed = this.db.prepare(
+      'UPDATE owner_chat_sessions SET last_opened_at=? WHERE id=?'
+    ).run(at, key);
+    if (!changed.changes) fail('会话不存在', 404);
+    return { id: key, lastOpenedAt: at };
   }
 
   /**
@@ -224,6 +362,8 @@ export class ChatSessionStore {
     const body = normalizeMessageText(text);
     const session = this.db.prepare('SELECT * FROM owner_chat_sessions WHERE id=?').get(key);
     if (!session) fail('会话不存在', 404);
+    // 软删除的会话是只读的：要接着聊先找回，避免「删了还能写」的半截状态。
+    if (session.deleted_at) fail('会话已删除，请先找回', 409);
     const now = this.now();
     const result = this.db.prepare(`
       INSERT INTO owner_chat_messages(session_id,role,text,status,citations,created_at)

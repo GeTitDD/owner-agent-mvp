@@ -59,6 +59,27 @@
   const isPlaceholder = (message) =>
     Boolean(message) && message.placeholder === true && message.source === PLACEHOLDER_SOURCE;
 
+  /**
+   * 库里只有一段文本、没有 placeholder 标记（消息按角色与正文落库），
+   * 所以「是不是占位回复」从正文开头的固定前缀认。#106 起会话切换要重放历史消息，
+   * 判定口径必须和发送时写进去的那一句完全一致。
+   */
+  const isPlaceholderText = (text) => String(text ?? '').startsWith(`（${PLACEHOLDER_PREFIX}）`);
+
+  /**
+   * 把库里取回的消息行（role user/assistant）转成渲染用的消息：
+   * assistant 在界面上叫 agent，占位回复补回标记，其余原样。
+   */
+  const fromStored = (rows) => (Array.isArray(rows) ? rows : []).map((row) => {
+    const text = String(row?.text ?? '');
+    const message = { role: row?.role === 'user' ? 'user' : 'agent', text };
+    if (isPlaceholderText(text)) {
+      message.placeholder = true;
+      message.source = PLACEHOLDER_SOURCE;
+    }
+    return message;
+  });
+
   /** 发送后输入框回到空；单列成函数是为了渲染层不各写一份清空逻辑。 */
   const draftAfterSend = () => '';
 
@@ -72,6 +93,8 @@
     placeholderText,
     sendTurn,
     isPlaceholder,
+    isPlaceholderText,
+    fromStored,
     draftAfterSend
   };
 });
