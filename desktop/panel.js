@@ -2896,11 +2896,14 @@
     );
   };
   $('libraryPublish').onclick = () => {
+    // #92：说明可空；空字符串照常发布，主进程会保留空说明，界面不显示占位。
+    const note = String($('libraryNote')?.value ?? '').trim();
     void libraryAction(
-      (projectId) => window.companion.library.publish({ projectId }),
+      (projectId) => window.companion.library.publish({ projectId, note }),
       (result) => {
         const label = result?.published?.label ?? '新版本';
         const dir = result?.published?.export?.dir;
+        if ($('libraryNote')) $('libraryNote').value = '';
         // 发布成功就把可预测的导出路径写进提示；路径本身在库段里长期可见，不靠 toast 留住。
         if (dir) return `已发布 ${label}，导出到 ${dir}`;
         if (result?.published?.exportError) return `已发布 ${label}，但导出失败：${result.published.exportError}`;
@@ -3135,11 +3138,175 @@
     meta.append(el('span', `library-badge ${item.status || 'unknown'}`, item.badge || item.status || '未知'));
     if (item.detail) meta.append(el('span', 'library-item-detail', item.detail));
     // 只显示证据条数，不把证据正文铺进库：引用留在快照里，详情留给后续票。
-    const evidenceCount = (item.evidenceRefs ?? []).length || countOf(item.evidenceCount);
+    // 快照条目带 evidence，面板视图带 evidenceRefs；两者都按同一个前缀读。
+    const evidenceCount = (item.evidenceRefs ?? item.evidence ?? []).length || countOf(item.evidenceCount);
     if (evidenceCount > 0) meta.append(el('span', 'library-item-evidence', `证据 ${evidenceCount}`));
     main.append(meta);
     row.append(main);
     return row;
+  };
+
+  // ---- 项目库（#92）：历史版本浏览与相邻两版自动 diff ----
+  //
+  // 版本列表与 diff 都是只读：点开历史版本只发一次读取 IPC，不生成草稿、不写库。
+  // 判定逻辑在 src/project-version-diff.mjs（纯函数，按 ref.kind + ref.id 认条目），
+  // 这里只画结构，不再算一次新增/变更/消失。
+
+  let libraryVersionProjectId = '';
+  let libraryVersionSelection = null;
+  let libraryVersionDetail = null;
+  let libraryVersionPending = '';
+  let libraryVersionError = '';
+  let libraryVersionToken = 0;
+
+  /** 版本的缓存键：内容哈希也进键，万一同一版本被替换（不应该）也不会读到旧详情。 */
+  const libraryVersionKeyOf = (projectId, meta) =>
+    `${projectId}:${meta?.version ?? ''}:${meta?.contentHash ?? ''}`;
+
+  /** 一行字段变化：旧值 → 新值；空值写「（空）」，不显示空箭头。 */
+  const libraryDiffChangeLine = (change) => {
+    const line = el('div', 'library-diff-change');
+    line.append(el('span', 'library-diff-field', `${change.label}：`));
+    line.append(el('span', 'library-diff-before', change.before || '（空）'));
+    line.append(el('span', 'library-diff-arrow', '→'));
+    line.append(el('span', 'library-diff-after', change.after || '（空）'));
+    return line;
+  };
+
+  /** 三类之一：标题固定，条目为空时给一句空说明，不画假条目。 */
+  const libraryDiffGroup = (key, label, items, emptyHint) => {
+    const group = el('div', `library-diff-group library-diff-${key}`);
+    const head = el('div', 'library-diff-group-head');
+    head.append(el('span', 'library-diff-group-name', label));
+    head.append(el('span', 'library-diff-group-count', `${items.length} 条`));
+    group.append(head);
+    if (!items.length) {
+      group.append(el('p', 'library-diff-empty', emptyHint));
+      return group;
+    }
+    for (const entry of items) {
+      const row = el('div', 'library-diff-item');
+      const rowHead = el('div', 'library-diff-item-head');
+      rowHead.append(el('span', 'library-diff-item-title', entry.title || '未命名条目'));
+      if (entry.sectionLabel) rowHead.append(el('span', 'library-diff-item-section', entry.sectionLabel));
+      row.append(rowHead);
+      for (const change of entry.changes ?? []) row.append(libraryDiffChangeLine(change));
+      group.append(row);
+    }
+    return group;
+  };
+
+  /**
+   * 画一版的只读内容 + diff。入口只有读 IPC 回来的那一份数据；
+   * 首版不给三类计数（否则会被读成「0 变化」），只显示「首版，无可比对象」。
+   */
+  const renderLibraryVersionDetail = (library) => {
+    const holder = $('libraryVersionDetail');
+    if (!holder) return;
+    holder.replaceChildren();
+    const rows = library?.snapshot?.versions ?? [];
+    const meta = rows.find((item) => item.version === libraryVersionSelection);
+    if (!meta) {
+      holder.hidden = true;
+      return;
+    }
+    holder.hidden = false;
+
+    const head = el('div', 'library-version-detail-head');
+    head.append(el('strong', 'library-version-detail-label', meta.label));
+    head.append(el('span', 'library-version-detail-time', meta.publishedAt
+      ? `发布于 ${String(meta.publishedAt).replace('T', ' ').slice(0, 19)}`
+      : '发布时间未知'));
+    head.append(el('span', 'library-version-readonly', '只读'));
+    holder.append(head);
+
+    const key = libraryVersionKeyOf(libraryVersionProjectId, meta);
+    if (libraryVersionDetail?.key !== key) {
+      holder.append(el('p', 'library-version-hint', libraryVersionError || '正在读取这一版…'));
+      return;
+    }
+    const data = libraryVersionDetail.data ?? {};
+
+    // 说明与 diff 并列：说明可空，空就整块不出现（不留空引号或「无说明」占位）。
+    const brief = el('div', 'library-version-brief');
+    if (data.note) {
+      const note = el('div', 'library-version-note');
+      note.append(el('span', 'library-version-note-label', '发布说明'));
+      note.append(el('p', 'library-version-note-text', data.note));
+      brief.append(note);
+    }
+    const diff = data.diff ?? {};
+    const diffBox = el('div', 'library-version-diff');
+    diffBox.append(el('p', 'library-diff-headline', diff.headline || '无法比对'));
+    if (diff.comparable) {
+      diffBox.append(libraryDiffGroup('added', '新增', diff.added ?? [], '没有新增条目。'));
+      diffBox.append(libraryDiffGroup('changed', '变更', diff.changed ?? [], '没有变更的条目。'));
+      diffBox.append(libraryDiffGroup('removed', '消失', diff.removed ?? [], '没有消失的条目。'));
+    }
+    brief.append(diffBox);
+    holder.append(brief);
+
+    // 两节清单与计数：只读渲染，不出现输入框或动作按钮。
+    const sections = el('div', 'library-version-sections');
+    for (const sectionModel of data.content?.sections ?? []) {
+      const card = el('section', `library-block library-${sectionModel.key}`);
+      const sectionHead = el('div', 'library-block-head');
+      sectionHead.append(el('h4', 'library-block-name', sectionModel.label));
+      sectionHead.append(el('span', 'library-block-count', `${countOf(sectionModel.count)} 条`));
+      card.append(sectionHead);
+      if (!(sectionModel.items ?? []).length) {
+        card.append(el('p', 'library-block-empty', '这一版这一节没有条目。'));
+      } else {
+        for (const item of sectionModel.items) card.append(libraryEntryRow(item));
+      }
+      sections.append(card);
+    }
+    holder.append(sections);
+
+    const counts = data.content?.counts ?? data.counts ?? {};
+    holder.append(el('p', 'library-version-counts',
+      `共 ${countOf(counts.total)} 条 · 已验证 ${countOf(counts.verified)} 条 · 观察中 ${countOf(counts.observing)} 条`));
+  };
+
+  /**
+   * 打开某一版：先给选中态，再读详情。同一版本（含内容哈希）只读一次；
+   * 重新渲染不会重复发 IPC，也不会生成草稿。
+   */
+  const openLibraryVersion = (library, version) => {
+    const project = workspaceProject();
+    const meta = (library?.snapshot?.versions ?? []).find((item) => item.version === version);
+    if (!project || !meta) return;
+    libraryVersionSelection = meta.version;
+    for (const node of document.querySelectorAll('#libraryVersions .library-version')) {
+      const on = Number(node.dataset.version) === meta.version;
+      node.classList.toggle('on', on);
+      node.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    const key = libraryVersionKeyOf(project.id, meta);
+    if (libraryVersionDetail?.key === key || libraryVersionPending === key) {
+      renderLibraryVersionDetail(library);
+      return;
+    }
+    libraryVersionPending = key;
+    libraryVersionError = '';
+    libraryVersionToken += 1;
+    const token = libraryVersionToken;
+    renderLibraryVersionDetail(library);
+    void window.companion.library.version({ projectId: project.id, version: meta.version })
+      .then((data) => {
+        if (token !== libraryVersionToken) return;
+        libraryVersionDetail = { key, data };
+        libraryVersionPending = '';
+      })
+      .catch((error) => {
+        if (token !== libraryVersionToken) return;
+        libraryVersionError = cleanIpcError(error?.message ?? error);
+        libraryVersionPending = '';
+      })
+      .finally(() => {
+        if (token !== libraryVersionToken) return;
+        if (view?.library) renderLibraryVersionDetail(view.library);
+      });
   };
 
   // ---- 项目库（#90）：导出到固定目录 ----
@@ -3253,18 +3420,45 @@
     publishButton.textContent = `发布 ${snapshot.nextLabel || 'v1'}`;
     publishButton.disabled = !draft;
 
-    // 版本浏览的详情是下一张票：这里只给版本号与时间，不给可点开的渲染。
+    // #92：版本按从新到旧列全（store 已按 version DESC），点开只读查看。
+    // 换项目时清掉选中与缓存，别把 A 的版本内容留在 B 上。
+    if (libraryVersionProjectId !== project.id) {
+      libraryVersionProjectId = project.id;
+      libraryVersionSelection = null;
+      libraryVersionDetail = null;
+      libraryVersionPending = '';
+      libraryVersionError = '';
+      // 加一让旧项目里还在路上的响应作废。
+      libraryVersionToken += 1;
+    }
     const versions = $('libraryVersions');
     versions.replaceChildren();
     const rows = snapshot.versions ?? [];
+    if (!rows.some((item) => item.version === libraryVersionSelection)) {
+      libraryVersionSelection = rows[0]?.version ?? null;
+    }
     if (rows.length) {
-      versions.append(el('span', 'library-versions-label', '已发布：'));
-      for (const item of rows.slice(0, 5)) {
-        const chip = el('span', 'library-version', `${item.label} · ${formatRelative(item.publishedAt) || '—'}`);
-        chip.title = `${item.label} · ${String(item.publishedAt ?? '').replace('T', ' ').slice(0, 19)}` +
-          (item.note ? ` · ${item.note}` : '');
+      versions.append(el('span', 'library-versions-label', `已发布 ${rows.length} 版（从新到旧）：`));
+      for (const item of rows) {
+        const chip = el('button', 'library-version', `${item.label} · ${formatRelative(item.publishedAt) || '—'}`);
+        chip.type = 'button';
+        chip.dataset.version = String(item.version);
+        chip.title = `${item.label} · ${String(item.publishedAt ?? '').replace('T', ' ').slice(0, 19)}`
+          + (item.note ? ` · ${item.note}` : '')
+          + ' · 点开只读查看这一版';
+        chip.classList.toggle('on', item.version === libraryVersionSelection);
+        chip.setAttribute('aria-pressed', item.version === libraryVersionSelection ? 'true' : 'false');
+        chip.onclick = () => openLibraryVersion(library, item.version);
         versions.append(chip);
       }
+      // 默认打开最新一版；打开只读详情，不会生成草稿、也不会发版。
+      if (libraryVersionSelection !== null) openLibraryVersion(library, libraryVersionSelection);
+    } else {
+      libraryVersionDetail = null;
+      libraryVersionPending = '';
+      libraryVersionError = '';
+      const detail = $('libraryVersionDetail');
+      if (detail) { detail.hidden = true; detail.replaceChildren(); }
     }
     renderLibraryExport(library);
   };
@@ -3283,6 +3477,10 @@
     try {
       const result = await action(project.id);
       if (view) view = { ...view, library: result };
+      // 发布成功后默认打开刚发布的这一版；其余动作保留用户正在看的版本。
+      if (Number.isSafeInteger(result?.published?.version)) {
+        libraryVersionSelection = result.published.version;
+      }
       renderLibrary();
       await refresh();
       if (success) toast(success(result), 4200);
