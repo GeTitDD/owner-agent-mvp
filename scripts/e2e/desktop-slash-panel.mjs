@@ -205,9 +205,32 @@ const run = async () => {
       model.groups.some((group) => group.text.includes('数字快捷'))
       && model.groups.some((group) => group.text.includes('全部技能')),
       model.groups.map((group) => group.text).join(' | '));
-    check('both section headers are visible without scrolling',
-      model.groups.length === 2 && model.groups.every((group) => group.visible),
-      JSON.stringify(model.groups));
+    // #132：原判据要求两段标题「不滚动就能同时看到」，字体度量稍宽就必红。
+    // 改成「两段都在，且各自都能滚进视野」——仍然要求两条标题都存在、都能看到，
+    // 只是不再把「同一屏放得下」这种排版巧合当验收条件。
+    const headersReachable = await panel.evaluate(`(() => {
+      const list = document.getElementById('skillList');
+      const groups = [...list.querySelectorAll('.slash-group')];
+      const box = list.getBoundingClientRect();
+      const canShow = (node) => {
+        const top = node.getBoundingClientRect().top - box.top + list.scrollTop;
+        list.scrollTop = Math.max(0, top - 4);
+        const rect = node.getBoundingClientRect();
+        const shown = list.getBoundingClientRect();
+        return rect.bottom > shown.top - 1 && rect.top < shown.bottom + 1;
+      };
+      return {
+        count: groups.length,
+        texts: groups.map((node) => node.textContent.trim()),
+        all: groups.every(canShow)
+      };
+    })()`);
+    check('both section headers are present and can be scrolled into view',
+      headersReachable.count === 2
+      && headersReachable.texts.some((text) => text.includes('数字快捷'))
+      && headersReachable.texts.some((text) => text.includes('全部技能'))
+      && headersReachable.all === true,
+      JSON.stringify(headersReachable));
     check('quick section has nine numbered rows',
       model.quick.length === 9
       && model.quick.map((row) => row.number).join(',') === '1,2,3,4,5,6,7,8,9',
@@ -376,6 +399,19 @@ const run = async () => {
       model.quick.slice(0, 2).map((row) => `${row.number}:${row.id}`).join(' '));
     check('history is still in the thread after reload',
       (await readThread(panel)).count === 6, String((await readThread(panel)).count));
+
+    // ⑧ #132 回归：没有匹配项时 Enter 不能吞键——关面板，并把这条照常发出去。
+    await typeInput(panel, '/definitely-no-such-skill');
+    await waitFor(panel, "Boolean(document.querySelector('#skillList .slash-empty'))", 10000);
+    check('Enter is still handled by the composer', await pressKey(panel, 'Enter'));
+    check('no match + Enter closes the panel',
+      await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000));
+    check('no match + Enter sends the draft as a normal message',
+      await waitFor(panel, "document.querySelectorAll('#messages .msg').length === 8", 8000),
+      String((await readThread(panel)).count));
+    thread = await readThread(panel);
+    check('the sent draft keeps its raw text',
+      thread.texts.includes('/definitely-no-such-skill'), JSON.stringify(thread.texts));
 
     const errors = consoleErrors(panel);
     check('console is clean', errors.length === 0, errors.slice(0, 3).join(' | '));
