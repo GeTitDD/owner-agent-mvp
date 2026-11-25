@@ -382,10 +382,32 @@ export function skillCatalogView({ items = [], scannedAt = null, limit = DEFAULT
 }
 
 /**
+ * 扫一遍四处来源并返回扁平的技能条目。
+ *
+ * 单独导出是因为界面有两种读者：分组视图只要每组前 12 条（面板），
+ * 而 #108 的 `/` 面板要「全部技能」——不能因为分组截断就少显示技能。
+ */
+export function collectSkillItems({
+  domainRoot = '',
+  pluginsDir = '',
+  pstackSkillsDir = '',
+  pstackSkillIds = [],
+  mattSkillsDir = ''
+} = {}) {
+  return [
+    ...scanDomainSkills({ domainRoot }),
+    ...scanPstackSkills({ skillsDir: pstackSkillsDir, expectedIds: pstackSkillIds }),
+    ...scanMattSkills({ skillsRoot: mattSkillsDir }),
+    ...scanPluginSkills({ pluginsDir })
+  ];
+}
+
+/**
  * 扫一遍三处来源并组装视图模型。
  *
  * 路径由调用方注入（Electron 主进程知道应用根目录与 PSTACK_DIR），
  * 这样纯函数部分可以在 node --test 里用临时目录覆盖。
+ * withItems 为 true 时额外带回未截断的扁平条目，供 `/` 技能面板使用。
  */
 export function skillCatalogFor({
   domainRoot = '',
@@ -394,15 +416,14 @@ export function skillCatalogFor({
   pstackSkillIds = [],
   mattSkillsDir = '',
   limit = DEFAULT_GROUP_LIMIT,
-  scannedAt = new Date().toISOString()
+  scannedAt = new Date().toISOString(),
+  withItems = false
 } = {}) {
-  const items = [
-    ...scanDomainSkills({ domainRoot }),
-    ...scanPstackSkills({ skillsDir: pstackSkillsDir, expectedIds: pstackSkillIds }),
-    ...scanMattSkills({ skillsRoot: mattSkillsDir }),
-    ...scanPluginSkills({ pluginsDir })
-  ];
-  return { ...skillCatalogView({ items, scannedAt, limit }), scannedAt };
+  const items = collectSkillItems({
+    domainRoot, pluginsDir, pstackSkillsDir, pstackSkillIds, mattSkillsDir
+  });
+  const view = { ...skillCatalogView({ items, scannedAt, limit }), scannedAt };
+  return withItems ? { ...view, items } : view;
 }
 
 /**

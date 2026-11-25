@@ -65,10 +65,26 @@
       <textarea id="input" rows="1" placeholder="说点什么。回车发送，Shift+回车换行"></textarea>
       <button type="submit" class="send" id="send" disabled>发送</button>
     </form>
+
+    <!-- #108：输入 `/` 打开技能面板。上半是数字快捷（1-9，可改），
+         下半是扫描出来的全部技能；两段共用一个滚动容器，页脚写键盘用法。 -->
+    <div class="slash-panel" id="skillPanel" role="dialog" aria-label="技能面板" hidden>
+      <div class="slash-head">
+        <span class="slash-title">技能</span>
+        <span class="slash-count" id="skillCount">读取中…</span>
+        <button type="button" class="slash-link" id="skillAliasToggle" aria-pressed="false">自定义</button>
+        <button type="button" class="slash-close" id="skillClose" aria-label="关闭技能面板">✕</button>
+      </div>
+      <div class="slash-scroll" id="skillList"></div>
+      <p class="slash-hint" id="skillHint"></p>
+      <p class="slash-warn" id="skillConflict" hidden></p>
+      <p class="slash-error" id="skillError" role="status" hidden></p>
+    </div>
   </div>
 
   <script src="./shell-thread.cjs"></script>
   <script src="./shell-sessions.cjs"></script>
+  <script src="./shell-skills.cjs"></script>
   <script src="./shell-blocks.cjs"></script>
   <script src="./shell-blocks-view.js"></script>
   <script src="./shell.js"></script>
