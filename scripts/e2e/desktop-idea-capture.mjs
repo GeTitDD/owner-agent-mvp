@@ -101,7 +101,9 @@ const readInbox = (panel) => panel.evaluate(`(() => ({
     sourceLabel: node.querySelector('.queue-source')?.textContent ?? '',
     time: node.querySelector('.queue-time')?.textContent ?? '',
     link: node.querySelector('.queue-link')?.textContent ?? '',
-    actions: [...node.querySelectorAll('button[data-next]')].map((button) => button.dataset.next)
+    actions: [...node.querySelectorAll('button[data-next]')].map((button) => button.dataset.next),
+    promotes: [...node.querySelectorAll('button[data-promote]')].map((button) => button.dataset.promote),
+    picks: [...node.querySelectorAll('select[data-idea-project]')].length
   }))
 }))()`);
 
@@ -305,14 +307,17 @@ const run = async () => {
     const sortedRow = afterSorted.rows.find((row) => row.id === textRow.id);
     check('标记已整理后状态是「已整理」', sortedRow?.status === 'sorted' && sortedRow?.statusLabel === '已整理',
       `${sortedRow?.status}/${sortedRow?.statusLabel}`);
-    check('已整理只给 采纳 / 丢弃 两条合法路径',
-      JSON.stringify(sortedRow?.actions) === JSON.stringify(['adopted', 'discarded']),
-      JSON.stringify(sortedRow?.actions));
+    // #97 起 adopted 只能经提升到达：已整理给「提升为知识 / 提升为任务 / 丢弃」，不再有空的「采纳」。
+    check('已整理给 提升为知识 / 提升为任务 / 丢弃 三条去处',
+      JSON.stringify(sortedRow?.promotes) === JSON.stringify(['knowledge', 'task'])
+      && JSON.stringify(sortedRow?.actions) === JSON.stringify(['discarded']),
+      `${JSON.stringify(sortedRow?.promotes)} / ${JSON.stringify(sortedRow?.actions)}`);
     await shotSection(panel, 'idea-inbox-sorted.png', 900);
 
     await panel.evaluate(`(() => {
       const row = document.querySelector('#ideaList .queue-item[data-id="${textRow.id}"]');
-      row.querySelector('button[data-next="adopted"]').click();
+      row.querySelector('select[data-idea-project]').value = 'alpha';
+      row.querySelector('button[data-promote="task"]').click();
       return true;
     })()`);
     await waitFor(panel, `document.querySelector('#ideaList .queue-item[data-id="${textRow.id}"]')?.dataset.status === 'adopted'`);

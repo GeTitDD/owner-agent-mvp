@@ -936,7 +936,20 @@ pre.diff, pre.logs {
 .queue-status.done { color: var(--ok); }
 .queue-status.failed { color: var(--danger); }
 .queue-status.doing { color: #3b82f6; }
-.queue-actions { display: flex; gap: 3px; flex: none; }
+.queue-actions { display: flex; gap: 3px; flex: none; flex-wrap: wrap; justify-content: flex-end; max-width: 210px; }
+/* #97 提升为任务前先选项目：小选择框与动作按钮同高，没选时保持 placeholder。 */
+.idea-project {
+  height: 20px;
+  max-width: 110px;
+  padding: 0 3px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 9px;
+}
+.idea-project:focus { outline: none; border-color: var(--accent); }
 .queue-action {
   height: 20px;
   min-width: 22px;
