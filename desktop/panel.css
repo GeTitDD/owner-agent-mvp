@@ -839,6 +839,8 @@ pre.diff, pre.logs {
 .count-chip.active .chip-dot { background: #3b82f6; animation: pulse 1.2s infinite; }
 .count-chip.warn { color: var(--warn); border-color: rgba(234, 107, 23, 0.45); background: var(--warn-soft); }
 .count-chip.warn .chip-dot { background: var(--warn); }
+/* 写范围（#112）：未授权时保持低调；项目目录已授权才用「活动」色，但不闪烁——它是状态，不是进行中。 */
+.count-chip.write-scope.granted { color: var(--text); border-color: rgba(59, 130, 246, 0.45); }
 .section-sub { margin: -2px 0 8px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .project-section { margin-bottom: 14px; }
 .zone { display: block; }.zone + .zone {

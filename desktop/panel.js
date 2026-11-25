@@ -27,6 +27,23 @@
   // - 交办目标：只能由「交办到 …」菜单设置；空＝未选，发送被拦。
   let viewProjectId = '';
   let handoffProjectId = '';
+  // 写范围授权按会话（ADR-0012 / #112）：只活在这块面板的内存里，重开面板即回到「写·自有」。
+  // 本轮只负责显示，不落任何持久化；确认卡（#113）通过 owner-write-grant 事件把授权写进来。
+  let writeGrant = { project: false };
+
+  /**
+   * 顶栏那一格：文案与范围判定只读 src/write-gate.mjs（经 write-gate-host.mjs 挂到 window），
+   * 面板不自己判「能不能写」。模块脚本还没就绪时退回默认说法，等 owner-write-gate-ready 补画。
+   */
+  const renderWriteScope = () => {
+    const node = $('writeScope');
+    if (!node) return;
+    const model = window.OwnerWriteGate?.writeScopeLabel?.({ granted: writeGrant });
+    node.textContent = model?.label ?? '写·自有';
+    node.title = model?.hint ?? '只能写自有目录；项目目录要一次一申请，外发与删除逐次确认';
+    node.dataset.scope = model?.scope ?? 'own';
+    node.classList.toggle('granted', model?.granted === true);
+  };
 
   const toast = (text, ms = 2600) => {
     const node = $('toast');
@@ -63,6 +80,9 @@
     const state = view?.state ?? 'idle';
     $('stateDot').className = `state-dot ${state}`;
     $('stateText').textContent = stateText[state] ?? '空闲';
+    // 写范围不随快照变化（授权只在本次会话内由用户动作改变），但每次渲染都补一次，
+    // 模块脚本晚到或整页刷新后都不会留空格。
+    renderWriteScope();
     $('activityPhase').className = `state-dot ${state}`;
     $('activityLabel').textContent = stateText[state] ?? '空闲';
     $('stage').textContent = view?.stage ?? '正在读取状态…';
@@ -5006,6 +5026,18 @@
   // 就绪前已算好的数据在这里补画一次，不用等下一次进入项目。
   window.addEventListener('owner-since-seen-ready', () => {
     if (panelMode === 'focus') renderSinceSeen();
+  });
+
+  // 写范围的文案来自 ESM（src/write-gate.mjs）；就绪前顶栏显示默认「写·自有」，就绪后补画。
+  window.addEventListener('owner-write-gate-ready', renderWriteScope);
+
+  // 项目目录授权的唯一入口（#112 只留缝，确认卡在 #113）：一次会话一次授权，写进内存即算数。
+  // 换会话/重开面板不会有这个事件，于是自动回到「写·自有」——按会话重置不是额外逻辑。
+  document.addEventListener('owner-write-grant', (event) => {
+    const next = event?.detail?.granted;
+    if (next && typeof next === 'object') writeGrant = { project: next.project === true };
+    else if (typeof event?.detail?.project === 'boolean') writeGrant = { project: event.detail.project };
+    renderWriteScope();
   });
 
   void refresh().then(() => {
