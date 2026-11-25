@@ -1707,6 +1707,9 @@ const buildView = async (requestedProjectId = '') => {
   const queueView = (await api(
     `/owner/v1/queue?projectId=${encodeURIComponent(activeProjectId)}`
   )).items ?? [];
+  // #95 灵感收件箱是全局的（条目在整理前不属于任何项目）：不跟着 activeProjectId 取数，
+  // 没有项目时也要能看能记。取不到就按「读不出来」显示，不要拿空收件箱冒充。
+  const ideasView = (await api('/owner/v1/ideas').catch(() => null))?.view ?? null;
   const projectHead = await headForProject(activeProject?.root ?? '');
   const diagramView = ((await api(
     `/owner/v1/projects/${encodeURIComponent(activeProjectId)}/diagrams`
@@ -1821,6 +1824,7 @@ const buildView = async (requestedProjectId = '') => {
     brief: briefView,
     nextAction,
     queue: queueView,
+    ideas: ideasView,
     diagrams: diagramView,
     knowledge: knowledgeView,
     result: resultView
@@ -2699,6 +2703,27 @@ const registerIpc = () => {
         source: 'owner',
         kind: input?.kind === 'idea' ? 'idea' : 'task'
       }
+    });
+  });
+
+  // #95 灵感收件箱：捕获只落库（来源由存储层识别），链接只存地址、不抓取。
+  // 去重也在存储层：同一段正文 + 同一个来源只会有一条，重复粘贴返回 duplicate=true。
+  ipcMain.handle('companion:idea-capture', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return api('/owner/v1/ideas', {
+      method: 'POST',
+      body: { text: String(input?.text ?? '') }
+    });
+  });
+
+  // 状态机在存储层：非法流转返回 409，面板把原因告诉用户，而不是把条目硬改过去。
+  ipcMain.handle('companion:idea-status', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const id = String(input?.id ?? '');
+    if (!id) throw new Error('Missing idea id');
+    return api(`/owner/v1/ideas/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: { status: String(input?.status ?? '') }
     });
   });
 

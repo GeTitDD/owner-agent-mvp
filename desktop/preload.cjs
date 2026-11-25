@@ -33,6 +33,11 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     move: (input) => invoke('companion:queue-move', input),
     dispatch: (input) => invoke('companion:queue-dispatch', input)
   }),
+  // #95 灵感收件箱：列表随快照下发（view.ideas），这里只有捕获与状态流转两条写路径。
+  ideas: Object.freeze({
+    capture: (input) => invoke('companion:idea-capture', input),
+    status: (input) => invoke('companion:idea-status', input)
+  }),
   diagrams: Object.freeze({
     dependency: (input) => invoke('companion:diagram-dependency', input),
     generate: (input) => invoke('companion:diagram-generate', input)

@@ -215,15 +215,17 @@
 
           <section id="queueSection" class="queue-section">
             <div class="section-title">
-              <h3>想法</h3>
+              <h3>灵感收件箱</h3>
               <span id="queueBadge" class="count">0</span>
             </div>
-            <p class="section-sub">和 Agent 聊到的改进意见收在这里；只收集，不直接改代码。</p>
+            <p class="section-sub">粘贴一段话或一个链接就进收件箱；链接只记地址，不抓取。</p>
             <div class="queue-add">
-              <input id="queueInput" class="queue-input" type="text" maxlength="1200" placeholder="记一条想法…（Enter 保存）" />
-              <button id="queueAdd" class="primary small" type="button">记下</button>
+              <textarea id="ideaInput" class="queue-input" rows="2" maxlength="8000"
+                placeholder="粘贴一段想法或一个链接…（Ctrl+Enter 存入）"></textarea>
+              <button id="ideaCapture" class="primary small" type="button">存入</button>
             </div>
-            <div id="queueList" class="queue-list"></div>
+            <div id="ideaHint" class="idea-hint" hidden></div>
+            <div id="ideaList" class="queue-list"></div>
           </section>
 
           <section class="knowledge-section compact" id="knowledgeSection">

@@ -14,6 +14,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { OwnerInputError } from './owner-store.mjs';
+import { ideaInboxView } from './idea-inbox.mjs';
+import { parseIdeaCapture } from './idea-entry.mjs';
 import { applyApprovedPatch } from './patch-service.mjs';
 import { approveRepairCycle, submitRepairCycle } from './repair-service.mjs';
 import { approveSandboxRun, submitSandboxRun } from './sandbox-service.mjs';
@@ -512,6 +514,42 @@ export function createSidecarHandler({
       requireMethod(method, 'POST');
       const body = await readJson(req);
       send(res, 200, store.moveProjectQueueItem(rest[1], { direction: body.direction }));
+      return;
+    }
+
+    // #95 灵感收件箱：粘贴一段文本或一个链接就入队。识别来源与去重都在存储层，
+    // 这里只做「空内容 / 超长」的入口校验；链接只存地址，任何抓取都留给下一张票。
+    if (rest.length === 1 && head === 'ideas') {
+      if (method === 'GET') {
+        const items = store.listIdeaInbox();
+        send(res, 200, { items, view: ideaInboxView({ items }) });
+        return;
+      }
+      requireMethod(method, 'POST');
+      const body = await readJson(req);
+      const parsed = parseIdeaCapture(body?.text);
+      if (!parsed.ok) throw new OwnerInputError(parsed.reason, 400);
+      // 先查再写：命中已有条目时返回 200，让面板能说清「这一条已经在收件箱里」。
+      const existing = store.findIdeaByContent({
+        rawText: parsed.text,
+        captureSource: parsed.source
+      });
+      const item = existing ?? store.addIdeaItem({
+        title: parsed.title,
+        rawText: parsed.text,
+        captureSource: parsed.source,
+        link: parsed.link,
+        source: 'owner'
+      });
+      send(res, existing ? 200 : 201, { item, duplicate: Boolean(existing) });
+      return;
+    }
+
+    // 状态流转只走状态机：非法流转由 setIdeaStatus 抛 409，并带上「从哪到哪」。
+    if (rest.length === 2 && head === 'ideas') {
+      requireMethod(method, 'PATCH');
+      const body = await readJson(req);
+      send(res, 200, store.setIdeaStatus(rest[1], str(body.status, 'status', 20)));
       return;
     }
 
