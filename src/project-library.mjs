@@ -146,7 +146,7 @@ const entryOfLesson = (row) => {
     title: oneLine(row?.phenomenon, 200) || '未命名经验',
     status,
     badge: badgeOf(status),
-    detail: `${layer} · ${badgeOf(status)} · 证据 ${evidenceCount} 条`,
+    detail: `${layer} · ${badgeOf(status)}`,
     evidenceCount,
     evidenceRefs: evidenceRefsOf(row?.evidence),
     at: row?.lastMergedAt ?? row?.createdAt ?? row?.created_at ?? null,
@@ -176,8 +176,7 @@ const entryOfKnowledge = (row, source) => {
       isDecision ? '决策' : '知识',
       source === 'contributed' ? '本项目贡献' : '领域共享',
       badgeOf(status),
-      current ? '' : '不算现状',
-      `证据 ${evidenceCount} 条`
+      current ? '' : '不算现状'
     ].filter(Boolean).join(' · '),
     evidenceCount,
     evidenceRefs: evidenceRefsOf(row?.evidenceRefs),

@@ -2719,6 +2719,16 @@
     renderPlaybookResult();
     lastAnswer = null;
     renderAnswer(null);
+    // 库与「上次看过」也是按项目取的：刷新回来之前先把它们收起，
+    // 否则切换瞬间会显示上一个项目的画像与图谱（数字可能看起来还挺合理，更容易误读）。
+    const librarySection = $('librarySection');
+    if (librarySection) librarySection.hidden = true;
+    $('librarySections')?.replaceChildren();
+    $('libraryAssets')?.replaceChildren();
+    sinceSeenProjectId = '';
+    sinceSeenData = null;
+    sinceSeenError = '';
+    renderSinceSeen();
     await refresh();
     void loadPlaybooks();
   };
