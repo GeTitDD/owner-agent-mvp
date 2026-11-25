@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Owner Companion · 卡片</title>
+  <!-- #105 卡片壳：单列布局（顶栏一行 / 中部对话流 / 底部输入框）。
+       这一版是新旧并存的 expand 步骤：旧面板整页原样保留，默认仍走它；
+       主进程用 OWNER_AGENT_SHELL=1 或 --shell 才加载这一页。 -->
+  <link rel="stylesheet" href="./shell.css" />
+</head>
+<body>
+  <div class="shell">
+    <!-- 顶栏只放状态位（#105：本轮不放操作，避免变成第二个菜单）。
+         五个位都只写「占位」：位置与名字先定下来，接真数据是后续票的事。
+         数据槽用 data-slot 定位，方便验收断言。 -->
+    <header class="top" id="shellHeader">
+      <span class="slot" data-slot="session">
+        <span class="slot-key">会话</span>
+        <span class="slot-value">占位</span>
+      </span>
+      <span class="slot" data-slot="project">
+        <span class="slot-key">项目</span>
+        <span class="slot-value">占位</span>
+      </span>
+      <span class="slot" data-slot="write">
+        <span class="slot-key">写范围</span>
+        <span class="slot-value">占位</span>
+      </span>
+      <span class="slot" data-slot="monitor">
+        <span class="slot-key">监控</span>
+        <span class="slot-value">占位</span>
+      </span>
+      <span class="slot" data-slot="export">
+        <span class="slot-key">导出</span>
+        <span class="slot-value">占位</span>
+      </span>
+    </header>
+
+    <main class="thread" id="thread">
+      <p class="empty" id="emptyState">还没有对话。直接打字发送，这一版只会回一条占位回复。</p>
+      <ol class="messages" id="messages"></ol>
+    </main>
+
+    <form class="composer" id="composer" autocomplete="off">
+      <label class="sr-only" for="input">输入消息</label>
+      <textarea id="input" rows="1" placeholder="说点什么。回车发送，Shift+回车换行"></textarea>
+      <button type="submit" class="send" id="send" disabled>发送</button>
+    </form>
+  </div>
+
+  <script src="./shell-thread.cjs"></script>
+  <script src="./shell.js"></script>
+</body>
+</html>

@@ -73,20 +73,23 @@ export const connectCdp = async (url) => {
   return { send, evaluate, events, close: () => socket.close() };
 };
 
-/** 在 CDP 的 /json/list 里等 panel.html 的调试地址。 */
-export const findPanelTarget = async (port) => {
+/**
+ * 在 CDP 的 /json/list 里等目标页面的调试地址。
+ * 默认等旧面板；#105 的卡片壳传 'shell.html'。
+ */
+export const findPanelTarget = async (port, pageFile = 'panel.html') => {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/json/list`);
       const targets = await response.json();
-      const panel = targets.find((target) => String(target.url).includes('panel.html'));
+      const panel = targets.find((target) => String(target.url).includes(pageFile));
       if (panel?.webSocketDebuggerUrl) return panel.webSocketDebuggerUrl;
     } catch {
       // 端口还没起来：继续等。
     }
     await sleep(500);
   }
-  throw new Error('panel target not found');
+  throw new Error(`${pageFile} target not found`);
 };
 
 /** 轮询一个页面内表达式，直到为真或超时。 */
@@ -111,8 +114,9 @@ export const waitFor = async (panel, expression, timeoutMs = 30000) => {
  * @param {string} options.knowledgeDb 临时知识库
  * @param {Record<string,string>} [options.env] 额外环境变量（如 OWNER_TRIAGE_TIMEOUT_MS）
  * @param {boolean} [options.showPanel] 启动后是否调用 companion.showPanel()
+ * @param {string} [options.page] 要连的页面文件，默认旧面板 panel.html；#105 传 shell.html
  */
-export const startApp = async ({ userData, ownerDb, knowledgeDb, env = {}, showPanel = false }) => {
+export const startApp = async ({ userData, ownerDb, knowledgeDb, env = {}, showPanel = false, page = 'panel.html' }) => {
   const port = await freePort();
   const child = spawn(electronPath, [
     path.join(repoRoot, 'desktop', 'main.cjs'),
@@ -132,7 +136,7 @@ export const startApp = async ({ userData, ownerDb, knowledgeDb, env = {}, showP
   const log = [];
   child.stdout.on('data', (chunk) => log.push(String(chunk)));
   child.stderr.on('data', (chunk) => log.push(String(chunk)));
-  const wsUrl = await findPanelTarget(port);
+  const wsUrl = await findPanelTarget(port, page);
   const panel = await connectCdp(wsUrl);
   await panel.send('Runtime.enable');
   await panel.send('Log.enable');

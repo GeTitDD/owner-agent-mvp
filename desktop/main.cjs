@@ -30,6 +30,10 @@ const screenshotArg = process.argv.find((arg) => arg.startsWith('--screenshot-di
 const screenshotDir = screenshotArg ? screenshotArg.slice('--screenshot-dir='.length) : '';
 // 验收/自动化实例不把桌宠和面板画到用户桌面上（否则会看到测试宠物一闪而过）。
 const e2eOffscreen = process.env.OWNER_AGENT_E2E_OFFSCREEN === '1';
+// #105 卡片壳：新渲染器先与旧面板并存，默认仍加载旧面板（旧行为不变）；
+// 只有显式给 OWNER_AGENT_SHELL=1 或 --shell 才把窗口换成新壳。收缩在 #111。
+const cardShell = process.env.OWNER_AGENT_SHELL === '1' || process.argv.includes('--shell');
+const panelPage = cardShell ? 'shell.html' : 'panel.html';
 const selfTestArg = process.argv.find((arg) => arg.startsWith('--self-test='));
 const selfTest = selfTestArg ? selfTestArg.slice('--self-test='.length) : '';
 const selfTestOutArg = process.argv.find((arg) => arg.startsWith('--self-test-out='));
@@ -2257,7 +2261,7 @@ const createPanel = () => {
     panel.setOpacity(0);
     panel.setIgnoreMouseEvents(true);
   }
-  panel.loadFile(path.join(__dirname, 'panel.html'));
+  panel.loadFile(path.join(__dirname, panelPage));
   panel.on('closed', () => { panel = null; });
 };
 
