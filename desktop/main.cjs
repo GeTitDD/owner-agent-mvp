@@ -402,6 +402,7 @@ async function startServices() {
     approvalToken,
     ideaFetch: ideaFetcher.fetch,
     ideaResolve: ideaFetcher.resolve,
+    personalStore,
     imageDigest: resolveDigest(),
     sandboxRoot: path.join(app.getPath('userData'), 'sandbox'),
     port: 0,
@@ -2987,6 +2988,21 @@ const registerIpc = () => {
       method: 'POST',
       body: {},
       timeoutMs: 20000
+    });
+  });
+
+  // #97 提升：to=knowledge 落假设类候选（走既有候选审核），to=task 落目标项目队列。
+  // 没选项目时服务端拒绝并把原因回给面板；灵感状态只在成功后才变 adopted。
+  ipcMain.handle('companion:idea-promote', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const id = String(input?.id ?? '');
+    if (!id) throw new Error('Missing idea id');
+    return api(`/owner/v1/ideas/${encodeURIComponent(id)}/promote`, {
+      method: 'POST',
+      body: {
+        to: String(input?.to ?? ''),
+        projectId: String(input?.projectId ?? '')
+      }
     });
   });
 

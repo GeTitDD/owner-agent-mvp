@@ -17,6 +17,7 @@ import { OwnerInputError } from './owner-store.mjs';
 import { ideaInboxView } from './idea-inbox.mjs';
 import { parseIdeaCapture } from './idea-entry.mjs';
 import { sortIdeaEntry } from './idea-sort.mjs';
+import { promoteIdeaToKnowledge, promoteIdeaToTask } from './idea-promote.mjs';
 import { applyApprovedPatch } from './patch-service.mjs';
 import { approveRepairCycle, submitRepairCycle } from './repair-service.mjs';
 import { approveSandboxRun, submitSandboxRun } from './sandbox-service.mjs';
@@ -269,6 +270,13 @@ const baseShaOf = (root) => {
   }
 };
 
+/** #97 提升去处只认 knowledge / task；别的一律拒绝，不猜默认。 */
+const refusePromotionTarget = (to) => ({
+  ok: false,
+  code: 'target',
+  reason: `未知的提升去处「${String(to ?? '')}」：只支持知识（knowledge）或任务（task）。`
+});
+
 /** 这些路径是“决策”，必须使用审批令牌，读取令牌无效。 */
 const isDecisionRoute = (rest, method) => {
   if (method !== 'POST' || rest.length !== 3) return false;
@@ -286,7 +294,8 @@ const isDecisionRoute = (rest, method) => {
  * @param {{store: object, brokerFactory: () => object, token: string,
  *          approvalToken?: string|null, version?: string, imageDigest?: string,
  *          sandboxRoot?: string, getExpectedPort?: () => number|null,
- *          ideaFetch?: Function|null, ideaResolve?: Function|null}} options
+ *          ideaFetch?: Function|null, ideaResolve?: Function|null,
+ *          personalStore?: object|null}} options
  */
 export function createSidecarHandler({
   store,
@@ -300,7 +309,9 @@ export function createSidecarHandler({
   getExpectedPort = () => null,
   // #96 整理要访问外网：抓取器与 DNS 解析从这里注入，缺省用真实网络。
   ideaFetch = null,
-  ideaResolve = null
+  ideaResolve = null,
+  // #97 提升为知识要写候选队列：知识库从这里注入；没注入时只有「提升为任务」可用。
+  personalStore = null
 } = {}) {
   if (!store) throw new Error('store is required');
   if (typeof brokerFactory !== 'function') throw new Error('brokerFactory is required');
@@ -576,6 +587,35 @@ export function createSidecarHandler({
         cached: result.cached,
         attempts: result.attempts
       });
+      return;
+    }
+
+    // #97 提升：已整理的条目 → 知识候选（假设类）或项目队列任务。
+    // 两条路都复用既有入口；失败（没选项目、候选被拒）状态不变，原因原样回给面板。
+    if (rest.length === 3 && head === 'ideas' && rest[2] === 'promote') {
+      requireMethod(method, 'POST');
+      const body = await readJson(req);
+      const to = str(body?.to, 'to', 20);
+      const result = to === 'knowledge'
+        ? promoteIdeaToKnowledge({
+          store,
+          personalStore,
+          id: rest[1],
+          actor: origin?.operatorId ?? 'local-user',
+          note: typeof body?.note === 'string' ? body.note : ''
+        })
+        : to === 'task'
+          ? promoteIdeaToTask({
+            store,
+            id: rest[1],
+            projectId: typeof body?.projectId === 'string' ? body.projectId : ''
+          })
+          : refusePromotionTarget(to);
+      if (!result.ok) {
+        throw new OwnerInputError(result.reason, result.code === 'missing' ? 404 : 400);
+      }
+      noteCall(result.task?.projectId ?? result.item?.projectId ?? '', `idea.promote.${to}`);
+      send(res, 200, result);
       return;
     }
 
@@ -922,7 +962,8 @@ export async function startSidecar({
   imageDigest = '',
   sandboxRoot = '',
   ideaFetch = null,
-  ideaResolve = null
+  ideaResolve = null,
+  personalStore = null
 } = {}) {
   if (host !== '127.0.0.1') throw new OwnerInputError('Sidecar may only bind to 127.0.0.1');
   const state = { port: 0 };
@@ -937,6 +978,7 @@ export async function startSidecar({
     sandboxRoot,
     ideaFetch,
     ideaResolve,
+    personalStore,
     getExpectedPort: () => state.port || null
   });
   const server = http.createServer(handler);

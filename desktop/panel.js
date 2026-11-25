@@ -178,11 +178,11 @@
   };
 
   // #95 灵感收件箱：捕获只入「收件箱」，状态只能按 收件箱 → 已整理 → 已采纳/已丢弃 前进。
-  // 整理（抓链接、写四段结论）是下一张票的事，这里只做状态动作；「标记已整理」不生成任何内容。
+  // 整理（抓链接、写四段结论）是 #96 的事；本段只做捕获、整理与状态动作。
+  // #97 起「已采纳」不再是一个空按钮：已整理只能经「提升为知识 / 提升为任务」到达 adopted。
   // 丢弃是明确动作：条目留在「已整理」段里可查回，原文与链接都不删。
   const IDEA_ACTION_TEXT = {
     sorted: { label: '标记已整理', done: '已移入已整理' },
-    adopted: { label: '采纳', done: '已采纳' },
     discarded: { label: '丢弃', done: '已丢弃（原文还留着）' }
   };
   const IDEA_STATUS_NAMES = { inbox: '收件箱', sorted: '已整理', adopted: '已采纳', discarded: '已丢弃' };
@@ -210,6 +210,43 @@
     } catch (error) {
       toast(ideaErrorText(error), 6000);
       return null;
+    }
+  };
+
+  /**
+   * #97 提升：已整理的条目 → 知识候选（假设类）或项目队列任务。
+   * 任务没有项目时不替用户挑：先让他在这条上选项目；服务端也会再拦一次。
+   */
+  const promoteIdea = async (item, to, button, select) => {
+    const knowledge = to === 'knowledge';
+    const projectId = knowledge ? '' : (item.projectId || select?.value || '');
+    if (!knowledge && !projectId) {
+      toast('这条灵感还没有项目：先在条目里选一个项目，再提升为任务。', 6000);
+      return;
+    }
+    if (button?.disabled) return;
+    if (button) {
+      button.disabled = true;
+      button.textContent = '提升中…';
+    }
+    try {
+      const result = await window.companion.ideas.promote({ id: item.id, to, projectId });
+      await refresh();
+      if (knowledge) {
+        toast('已提升为知识候选（假设类），去候选队列审核；灵感已采纳。', 5200);
+      } else {
+        const target = result?.projectId ?? projectId;
+        const name = focusProjects().find((project) => project.id === target)?.name ?? target;
+        toast(`已提升为任务，放进「${name}」的队列；灵感已采纳。`, 5200);
+      }
+    } catch (error) {
+      toast(cleanIpcError(error?.message ?? error), 7000);
+      await refresh();
+    } finally {
+      if (button?.isConnected) {
+        button.disabled = false;
+        button.textContent = knowledge ? '提升为知识' : '提升为任务';
+      }
     }
   };
 
@@ -323,10 +360,42 @@
       };
       actions.append(button);
     };
-    // 按钮只给合法的那一步：收件箱只能去已整理；已整理才能采纳或丢弃。
+    // 按钮只给合法的那一步：收件箱只能去已整理；已整理只能提升（知识 / 任务）或丢弃。
     if (item.status === 'inbox') addAction('sorted');
     if (item.status === 'sorted') {
-      addAction('adopted');
+      // #97 提升是两条明确去处，取代 #95 泛化的「采纳」：adopted 就是「提升过」的终态，
+      // 不允许既不进知识也不进任务就走到终点（状态机仍保留 adopted，见 idea-entry / owner-store）。
+      const addPromote = (to, label) => {
+        const button = el('button', 'queue-action', label);
+        button.type = 'button';
+        button.dataset.promote = to;
+        button.title = to === 'knowledge'
+          ? '落成假设类知识候选，走既有候选审核；不改动原文与整理结果'
+          : '放进对应项目的任务队列；本条没有项目时要先选项目';
+        button.onclick = () => {
+          const select = row.querySelector('select[data-idea-project]');
+          void promoteIdea(item, to, button, select);
+        };
+        actions.append(button);
+      };
+      addPromote('knowledge', '提升为知识');
+      // 条目没有项目：给一个明确的选择，不默认第一个项目；选中前按钮只提示。
+      if (!item.projectId && focusProjects().length) {
+        const pick = el('select', 'idea-project');
+        pick.dataset.ideaProject = 'true';
+        pick.title = '这条灵感还没有项目：选一个再提升为任务';
+        const placeholder = el('option', '', '选项目…');
+        placeholder.value = '';
+        placeholder.selected = true;
+        pick.append(placeholder);
+        for (const project of focusProjects()) {
+          const option = el('option', '', project.name || project.id);
+          option.value = project.id;
+          pick.append(option);
+        }
+        actions.append(pick);
+      }
+      addPromote('task', '提升为任务');
       addAction('discarded', 'queue-action danger');
     }
     row.append(dot, main, actions);
