@@ -96,6 +96,9 @@ let executionStatusModule = null;
 let ideaCaptureModule = null;
 // #86 会话扫描：模块按需加载；扫描是显式动作，不在启动或轮询里调用。
 let sessionScanModule = null;
+// #87 决策确认：候选确认入库与状态流转；同样按需加载。
+let decisionConfirmModule = null;
+let decisionRetrievalModule = null;
 let chatModule = null;
 let chatService = null;
 let chatSessionStore = null;
@@ -799,6 +802,10 @@ const skillCatalogPayload = async ({ refresh = false } = {}) => {
 const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) => {
   if (!personalStore) return { answer: '知识库尚未建立；完成任务并提炼执行记录后会出现在这里。', items: [], basis: [] };
   const units = personalStore.list({ limit: 2000 });
+  // 决策有自己的状态列（#87）：已结束的决策不再算现状，检索默认不返回，
+  // 也不再与「待验证 / 已验证」的知识混在一句里。
+  const currentUnit = (row) => row.kind !== 'decision' || row.decisionStatus === 'active';
+  const decisions = units.filter((row) => row.kind === 'decision');
   // 旧 experience/v1 已退役（#62）：问答只读三层沉淀的 lesson/v1。
   const allLessons = personalStore.listLessons({ limit: 1000 });
   // 跨项目合并后的经验只挂在最早项目下，第二个项目靠来源台账反查。
@@ -808,7 +815,10 @@ const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) =>
   const item = (type, row, extra = {}) => ({
     type, id: row.id,
     title: type === 'lesson' ? row.phenomenon : row.title,
-    status: type === 'lesson' ? (row.verificationStatus ?? 'inferred') : row.verificationStatus,
+    // 决策读自己的状态列，不拿验证状态冒充（#87）。
+    status: type === 'lesson'
+      ? (row.verificationStatus ?? 'inferred')
+      : (row.kind === 'decision' ? (row.decisionStatus ?? 'active') : row.verificationStatus),
     layer: type === 'lesson' ? (row.scope?.layer ?? row.layer ?? null) : (row.layer ?? null),
     revision: row.revision ?? null,
     projectId: row.projectId ?? row.project_id ?? null,
@@ -828,7 +838,7 @@ const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) =>
   if (kind === 'similar') {
     const latest = lessons[0]?.phenomenon;
     const q = query || latest || '';
-    const matched = personalStore.list({ q, limit: 10 });
+    const matched = personalStore.list({ q, limit: 10 }).filter(currentUnit);
     const found = lessons.filter((row) =>
       `${row.phenomenon} ${row.mechanism} ${row.countermeasure}`.toLowerCase().includes(q.toLowerCase())
     ).slice(0, 10);
@@ -860,14 +870,18 @@ const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) =>
     };
   }
   // project
+  // 决策状态与验证状态分开：已结束的决策不进「相关知识」，但要在回答里说明还有几条旧决策。
   const projectKnowledge = units.filter((row) =>
-    row.scope === 'project'
+    (row.scope === 'project'
       ? row.projectId === projectId
-      : Boolean(domain) && row.domains.includes(domain)
+      : Boolean(domain) && row.domains.includes(domain)) && currentUnit(row)
   );
+  const endedDecisions = decisions.filter((row) => row.decisionStatus !== 'active'
+    && row.scope === 'project' && row.projectId === projectId).length;
   const projectLessons = lessons.filter(inProject);
   return {
-    answer: `${projectId || '当前项目'}：${projectLessons.length} 条经验，${projectKnowledge.length} 条相关知识。`,
+    answer: `${projectId || '当前项目'}：${projectLessons.length} 条经验，${projectKnowledge.length} 条相关知识`
+      + (endedDecisions ? `；另有 ${endedDecisions} 条决策已被取代或已放弃，不再算现状。` : '。'),
     items: [...projectLessons.slice(0, 10).map((row) => item('lesson', row)),
       ...projectKnowledge.slice(0, 10).map((row) => item('knowledge', row))],
     basis: [...projectLessons.map((row) => `lesson:${row.id}`),
@@ -3212,20 +3226,66 @@ const registerIpc = () => {
       root: project.root ?? ''
     }));
     const state = loadSessionScanState();
+    // 已确认入库的决策指纹从库里读（#87）：同一句话已经被确认过，就不该再作为候选出现。
+    const confirmed = (() => {
+      try { return personalStore?.decisionFingerprints?.() ?? []; } catch { return []; }
+    })();
     const result = await sessionScanModule.scanSessions({
       roots: sessionScanModule.sessionRootsFrom({ home: os.homedir(), env: process.env }),
       projects,
       seenSessions: state.sessions,
-      fingerprints: state.fingerprints
+      fingerprints: [...state.fingerprints, ...confirmed]
     });
     saveSessionScanState({
       sessions: [...state.sessions, ...result.scannedKeys],
       // 只记「哪些会话扫过」，不把未确认候选的指纹写进去：本轮提过的候选还没入库，
       // 占住指纹会让它以后再也没机会被提出来。跨轮的同内容去重靠会话键；
-      // 指纹去重在本轮跨会话时生效，等确认入库后由库提供已有指纹（下一张票）。
+      // 已确认入库的指纹由知识库提供（上面那一步），不落进这份 JSON。
       fingerprints: state.fingerprints
     });
     return result;
+  });
+
+  // #87 决策确认：候选只在人点「确认」时入库；可选补一句理由，缺理由单独标记。
+  // 未确认的候选不经过这里，因此不会写任何数据。
+  ipcMain.handle('companion:decision-confirm', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) return { ok: false, reason: '知识库尚未初始化，暂时不能确认决策。' };
+    decisionConfirmModule = decisionConfirmModule ?? await importEsm('../src/memory/decision-confirm.mjs');
+    return decisionConfirmModule.confirmDecisionCandidate({
+      personalStore,
+      candidate: input?.candidate && typeof input.candidate === 'object' ? input.candidate : {},
+      reason: String(input?.reason ?? ''),
+      actor: 'local-user'
+    });
+  });
+
+  // #87 决策状态：只改 decision_status 一列（生效中 → 已被取代 / 已放弃），验证状态不动。
+  ipcMain.handle('companion:decision-status', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) return { ok: false, reason: '知识库尚未初始化，暂时不能改决策状态。' };
+    decisionConfirmModule = decisionConfirmModule ?? await importEsm('../src/memory/decision-confirm.mjs');
+    return decisionConfirmModule.changeDecisionStatus({
+      personalStore,
+      id: String(input?.id ?? ''),
+      status: String(input?.status ?? ''),
+      note: String(input?.note ?? ''),
+      actor: 'local-user'
+    });
+  });
+
+  // #87 决策检索：默认只给生效中的决策；已被取代 / 已放弃的单独列出，不算现状。
+  ipcMain.handle('companion:decision-retrieve', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) return { items: [], ended: [], counts: { current: 0, ended: 0, matched: 0 }, reason: null };
+    decisionRetrievalModule = decisionRetrievalModule ?? await importEsm('../src/memory/decision-status.mjs');
+    const units = personalStore.list({ limit: 2000 });
+    return decisionRetrievalModule.decisionRetrievalView({
+      units,
+      projectId: String(input?.projectId ?? '') || config.projectId || '',
+      query: String(input?.query ?? ''),
+      limit: input?.limit
+    });
   });
 
   // 只读 playbook：列表、执行、报告、转提案。

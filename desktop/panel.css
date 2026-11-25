@@ -1623,6 +1623,18 @@ pre.diff, pre.logs {
 }
 .kb-scan-quote { font-size: 12px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere; }
 .kb-scan-item-meta { font-size: 10.5px; color: var(--muted); }
+/* #87 决策确认：缺理由的行用左侧色条标出来；理由是可选输入，确认按钮在右侧。 */
+.kb-scan-item.missing-reason { border-left: 3px solid #c98a2b; padding-left: 7px; }
+.kb-scan-missing { font-size: 10.5px; line-height: 1.5; color: #9a6a1c; }
+.kb-scan-confirm { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+.kb-scan-reason {
+  flex: 1; min-width: 0; padding: 4px 8px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 11.5px;
+}
+.kb-scan-reason:focus { outline: none; border-color: rgba(38, 38, 38, .34); }
+.kb-scan-item.done { opacity: .72; }
+.kb-scan-done { font-size: 11px; font-weight: 600; color: var(--muted); }
 .kb-scan-empty, .kb-scan-more, .kb-scan-hint { margin: 0; font-size: 11px; line-height: 1.6; color: var(--muted); }
 .kb-scan-hint { margin-top: 8px; }
 .kb-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
@@ -1661,6 +1673,13 @@ pre.diff, pre.logs {
 .kb-act:disabled { opacity: .5; cursor: default; }
 .kb-item-title { font-size: 12.5px; font-weight: 600; line-height: 1.4; }
 .kb-item-meta { font-size: 11px; color: var(--muted); line-height: 1.45; }
+/* 决策的两个提示：缺理由（确认时没补）与「不算现状」（已被取代 / 已放弃）。 */
+.kb-item-flag {
+  align-self: flex-start; margin-top: 2px; padding: 1px 6px;
+  border-radius: 999px; font-size: 10px; line-height: 1.5;
+  color: #8a5b12; background: rgba(201, 138, 43, .14);
+}
+.kb-item-flag.ended { color: var(--muted); background: rgba(38, 38, 38, .07); }
 .kb-group-empty, .kb-group-more, .kb-loading { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }
 .kb-empty { padding: 12px 10px; background: var(--bg); border: 1px dashed var(--line); border-radius: 10px; }
 .kb-empty-title { margin-bottom: 5px; font-size: 14px; font-weight: 650; }

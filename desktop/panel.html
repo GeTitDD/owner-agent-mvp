@@ -302,7 +302,7 @@
         </div>
         <p class="kb-hint">知识分三层：候选待审核，经验是从执行里提炼的教训，知识是收敛后的规则。状态看徽章，不分组。</p>
         <!-- #86 会话扫描：显式动作。第一次扫出 0 条时要看得见「扫了多少、匹配上多少、丢了多少」，
-             否则会被当成坏了。候选暂不可确认（下一张票才开放）。 -->
+             否则会被当成坏了。#87 起候选可以确认入库：可选补一句理由，缺理由会标出来。 -->
         <div id="kbScan" class="kb-scan" aria-live="polite" hidden>
           <div class="kb-scan-head">
             <span class="kb-scan-title">会话扫描</span>
@@ -310,8 +310,8 @@
           </div>
           <p id="kbScanReasons" class="kb-scan-reasons" hidden></p>
           <div id="kbScanCandidates" class="kb-scan-candidates"></div>
-          <p class="kb-scan-hint">只读 Codex 与 Claude Code；OpenCode 的会话不在扫描范围内。扫描不写库，同一段会话不会被重复提炼。</p>
-        </section>
+          <p class="kb-scan-hint">只读 Codex 与 Claude Code；OpenCode 的会话不在扫描范围内。扫描不写库；确认一条才会作为决策入库，同一段会话不会被重复提炼。</p>
+        </div>
         <div id="kbFilters" class="kb-filters" role="group" aria-label="按项目筛选"></div>
         <div id="kbGroups" class="kb-groups" aria-live="polite"></div>
       </section>

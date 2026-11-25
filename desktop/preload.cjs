@@ -62,8 +62,12 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     catalog: (input) => invoke('companion:skill-catalog', input)
   }),
   // #86 会话扫描：显式点击才跑；只读本机会话文件，不写库。
+  // #87 决策：确认才入库；状态只写决策自己那一列（生效中 / 已被取代 / 已放弃）。
   memory: Object.freeze({
-    scanSessions: () => invoke('companion:session-scan')
+    scanSessions: () => invoke('companion:session-scan'),
+    confirmDecision: (input) => invoke('companion:decision-confirm', input),
+    setDecisionStatus: (input) => invoke('companion:decision-status', input),
+    decisions: (input) => invoke('companion:decision-retrieve', input)
   }),
   playbooks: Object.freeze({
     list: (input) => invoke('companion:playbooks', input),

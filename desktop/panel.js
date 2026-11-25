@@ -1067,13 +1067,17 @@
     }
   };
 
+  // 决策状态文案：列表与详情只显示决策自己的状态，不拿验证状态冒充（#87）。
+  const DECISION_STATUS_TEXT = { active: '生效中', superseded: '已被取代', abandoned: '已放弃' };
+
   const knowledgeItem = (item) => {
     const button = el('button', 'knowledge-item');
     button.type = 'button';
+    const statusText = DECISION_STATUS_TEXT[item.status] ?? item.status ?? 'unknown';
     button.append(el('strong', undefined, item.title));
     button.append(el('span', undefined,
       `${item.type === 'lesson' ? '经验' : item.type === 'candidate' ? '候选' : '知识'} · ` +
-      `${item.status ?? 'unknown'}${item.layer ? ` · ${item.layer}` : ''}` +
+      `${statusText}${item.layer ? ` · ${item.layer}` : ''}` +
       `${item.revision ? ` · r${item.revision}` : ''}`));
     if (item.detail) button.append(el('span', undefined, item.detail));
     button.onclick = () => { void openKnowledgeDetail(item.id); };
@@ -1085,11 +1089,23 @@
       const data = await window.companion.knowledge.detail({ id });
       const nodes = [];
       if (data.kind === 'knowledge') {
+        const isDecision = data.item.kind === 'decision';
+        const decision = data.item.decision ?? {};
+        const reasonText = decision.reasonMissing === true || !decision.reason
+          ? '缺理由（确认时没补）'
+          : decision.reason;
         nodes.push(el('p', 'result-summary', data.item.content));
         nodes.push(detailRows([
           ['层级', data.item.layer],
           ['范围', data.item.scope === 'project' ? `项目 ${data.item.projectId}` : data.item.scope],
-          ['验证', data.item.verificationStatus],
+          // 决策不显示「验证」：它的状态是生效中 / 已被取代 / 已放弃。
+          ...(isDecision ? [
+            ['决策状态', DECISION_STATUS_TEXT[data.item.decisionStatus] ?? data.item.decisionStatus ?? ''],
+            ['理由', reasonText],
+            ['来源', decision.source?.source === 'claude' ? 'Claude Code 会话' : 'Codex 会话'],
+            ['确认', decision.decidedAt ?? ''],
+            ['原话', decision.quote?.user ?? '']
+          ] : [['验证', data.item.verificationStatus]]),
           ['版本', `r${data.item.revision}`],
           ['证据', String((data.item.evidenceRefs ?? []).length)],
           ['复用', String(data.usages.length)]
@@ -3199,6 +3215,13 @@
       meta.textContent += ` · ${projectLabel(item.projectId)}`;
     }
     main.append(meta);
+    // 决策的两种状态：缺理由要显眼（确认时没补），已结束要写清「不算现状」。
+    if (item.decision && item.reasonMissing) {
+      main.append(el('span', 'kb-item-flag', '缺理由'));
+    }
+    if (item.decision && item.current === false) {
+      main.append(el('span', 'kb-item-flag ended', '不算现状'));
+    }
     main.onclick = () => { void openKnowledgeDetail(item.id); };
     row.append(main);
 
@@ -3254,6 +3277,42 @@
         }
       };
       actions.append(promote);
+      row.append(actions);
+    }
+
+    // #87：生效中的决策可以结束成「已被取代 / 已放弃」。状态只改决策自己那一列，
+    // 验证状态与内容原样不动；结束后这一条不再算现状，但仍留在列表里可查。
+    if (item.decision && item.current !== false) {
+      const actions = el('div', 'kb-item-actions');
+      const mark = async (status, label, button) => {
+        button.disabled = true;
+        try {
+          const result = await window.companion.memory.setDecisionStatus({
+            id: item.id,
+            status,
+            note: ''
+          });
+          if (!result?.ok) {
+            toast(result?.reason ?? '改状态失败，请稍后再试。', 6000);
+            button.disabled = false;
+            return;
+          }
+          toast(`已标为「${label}」，这条决策不再算现状`, 4000);
+          await loadKnowledgeBrowse();
+        } catch (error) {
+          toast(String(error?.message ?? error), 6000);
+          button.disabled = false;
+        }
+      };
+      const supersede = el('button', 'kb-act reject', '已被取代');
+      const abandon = el('button', 'kb-act reject', '已放弃');
+      supersede.type = 'button';
+      abandon.type = 'button';
+      supersede.dataset.role = 'decision-supersede';
+      abandon.dataset.role = 'decision-abandon';
+      supersede.onclick = () => { void mark('superseded', '已被取代', supersede); };
+      abandon.onclick = () => { void mark('abandoned', '已放弃', abandon); };
+      actions.append(supersede, abandon);
       row.append(actions);
     }
     return row;
@@ -3374,6 +3433,66 @@
 
   let sessionScanResult = null;
 
+  // 一条候选：原话 + 出处 + 可选理由 + 确认。确认前不写任何数据；
+  // 缺理由的候选用醒目标记（不是隐藏），因为「补一句为什么」正是确认时要问人的事。
+  const scanCandidateRow = (candidate, index) => {
+    const row = el('div', `kb-scan-item${candidate.missingReason ? ' missing-reason' : ''}`);
+    row.dataset.index = String(index);
+    if (candidate.fingerprint) row.dataset.fingerprint = candidate.fingerprint;
+    row.append(el('span', 'kb-scan-quote', candidate.quote?.user || candidate.phenomenon || '（无原话）'));
+
+    const meta = [
+      candidate.projectName || projectLabel(candidate.projectId),
+      candidate.source === 'codex' ? 'Codex' : 'Claude Code',
+      candidate.partial ? '只有用户原话' : '成对',
+      candidate.missingReason ? '缺理由' : ''
+    ].filter(Boolean).join(' · ');
+    row.append(el('span', 'kb-scan-item-meta', meta));
+    if (candidate.missingReason) {
+      row.append(el('span', 'kb-scan-missing', '原话里没有理由；确认时可以补一句，不补会记为「缺理由」。'));
+    }
+
+    const form = el('div', 'kb-scan-confirm');
+    const reason = el('input', 'kb-scan-reason');
+    reason.type = 'text';
+    reason.placeholder = '补一句为什么（可选）';
+    reason.dataset.role = 'decision-reason';
+    const confirm = el('button', 'kb-act accept', '确认入库');
+    confirm.type = 'button';
+    confirm.dataset.role = 'decision-confirm';
+    // 不做乐观更新：只有 IPC 成功后才把这条标成已入库；失败时按钮恢复、候选留在原处。
+    confirm.onclick = async () => {
+      confirm.disabled = true;
+      const label = confirm.textContent;
+      confirm.textContent = '确认中…';
+      try {
+        const result = await window.companion.memory.confirmDecision({
+          candidate,
+          reason: reason.value
+        });
+        if (!result?.ok) {
+          toast(result?.reason ?? '确认失败，请稍后再试。', 6000);
+          confirm.disabled = false;
+          confirm.textContent = label;
+          return;
+        }
+        toast(result.created ? '已确认入库：这条决策现在是「生效中」' : '这条决策已经确认过了', 4000);
+        row.classList.add('done');
+        form.replaceChildren(el('span', 'kb-scan-done',
+          result.created ? '已入库 · 生效中' : '已入库过 · 生效中'));
+        // 决策进了知识层，刷新一次让「生效中」条目当场出现。
+        await loadKnowledgeBrowse();
+      } catch (error) {
+        toast(String(error?.message ?? error), 6000);
+        confirm.disabled = false;
+        confirm.textContent = label;
+      }
+    };
+    form.append(reason, confirm);
+    row.append(form);
+    return row;
+  };
+
   // 计数先写清楚（扫了多少 / 匹配上多少 / 丢了多少），再看候选：
   // 第一次扫出 0 条时要能从这几项里看出「扫了但没命中」，而不是「像坏了」。
   const renderSessionScan = () => {
@@ -3405,20 +3524,9 @@
         ? '这段会话里没有像取舍的用户原话：提问、工具输出和注入的环境上下文都不算候选。'
         : '没有会话匹配到已登记的项目：只有工作目录正好是项目根或在其子目录下才算命中。'));
     } else {
-      for (const candidate of shown.slice(0, 8)) {
-        const row = el('div', 'kb-scan-item');
-        row.append(el('span', 'kb-scan-quote', candidate.quote?.user || candidate.phenomenon || '（无原话）'));
-        const meta = [
-          candidate.projectName || projectLabel(candidate.projectId),
-          candidate.source === 'codex' ? 'Codex' : 'Claude Code',
-          candidate.partial ? '只有用户原话' : '成对',
-          candidate.missingReason ? '缺理由' : ''
-        ].filter(Boolean).join(' · ');
-        row.append(el('span', 'kb-scan-item-meta', meta));
-        list.append(row);
-      }
-      if ((counts.candidates ?? 0) > shown.length) {
-        list.append(el('p', 'kb-scan-more', `共 ${counts.candidates} 条候选，这里只列前 ${shown.length} 条。`));
+      shown.slice(0, 8).forEach((candidate, index) => list.append(scanCandidateRow(candidate, index)));
+      if ((counts.candidates ?? 0) > shown.slice(0, 8).length) {
+        list.append(el('p', 'kb-scan-more', `共 ${counts.candidates} 条候选，这里只列前 ${shown.slice(0, 8).length} 条。`));
       }
     }
     // e2e 直接读这几个属性，不用解析中文文案。
