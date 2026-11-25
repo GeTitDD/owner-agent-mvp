@@ -19,6 +19,12 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     })
   }),
   createJob: (input) => invoke('companion:create-job', input),
+  // #110 复制：沙箱里的渲染进程不能直接写系统剪贴板，走主进程。
+  writeClipboard: (text) => invoke('companion:clipboard-write', { text: String(text ?? '') }),
+  // #110 会话导出：正文 + 上下文头落到 <userData>/conversations/<sessionId>.md。
+  conversation: Object.freeze({
+    export: (input) => invoke('companion:conversation-export', input)
+  }),
   decide: (input) => invoke('companion:decide', input),
   patchDetail: (input) => invoke('companion:patch-detail', input),
   result: (input) => invoke('companion:result', input),

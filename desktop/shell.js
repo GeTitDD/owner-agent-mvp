@@ -10,6 +10,8 @@
   if (!blocksApi) throw new Error('shell-blocks.cjs 未加载');
   const blocksView = window.OwnerShellBlocksView;
   if (!blocksView) throw new Error('shell-blocks-view.js 未加载');
+  const copyApi = window.OwnerShellCopy;
+  if (!copyApi) throw new Error('shell-copy.cjs 未加载');
 
   const $ = (id) => document.getElementById(id);
   const messagesNode = $('messages');
@@ -18,15 +20,75 @@
   const form = $('composer');
   const input = $('input');
   const sendButton = $('send');
+  const toastNode = $('toast');
+  const exportButton = $('exportConversation');
+  const exportPathNode = $('exportPath');
 
   // 流就是这份数组；每次发送拿新数组回来（纯函数不改旧值），旧帧可以直接比对。
   let messages = api.createThread();
+
+  // #110 会话身份：导出文件按会话 id 命名，时间取会话开始时间而不是「现在」。
+  // 本轮壳还没有会话持久化（#106 那条线），所以把最小的身份写进 localStorage：
+  // 同一台机器上重复打开仍是同一条会话，重复导出也落在同一个文件里。
+  const SESSION_KEY = 'owner-shell-session';
+  const loadSession = () => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(SESSION_KEY) ?? '');
+      if (stored && typeof stored.id === 'string' && stored.id) {
+        return { id: stored.id, startedAt: String(stored.startedAt ?? '') };
+      }
+    } catch {
+      // 存储里是坏值：当作没有，下一次写入会覆盖它。
+    }
+    const created = {
+      id: globalThis.crypto?.randomUUID?.() ?? `session-${Date.now()}`,
+      startedAt: new Date().toISOString()
+    };
+    try {
+      localStorage.setItem(SESSION_KEY, JSON.stringify(created));
+    } catch {
+      // 存储不可用也不影响复制；只是导出路径会随页面重载变化。
+    }
+    return created;
+  };
+  const session = loadSession();
+
+  /** 导出/复制共用的上下文头；项目与模型这一轮还没有真来源，按实际状态写。 */
+  const sessionContext = () => ({
+    project: '全局（未选项目）',
+    session: copyApi.sessionTitleOf(messages),
+    time: session.startedAt,
+    model: '未接入（占位回复）'
+  });
+
+  /** 可见回执：成功与失败都留 4 秒；不静默，也不弹窗打断。 */
+  let toastTimer = null;
+  const notify = (text, tone = 'ok') => {
+    toastNode.textContent = text;
+    toastNode.dataset.tone = tone;
+    toastNode.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toastNode.hidden = true;
+      toastNode.textContent = '';
+    }, 4000);
+  };
 
   const el = (tag, className, text) => {
     const node = document.createElement(tag);
     if (className) node.className = className;
     if (text !== undefined) node.textContent = text;
     return node;
+  };
+
+  // 悬停态只记一个节点：最后被指到的那一个（块或消息）亮按钮，另一个立刻收起。
+  // 用属性而不是 :hover 叠加，是因为块本身也在消息里面，纯 CSS 会同时亮两个。
+  let copyActive = null;
+  const setCopyActive = (node) => {
+    if (copyActive === node) return;
+    copyActive?.removeAttribute('data-copy-active');
+    copyActive = node;
+    copyActive?.setAttribute('data-copy-active', '1');
   };
 
   /**
@@ -45,6 +107,13 @@
     }
     const who = el('span', 'who', message.role === 'user' ? '我' : 'Companion');
     if (item.dataset.placeholder === 'true') who.append(el('span', 'badge', api.PLACEHOLDER_PREFIX));
+    // #110 悬停复制：每条消息一个，块另有自己的一个；同一时刻只亮一个（见下面 data-copy-active）。
+    // 文案同样走 CSS 伪元素，消息的 who 文本保持「我 / Companion」。
+    const copy = el('button', 'copy-affordance msg-copy');
+    copy.type = 'button';
+    copy.dataset.copyMessage = '1';
+    copy.setAttribute('aria-label', '复制这条消息为 Markdown');
+    who.append(copy);
     item.append(who);
     if (message.text) item.append(el('p', 'bubble', message.text));
     item.append(blocksView.renderReply(message));
@@ -52,6 +121,8 @@
   };
 
   const render = () => {
+    // 重画会换掉旧节点：悬停态跟着旧节点一起作废，避免按钮挂在不存在的块上。
+    setCopyActive(null);
     messagesNode.replaceChildren(...messages.map(renderMessage));
     emptyNode.hidden = messages.length > 0;
     // 新消息在底部：画完再滚，避免停在上一屏。
@@ -115,7 +186,103 @@
     input.focus();
   };
 
+  /**
+   * 剪贴板写入点：先用注入的 writer（e2e 与测试用），否则走主进程剪贴板，
+   * 再退到 navigator.clipboard。三者都不可用就抛错，由调用方给可见提示。
+   */
+  const writeClipboard = async (text) => {
+    const injected = window.OwnerShellClipboard;
+    if (injected && typeof injected.write === 'function') {
+      await injected.write(text);
+      return;
+    }
+    if (window.companion && typeof window.companion.writeClipboard === 'function') {
+      await window.companion.writeClipboard(text);
+      return;
+    }
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    throw new Error('这个环境没有可用的剪贴板');
+  };
+
+  /**
+   * 复制的唯一落点。按钮只声明「复制消息」或「复制块」，
+   * Markdown 由 shell-copy 从「画这个节点用的同一份模型」里取，不重新读一遍 DOM。
+   */
+  const copyFromButton = async (button) => {
+    const item = button.closest('.msg');
+    const index = Number(item?.dataset.index);
+    const message = messages[index];
+    if (!message) return;
+    const model = blocksApi.normalizeReply(message);
+    let markdown = '';
+    if (button.dataset.copyBlock !== undefined) {
+      const blockIndex = Number(button.closest('[data-block]')?.dataset.blockIndex);
+      markdown = copyApi.blockToMarkdown(model.blocks[blockIndex]);
+    } else {
+      markdown = copyApi.messageToMarkdown(message);
+    }
+    if (!markdown.trim()) {
+      notify('这条内容没有可复制的 Markdown', 'error');
+      return;
+    }
+    try {
+      await writeClipboard(markdown);
+      notify('已复制为 Markdown', 'ok');
+    } catch (error) {
+      // 失败必须看得见：不静默，也不假装复制成功。
+      notify(`复制失败：${error?.message || '剪贴板不可用'}`, 'error');
+    }
+  };
+
+  /** 导出当前会话：正文与上下文头都交给主进程落盘，路径回填到按钮旁边。 */
+  const exportConversation = async () => {
+    if (messages.length === 0) {
+      notify('没有可导出的消息', 'error');
+      return;
+    }
+    if (!window.companion?.conversation?.export) {
+      notify('导出失败：主进程接口不可用', 'error');
+      return;
+    }
+    try {
+      const result = await window.companion.conversation.export({
+        sessionId: session.id,
+        context: sessionContext(),
+        messages
+      });
+      exportPathNode.textContent = result.path;
+      exportPathNode.hidden = false;
+      notify(`已导出：${result.path}`, 'ok');
+    } catch (error) {
+      notify(`导出失败：${error?.message || '未知原因'}`, 'error');
+    }
+  };
+
+  exportButton.addEventListener('click', () => { exportConversation(); });
+
+  // 悬停时只亮最后指到的那一层：块在消息里面，块优先。
+  messagesNode.addEventListener('mouseover', (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    const block = target.closest('[data-block]');
+    if (block) {
+      setCopyActive(block);
+      return;
+    }
+    const item = target.closest('.msg');
+    if (item) setCopyActive(item);
+  });
+  messagesNode.addEventListener('mouseleave', () => setCopyActive(null));
+
   messagesNode.addEventListener('click', (event) => {
+    const copyButton = event.target.closest?.('[data-copy-message], [data-copy-block]');
+    if (copyButton) {
+      copyFromButton(copyButton);
+      return;
+    }
     const button = event.target.closest?.(
       '[data-ask-choice], [data-ask-skip], [data-ask-free-submit]'
     );
