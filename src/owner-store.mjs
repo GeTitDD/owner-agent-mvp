@@ -17,8 +17,16 @@ const txt=(v,label,max=400,required=true)=>{check(typeof v==='string'&&v.length<
 const ident=(v,label='id')=>{const s=txt(v,label,90);check(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(s),`Invalid ${label}`);return s;};
 const json= v=>JSON.stringify(v);
 const parse=v=>JSON.parse(v);
+// 迁移期的旧行或未整理的行没有 JSON：读不回就按空值处理，不让一条坏数据毁掉整个列表。
+const parseOr=(value,fallback=null)=>{if(!value)return fallback;try{return parse(value);}catch{return fallback;}};
 const statuses=new Set(['planned','active','blocked','paused','done','archived']);
 const taskStatuses=new Set(['todo','doing','blocked','done','cancelled']);
+// #94 灵感收件箱：表格仍是 owner_project_queue，另起一列记灵感自己的状态，
+// 因为旧 status 列被任务状态（todo/doing/...）占用，且它的 CHECK 不能改。
+const ideaStatuses=new Set(['inbox','sorted','adopted','discarded']);
+// 状态只能按顺序前进：收件箱 → 已整理 → 已采纳/已丢弃。终态不再变化。
+const ideaTransitions={inbox:['sorted'],sorted:['adopted','discarded'],adopted:[],discarded:[]};
+const captureSources=new Set(['paste','link']);
 const kinds=new Set(['run_started','tool_finished','run_settled','project_note','test_result','api_call']);
 // v1.1：记录 OpenClaw 侧发起的写入来源（网关实例 / 会话 / run / 操作员）。
 // 只进入事件 payload，不新增表或列。
@@ -50,6 +58,9 @@ const repairRow=row=>row?{...row,repairScope:parse(row.repair_scope)}:null;
 const queueRow=row=>row?{
   id:row.id,projectId:row.project_id,title:row.title,body:row.body,status:row.status,
   kind:row.kind??'task',position:row.position,source:row.source,linkedJobId:row.linked_job_id,
+  // #94 灵感字段：旧行没有这些列时按迁移默认值读出，不返回 undefined。
+  rawText:row.raw_text??'',captureSource:row.capture_source??'paste',link:row.link_url??'',
+  sorted:parseOr(row.sorted_result),ideaStatus:row.idea_status??'inbox',sortedAt:row.sorted_at??null,
   createdAt:row.created_at,updatedAt:row.updated_at,completedAt:row.completed_at
 }:null;
 const diagramRow=row=>row?{
@@ -68,6 +79,42 @@ const cleanPayload=v=>{check(v!==null&&typeof v==='object'&&!Array.isArray(v),'P
     out[key]=val;}
   return out;};
 const canonical=v=>JSON.stringify(v,Object.keys(v).sort());
+// 队列表的列定义只写一份：新库直接建，旧库升级时用它重建。
+// #94 的两处改动：project_id 去掉 NOT NULL（收件箱条目在整理前不属于任何项目），
+// 并追加灵感字段。SQLite 不能把 NOT NULL 列改宽，旧库只能重建表，见下方迁移。
+const QUEUE_TABLE_DDL=`(
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES owner_projects(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL CHECK(status IN ('todo','doing','blocked','done','failed')),
+        kind TEXT NOT NULL DEFAULT 'task',
+        position INTEGER NOT NULL DEFAULT 0,
+        source TEXT NOT NULL DEFAULT 'owner',
+        linked_job_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        raw_text TEXT NOT NULL DEFAULT '',
+        capture_source TEXT NOT NULL DEFAULT 'paste' CHECK(capture_source IN ('paste','link')),
+        link_url TEXT NOT NULL DEFAULT '',
+        sorted_result TEXT NOT NULL DEFAULT '',
+        idea_status TEXT NOT NULL DEFAULT 'inbox' CHECK(idea_status IN ('inbox','sorted','adopted','discarded')),
+        sorted_at TEXT
+      )`;
+const QUEUE_COLUMNS=['id','project_id','title','body','status','kind','position','source',
+  'linked_job_id','created_at','updated_at','completed_at','raw_text','capture_source',
+  'link_url','sorted_result','idea_status','sorted_at'];
+// 老库补列：与表定义里的默认值保持一致。只补缺的列，已有列不动。
+const QUEUE_ADDITIVE_COLUMNS=[
+  ['kind',`TEXT NOT NULL DEFAULT 'task'`],
+  ['raw_text',`TEXT NOT NULL DEFAULT ''`],
+  ['capture_source',`TEXT NOT NULL DEFAULT 'paste'`],
+  ['link_url',`TEXT NOT NULL DEFAULT ''`],
+  ['sorted_result',`TEXT NOT NULL DEFAULT ''`],
+  ['idea_status',`TEXT NOT NULL DEFAULT 'inbox'`],
+  ['sorted_at',`TEXT`]
+];
 
 export class OwnerStore {
   constructor(dbPath=defaultDbPath(),{maxActiveJobsPerProject=1}={}){
@@ -133,20 +180,7 @@ export class OwnerStore {
         payload TEXT NOT NULL,
         PRIMARY KEY(project_id,version)
       );
-      CREATE TABLE IF NOT EXISTS owner_project_queue(
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL REFERENCES owner_projects(id) ON DELETE CASCADE,
-        title TEXT NOT NULL,
-        body TEXT NOT NULL DEFAULT '',
-        status TEXT NOT NULL CHECK(status IN ('todo','doing','blocked','done','failed')),
-        kind TEXT NOT NULL DEFAULT 'task',
-        position INTEGER NOT NULL DEFAULT 0,
-        source TEXT NOT NULL DEFAULT 'owner',
-        linked_job_id TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        completed_at TEXT
-      );
+      CREATE TABLE IF NOT EXISTS owner_project_queue ${QUEUE_TABLE_DDL};
       CREATE INDEX IF NOT EXISTS owner_project_queue_project
         ON owner_project_queue(project_id,status,position,created_at);
       CREATE TABLE IF NOT EXISTS owner_project_diagrams(
@@ -408,8 +442,34 @@ export class OwnerStore {
     const attemptColumns=this.db.prepare('PRAGMA table_info(owner_job_attempts)').all().map(c=>c.name);
     if(!attemptColumns.includes('session_id'))this.db.exec(`ALTER TABLE owner_job_attempts ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`);
     // 项目队列分两类：task（可交办）与 idea（灵感/改进意见，只收集不执行）。
-    const queueColumns=this.db.prepare('PRAGMA table_info(owner_project_queue)').all().map(c=>c.name);
-    if(!queueColumns.includes('kind'))this.db.exec(`ALTER TABLE owner_project_queue ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'`);
+    let queueColumns=this.db.prepare('PRAGMA table_info(owner_project_queue)').all();
+    // #94：灵感收件箱的条目在整理前不属于任何项目，project_id 必须可空。
+    // SQLite 的 ALTER TABLE 只能加列/改默认值，放宽 NOT NULL 只能重建表；
+    // 重建时按列名搬运，旧行一条不丢，缺的新列由默认值补齐（来源=粘贴、状态=收件箱）。
+    if(queueColumns.find((c)=>c.name==='project_id')?.notnull===1){
+      const oldNames=new Set(queueColumns.map((c)=>c.name));
+      const copyColumns=QUEUE_COLUMNS.filter((name)=>oldNames.has(name)).join(',');
+      this.db.exec('PRAGMA foreign_keys=OFF');
+      try{
+        this.db.exec(`BEGIN IMMEDIATE;
+          DROP TABLE IF EXISTS owner_project_queue_upgrade;
+          CREATE TABLE owner_project_queue_upgrade ${QUEUE_TABLE_DDL};
+          INSERT INTO owner_project_queue_upgrade(${copyColumns})
+            SELECT ${copyColumns} FROM owner_project_queue;
+          DROP TABLE owner_project_queue;
+          ALTER TABLE owner_project_queue_upgrade RENAME TO owner_project_queue;
+          CREATE INDEX IF NOT EXISTS owner_project_queue_project
+            ON owner_project_queue(project_id,status,position,created_at);
+          COMMIT;`);
+      }catch(error){try{this.db.exec('ROLLBACK');}catch{/* ignore */}throw error;}
+      finally{this.db.exec('PRAGMA foreign_keys=ON');}
+      queueColumns=this.db.prepare('PRAGMA table_info(owner_project_queue)').all();
+    }
+    // 其余新列沿用既有写法：建表后按 PRAGMA table_info 补列，老库可重复升级。
+    const queueColumnNames=new Set(queueColumns.map((c)=>c.name));
+    for(const [name,ddl] of QUEUE_ADDITIVE_COLUMNS){
+      if(!queueColumnNames.has(name))this.db.exec(`ALTER TABLE owner_project_queue ADD COLUMN ${name} ${ddl}`);
+    }
     // v0.7: approval-time snapshot of the referenced owner task input (title/note), so later
     // task edits cannot change what an approved job will analyse.
     const jobColumns=this.db.prepare('PRAGMA table_info(owner_jobs)').all().map(c=>c.name);
@@ -519,6 +579,76 @@ export class OwnerStore {
       id,project_id,title,body,status,kind,position,source,linked_job_id,created_at,updated_at,completed_at
     ) VALUES(?,?,?,?, 'todo', ?, ?, ?, NULL, ?, ?, NULL)`)
       .run(id,projectId,titleText,txt(body,'body',4000,false),kind,next,txt(source,'source',40),now,now);
+    return this.getProjectQueueItem(id);
+  }
+  // #94 灵感收件箱：读写仍落在 owner_project_queue，只认 kind=idea 的条目。
+  // 项目可以为空（全局收件箱），状态走 idea_status 一列，不复用任务的 status。
+  getIdeaItem(id){
+    const item=this.getProjectQueueItem(id);
+    return item&&item.kind==='idea'?item:null;
+  }
+  listIdeaInbox(){
+    return this.db.prepare(`SELECT * FROM owner_project_queue WHERE kind='idea'
+      ORDER BY created_at DESC,id ASC`).all().map(queueRow);
+  }
+  addIdeaItem({projectId=null,title,rawText='',captureSource='paste',link='',body='',source='owner',now=stamp()}={}){
+    const project=projectId===undefined||projectId===null||projectId===''?null:ident(projectId,'project id');
+    if(project!==null)check(!!this.getProject(project),'Unknown project',404);
+    check(captureSources.has(captureSource),'Invalid capture source');
+    const titleText=txt(title,'title',300);
+    // 原文缺省时用标题兜底：旧入口只有一句纯文本，不能让「原文」变成空白。
+    const raw=txt(rawText===''||rawText===undefined?titleText:rawText,'original text',8000);
+    const linkText=txt(link,'link',2000,false);
+    // 只做存储：这里不抓链接，只保证「来源是链接」的条目确实带链接。
+    if(captureSource==='link')check(!!linkText,'Link is required for link items');
+    const next=project===null
+      ? (this.db.prepare('SELECT COALESCE(MAX(position),0)+1 AS pos FROM owner_project_queue WHERE project_id IS NULL').get()?.pos??1)
+      : (this.db.prepare('SELECT COALESCE(MAX(position),0)+1 AS pos FROM owner_project_queue WHERE project_id=?').get(project)?.pos??1);
+    const id=randomUUID();
+    this.db.prepare(`INSERT INTO owner_project_queue(
+      id,project_id,title,body,status,kind,position,source,linked_job_id,
+      raw_text,capture_source,link_url,sorted_result,idea_status,sorted_at,
+      created_at,updated_at,completed_at
+    ) VALUES(?,?,?,?,'todo','idea',?,?,NULL,?,?,?,'','inbox',NULL,?,?,NULL)`)
+      .run(id,project,titleText,txt(body,'body',4000,false),next,txt(source,'source',40),
+        raw,captureSource,linkText,now,now);
+    return this.getProjectQueueItem(id);
+  }
+  // 编辑内容，不动状态：整理结果也只是存进 sorted_result，何时进入「已整理」由 setIdeaStatus 决定。
+  updateIdeaItem(id,{title,body,rawText,captureSource,link,sorted,projectId}={}){
+    const item=this.getIdeaItem(id);
+    check(!!item,'Unknown idea',404);
+    const nextProject=projectId===undefined
+      ? item.projectId
+      : (projectId===null||projectId===''?null:ident(projectId,'project id'));
+    if(nextProject!==null)check(!!this.getProject(nextProject),'Unknown project',404);
+    const nextSource=captureSource===undefined?item.captureSource:captureSource;
+    check(captureSources.has(nextSource),'Invalid capture source');
+    const nextLink=link===undefined?item.link:txt(link,'link',2000,false);
+    if(nextSource==='link')check(!!nextLink,'Link is required for link items');
+    const nextSorted=sorted===undefined?item.sorted:sorted;
+    check(nextSorted===null||(!!nextSorted&&typeof nextSorted==='object'&&!Array.isArray(nextSorted)),'Invalid sorted result');
+    const sortedJson=nextSorted===null?'':json(nextSorted);
+    check(sortedJson.length<=20000,'Sorted result is too large');
+    const now=stamp();
+    this.db.prepare(`UPDATE owner_project_queue SET title=?,body=?,raw_text=?,capture_source=?,link_url=?,
+      sorted_result=?,project_id=?,updated_at=? WHERE id=?`).run(
+      title===undefined?item.title:txt(title,'title',300),
+      body===undefined?item.body:txt(body,'body',4000,false),
+      rawText===undefined?item.rawText:txt(rawText,'original text',8000),
+      nextSource,nextLink,sortedJson,nextProject,now,id);
+    return this.getProjectQueueItem(id);
+  }
+  // 灵感状态机：只允许 收件箱 → 已整理 → 已采纳/已丢弃；丢弃是状态，不删除原文。
+  setIdeaStatus(id,status,{now=stamp()}={}){
+    check(ideaStatuses.has(status),'Invalid idea status');
+    const item=this.getIdeaItem(id);
+    check(!!item,'Unknown idea',404);
+    check((ideaTransitions[item.ideaStatus]??[]).includes(status),
+      `Idea cannot move from ${item.ideaStatus} to ${status}`,409);
+    const sortedAt=status==='sorted'?now:item.sortedAt;
+    this.db.prepare('UPDATE owner_project_queue SET idea_status=?,sorted_at=?,updated_at=? WHERE id=?')
+      .run(status,sortedAt,now,id);
     return this.getProjectQueueItem(id);
   }
   getProjectDiagram(projectId,kind,scope='project'){
