@@ -92,6 +92,7 @@ let projectBriefModule = null;
 let nextActionModule = null;
 let knowledgeTidyModule = null;
 let diagramModule = null;
+let executionStatusModule = null;
 let ideaCaptureModule = null;
 let chatModule = null;
 let chatService = null;
@@ -966,6 +967,8 @@ const knowledgeDetail = ({ id } = {}) => {
   const loadGithubPr = async () => (githubPrModule ??= await importEsm('../src/github-pr.mjs'));
   const loadProjectBrief = async () => (projectBriefModule ??= await importEsm('../src/project-brief.mjs'));
   const loadNextAction = async () => (nextActionModule ??= await importEsm('../src/next-action.mjs'));
+  // 执行状态只有一份判定（src/execution-status.mjs）：跨项目「还在场内」的列表也从这里出。
+  const loadExecutionStatus = async () => (executionStatusModule ??= await importEsm('../src/execution-status.mjs'));
   const loadKnowledgeTidy = async () => (knowledgeTidyModule ??= await importEsm('../src/knowledge/tidy.mjs'));
   const loadDiagrams = async () => (diagramModule ??= await importEsm('../src/project-diagrams.mjs'));
   const projectHeadCache = new Map();
@@ -1385,21 +1388,28 @@ const buildView = async (requestedProjectId = '') => {
     sandboxes: allSandboxes,
     repairs: allRepairs
   }, projectNames);
+  // 跨项目的「还在场内」执行：view.chain 只装当前项目、每类最多一条
+  // （activeJob ?? jobsInProject[0]），回答不了「别的项目是不是还活着」。
+  // 这里从同一批 limit=20 的四张表摊平，终态与审批态由 execution-status.mjs 滤掉；
+  // 已知限制：超出最近 20 条的旧执行不会出现，只影响很忙的大项目。
+  const { listInFlightExecutions, isInFlight } = await loadExecutionStatus();
+  const executions = listInFlightExecutions({
+    jobs: allJobs,
+    patches: allPatches,
+    sandboxes: allSandboxes,
+    repairs: allRepairs
+  }, { projectNames });
   // 任务链只关联当前选中的项目，避免把不同项目的 Job/Patch/Run/Cycle 拼成假进度。
   const inProject = (item) => projectIdOf(item) === activeProjectId;
   const jobsInProject = allJobs.filter(inProject);
   const patchesInProject = allPatches.filter(inProject);
   const sandboxesInProject = allSandboxes.filter(inProject);
   const repairsInProject = allRepairs.filter(inProject);
-  const activeJob = jobsInProject.find((job) =>
-    ['pending_approval', 'queued', 'leased', 'running', 'cancel_requested'].includes(job.status)
-  );
-  const activeCycle = repairsInProject.find((cycle) =>
-    ['pending_approval', 'queued', 'proposal_ready', 'applied', 'test_pending'].includes(cycle.status)
-  );
-  const activeSandbox = sandboxesInProject.find((run) =>
-    ['pending_approval', 'queued', 'provisioning', 'running', 'collecting'].includes(run.status)
-  );
+  // 「进行中」不再抄一份状态数组：能直接读 execution-status.mjs 就 import，
+  // 与操作区、执行记录用同一套终态 / 审批态判定（见 src/execution-status.mjs）。
+  const activeJob = jobsInProject.find((job) => isInFlight('job', job.status));
+  const activeCycle = repairsInProject.find((cycle) => isInFlight('cycle', cycle.status));
+  const activeSandbox = sandboxesInProject.find((run) => isInFlight('sandbox', run.status));
   const latestPatch = patchesInProject[0] ?? null;
   const chain = {
     job: activeJob ?? jobsInProject[0] ?? null,
@@ -1631,6 +1641,8 @@ const buildView = async (requestedProjectId = '') => {
     version: COMPANION_VERSION,
     state,
     pending,
+    // 跨项目非终态执行（操作区「运行中」块的唯一数据源）；终态与审批态已在主进程滤掉。
+    executions,
     stage,
     activity,
     timeline,
@@ -2988,9 +3000,13 @@ const registerIpc = () => {
 
   // #58 提议信号：按项目统计「还没提炼成经验的执行记录」，达到阈值才返回。
   // 只读、只提示——这里不会调用任何提炼，也不会写库。
+  // #71 操作区跨项目：显式 allProjects 时统计全部项目（空 projectId 会被
+  // listDistillProposals 读成「先列项目再逐个查」）；不带这个标记时沿用
+  // 「传入项目 → 配置项目」的老口径，知识页的行为不变。
   ipcMain.handle('companion:knowledge-distill-proposals', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    const projectId = String(input?.projectId ?? '') || config.projectId || '';
+    const allProjects = input?.allProjects === true;
+    const projectId = allProjects ? '' : (String(input?.projectId ?? '') || config.projectId || '');
     const distiller = await knowledgeDistiller();
     if (!distiller) return { projectId, proposals: [], threshold: null };
     onDemandModule = onDemandModule ?? await importEsm('../src/knowledge-loop/on-demand.mjs');
@@ -3590,7 +3606,7 @@ async function boot() {
             const toastText = toast?.textContent ?? '';
             const toastVisible = !(toast?.hidden ?? true);
             const draftKept = input.value;
-            const selectedRow = document.querySelector('#projectList .project-row.selected')?.dataset.project ?? '';
+            // #73 之后选项目只剩工作区顶部一处：视图项目只从切换标签读。
             const detailTab = document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
             // toast 位置验收：不能压住模式栏，也不能压住底部输入区。
             const rectOf = (node) => {
@@ -3610,7 +3626,7 @@ async function boot() {
               blockedToast: toastText,
               blockedToastVisible: toastVisible,
               draftKept,
-              viewProjectFromDom: selectedRow || detailTab,
+              viewProjectFromDom: detailTab,
               toastRect,
               navRect,
               composerRect,
@@ -3662,7 +3678,7 @@ async function boot() {
               // 选中后等界面真正换到该项目（快照要走一遍服务探测），最多等 6 秒。
               let viewProject = '';
               for (let i = 0; i < 40; i += 1) {
-                viewProject = document.querySelector('#projectList .project-row.selected')?.dataset.project ?? '';
+                viewProject = document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
                 if (viewProject && viewProject === target?.dataset.project) break;
                 await wait(150);
               }
@@ -3683,8 +3699,8 @@ async function boot() {
                 };
               };
               const settings = await window.companion.settings.get();
-              // 截图前把详情卡滚到眼前，并清掉自动生成图谱的报错提示，别挡住选择证据。
-              document.getElementById('focusDetail')?.scrollIntoView({ block: 'start' });
+              // 截图前把工作区滚到眼前（详情卡已在 #72 删除），并清掉自动生成图谱的报错提示。
+              document.getElementById('workZone')?.scrollIntoView({ block: 'start' });
               await wait(400);
               document.getElementById('toast').hidden = true;
               return {
@@ -4101,28 +4117,27 @@ async function boot() {
             const chip = document.getElementById('handoffTarget');
             const name = document.getElementById('handoffTargetName');
             const tabOf = () => document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
-            const rowOf = () => document.querySelector('#projectList .project-row.selected')?.dataset.project ?? '';
             const handoffOf = () => ({ id: chip?.dataset.projectId ?? '', label: name?.textContent?.trim() ?? '' });
             if (projects.length < 2) return { skipped: 'need-two-projects', count: projects.length };
-            const initial = { view: tabOf(), selectedRow: rowOf(), handoff: handoffOf() };
-            // 点详情卡的项目标签看另一个项目：只应换视图，交办仍是「未选项目」。
+            const initial = { view: tabOf(), handoff: handoffOf() };
+            // 点工作区的项目切换标签看另一个项目：只应换视图，交办仍是「未选项目」。
             const other = projects[1];
             const tab = [...document.querySelectorAll('#fdTabs .fd-tab')]
               .find((node) => node.dataset.project === other.id);
             tab?.click();
             for (let i = 0; i < 60; i += 1) {
               await wait(150);
-              if (tabOf() === other.id && rowOf() === other.id) break;
+              if (tabOf() === other.id) break;
             }
             await wait(600);
-            // 截图要同时看到详情卡标签（视图项目）与底部「交办到 …」（交办目标）。
-            document.getElementById('focusDetail')?.scrollIntoView({ block: 'start' });
+            // 截图要同时看到工作区的项目切换（视图项目）与底部「交办到 …」（交办目标）。
+            document.getElementById('workZone')?.scrollIntoView({ block: 'start' });
             await wait(500);
             document.getElementById('toast').hidden = true;
             return {
               projectIds: projects.map((item) => item.id),
               initial,
-              afterTab: { view: tabOf(), selectedRow: rowOf(), handoff: handoffOf() },
+              afterTab: { view: tabOf(), handoff: handoffOf() },
               clicked: other.id
             };
           })()`);
@@ -4206,14 +4221,15 @@ async function boot() {
             await wait(400);
             const modeB = document.getElementById('modeB');
             const modeA = document.getElementById('modeA');
-            const workspace = document.getElementById('workspaceToggle');
+            const workspace = document.getElementById('workWorkspace');
             const browse = document.getElementById('knowledgeBrowse');
             return {
               blocks: [...modeB.querySelectorAll(':scope > .scroll > section')]
                 .map((node) => ({ id: node.id, className: node.className })),
               hasWorkspaceInKnowledge: modeB.contains(workspace),
               workspaceInFocus: modeA.contains(workspace),
-              workspaceOpen: workspace?.open === true,
+              // 工作区从 #69 起是常驻展开的 <section>（不再是 <details>）：只看它有没有被隐藏。
+              workspaceOpen: workspace?.hidden !== true,
               renderMs: browse?.dataset.renderMs ?? '',
               renderBudget: browse?.dataset.renderBudget ?? ''
             };
@@ -4227,7 +4243,7 @@ async function boot() {
           const jumpTargets = {
             knowledge: 'knowledgeBrowse',
             tests: 'runningSection',
-            patches: 'needsSection',
+            patches: 'opsZone',
             runs: 'runningSection'
           };
           const jumpResults = [];
@@ -4236,7 +4252,7 @@ async function boot() {
               const wait = (ms) => new Promise((r) => setTimeout(r, ms));
               document.querySelector('#modeBar button[data-mode="focus"]')?.click();
               await wait(900);
-              const entry = document.querySelector('#fdBody .fd-entry[data-entry="${key}"]');
+              const entry = document.querySelector('#workEntries .work-entry[data-entry="${key}"]');
               if (!entry) return { key: '${key}', error: 'entry-not-rendered' };
               entry.click();
               await wait(1200);
@@ -4244,14 +4260,14 @@ async function boot() {
               const visible = Object.entries(views)
                 .find(([, id]) => !document.getElementById(id).hidden)?.[0] ?? '';
               const node = document.getElementById('${jumpTargets[key]}');
-              const workspace = document.getElementById('workspaceToggle');
+              const workspace = document.getElementById('workWorkspace');
               const rect = node?.getBoundingClientRect();
               return {
                 key: '${key}',
                 visible,
                 target: '${jumpTargets[key]}',
                 inWorkspace: Boolean(workspace && node && workspace.contains(node)),
-                workspaceOpen: workspace?.open === true,
+                workspaceOpen: workspace?.hidden !== true,
                 top: rect ? Math.round(rect.top) : null
               };
             })()`);
@@ -4267,7 +4283,7 @@ async function boot() {
             const node = document.getElementById('runningSection');
             const saved = node.id;
             node.id = 'runningSection-detached';
-            document.querySelector('#fdBody .fd-entry[data-entry="runs"]')?.click();
+            document.querySelector('#workEntries .work-entry[data-entry="runs"]')?.click();
             await wait(900);
             node.id = saved;
             const wrap = document.querySelector('#modeA .a-wrap');

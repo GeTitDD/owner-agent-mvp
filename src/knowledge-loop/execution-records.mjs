@@ -5,15 +5,17 @@
 // 一次执行（job → patch → sandbox run）只产出一条记录，主体按 run > job > patch 取舍；
 // 其余主体退化为这条记录的 evidenceRefs，供提炼时追证据。
 import { flatText } from '../utils.mjs';
+// 终态判定来自 src/execution-status.mjs：执行记录、操作区与跨项目快照共用一份。
+import { TERMINAL } from '../execution-status.mjs';
 
 export const EXECUTION_RECORD_LIMIT = 100;
 /** 单次扫描上限：owner store 的列表接口最多返回 500 条，够覆盖默认的最近 100 条。 */
 const SCAN_LIMIT = 500;
 
-/** 终态判定与 ExperienceCollector 保持一致，避免两处对「已终态」的理解分叉。 */
-const TERMINAL_SANDBOX = new Set(['completed', 'failed', 'cancelled', 'rejected']);
-const TERMINAL_JOB = new Set(['succeeded', 'failed', 'cancelled', 'rejected']);
-const TERMINAL_PATCH = new Set(['applied', 'rejected', 'apply_failed']);
+const TERMINAL_SANDBOX = TERMINAL.sandbox;
+const TERMINAL_JOB = TERMINAL.job;
+const TERMINAL_PATCH = TERMINAL.patch;
+
 
 const text = (value, max = 300) => flatText(value, max);
 /** 取第一个非空字符串：终态记录的发生时间优先用真实结束时间。 */

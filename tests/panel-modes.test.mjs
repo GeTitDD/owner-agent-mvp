@@ -14,11 +14,17 @@ test('P0-5 知识模式只剩「知识浏览 + 技能目录」两块', () => {
   const knowledge = html.slice(html.indexOf('id="modeB"'), html.indexOf('id="modeC"'));
   const blocks = [...knowledge.matchAll(/<section id="([^"]+)"/gu)].map((match) => match[1]);
   assert.deepEqual(blocks, ['knowledgeBrowse', 'skillCatalog']);
-  // 工作区搬去专注，且默认折叠（<details> 上没有 open）。
-  assert.equal(knowledge.includes('workspaceToggle'), false);
+  // 工作区搬去专注，并从 #69 起常驻展开（折叠条已去掉）。
+  assert.equal(knowledge.includes('workWorkspace'), false);
   const focus = html.slice(html.indexOf('id="modeA"'), html.indexOf('id="modeB"'));
-  assert.match(focus, /<details class="workspace" id="workspaceToggle">/u);
-  assert.equal(/<details[^>]*id="workspaceToggle"[^>]*\bopen\b/u.test(focus), false);
+  // #69：工作区改成常驻展开，折叠条（details/summary）整段消失。
+  assert.match(focus, /<section class="workspace" id="workWorkspace">/u);
+  assert.equal(focus.includes('<details class="workspace"'), false);
+  assert.equal(focus.includes('workspace-summary'), false);
+  // 工作区顶部有项目切换，且只写一个项目名（不多套一层选择器状态）。
+  assert.match(focus, /id="workProjectBar"/u);
+  assert.match(focus, /id="workProjectName"/u);
+  assert.match(focus, /id="fdTabs"/u);
 });
 
 test('P0-5 四个入口指向真实位置，找不到时退回模式顶部', () => {
@@ -29,17 +35,42 @@ test('P0-5 四个入口指向真实位置，找不到时退回模式顶部', () 
   const expected = [
     ['knowledge', 'knowledge', 'knowledgeBrowse'],
     ['tests', 'focus', 'runningSection'],
-    ['patches', 'focus', 'needsSection'],
+    // #72：补丁去操作区（待办块没有待办时会整段收起，指到块上会落到空处）。
+    ['patches', 'focus', 'opsZone'],
     ['runs', 'focus', 'runningSection']
   ];
   for (const [key, mode, sectionId] of expected) {
     assert.match(jump, new RegExp(`${key}: \\['${mode}', '${sectionId}'\\]`, 'u'));
     assert.match(html, new RegExp(`id="${sectionId}"`, 'u'));
   }
-  // 测试 / 运行在折叠工作区里：跳转前展开。
-  assert.match(panel, /workspace\.contains\(node\)\) workspace\.open = true/u);
-  // 目标被移走时退回该模式顶部，不留死跳转。
-  assert.match(panel, /const node = \$\(sectionId\) \?\? \$\(MODE_VIEW\[mode\]\)/u);
+  // 工作区从 #69 起常驻展开：跳转不再需要先展开折叠条，只负责滚到目标。
+  assert.equal(panel.includes('workspaceToggle'), false);
+  assert.match(panel, /node\.scrollIntoView\(\{ block: 'start', behavior: 'smooth' \}\)/u);
+  // 目标被移走时退回该模式顶部，不留死跳转（退回的是模式自己的滚动容器）。
+  assert.match(panel, /const top = container\?\.querySelector\('\.a-wrap, \.scroll'\) \?\? container \?\? null;/u);
+  assert.match(panel, /top\.scrollTo\(\{ top: 0, behavior: 'smooth' \}\)/u);
+});
+
+test('#72 详情卡删除后，四个计数留在工作区', () => {
+  const html = read('desktop/panel.html');
+  const panel = read('desktop/panel.js');
+  const focus = html.slice(html.indexOf('id="modeA"'), html.indexOf('id="modeB"'));
+  // 卡片本体、正文容器与脚本标签都不在了（漏删 script 会 404，界面却看起来正常）。
+  assert.equal(focus.includes('id="focusDetail"'), false);
+  assert.equal(focus.includes('id="fdBody"'), false);
+  assert.equal(html.includes('focus-detail.cjs'), false);
+  assert.equal(panel.includes('buildFocusDetail'), false);
+  // 四个入口留工作区里，按其原始位置跳转（行为不变）。
+  assert.match(focus, /<div id="workEntries"[^>]*>/u);
+  for (const key of ['knowledge', 'tests', 'patches', 'runs']) {
+    assert.match(focus, new RegExp(`data-entry="${key}"`, 'u'));
+  }
+  // 计数渲染在工作区里，数据直接来自快照（不再为卡片单独取一份）。
+  assert.match(panel, /const renderWorkEntries = \(\) =>/u);
+  assert.match(panel, /const workEntryRows = \(\) =>/u);
+  assert.equal(/FOCUS_DETAIL_TTL/u.test(panel), false);
+  // 项目切换仍只改视图项目。
+  assert.match(panel, /const renderWorkProjectBar = \(\) =>/u);
 });
 
 test('P0-4 写路径不再静默回退第一个项目', () => {

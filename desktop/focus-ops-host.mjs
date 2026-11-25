@@ -1,0 +1,12 @@
+// 把 src/focus-ops.mjs 的纯函数挂到 window，供经典脚本 panel.js 调用。
+//
+// 为什么要这一层：panel.js 是普通脚本（<script src>），无法 import ESM；
+// 而操作区的组装规则只允许有一份（#67 的 focusOpsView），不能在渲染里抄第二套。
+// 所以用模块脚本把它原样搬到 window，渲染层只做「调用 + 画 DOM」。
+//
+// 时序：模块脚本晚于经典脚本执行。panel.js 第一次渲染时可能还读不到，
+// 读不到就跳过这一帧；挂载完成后发一次事件，面板若正停在专注页会补画。
+import { focusOpsView } from '../src/focus-ops.mjs';
+
+window.OwnerFocusOps = Object.freeze({ focusOpsView });
+window.dispatchEvent(new Event('owner-focus-ops-ready'));

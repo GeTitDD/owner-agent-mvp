@@ -40,46 +40,142 @@
 
     <section id="modeA" class="mode" hidden>
       <div class="a-wrap">
-        <!-- 专注第一张卡：待办（知识模式只管浏览，处理决定留在这里）。
-             没有待办时卡片仍在，只留一句空状态，避免整页只剩详情。 -->
-        <section id="needsSection" class="inbox-section a-pending">
-          <div class="inbox-head">
-            <h3>待你决定</h3>
-            <span id="pendingBadge" class="count">0</span>
+        <!-- 上半区 · 操作区：现在要你处理什么。
+             内容由 src/focus-ops.mjs 的视图模型（focusOpsView）给出，这里只负责画；
+             三段块的顺序与空态文案都不在渲染里另写。当前已接「待办」与「待提炼」，
+             运行中由 #70 再接进来。 -->
+        <section id="opsZone" class="focus-zone ops-zone">
+          <div class="zone-head focus-zone-head ops-zone-head">
+            <strong>操作区</strong>
+            <span>现在要你处理什么</span>
           </div>
-          <p id="needsHint" class="inbox-hint">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
-          <div id="pendingList" class="pending-list"></div>
+          <!-- 三类块都空时操作区压成这一行文字，不保留卡片外框（#66）。 -->
+          <p id="opsEmpty" class="ops-empty-line" hidden></p>
+          <div id="opsBody" class="ops-body">
+            <!-- 待办块：知识模式只管浏览，处理决定留在这里。
+                 分组与首组展开仍由 pending-groups.cjs 决定，这里不重写规则。 -->
+            <section id="needsSection" class="inbox-section a-pending">
+              <div class="inbox-head">
+                <h3 id="opsPendingTitle">待办</h3>
+                <span id="pendingBadge" class="count">0</span>
+              </div>
+              <p id="needsHint" class="inbox-hint">写入、补丁、测试和修复都会停在这里，批准前不会改变真实项目。</p>
+              <div id="pendingList" class="pending-list"></div>
+            </section>
+            <!-- 运行中块（#70）：非终态执行（排队 / 执行中 / 卡住）跨项目出现在这里。
+                 没有执行时整段 hidden，不占位；卡住与执行中靠相位标签与左侧色条区分。 -->
+            <section id="opsRunning" class="ops-running" hidden>
+              <div class="ops-block-head">
+                <h3 id="opsRunningTitle">运行中</h3>
+                <span id="opsRunningBadge" class="count">0</span>
+              </div>
+              <p class="ops-hint">卡住表示租约过期或需要核对，系统不会自己重试。</p>
+              <div id="opsRunningList" class="ops-run-list"></div>
+            </section>
+
+            <!-- 待提炼块（#71）：某项目已积够阈值的未提炼执行记录，只提示、不自动提炼。
+                 阈值由 src/knowledge-loop/on-demand.mjs 判定；没有提议时整段 hidden。 -->
+            <section id="proposeSection" class="inbox-section a-proposing" hidden>
+              <div class="inbox-head">
+                <h3 id="opsProposeTitle">待提炼</h3>
+                <span id="proposeBadge" class="count">0</span>
+              </div>
+              <p id="proposeHint" class="inbox-hint">执行记录攒够了才会出现在这里；点「去提炼」去知识页决定，这里不会写库。</p>
+              <div id="proposeList" class="propose-list"></div>
+            </section>
+          </div>
+
+          <!-- 结果下钻区（#73）：答案卡 / 会话 / 最近结果是「某次操作的结果」，
+               落在操作区里，不再占工作区。三段都空时整段 hidden，一个像素都不留。 -->
+          <section id="opsDrill" class="ops-drill" hidden>
+            <div class="ops-block-head ops-drill-head">
+              <h3>操作结果</h3>
+              <span class="ops-drill-hint">这次操作留下了什么</span>
+            </div>
+
+            <section id="answerSection" class="ops-answer" hidden>
+              <div class="section-title">
+                <h3>只读分析</h3>
+                <span id="answerBadge" class="count">分析</span>
+              </div>
+              <div id="answerCard" class="answer-card"></div>
+            </section>
+
+            <!-- 会话是历史记录：默认折叠，要回看再展开，不在操作区铺一屏旧记录。 -->
+            <details id="timelineSection" class="timeline-section ops-timeline" hidden>
+              <summary class="ops-drill-summary">
+                <span>会话记录</span>
+                <span id="timelineCount" class="count">0</span>
+              </summary>
+              <div id="timeline" class="timeline-list"></div>
+            </details>
+
+            <section id="resultSection" class="ops-result" hidden>
+              <div class="section-title"><h3>最近结果</h3></div>
+              <div id="resultCard" class="result-card"></div>
+            </section>
+          </section>
         </section>
 
-        <!-- 专注第二张卡：所选项目的只读详情（视图项目，与交办目标互不影响）。 -->
-        <section id="focusDetail" class="focus-detail" hidden>
-          <div class="fd-head">
-            <div class="fd-head-text">
-              <span class="fd-title">项目详情</span>
-              <span id="fdHint" class="fd-hint"></span>
-            </div>
-            <div id="fdTabs" class="fd-tabs" role="tablist" aria-label="选择项目"></div>
+        <!-- 下半区 · 工作区：永远是某个项目的详情与操作面（#69 起常驻展开）。
+             只读详情卡已在 #72 删除，这里就是唯一看到项目的地方。 -->
+        <section id="workZone" class="focus-zone work-zone">
+          <div class="zone-head focus-zone-head work-zone-head">
+            <strong>工作区</strong>
+            <span>这个项目现在是什么样</span>
           </div>
-          <div id="fdBody" class="fd-body"></div>
-        </section>
-        <details class="workspace" id="workspaceToggle">
-          <summary class="workspace-summary">工作区 · 项目 / 图谱 / 想法 / 知识 / Playbook</summary>
+
+          <!-- 工作区永远是某个项目：项目名常显；只有项目不止一个时才出现切换按钮。
+               切换沿用 #fdTabs 那套标签与 selectViewProject，只改视图项目，
+               不碰交办目标（ADR-0006），也不另存一份状态。 -->
+          <div id="workProjectBar" class="work-project-bar" hidden>
+            <span id="workProjectName" class="work-project-name"></span>
+            <div id="fdTabs" class="fd-tabs" role="tablist" aria-label="切换工作区项目" hidden></div>
+            <!-- 选项目只剩这一处（#73）：旧的「搜索 + 列表 + 添加」段已删除，
+                 但「添加项目」入口不能丢，挂在切换行尾，文案写清它做什么。 -->
+            <button id="addProjectTop" class="ghost small work-project-add" type="button"
+              title="选择一个本地 Git 仓库目录，添加为项目">添加项目</button>
+          </div>
+
+        <!-- 四个入口（知识 / 测试 / 补丁 / 运行）：原只读详情卡的计数搬到这里（#72）。
+             工作区现在是唯一看到项目的地方，四条入口留在工作区里：点哪一项就跳到
+             它原来的位置，目标不存在时退回模式顶部（见 panel.js 的 renderWorkEntries）。
+             计数由 renderWorkEntries 直接读快照填，静态结构只写一次，避免轮询重建。 -->
+        <div id="workEntries" class="work-entries" role="group" aria-label="项目入口" hidden>
+          <button class="work-entry" type="button" data-entry="knowledge">
+            <span class="work-entry-label">知识</span>
+            <span class="work-entry-count">0</span>
+            <span class="work-entry-note"></span>
+          </button>
+          <button class="work-entry" type="button" data-entry="tests">
+            <span class="work-entry-label">测试</span>
+            <span class="work-entry-count">0</span>
+            <span class="work-entry-note"></span>
+          </button>
+          <button class="work-entry" type="button" data-entry="patches">
+            <span class="work-entry-label">补丁</span>
+            <span class="work-entry-count">0</span>
+            <span class="work-entry-note"></span>
+          </button>
+          <button class="work-entry" type="button" data-entry="runs">
+            <span class="work-entry-label">运行</span>
+            <span class="work-entry-count">0</span>
+            <span class="work-entry-note"></span>
+          </button>
+        </div>
+        <!-- 工作区内容常驻展开：原来包在外面的 details 折叠条已经去掉，
+             这里只留容器；#73 之后只剩「所选项目」一段，全局块都搬走了。 -->
+        <section class="workspace" id="workWorkspace">
         <section class="zone project-zone">
           <div class="zone-head">
             <strong>所选项目</strong>
             <span>项目画像、待办、知识与操作</span>
           </div>
 
+          <!-- 项目画像 / 知识摘要 / GitHub：都只描述「所选项目」。
+               旧的「搜索 + 项目列表 + 添加」段已删除（#73）——选项目只剩顶部切换一处，
+               「添加项目」挂在切换行尾，设置里也还有一个入口。 -->
           <section id="projectSection" class="project-section">
-            <div class="section-title">
-              <h3>项目</h3>
-              <span class="section-actions">
-                <input id="projectSearch" class="project-search" type="search" placeholder="搜索" aria-label="搜索项目" />
-                <span id="projectBadge" class="count">0</span>
-                <button id="addProjectTop" class="ghost small" type="button">添加</button>
-              </span>
-            </div>
-            <div id="projectList" class="project-list"></div>
             <div id="projectBrief" class="project-brief" hidden></div>
             <div id="projectSummary" class="project-summary" hidden></div>
             <div id="githubPanel" class="github-panel" hidden></div>
@@ -149,14 +245,10 @@
             <div id="playbookGroups" class="playbook-groups"></div>
             <div id="playbookResult" class="playbook-result" hidden></div>
           </section>
-        </section>
 
-        <section class="zone general-zone">
-          <div class="zone-head">
-            <strong>通用管理</strong>
-            <span>跨项目的决定、运行与最近结果</span>
-          </div>
-
+          <!-- 运行中 / 最近活动（原「通用管理」段）：数据是当前项目的任务链与 worker 状态，
+               属于「这个项目现在是什么样」，所以留在工作区里；#73 去掉了外面那层
+               「跨项目的决定、运行与最近结果」分区头，工作区不再有全局块。 -->
           <section id="runningSection" class="running-section">
             <div class="section-title">
               <h3 id="runningTitle">运行中</h3>
@@ -179,36 +271,9 @@
               </details>
             </div>
           </section>
-
-          <section id="setup" class="setup" hidden>
-            <h3>先添加一个项目</h3>
-            <p>选择本地 Git 仓库目录。桌宠会从这里读取项目并创建任务；L1 不依赖 OpenClaw，完整工作台才需要它。</p>
-            <div id="setupServices" class="service-grid"></div>
-            <button id="addProject" class="primary">选择项目目录</button>
-          </section>
-
-          <section id="answerSection" hidden>
-            <div class="section-title">
-              <h3>只读分析</h3>
-              <span id="answerBadge" class="count">分析</span>
-            </div>
-            <div id="answerCard" class="answer-card"></div>
-          </section>
-
-          <section id="timelineSection" class="timeline-section" hidden>
-            <div class="section-title">
-              <h3>会话</h3>
-              <span id="timelineCount" class="count">0</span>
-            </div>
-            <div id="timeline" class="timeline-list"></div>
-          </section>
-
-          <section id="resultSection" hidden>
-            <div class="section-title"><h3>最近结果</h3></div>
-            <div id="resultCard" class="result-card"></div>
-          </section>
         </section>
-        </details>
+        </section>
+        </section>
       </div>
     </section>
 
@@ -222,7 +287,6 @@
         </div>
         <p class="kb-hint">知识分三层：候选待审核，经验是从执行里提炼的教训，知识是收敛后的规则。状态看徽章，不分组。</p>
         <div id="kbFilters" class="kb-filters" role="group" aria-label="按项目筛选"></div>
-        <div id="kbProposals" class="kb-proposals" aria-live="polite"></div>
         <div id="kbGroups" class="kb-groups" aria-live="polite"></div>
       </section>
 
@@ -316,6 +380,13 @@
         <button id="closeSettings" class="ghost">×</button>
       </div>
       <div class="sheet-body">
+        <!-- 设置向导（#73）：添加项目不属于任何项目，所以跟着设置走，不再占工作区。
+             没有项目时它是设置里第一件该做的事；已经有项目时也能再加一个。 -->
+        <section id="setup" class="setup setup-in-settings">
+          <h3>添加项目</h3>
+          <p>选择本地 Git 仓库目录。桌宠会从这里读取项目并创建任务；L1 不依赖 OpenClaw，完整工作台才需要它。</p>
+          <button id="addProject" class="primary">选择项目目录</button>
+        </section>
         <label class="field">
           <span>OpenClaw Gateway 地址</span>
           <input id="gatewayUrl" placeholder="http://127.0.0.1:18789" />
@@ -366,7 +437,6 @@
         <div class="sheet-actions">
           <button id="saveSettings" class="primary">保存</button>
           <button id="retryServices" class="ghost">重新检测</button>
-          <button id="addProjectSettings" class="ghost">添加项目</button>
         </div>
       </div>
     </div>
@@ -385,8 +455,10 @@
 
   <script src="./composer-list.js"></script>
   <script src="./panel-selection.cjs"></script>
-  <script src="./focus-detail.cjs"></script>
   <script src="./pending-groups.cjs"></script>
+  <!-- 操作区视图模型是 ESM（src/focus-ops.mjs）；模块脚本会被推迟到解析完再执行，
+       panel.js 只在真正渲染操作区时读 window.OwnerFocusOps，读不到就等 next tick。 -->
+  <script type="module" src="./focus-ops-host.mjs"></script>
   <script src="./chat-handoff.cjs"></script>
   <script src="../node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="./panel.js"></script>
