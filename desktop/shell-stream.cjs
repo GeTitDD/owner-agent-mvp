@@ -317,6 +317,57 @@
       ctx.ui.compose.focus();
     });
 
+    /**
+     * 外发 / 删除确认卡（#116）的唯一落点：与风险卡同一套「我的 + 回复」两条消息。
+     * 取消只留回执，不生成新卡；删除一项则给回执，并把剩余项做成下一张卡。
+     */
+    const actConfirm = (button) => ctx.report('确认卡', async () => {
+      if (!listApi.canCompose(currentId())) return;
+      const api = window.OwnerConfirmCards ?? window.OwnerConfirm;
+      if (!api?.confirmAction) {
+        notify('确认卡模块还没加载好，稍等一下再试。', 'error');
+        return;
+      }
+      const cardNode = button.closest('[data-block="confirm"]');
+      const item = button.closest('.msg');
+      if (!cardNode || !item) return;
+      const blockIndex = Number(cardNode.dataset.blockIndex ?? -1);
+      const messageIndex = Number(item.dataset.index);
+      const target = messages[messageIndex];
+      const card = target?.blocks?.[blockIndex];
+      if (!target || !card) return;
+      // 同一张确认卡只选一次：旧节点若被重复点到，不再追加第二轮。
+      if (target.answers?.[blockIndex] !== undefined) return;
+
+      const index = button.dataset.confirmIndex === undefined
+        ? -1
+        : Number(button.dataset.confirmIndex);
+      const action = api.confirmAction({
+        card,
+        action: button.dataset.confirmAction,
+        index,
+        at: new Date().toISOString()
+      });
+      // 不在动作表里的点击（伪造参数 / 存储里的旧动作）：不改流，也不假装收到。
+      if (!action) return;
+
+      // 先记「这一张已经选过」，重画之后按钮不会再冒出来；再追加我问的一句与一条回复。
+      const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, action.answeredLabel);
+      const answers = answered[messageIndex]?.answers ?? {};
+      if (Number.isInteger(target.seq)) {
+        await store.answers({ id: currentId(), seq: target.seq, answers });
+      }
+      await store.append({ id: currentId(), role: 'user', text: action.userText });
+      await store.append({
+        id: currentId(),
+        role: 'assistant',
+        text: action.reply?.text ?? '',
+        blocks: Array.isArray(action.reply?.blocks) ? action.reply.blocks : []
+      });
+      await ctx.refreshThread();
+      ctx.ui.compose.focus();
+    });
+
     // ── 事件 ──────────────────────────────────────────────────────────
 
     exportButton.addEventListener('click', () => { void exportConversation(); });
@@ -337,7 +388,12 @@
 
     messagesNode.addEventListener('click', (event) => {
       // 确认卡的动作、复制/导出的按钮、提问块的回答是三套落点，但都只声明「点了什么」；
-      // 真正的行为分别由 actRisk / copyFromButton / answerAsk 负责。
+      // 真正的行为分别由 actConfirm / actRisk / copyFromButton / answerAsk 负责。
+      const confirmButton = event.target.closest?.('[data-confirm-action]');
+      if (confirmButton) {
+        void actConfirm(confirmButton);
+        return;
+      }
       const riskButton = event.target.closest?.(
         '[data-risk-action], [data-risk-override-submit]'
       );

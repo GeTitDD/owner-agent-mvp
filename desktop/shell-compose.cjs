@@ -354,7 +354,10 @@
      */
     const syncSlashFromInput = () => {
       const value = input.value;
-      const legacySample = value.trim() === blocksApi.SAMPLE_COMMAND;
+      // #116：/外发、/删除、/同步 与 /blocks 一样是整句命令，没有可调用的技能，
+      // 不能让 `/` 面板把回车吃掉——否则「有匹配项才调用」会变成「永远调不到」。
+      const legacySample = value.trim() === blocksApi.SAMPLE_COMMAND
+        || Boolean(window.OwnerConfirm?.isCommand(value));
       if (!value.startsWith('/') || legacySample) {
         if (slashOpen) setSlashOpen(false);
         return;
@@ -474,13 +477,17 @@
         await runOwnWriteTurn(command, raw);
         return;
       }
-      // 还没接模型：普通消息回占位回复；/blocks 回块全览；/risk 回一张确认卡（#113）。
-      // 三者都是普通消息，先拦住再回，保证同一个入口。
-      const reply = blocksApi.isSampleCommand(raw)
+      // 还没接模型：普通消息回占位回复；/blocks 回块全览；/risk 回一张确认卡（#113）；
+      // /外发 /删除 /同步 回 #116 的确认卡。全部是普通消息，先拦住再回，保证同一个入口。
+      const confirmCommand = window.OwnerConfirm?.parseCommand(raw) ?? null;
+      const built = blocksApi.isSampleCommand(raw)
         ? blocksApi.sampleReply()
         : riskApi.isRiskCommand(raw)
           ? await riskApi.buildRiskReply(raw)
-          : { text: threadApi.placeholderText(raw), blocks: [] };
+          : confirmCommand
+            ? await window.OwnerConfirm.buildReply(confirmCommand)
+            : { text: threadApi.placeholderText(raw), blocks: [] };
+      const reply = built ?? { text: threadApi.placeholderText(raw), blocks: [] };
       busy = true;
       try {
         await store.append({ id: currentId(), role: 'user', text: raw });

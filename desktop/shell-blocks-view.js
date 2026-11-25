@@ -473,6 +473,100 @@
     return node;
   };
 
+  /**
+   * 外发 / 删除确认卡（#116）：标题 + 硬约束徽章 → 一句「发出即收不回 / 删除不可恢复」
+   * → 逐条对象 → 硬约束说明 → 动作。
+   *
+   * 只画模型，不判定：外发恒两项动作、删除每项一个按钮，全部由 confirm-cards.cjs 算好；
+   * 这里不提供，也不认识「以后不用问」或「批量删除」。
+   */
+  const renderConfirm = (model) => {
+    const node = blockNode(model);
+    node.dataset.confirmKind = model.kind;
+    node.dataset.confirmId = model.id;
+
+    const head = el('div', 'block-head');
+    head.append(el('h4', '', model.title || '确认'));
+    head.append(el('span', join('confirm-badge', `confirm-${model.kind}`), model.badge));
+    node.append(head);
+    if (model.sequence) node.append(el('p', 'confirm-sequence', model.sequence));
+
+    if (model.headline) node.append(el('p', 'confirm-headline', model.headline));
+    if (model.conclusion) node.append(el('p', 'confirm-conclusion', model.conclusion));
+
+    if (model.target) {
+      const target = el('dl', 'confirm-target');
+      const row = el('div');
+      row.append(el('dt', '', '目的地'), el('dd', '', model.target));
+      target.append(row);
+      node.append(target);
+    }
+
+    node.append(el(
+      'div',
+      'confirm-section-title',
+      model.kind === 'delete' ? '将删除的对象（逐条完整路径）' : '将要发出的内容（逐条完整路径）'
+    ));
+    if (model.items.length === 0) {
+      node.append(el('p', 'block-note', '这张卡没有列出对象。'));
+    } else {
+      const items = el('ul', 'confirm-items');
+      model.items.forEach((item, index) => {
+        const row = el('li', 'confirm-item');
+        row.dataset.confirmItem = String(index);
+        const main = el('div', 'confirm-item-main');
+        main.append(el('span', 'confirm-item-label', item.label));
+        if (item.path) main.append(el('code', 'confirm-item-path', item.path));
+        if (item.note) main.append(el('span', 'confirm-item-note', item.note));
+        row.append(main);
+        // 删除卡：每一项自己的按钮。没有「全选 / 全部删除」，批量入口根本不存在。
+        const perItem = model.actions.find(
+          (action) => action.id === 'delete-item' && action.index === index
+        );
+        if (perItem && !model.answered) {
+          const button = el('button', 'confirm-item-action', perItem.label);
+          button.type = 'button';
+          button.dataset.confirmAction = 'delete-item';
+          button.dataset.confirmIndex = String(index);
+          row.append(button);
+        }
+        items.append(row);
+      });
+      node.append(items);
+    }
+
+    if (model.notices.length > 0) {
+      const notices = el('ul', 'confirm-notices');
+      model.notices.forEach((line) => notices.append(el('li', 'confirm-notice', line)));
+      node.append(notices);
+    }
+
+    // 点过动作就收起按钮，只留记录：与提问块、风险卡同一套口径。
+    if (model.answered) {
+      node.append(el('p', 'confirm-answered', `已选择：${model.answered}`));
+      return node;
+    }
+
+    // 共用动作只剩「发出这一次 / 取消」；删除的逐项按钮已经在每一行里。
+    const shared = model.actions.filter((action) => action.id !== 'delete-item');
+    if (shared.length === 0) {
+      node.append(el('p', 'block-note', '这张卡没有可点的动作。'));
+      return node;
+    }
+    const actions = el('div', 'confirm-actions');
+    shared.forEach((action) => {
+      const classes = ['confirm-action'];
+      if (action.primary) classes.push('primary');
+      if (action.cancel) classes.push('cancel');
+      const button = el('button', join(...classes), action.label);
+      button.type = 'button';
+      button.dataset.confirmAction = action.id;
+      actions.append(button);
+    });
+    node.append(actions);
+    return node;
+  };
+
   const renderUnknown = (model) => {
     const node = blockNode(model);
     node.append(el('p', 'block-note', model.text));
@@ -493,6 +587,7 @@
     badges: renderBadges,
     ask: renderAsk,
     risk: renderRisk,
+    confirm: renderConfirm,
     unknown: renderUnknown
   };
 
