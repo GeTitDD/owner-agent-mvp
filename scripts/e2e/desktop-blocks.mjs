@@ -128,12 +128,17 @@ const readNarrowLayout = (panel) => panel.evaluate(`(() => {
   const selfOverflow = blocks
     .filter((node) => node.scrollWidth > node.clientWidth + 1)
     .map((node) => node.dataset.block);
+  // 宽表格是唯一预期的块内横向滚动：它能滚，但只在自己框里滚。
+  const table = document.querySelector('.block-table-wrap');
   return {
     viewport: window.innerWidth,
     threadScroll: thread.scrollWidth,
     threadClient: thread.clientWidth,
     outside,
-    selfOverflow
+    selfOverflow,
+    tableScroll: table?.scrollWidth ?? 0,
+    tableClient: table?.clientWidth ?? 0,
+    tableOverflow: table ? getComputedStyle(table).overflowX : ''
   };
 })()`);
 
@@ -335,6 +340,14 @@ const runBlocks = async () => {
       narrow.outside.length === 0, JSON.stringify(narrow.outside));
     check('narrow: no block overflows itself',
       narrow.selfOverflow.length === 0, JSON.stringify(narrow.selfOverflow));
+    // 长内容在块内滚动：表格自带横向滚动容器，滚的是它自己，不是整条流。
+    check('narrow: a wide table scrolls inside its own box, not the flow',
+      narrow.tableOverflow === 'auto' && narrow.tableScroll >= narrow.tableClient,
+      JSON.stringify({
+        overflowX: narrow.tableOverflow,
+        scroll: narrow.tableScroll,
+        client: narrow.tableClient
+      }));
     await capture(panel, path.join(shotsDir, 'blocks-narrow.png'));
     await panel.send('Emulation.clearDeviceMetricsOverride');
     await sleep(200);
