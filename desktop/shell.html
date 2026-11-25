@@ -154,6 +154,8 @@
   <script src="./shell-projects.cjs"></script>
   <!-- #113 风险评级与确认卡：先于块渲染加载，块归一化要直接读它的纯函数。 -->
   <script src="./risk-card.cjs"></script>
+  <!-- #116 外发 / 删除确认卡：同样先于块渲染；window.OwnerConfirmCards 被块归一化直接读。 -->
+  <script src="./confirm-cards.cjs"></script>
   <script src="./shell-blocks.cjs"></script>
   <script src="./shell-copy.cjs"></script>
   <script src="./shell-blocks-view.js"></script>
@@ -166,6 +168,8 @@
   <script type="module" src="./card-scope-host.mjs"></script>
   <!-- #114 自有目录写入：判定与回执的纯函数在这里挂窗口（模块脚本，晚于上面的经典脚本）。 -->
   <script type="module" src="./own-write-host.mjs"></script>
+  <!-- #116 外发 / 删除的脚本化入口：算计划、出卡片，命令与卡片共用一份判定。 -->
+  <script type="module" src="./confirm-host.mjs"></script>
   <script src="./shell.js"></script>
 </body>
 </html>

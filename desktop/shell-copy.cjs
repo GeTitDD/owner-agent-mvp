@@ -251,6 +251,29 @@
     return finish(lines);
   };
 
+  /**
+   * 外发 / 删除确认卡（#116）：硬约束、逐条对象、说明、已选项一个都不省。
+   * 动作按钮不进 Markdown（它只是交互入口），但「已选择」要留下。
+   */
+  const confirmMarkdown = (model) => {
+    const lines = [];
+    if (model.title) lines.push(heading(`${model.title}${model.badge ? `（${model.badge}）` : ''}`));
+    if (model.headline) lines.push('', `**${model.headline}**`);
+    if (model.sequence) lines.push('', `_${model.sequence}_`);
+    if (model.target) lines.push('', `- 目的地：${model.target}`);
+    if (model.conclusion) lines.push('', model.conclusion);
+    lines.push('', model.kind === 'delete' ? '将删除的对象：' : '将要发出的内容：');
+    if (model.items.length === 0) lines.push('- （这张卡没有列出对象）');
+    model.items.forEach((item) => {
+      const path = item.path ? `：${item.path}` : '';
+      const note = item.note ? ` — ${item.note}` : '';
+      lines.push(`- ${item.label}${path}${note}`);
+    });
+    model.notices.forEach((notice) => lines.push('', `- ${notice}`));
+    if (model.answered) lines.push('', `已选择：${model.answered}`);
+    return finish(lines);
+  };
+
   const RENDERERS = {
     card: cardMarkdown,
     table: tableMarkdown,
@@ -263,7 +286,8 @@
     diff: diffMarkdown,
     tool: toolMarkdown,
     badges: badgesMarkdown,
-    ask: askMarkdown
+    ask: askMarkdown,
+    confirm: confirmMarkdown
   };
 
   /**

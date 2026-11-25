@@ -24,6 +24,12 @@
     ? require('./risk-card.cjs')
     : (typeof globalThis === 'undefined' ? null : globalThis.OwnerRiskCard);
 
+  // #116 外发 / 删除确认卡是独立的块类型（type=confirm）。与风险卡同一套双份导出：
+  // 浏览器里 confirm-cards.cjs 先于本文件加载，Node 测试里直接 require。
+  const confirmApi = (typeof module === 'object' && module.exports)
+    ? require('./confirm-cards.cjs')
+    : (typeof globalThis === 'undefined' ? null : globalThis.OwnerConfirmCards);
+
   // 提问块最多给四个选项：再多就不是「问一句」而是表单了。
   const ASK_OPTION_LIMIT = 4;
 
@@ -331,7 +337,25 @@
     tool: normalizeTool,
     badges: normalizeBadges,
     ask: normalizeAsk,
-    risk: normalizeRiskBlock
+    risk: normalizeRiskBlock,
+    // #116：外发 / 删除确认卡。动作表由 confirm-cards.cjs 重算，存储里的「免问」不会复活。
+    confirm: (data) => (confirmApi?.normalizeConfirmCard
+      ? confirmApi.normalizeConfirmCard(data)
+      : {
+        type: 'confirm',
+        kind: 'unknown',
+        id: str(data.id),
+        title: '无法识别的确认卡',
+        badge: '不放行',
+        headline: '确认卡模块未加载：一律不放行',
+        conclusion: 'desktop/confirm-cards.cjs 未加载，这张卡没有可点的动作。',
+        target: '',
+        sequence: '',
+        items: [],
+        notices: ['确认卡模块未加载：按最保守的方式处理，什么都不做。'],
+        actions: [],
+        answered: ''
+      })
   };
 
   /**
@@ -373,7 +397,8 @@
       const model = normalizeBlock(block, index);
       const answer = answers[index];
       // 提问块与确认卡都靠 answers 收起按钮：同一套「点过就留记录」的机制，不另开字段。
-      if ((model.type === 'ask' || model.type === 'risk') && answer !== undefined) {
+      if ((model.type === 'ask' || model.type === 'risk' || model.type === 'confirm')
+        && answer !== undefined) {
         model.answered = str(answer);
       }
       return model;
