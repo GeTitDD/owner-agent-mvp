@@ -1,8 +1,8 @@
-// #83 变化窗口视图模型：给一份项目的 git 事实与上次水位，断言三类变化、空态与时间边界。
+﻿// #83 变化窗口视图模型：给一份项目的 git 事实与上次水位，断言三类变化、空态与时间边界。
 // 只断言模型，不断言 DOM；不读盘、不读库、不碰 Electron。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { changeWindowView } from '../src/change-window.mjs';
+import { changeWindowView } from '../src/memory/change-window.mjs';
 
 const SINCE = '2026-11-01T00:00:00.000Z';
 const BLOCK_KEYS = ['commits', 'dirty', 'events'];

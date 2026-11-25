@@ -1,4 +1,4 @@
-// 变化窗口（change window）的纯函数视图模型：回答「自上次看过之后，这个项目变了什么」。
+﻿// 变化窗口（change window）的纯函数视图模型：回答「自上次看过之后，这个项目变了什么」。
 //
 // 为什么单独一个文件：#83 把「上次看到哪」的水位变成主路径，水位边界的规则——什么算新、
 // 什么算旧、判断不了时怎么表达——必须先落在一处，后续界面票只负责画。这里只组装视图模型：
@@ -16,7 +16,7 @@
 // 观察员事件用发现时间（detectedAt 等），不用 lastCommitAt——后者说的是被观察的提交，
 // 不是事件发生的时间。
 
-import { eventTypeLabel } from './observer/event-types.mjs';
+import { eventTypeLabel } from '../observer/event-types.mjs';
 
 /** 三段块的定义只写一份：顺序、标题、两种空态文案都从这里出。 */
 const BLOCK_DEFS = [
