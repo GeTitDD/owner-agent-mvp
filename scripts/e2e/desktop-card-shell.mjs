@@ -183,11 +183,11 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     const header = await readHeader(panel);
     check('top bar keeps the five status slots',
       JSON.stringify(header.slots) === JSON.stringify(SLOTS), JSON.stringify(header.slots));
-    check('only the session slot became an entry',
-      header.capsules === 1 && header.otherControls === 0,
+    check('only the session and project slots are entries',
+      header.capsules === 2 && header.otherControls === 0,
       `capsules=${header.capsules} others=${header.otherControls}`);
-    check('the other four slots are still placeholders',
-      header.placeholders.length === 4 && header.placeholders.every((text) => text.includes('占位')),
+    check('the remaining status slots keep their labels',
+      header.placeholders.length === 3 && header.placeholders.filter((text) => text.includes('占位')).length === 2,
       JSON.stringify(header.placeholders));
     check('the capsule says there is no session yet', header.label === '还没有会话', header.label);
 
