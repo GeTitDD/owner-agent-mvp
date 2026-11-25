@@ -11,14 +11,32 @@
 </head>
 <body>
   <div class="shell">
-    <!-- 顶栏只放状态位（#105：本轮不放操作，避免变成第二个菜单）。
-         五个位都只写「占位」：位置与名字先定下来，接真数据是后续票的事。
-         数据槽用 data-slot 定位，方便验收断言。 -->
+    <!-- 顶栏只放状态位：#105 定了五个位置；#106 只把「会话」这一个位从占位换成入口
+         （胶囊 + 一个浮层），其余四位仍是占位。浮层里承载列表/搜索/新建/重命名/置顶/删除，
+         所以顶栏本身没有多出第二个按钮。 -->
     <header class="top" id="shellHeader">
-      <span class="slot" data-slot="session">
-        <span class="slot-key">会话</span>
-        <span class="slot-value">占位</span>
-      </span>
+      <div class="session-entry">
+        <button type="button" class="capsule" id="sessionToggle" data-slot="session"
+                aria-haspopup="dialog" aria-expanded="false" title="会话">
+          <span class="slot-key">会话</span>
+          <span class="slot-value" id="sessionLabel">还没有会话</span>
+          <span class="caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="sessions" id="sessionPopover" role="dialog" aria-label="会话列表" hidden>
+          <div class="sessions-head">
+            <input type="search" id="sessionSearch" placeholder="搜索会话标题" autocomplete="off" />
+            <button type="button" class="sessions-new" id="sessionNew">新建</button>
+          </div>
+          <p class="sessions-hint" id="sessionListHint" hidden></p>
+          <ul class="sessions-list" id="sessionList"></ul>
+          <div class="sessions-foot">
+            <button type="button" class="sessions-archive" id="sessionArchive" aria-pressed="false">
+              已删除 0
+            </button>
+            <span class="sessions-error" id="sessionError" role="status" hidden></span>
+          </div>
+        </div>
+      </div>
       <span class="slot" data-slot="project">
         <span class="slot-key">项目</span>
         <span class="slot-value">占位</span>
@@ -38,7 +56,7 @@
     </header>
 
     <main class="thread" id="thread">
-      <p class="empty" id="emptyState">还没有对话。直接打字发送，这一版只会回一条占位回复。</p>
+      <p class="empty" id="emptyState">还没有会话。点顶栏的「会话」新建一个。</p>
       <ol class="messages" id="messages"></ol>
     </main>
 
@@ -50,6 +68,7 @@
   </div>
 
   <script src="./shell-thread.cjs"></script>
+  <script src="./shell-sessions.cjs"></script>
   <script src="./shell-blocks.cjs"></script>
   <script src="./shell-blocks-view.js"></script>
   <script src="./shell.js"></script>

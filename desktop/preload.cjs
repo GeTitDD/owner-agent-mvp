@@ -19,6 +19,20 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     })
   }),
   createJob: (input) => invoke('companion:create-job', input),
+  // #106 卡片壳：会话列表 / 切换 / 新建 / 重命名 / 置顶 / 软删除 / 找回。
+  // 与 chat.sessions 分开，是因为卡片壳允许「不绑项目的会话」且删除是软删除。
+  cardSessions: Object.freeze({
+    list: (input) => invoke('companion:card-sessions', input),
+    get: (input) => invoke('companion:card-session-get', input),
+    create: (input) => invoke('companion:card-session-create', input),
+    rename: (input) => invoke('companion:card-session-rename', input),
+    pin: (input) => invoke('companion:card-session-pin', input),
+    remove: (input) => invoke('companion:card-session-soft-delete', input),
+    restore: (input) => invoke('companion:card-session-restore', input),
+    touch: (input) => invoke('companion:card-session-touch', input),
+    append: (input) => invoke('companion:card-session-append', input),
+    answers: (input) => invoke('companion:card-session-answer', input)
+  }),
   decide: (input) => invoke('companion:decide', input),
   patchDetail: (input) => invoke('companion:patch-detail', input),
   result: (input) => invoke('companion:result', input),
