@@ -9,6 +9,7 @@ import { createInputSnapshot, verifyInputSnapshot } from '../src/sandbox-materia
 import { approvalHash, resolveTestProfile } from '../src/sandbox-protocol.mjs';
 import { reconcileSandboxWithProvider, cleanupSandboxWithProvider } from '../src/sandbox-control.mjs';
 import { sha256 } from '../src/utils.mjs';
+import { waitFor } from './helpers/wait.mjs';
 
 const FAKE_IMAGE = `sha256:${'a'.repeat(64)}`;
 const clock = (start = '2026-09-01T00:00:00.000Z') => {
@@ -21,25 +22,6 @@ const clock = (start = '2026-09-01T00:00:00.000Z') => {
     }
   };
 };
-
-const waitFor = (fn, label, ms = 3000) => new Promise((resolve, reject) => {
-  const started = Date.now();
-  const timer = setInterval(() => {
-    try {
-      if (fn()) {
-        clearInterval(timer);
-        resolve();
-        return;
-      }
-    } catch {
-      // retry
-    }
-    if (Date.now() - started > ms) {
-      clearInterval(timer);
-      reject(new Error(`waitFor timeout: ${label}`));
-    }
-  }, 5);
-});
 
 const manualTimers = () => {
   const handles = new Map();

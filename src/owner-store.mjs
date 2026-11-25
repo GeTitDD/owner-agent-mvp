@@ -9,7 +9,7 @@ import { sha256 } from './utils.mjs';
 import { canonicalProposalHash } from './patch-protocol.mjs';
 import { SANDBOX_STATUSES, approvalHash as computeSandboxApprovalHash } from './sandbox-protocol.mjs';
 import { PersonalKnowledgeStore } from './personal-store.mjs';
-import { ideaDedupeKey } from './idea-entry.mjs';
+import { ideaDedupeKey } from './idea-dedupe.mjs';
 
 export class OwnerInputError extends Error { constructor(message,status=400){super(message);this.status=status;} }
 const check=(ok,msg,status=400)=>{if(!ok)throw new OwnerInputError(msg,status);};
@@ -28,6 +28,10 @@ const ideaStatuses=new Set(['inbox','sorted','adopted','discarded']);
 // 状态只能按顺序前进：收件箱 → 已整理 → 已采纳/已丢弃。终态不再变化。
 const ideaTransitions={inbox:['sorted'],sorted:['adopted','discarded'],adopted:[],discarded:[]};
 const captureSources=new Set(['paste','link']);
+// #95 灵感列宽只写一份：建表语句里 TEXT 不带长度，真正的上限在写入校验上，
+// 所以常量放这里、idea-entry 从这里导入；改一处两处同步，不再靠注释约束。
+export const IDEA_RAW_TEXT_LIMIT=8000;
+export const IDEA_LINK_LIMIT=2000;
 const kinds=new Set(['run_started','tool_finished','run_settled','project_note','test_result','api_call']);
 // v1.1：记录 OpenClaw 侧发起的写入来源（网关实例 / 会话 / run / 操作员）。
 // 只进入事件 payload，不新增表或列。
@@ -611,8 +615,8 @@ export class OwnerStore {
     check(captureSources.has(captureSource),'Invalid capture source');
     const titleText=txt(title,'title',300);
     // 原文缺省时用标题兜底：旧入口只有一句纯文本，不能让「原文」变成空白。
-    const raw=txt(rawText===''||rawText===undefined?titleText:rawText,'original text',8000);
-    const linkText=txt(link,'link',2000,false);
+    const raw=txt(rawText===''||rawText===undefined?titleText:rawText,'original text',IDEA_RAW_TEXT_LIMIT);
+    const linkText=txt(link,'link',IDEA_LINK_LIMIT,false);
     // 只做存储：这里不抓链接，只保证「来源是链接」的条目确实带链接。
     if(captureSource==='link')check(!!linkText,'Link is required for link items');
     // 同一条不重复入队：命中已有条目就原样返回，让调用方拿到「还是这一条」。
@@ -641,7 +645,7 @@ export class OwnerStore {
     if(nextProject!==null)check(!!this.getProject(nextProject),'Unknown project',404);
     const nextSource=captureSource===undefined?item.captureSource:captureSource;
     check(captureSources.has(nextSource),'Invalid capture source');
-    const nextLink=link===undefined?item.link:txt(link,'link',2000,false);
+    const nextLink=link===undefined?item.link:txt(link,'link',IDEA_LINK_LIMIT,false);
     if(nextSource==='link')check(!!nextLink,'Link is required for link items');
     const nextSorted=sorted===undefined?item.sorted:sorted;
     check(nextSorted===null||(!!nextSorted&&typeof nextSorted==='object'&&!Array.isArray(nextSorted)),'Invalid sorted result');
@@ -652,7 +656,7 @@ export class OwnerStore {
       sorted_result=?,project_id=?,updated_at=? WHERE id=?`).run(
       title===undefined?item.title:txt(title,'title',300),
       body===undefined?item.body:txt(body,'body',4000,false),
-      rawText===undefined?item.rawText:txt(rawText,'original text',8000),
+      rawText===undefined?item.rawText:txt(rawText,'original text',IDEA_RAW_TEXT_LIMIT),
       nextSource,nextLink,sortedJson,nextProject,now,id);
     return this.getProjectQueueItem(id);
   }

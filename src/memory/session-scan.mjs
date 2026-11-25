@@ -10,6 +10,8 @@
 //   OpenCode 的库体量太大，明确留在范围外。
 // - 匹配只做「工作目录精确等于项目根，或在其子目录下」，不做模糊匹配；匹配不到就丢弃并计数。
 // - 只取对话双方的消息：工具输出、思考块、developer/system 角色都不进正文。
+// - 脱敏在扫描入口先做（redact.mjs）：片段换成占位符后再提炼，quote、四个提炼字段
+//   与指纹都只看见脱敏后的文本；decision-draft 的形状不变，秘密不散到别的层。
 // - 不新增依赖：Codex 新版把 rollout 压成 .jsonl.zst，用 node 内置 zlib 解，不引第三方包。
 // - 本文件不写库、不联网、不调真实模型：已扫过的会话键与已有指纹由调用方传入并带回，
 //   持久化留在宿主进程；提炼器通过参数注入，缺省时用本文件末尾那个保守占位实现。
@@ -19,6 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { draftDecisions } from './decision-draft.mjs';
+import { redactCandidate, redactSecrets } from './redact.mjs';
 import { flatText } from '../utils.mjs';
 
 // 只读开头就能拿到 cwd（Codex 在第 1 行，Claude Code 在前几行），
@@ -276,7 +279,20 @@ const sessionKeyOf = (source, meta, entry) =>
   `${source}:${meta.sessionId || entry.file}@${entry.size}`;
 
 /**
- * 扫描会话：读 → 匹配 → 提炼。
+ * 片段脱敏：提炼器与去重指纹都只该看见脱敏后的正文。
+ * 放在这里而不是 decision-draft.mjs：那一层只管配对、过滤、去重，不认识「秘密」；
+ * 扫描入口把原文换掉之后，quote 与 fingerprint 自然都是脱敏后的文本，形状一个字不用改。
+ * hits 按「替换掉的片段数」累加，同一段文本过两遍也只算一次（redactSecrets 幂等）。
+ * 候选字段的兜底脱敏在 redact.mjs 的 redactCandidate，这里只把两处命中数并进本轮总数。
+ */
+const redactFragments = (fragments, tally) => fragments.map((fragment) => {
+  const result = redactSecrets(fragment.text);
+  tally.hits += result.hits;
+  return { ...fragment, text: result.text };
+});
+
+/**
+ * 扫描会话：读 → 脱敏 → 匹配 → 提炼。
  *
  * @param {object} input
  * @param {{source: string, dir: string}[]} [input.roots] 会话根目录（见 sessionRootsFrom）
@@ -322,6 +338,8 @@ export async function scanSessions({
   const skippedFiles = [];
   const candidates = [];
   const scannedKeys = [];
+  // 本次扫描替换掉的秘密片段总数；0 也是结论，界面照常显示「本次脱敏 0 处」。
+  const redactions = { hits: 0 };
 
   const drop = (entry, reason) => {
     dropped[reason]++;
@@ -446,12 +464,14 @@ export async function scanSessions({
       continue;
     }
     const used = fragments.slice(0, Math.max(1, maxFragments));
+    // 先脱敏再提炼：quote 与指纹都只看见占位符，秘密不会在库里留下第二份（指纹本身也不泄露）。
+    const safeFragments = redactFragments(used, redactions);
 
     // 提炼规则全在 decision-draft.mjs：这里只给项目、片段、已有指纹和注入的提炼器。
     const draft = draftDecisions({
       projectId: String(project.id ?? ''),
       sessionId: meta.sessionId,
-      fragments: used,
+      fragments: safeFragments,
       fingerprints: known,
       extract
     });
@@ -464,10 +484,12 @@ export async function scanSessions({
     counts.fragments += refined;
 
     for (const candidate of draft.candidates) {
+      const cleaned = redactCandidate(candidate);
+      redactions.hits += cleaned.hits;
       // 同一轮里也去重：指纹进 known，后一段会话说同一句话不会再多出一条。
-      known.add(candidate.fingerprint);
+      known.add(cleaned.candidate.fingerprint);
       candidates.push({
-        ...candidate,
+        ...cleaned.candidate,
         source: entry.source,
         sessionPath: entry.file,
         projectName: String(project.name ?? '')
@@ -506,6 +528,8 @@ export async function scanSessions({
     fingerprints: candidates.map((candidate) => candidate.fingerprint),
     scannedKeys,
     truncated: counts.truncated,
+    // 本次扫描替换掉的秘密片段数；界面固定显示「本次脱敏 N 处」，0 也显示。
+    redactions: redactions.hits,
     // 空 = 这一轮一条候选都没有（扫出 0 条时界面要能解释，而不是像坏了）。
     empty: candidates.length === 0
   };

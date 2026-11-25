@@ -17,7 +17,11 @@ const ensureText = (value, label, max = 240) => {
 
 // Cheap tripwire, NOT a replacement for review / DLP. Never auto-share a suggested claim.
 export function rejectObviousSecrets(value) {
-  const text = typeof value === 'string' ? value : canonical(value);
+  // #98：脱敏占位符是「已经换掉的秘密」，不是凭据本身。先剥掉再查，否则
+  // `password=…<redacted:credential>` 会继续命中赋值规则，已脱敏的会话决策反而存不进去。
+  // 剥离只认固定形状 `<redacted:类型>`，真实密钥没有这种包围，检测强度不变。
+  const text = (typeof value === 'string' ? value : canonical(value))
+    .replace(/<redacted:[a-z-]+>/gu, '');
   if (/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:sk-proj|sk-ant|ghp|github_pat)_[A-Za-z0-9_-]{10,}|\b(?:password|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*[^\s,;]{8,}/i.test(text)) {
     throw new Error('Potential credential detected; do not store/share this text');
   }

@@ -1667,6 +1667,7 @@ pre.diff, pre.logs {
 .kb-scan-title { font-size: 13px; font-weight: 650; }
 .kb-scan-summary { font-size: 11.5px; line-height: 1.5; color: var(--muted); text-align: right; }
 .kb-scan-reasons { margin: 6px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--muted); }
+.kb-scan-redactions { margin: 6px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--muted); }
 .kb-scan-candidates { display: grid; gap: 6px; margin-top: 8px; }
 .kb-scan-item {
   display: grid; gap: 2px; padding: 6px 8px;
