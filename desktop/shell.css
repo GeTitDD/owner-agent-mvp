@@ -1637,6 +1637,107 @@ button.session-name { cursor: pointer; }
   color: var(--muted);
 }
 
+/* ── #122 `@@` 方法菜单与小卡片：贴着输入框浮起，尺寸受控，不铺满窗口 ──
+   菜单与方法卡共用同一个外壳（标题 + 返回 + 关闭），内容区由方法自己给。
+   底部留 96px = 输入框（58）+ 导出按钮行（34）再高一点：卡片贴着输入框上方，
+   不盖住正在打的字；最大高度封顶，长内容自己滚。 */
+.at-panel {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 96px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.at-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.at-title { font-size: 12px; font-weight: 700; }
+
+.at-sub {
+  margin-right: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.at-back,
+.at-close {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 17px;
+  cursor: pointer;
+}
+
+.at-back:hover,
+.at-close:hover { border-color: var(--accent); color: var(--text); }
+
+.at-close { border-color: transparent; }
+
+.at-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 2px 6px 6px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.at-method {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.at-method:hover,
+.at-method:focus-visible { background: var(--bg); }
+
+.at-method-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.at-method-name { font-size: 12.5px; font-weight: 600; }
+.at-method-desc { color: var(--muted); font-size: 11px; }
+.at-method-go { flex: none; color: var(--muted); font-size: 15px; }
+
+.at-content { padding: 8px 6px 6px; }
+.at-lead { margin: 0 0 4px; font-size: 12px; }
+.at-todo { margin: 0; color: var(--muted); font-size: 11px; }
+
+.at-hint {
+  flex: none;
+  margin: 0;
+  padding: 5px 10px 6px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .slash-num-input {
   flex: none;
   width: 24px;
