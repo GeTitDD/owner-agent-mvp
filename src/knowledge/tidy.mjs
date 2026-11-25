@@ -41,11 +41,14 @@ export function knowledgeTidyFor({
 } = {}) {
   if (!personalStore) throw new Error('知识库尚未初始化。');
   const units = personalStore.list({ projectId, limit });
+  // 决策不算「待验证 / 待复核」的知识（#87）：它的状态是生效中 / 已被取代 / 已放弃，
+  // 归到「未验证」会把它画成待验证。整理只针对普通知识条目。
+  const knowledgeUnits = units.filter((unit) => unit.kind !== 'decision');
   const duplicates = [];
-  for (let i = 0; i < units.length; i += 1) {
-    for (let j = i + 1; j < units.length; j += 1) {
-      const a = units[i];
-      const b = units[j];
+  for (let i = 0; i < knowledgeUnits.length; i += 1) {
+    for (let j = i + 1; j < knowledgeUnits.length; j += 1) {
+      const a = knowledgeUnits[i];
+      const b = knowledgeUnits[j];
       const score = similarity(`${a.title} ${a.content}`, `${b.title} ${b.content}`);
       if (score >= threshold) {
         duplicates.push({
@@ -57,16 +60,16 @@ export function knowledgeTidyFor({
     }
   }
   duplicates.sort((a, b) => b.score - a.score);
-  const stale = units
+  const stale = knowledgeUnits
     .filter((unit) => unit.verificationStatus === 'needs_reverification')
     .slice(0, 20)
     .map((unit) => ({ id: unit.id, title: unit.title, updatedAt: unit.updatedAt }));
-  const conflicts = units
+  const conflicts = knowledgeUnits
     .filter((unit) => unit.verificationStatus === 'disputed'
       || Object.keys(unit.relations ?? {}).includes('contradicts'))
     .slice(0, 20)
     .map((unit) => ({ id: unit.id, title: unit.title, status: unit.verificationStatus }));
-  const unverified = units
+  const unverified = knowledgeUnits
     .filter((unit) => unit.verificationStatus === 'unverified')
     .slice(0, 20)
     .map((unit) => ({ id: unit.id, title: unit.title, updatedAt: unit.updatedAt }));

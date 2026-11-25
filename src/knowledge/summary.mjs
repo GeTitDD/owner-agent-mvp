@@ -2,7 +2,20 @@
 //
 // 这里的「经验」是 ADR-0007 的 lesson/v1（现象 → 机制 → 对策），读 knowledge_lessons；
 // 旧的 experience/v1 表已停写、读路径已摘除（#62），摘要不再读取它，也不再提供手动提炼入口。
+//
+// 决策（#87）也算知识的一种，但状态读自己的 decision_status：「生效中」不是「已验证」，
+// 已被取代 / 已放弃的不算现状，因此不计入知识条数与首屏列表。
+import { decisionStatusOf, isCurrentDecision } from '../memory/decision-status.mjs';
+
 const proposalIsCandidate = (proposal) => proposal?.meta?.contract === 'knowledge-candidate/v1';
+
+/** 条目的状态：决策读决策状态，其余读验证状态，两套不互相冒充。 */
+const statusOfUnit = (unit) => (unit?.kind === 'decision'
+  ? decisionStatusOf(unit)
+  : unit?.verificationStatus);
+
+/** 是否算现状：非决策条目恒为 true；结束状态的决策不再算。 */
+const isCurrentUnit = (unit) => unit?.kind !== 'decision' || isCurrentDecision(unit);
 
 /**
  * 当前项目的知识摘要。
@@ -23,16 +36,20 @@ export function knowledgeSummaryFor({ personalStore, projectId = '', limit = 200
     return (proposal.meta?.sourceLessonIds ?? []).some((id) => lessonIds.has(id));
   });
   const usages = personalStore.listUsages({ projectId, limit: 200 });
-  // 摘要列表：已验证优先，其次最近更新；只取少量，供面板首屏阅读。
-  const rankedUnits = projectUnits.slice().sort((a, b) => {
-    const verified = Number(b.verificationStatus === 'verified') - Number(a.verificationStatus === 'verified');
-    return verified || String(b.updatedAt).localeCompare(String(a.updatedAt));
+  // 结束状态的决策不算现状：不进知识条数、不进首屏列表，但单独给一个计数说明它们还在。
+  const currentProjectUnits = projectUnits.filter(isCurrentUnit);
+  const currentSharedUnits = sharedUnits.filter(isCurrentUnit);
+  const endedDecisions = allUnits.filter((unit) => unit.kind === 'decision' && !isCurrentUnit(unit)).length;
+  // 摘要列表：现状条目优先（已验证 / 生效中），其次最近更新；只取少量，供面板首屏阅读。
+  const rankedUnits = currentProjectUnits.slice().sort((a, b) => {
+    const good = (unit) => Number(['verified', 'active'].includes(statusOfUnit(unit)));
+    return good(b) - good(a) || String(b.updatedAt).localeCompare(String(a.updatedAt));
   });
   const tagCounts = new Map();
-  for (const unit of projectUnits) {
+  for (const unit of currentProjectUnits) {
     for (const tag of unit.tags ?? []) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
   }
-  const lastKnowledgeAt = projectUnits
+  const lastKnowledgeAt = currentProjectUnits
     .map((unit) => unit.updatedAt)
     .filter(Boolean)
     .sort()
@@ -41,10 +58,12 @@ export function knowledgeSummaryFor({ personalStore, projectId = '', limit = 200
     projectId,
     counts: {
       lessons: lessons.length,
-      knowledge: projectUnits.length,
-      verified: projectUnits.filter((unit) => unit.verificationStatus === 'verified').length,
-      sharedKnowledge: sharedUnits.length,
-      sharedVerified: sharedUnits.filter((unit) => unit.verificationStatus === 'verified').length,
+      knowledge: currentProjectUnits.length,
+      verified: currentProjectUnits.filter((unit) => unit.verificationStatus === 'verified').length,
+      sharedKnowledge: currentSharedUnits.length,
+      sharedVerified: currentSharedUnits.filter((unit) => unit.verificationStatus === 'verified').length,
+      // 已结束的决策不再算现状，单独计数（0 时面板不必显示）。
+      endedDecisions,
       candidates: candidates.length,
       usages: usages.length,
       positiveUsages: usages.filter((usage) => usage.observedBenefit === 'positive').length,
@@ -53,7 +72,8 @@ export function knowledgeSummaryFor({ personalStore, projectId = '', limit = 200
     topKnowledge: rankedUnits.slice(0, 5).map((unit) => ({
       id: unit.id,
       title: unit.title,
-      status: unit.verificationStatus,
+      // 决策给决策状态，避免把「生效中」画成「待验证」。
+      status: statusOfUnit(unit),
       layer: unit.layer,
       revision: unit.revision,
       updatedAt: unit.updatedAt

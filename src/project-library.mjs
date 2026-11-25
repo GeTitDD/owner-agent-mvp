@@ -15,6 +15,7 @@
 // 缺的写明缺，避免让人以为项目只有一个视角。
 
 import { DIAGRAM_KINDS, DIAGRAM_LABELS } from './project-diagrams.mjs';
+import { decisionDecidedAt, decisionStatusOf } from './memory/decision-status.mjs';
 
 const DEFAULT_LIMIT = 50;
 
@@ -77,7 +78,15 @@ const evidenceRefsOf = (value) => asArray(value)
   })
   .filter(Boolean);
 
-const statusOf = (row) => String(row?.verificationStatus ?? row?.status ?? 'unverified');
+/**
+ * 条目状态：决策读自己的状态列（decisionStatus），其余读验证状态。
+ * 两者不互相冒充——决策的「生效中」不是「已验证」，决策的「已放弃」也不是「待验证」。
+ */
+const statusOf = (row) => String(
+  row?.kind === 'decision'
+    ? (decisionStatusOf(row) ?? 'active')
+    : (row?.verificationStatus ?? row?.status ?? 'unverified')
+);
 
 const badgeOf = (status) => STATUS_LABELS[status] ?? (status ? String(status) : '未知');
 
@@ -147,22 +156,35 @@ const entryOfLesson = (row) => {
 
 /** 知识条目：来源由筛选时的判定给出（同领域 / 本项目贡献），状态只做徽章。 */
 const entryOfKnowledge = (row, source) => {
+  const isDecision = row?.kind === 'decision';
   const status = statusOf(row);
   const evidenceCount = asArray(row?.evidenceRefs).length;
+  const current = !isDecision || status === 'active';
+  const decidedAt = isDecision ? decisionDecidedAt(row) : null;
   return {
     id: String(row?.id ?? ''),
-    kind: 'knowledge',
+    kind: isDecision ? 'decision' : 'knowledge',
     source,
     sourceLabel: SOURCE_LABELS[source],
-    title: oneLine(row?.title, 200) || '未命名知识',
+    title: oneLine(row?.title, 200) || (isDecision ? '未命名决策' : '未命名知识'),
     status,
     badge: badgeOf(status),
-    detail: `知识 · ${source === 'contributed' ? '本项目贡献' : '领域共享'} · ${badgeOf(status)} · 证据 ${evidenceCount} 条`,
+    current,
+    reasonMissing: isDecision && row?.decision?.reasonMissing === true,
+    decidedAt,
+    detail: [
+      isDecision ? '决策' : '知识',
+      source === 'contributed' ? '本项目贡献' : '领域共享',
+      badgeOf(status),
+      current ? '' : '不算现状',
+      `证据 ${evidenceCount} 条`
+    ].filter(Boolean).join(' · '),
     evidenceCount,
     evidenceRefs: evidenceRefsOf(row?.evidenceRefs),
     // 知识条目带修订号：快照里的引用要能指回「当时是哪一版」。
     ...(Number.isSafeInteger(row?.revision) ? { revision: row.revision } : {}),
     at: row?.updatedAt ?? row?.updated_at ?? row?.createdAt ?? row?.created_at ?? null,
+    // 生效中的决策属于现状，进「已验证」一节；结束状态与其它未验证条目一起进「观察中」。
     section: isVerifiedStatus(status) ? 'verified' : 'observing'
   };
 };

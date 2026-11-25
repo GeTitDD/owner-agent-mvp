@@ -6,6 +6,14 @@ import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { canonical, flatText, requireId, sha256 } from './utils.mjs';
 import { CREATABLE_LESSON_STATUSES, LESSON_STATUSES, lessonStatusOf as readLessonStatus } from './lesson-status.mjs';
+import {
+  DECISION_KIND,
+  DECISION_STATUSES,
+  DEFAULT_DECISION_STATUS,
+  decisionStatusChange,
+  isEndedDecisionStatus,
+  normalizeDecisionStatus
+} from './memory/decision-status.mjs';
 import { defaultDbPath } from './storage.mjs';
 import { rejectObviousSecrets } from './evolution.mjs';
 
@@ -16,7 +24,7 @@ const own = (obj, name) => Object.prototype.hasOwnProperty.call(obj, name);
 const now = () => new Date().toISOString();
 const SCOPES = new Set(['personal','domain','project']);
 const LAYERS = new Set(['domain','applied','project']);
-const KINDS = new Set(['note','concept','claim','hypothesis','procedure','experiment']);
+const KINDS = new Set(['note','concept','claim','hypothesis','procedure','experiment',DECISION_KIND]);
 const VERIFY = new Set(['unverified','verified','needs_reverification','disputed']);
 const RELATIONS = new Set(['depends_on','specializes','implements','validated_by','contradicts','related_to']);
 const safeText = (text,max,label,required=false) => {
@@ -43,12 +51,81 @@ function stringArray(value, max, itemMax, label) {
   valid(new Set(output).size === output.length, `Duplicate ${label}`);
   return output;
 }
+/**
+ * 落库前剥掉决策状态字段：当前状态只存 personal_units.decision_status 一列。
+ * 决策的来源、理由、交接记录仍在 payload.decision 里，那部分是内容不是当前状态。
+ */
+function unitPayloadBody(item) {
+  if (!item || typeof item !== 'object') return {};
+  const { decisionStatus: _decisionStatus, ...rest } = item;
+  return rest;
+}
+/**
+ * 决策附加信息（payload.decision）：理由、来源、原话、时间与状态变更台账。
+ * 理由允许为空，但 reasonMissing 必须显式给出——空串不代表「这条没有理由位」。
+ */
+function normalizeDecision(decision, { required }) {
+  if (decision === null || decision === undefined) {
+    valid(!required, '决策必须有理由与来源信息');
+    return null;
+  }
+  valid(typeof decision === 'object' && !Array.isArray(decision), 'Decision info must be an object');
+  const text = (value, max, label) => (typeof value === 'string' ? safeText(value, max, label) : '');
+  const source = decision.source === null || decision.source === undefined ? null : decision.source;
+  if (source !== null) {
+    valid(typeof source === 'object' && !Array.isArray(source), 'Invalid decision source');
+    safeText(source.kind ?? '', 40, 'decision source kind');
+    safeText(source.source ?? '', 40, 'decision source');
+    safeText(source.sessionId ?? '', 200, 'decision session id');
+    safeText(source.sessionPath ?? '', 500, 'decision session path');
+    safeText(source.projectName ?? '', 120, 'decision project name');
+  }
+  const quote = decision.quote === null || decision.quote === undefined ? null : decision.quote;
+  if (quote !== null) {
+    valid(typeof quote === 'object' && !Array.isArray(quote), 'Invalid decision quote');
+    safeText(quote.user ?? '', 2000, 'decision quote');
+    safeText(quote.assistant ?? '', 2000, 'decision quote');
+  }
+  const history = Array.isArray(decision.history) ? decision.history : [];
+  valid(history.length <= 20, 'Decision history is too long');
+  const normalizedHistory = history.map((entry) => {
+    valid(entry && typeof entry === 'object' && !Array.isArray(entry), 'Invalid decision history entry');
+    const to = normalizeDecisionStatus(entry.to);
+    valid(DECISION_STATUSES.includes(to), 'Invalid decision history status');
+    const from = entry.from === null || entry.from === undefined ? '' : normalizeDecisionStatus(entry.from);
+    valid(from === '' || DECISION_STATUSES.includes(from), 'Invalid decision history status');
+    return {
+      from,
+      to,
+      at: safeText(entry.at ?? '', 40, 'decision history time'),
+      actor: safeText(entry.actor ?? '', 80, 'decision history actor'),
+      note: safeText(entry.note ?? '', 500, 'decision history note')
+    };
+  });
+  const reason = text(decision.reason, 2000, 'decision reason');
+  return {
+    fingerprint: text(decision.fingerprint, 128, 'decision fingerprint'),
+    reason,
+    // 缺理由 = 理由为空；由这里统一算，避免调用方各写一份判断。
+    reasonMissing: reason === '',
+    intent: text(decision.intent, 2000, 'decision intent'),
+    abandoned: text(decision.abandoned, 2000, 'decision abandoned option'),
+    quote,
+    source,
+    decidedAt: text(decision.decidedAt, 40, 'decision time'),
+    history: normalizedHistory,
+    ...(decision.supersededAt ? { supersededAt: safeText(decision.supersededAt, 40, 'decision time') } : {}),
+    ...(decision.abandonedAt ? { abandonedAt: safeText(decision.abandonedAt, 40, 'decision time') } : {})
+  };
+}
 function normalize(payload, previous=null) {
   valid(payload && typeof payload === 'object' && !Array.isArray(payload), 'Knowledge must be an object');
+  const kind = payload.kind ?? 'note';
+  const isDecision = kind === DECISION_KIND;
   const item = {
     title: safeText(payload.title,200,'title',true),
     content: safeText(payload.content,25000,'content',true),
-    kind: payload.kind ?? 'note',
+    kind,
     layer: payload.layer ?? 'applied',
     scope: payload.scope ?? 'personal',
     projectId: payload.projectId ?? null,
@@ -58,9 +135,29 @@ function normalize(payload, previous=null) {
     verificationStatus: payload.verificationStatus ?? 'unverified',
     relations: payload.relations ?? {},
     sourceRef: payload.sourceRef ?? null,
+    // 决策状态单独一列：只认三种值；非决策条目必须为空，免得「生效中的知识」这种混用。
+    decisionStatus: isDecision
+      ? (normalizeDecisionStatus(payload.decisionStatus ?? previous?.decisionStatus) || DEFAULT_DECISION_STATUS)
+      : null,
+    decision: isDecision ? normalizeDecision(payload.decision ?? previous?.decision ?? null, { required: false }) : null,
+    // 升域来源台账：升域后项目级归属被清空，靠这两项仍能解释「最初来自哪个项目」。
+    // 只在有值时才写进 payload，普通知识条目的形状不受影响。
+    ...(payload.originProjectId ?? previous?.originProjectId
+      ? { originProjectId: payload.originProjectId ?? previous?.originProjectId } : {}),
+    ...(payload.promotedFrom ?? previous?.promotedFrom
+      ? { promotedFrom: payload.promotedFrom ?? previous?.promotedFrom } : {}),
+    ...(payload.promotedAt ?? previous?.promotedAt
+      ? { promotedAt: payload.promotedAt ?? previous?.promotedAt } : {})
   };
+  valid(item.originProjectId === undefined || (typeof item.originProjectId === 'string' && item.originProjectId.length <= 90),
+    'Invalid origin project ID');
+  valid(item.promotedFrom === undefined || (typeof item.promotedFrom === 'object' && !Array.isArray(item.promotedFrom)),
+    'Invalid promotion source');
+  valid(item.promotedAt === undefined || (typeof item.promotedAt === 'string' && item.promotedAt.length <= 40),
+    'Invalid promotion time');
   valid(KINDS.has(item.kind) && LAYERS.has(item.layer) && SCOPES.has(item.scope), 'Invalid knowledge kind/layer/scope');
   valid(VERIFY.has(item.verificationStatus), 'Invalid verification state');
+  valid(!isDecision || item.decision !== null, '决策必须带来源、理由与时间信息');
   valid(item.domains.every(x => { try { requireId(x); return true; } catch { return false; } }), 'Invalid domain ID');
   if (item.projectId !== null) { try { requireId(item.projectId,'project id'); } catch { throw new KnowledgeValidationError('Invalid project ID'); } }
   valid(item.scope === 'project' ? item.projectId !== null && item.layer === 'project' : item.projectId === null && item.layer !== 'project', 'Project scope requires projectId and project layer; other scopes cannot use them');
@@ -81,7 +178,12 @@ function normalize(payload, previous=null) {
 }
 function rowToItem(row) {
   if (!row) return null;
-  return {id:row.id,revision:row.revision,createdAt:row.created_at,updatedAt:row.updated_at,...JSON.parse(row.payload)};
+  return {
+    id:row.id,revision:row.revision,createdAt:row.created_at,updatedAt:row.updated_at,
+    ...JSON.parse(row.payload),
+    // 当前决策状态只从列上读：payload 里不再存第二份（非决策条目这一列为空）。
+    decisionStatus: row.decision_status ?? null
+  };
 }
 export class PersonalKnowledgeStore {
   constructor(filename=defaultDbPath(),{logger=console}={}) {
@@ -170,8 +272,43 @@ export class PersonalKnowledgeStore {
     // 状态列升级（P0-2）：旧建表语句只允许 unverified/inferred，需要换成五态 CHECK。
     // 只在这一种条件下重建，重复初始化是空操作；结果留在 lastLessonStatusMigration 上。
     this.lastLessonStatusMigration = this.rebuildLessonStatusColumn();
+    // 决策状态列（#87）：决策的「生效中 / 已被取代 / 已放弃」单独一列，
+    // 与 payload.verificationStatus 分开。老库没有这一列时补上，已有行留空（它们本来就不是决策）。
+    this.lastDecisionStatusMigration = this.addDecisionStatusColumn();
   }
   close() { this.db.close(); }
+
+  /**
+   * 补 decision_status 列（#87）：老库平滑升级。
+   *
+   * 用 ALTER TABLE ADD COLUMN 而不是重建表：新增列对已有行没有值要回填（非决策条目本来就该为空），
+   * 重建表反而多一次搬数据的风险。重复初始化是空操作；失败时留下明确日志并继续用旧表，
+   * 绝不静默：没有这一列时决策仍会写库，只是读不到当前状态。
+   */
+  addDecisionStatusColumn() {
+    let columns;
+    try {
+      columns = this.db.prepare('PRAGMA table_info(personal_units)').all().map((x) => x.name);
+    } catch (error) {
+      this.logger?.warn?.(`[personal-store] 检查决策状态列失败，本次跳过升级：${error.message}`);
+      return { added: false, reason: 'check-failed', error: error.message };
+    }
+    if (columns.includes('decision_status')) return { added: false, reason: 'current' };
+    let rows = 0;
+    try {
+      rows = Number(this.db.prepare('SELECT COUNT(*) AS total FROM personal_units').get()?.total ?? 0);
+    } catch (error) {
+      this.logger?.warn?.(`[personal-store] 统计知识行数失败，仍尝试补决策状态列：${error.message}`);
+    }
+    try {
+      this.db.exec('ALTER TABLE personal_units ADD COLUMN decision_status TEXT');
+    } catch (error) {
+      this.logger?.warn?.(`[personal-store] 补决策状态列失败，决策状态暂时读不到：${error.message}`);
+      return { added: false, reason: 'alter-failed', rows, error: error.message };
+    }
+    this.logger?.info?.(`[personal-store] 知识表已补 decision_status 列（#87），${rows} 行保持为空。`);
+    return { added: true, reason: 'legacy', rows };
+  }
 
   /**
    * 经验状态列升级（P0-2）：把 CHECK 从两态扩到五态，状态只存这一列。
@@ -290,10 +427,11 @@ export class PersonalKnowledgeStore {
     const normalized=normalize(payload);
     const id=`personal.${randomUUID().replaceAll('-','').slice(0,24)}`;
     const timestamp=now();
-    const body=canonical(normalized);
+    // 当前决策状态只进列，payload 里不留第二份（非决策条目该列为空）。
+    const body=canonical(unitPayloadBody(normalized));
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      this.db.prepare('INSERT INTO personal_units(id,revision,payload,created_at,updated_at) VALUES(?,1,?,?,?)').run(id,body,timestamp,timestamp);
+      this.db.prepare('INSERT INTO personal_units(id,revision,payload,created_at,updated_at,decision_status) VALUES(?,1,?,?,?,?)').run(id,body,timestamp,timestamp,normalized.decisionStatus ?? null);
       this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,1,?,?,?,?,?)').run(id,body,safeText(actor,80,'actor',true),safeText(note,500,'note'),timestamp,sha256(body));
       this.db.exec('COMMIT');
     } catch(e) { this.db.exec('ROLLBACK'); throw e; }
@@ -307,8 +445,8 @@ export class PersonalKnowledgeStore {
       if(!existing) throw new KnowledgeValidationError('Knowledge not found');
       if(existing.revision!==expectedRevision) throw new KnowledgeConflict(`Revision conflict: expected ${expectedRevision}, actual ${existing.revision}`);
       const normalized=normalize(payload,existing);
-      const body=canonical(normalized),stamp=now(),next=existing.revision+1;
-      this.db.prepare('UPDATE personal_units SET revision=?,payload=?,updated_at=? WHERE id=?').run(next,body,stamp,id);
+      const body=canonical(unitPayloadBody(normalized)),stamp=now(),next=existing.revision+1;
+      this.db.prepare('UPDATE personal_units SET revision=?,payload=?,updated_at=?,decision_status=? WHERE id=?').run(next,body,stamp,normalized.decisionStatus ?? null,id);
       this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,?,?,?,?,?,?)').run(id,next,body,safeText(actor,80,'actor',true),safeText(note,500,'note'),stamp,sha256(body));
       this.db.exec('COMMIT');
     } catch(e) { this.db.exec('ROLLBACK'); throw e; }
@@ -343,7 +481,7 @@ export class PersonalKnowledgeStore {
       valid(metaJson.length <= 20000, 'Proposal meta is too large');
       const id = randomUUID(), stamp = now();
       this.db.prepare(`INSERT INTO personal_proposals(id,target_id,target_revision,payload,status,actor,note,created_at,meta_json)
-        VALUES(?,?,?,?,'pending',?,?,?,?)`).run(id,targetId,existing?.revision ?? null,canonical(normalized),
+        VALUES(?,?,?,?,'pending',?,?,?,?)`).run(id,targetId,existing?.revision ?? null,canonical(unitPayloadBody(normalized)),
           safeText(actor,80,'actor',true),safeText(note,500,'note'),stamp,metaJson);
       this.db.exec('COMMIT');
       return this.proposal(id);
@@ -379,16 +517,16 @@ export class PersonalKnowledgeStore {
         if (existing && (proposal.payload.scope !== existing.scope || proposal.payload.projectId !== existing.projectId)) {
           throw new KnowledgeConflict('Proposal cannot change target scope or project ownership');
         }
-        const normalized=normalize(proposal.payload,existing), body=canonical(normalized), stamp=now();
+        const normalized=normalize(proposal.payload,existing), body=canonical(unitPayloadBody(normalized)), stamp=now();
         const note=`Accepted proposal ${id}`;
         if(existing) {
           const rev=existing.revision+1;
-          this.db.prepare('UPDATE personal_units SET revision=?,payload=?,updated_at=? WHERE id=?').run(rev,body,stamp,existing.id);
+          this.db.prepare('UPDATE personal_units SET revision=?,payload=?,updated_at=?,decision_status=? WHERE id=?').run(rev,body,stamp,normalized.decisionStatus ?? null,existing.id);
           this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,?,?,?,?,?,?)').run(existing.id,rev,body,reviewer,note,stamp,sha256(body));
           appliedId=existing.id;
         } else {
           appliedId=`personal.${randomUUID().replaceAll('-','').slice(0,24)}`;
-          this.db.prepare('INSERT INTO personal_units(id,revision,payload,created_at,updated_at) VALUES(?,1,?,?,?)').run(appliedId,body,stamp,stamp);
+          this.db.prepare('INSERT INTO personal_units(id,revision,payload,created_at,updated_at,decision_status) VALUES(?,1,?,?,?,?)').run(appliedId,body,stamp,stamp,normalized.decisionStatus ?? null);
           this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,1,?,?,?,?,?)').run(appliedId,body,reviewer,note,stamp,sha256(body));
         }
       }
@@ -1317,5 +1455,111 @@ export class PersonalKnowledgeStore {
       effective.push({ ...item, effectiveStatus:this.lessonStatusOf(item) });
     }
     return { project:projectLessons, domain:domainLessons, effective, overridden, superseded };
+  }
+
+  // ---- 决策（#87）：知识的一种，状态单独一列 ----
+  // 决策沿用知识表（personal_units），但它的状态机是「生效中 / 已被取代 / 已放弃」，
+  // 与「待验证 / 已验证」分开存在 decision_status 列上。下面这些方法只读/只写这一列，
+  // 绝不把决策状态写进 verificationStatus（那会出现「生效中的知识」这种自相矛盾的值）。
+
+  /** 按项目读决策；默认连结束状态一起返回（界面要能看见「这条已不算现状」）。 */
+  listDecisions({ projectId = '', includeEnded = true, limit = 200 } = {}) {
+    const project = projectId ? safeText(projectId,90,'project id',true) : '';
+    const cap = Math.min(Math.max(1, Number(limit) || 200), 2000);
+    return this.db.prepare('SELECT * FROM personal_units ORDER BY updated_at DESC,id LIMIT ?').all(2000)
+      .map(rowToItem)
+      .filter((row) => row.kind === DECISION_KIND)
+      // 项目级决策按项目过滤；域级决策对所有项目可见（升域是显式动作，见下）。
+      .filter((row) => !project || row.scope !== 'project' || row.projectId === project)
+      .filter((row) => includeEnded || !isEndedDecisionStatus(row.decisionStatus))
+      .slice(0, cap);
+  }
+
+  /** 按指纹找已确认的决策：确认是幂等的，同一句话不会写第二条。 */
+  decisionByFingerprint(fingerprint) {
+    const key = safeText(fingerprint,128,'decision fingerprint',true);
+    const row = this.db.prepare('SELECT * FROM personal_units ORDER BY created_at,id LIMIT 2000').all()
+      .map(rowToItem)
+      .find((item) => item.kind === DECISION_KIND && item.decision?.fingerprint === key);
+    return row ?? null;
+  }
+
+  /** 已确认决策的指纹：会话扫描据此跳过已入库的那条，不再反复提议。 */
+  decisionFingerprints() {
+    return [...new Set(this.db.prepare('SELECT * FROM personal_units LIMIT 2000').all()
+      .map(rowToItem)
+      .filter((row) => row.kind === DECISION_KIND)
+      .map((row) => row.decision?.fingerprint)
+      .filter((value) => typeof value === 'string' && value))];
+  }
+
+  /**
+   * 结束一条生效中的决策：标为「已被取代 / 已放弃」。
+   * - 只改 decision_status 列，verificationStatus 原样不动；
+   * - 状态变更记进 payload.decision.history，并追加一版修订，事后能解释什么时候改的；
+   * - 结束状态是终态，不提供改回生效中（要重新采用请另记一条新决策）。
+   */
+  setDecisionStatus(id, status, { actor = 'user', note = '' } = {}) {
+    const existing = this.get(id);
+    valid(Boolean(existing),'Knowledge not found');
+    valid(existing.kind === DECISION_KIND,'Only decision knowledge carries a decision status');
+    const from = normalizeDecisionStatus(existing.decisionStatus) || DEFAULT_DECISION_STATUS;
+    const verdict = decisionStatusChange(from, status);
+    valid(verdict.ok, verdict.message || 'Invalid decision status change');
+    const stamp = now();
+    const who = safeText(String(actor ?? 'user'),80,'actor',true);
+    const memo = note ? safeText(note,500,'note') : '';
+    const previous = existing.decision && typeof existing.decision === 'object' ? existing.decision : {};
+    const nextDecision = {
+      ...previous,
+      history:[...(Array.isArray(previous.history) ? previous.history : []),
+        { from, to:status, at:stamp, actor:who, note:memo }],
+      ...(status === 'superseded' ? { supersededAt:stamp } : {}),
+      ...(status === 'abandoned' ? { abandonedAt:stamp } : {})
+    };
+    // 走同一套 normalize：内容字段与证据不变，只换状态与决策信息。
+    const normalized = normalize({ ...existing, decisionStatus:status, decision:nextDecision }, existing);
+    const body = canonical(unitPayloadBody(normalized));
+    const rev = existing.revision + 1;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('UPDATE personal_units SET revision=?,payload=?,updated_at=?,decision_status=? WHERE id=?')
+        .run(rev,body,stamp,normalized.decisionStatus,id);
+      this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,?,?,?,?,?,?)')
+        .run(id,rev,body,who,memo || `决策状态：${from} → ${status}`,stamp,sha256(body));
+      this.db.exec('COMMIT');
+    } catch(error) { this.db.exec('ROLLBACK'); throw error; }
+    return this.get(id);
+  }
+
+  /**
+   * 把项目级决策升为域级（沿用 ADR-0007 的「项目级 → 域级」升级路径）：
+   * - scope 变 domain、projectId 清空、layer 变 domain；行上的来源项目写进 originProjectId；
+   * - 状态不因升域而变（升域不是验证，也不是裁决）；
+   * - 只是显式动作，不自动发生。
+   */
+  promoteDecisionToDomain(id, { domainIds = [] } = {}) {
+    const existing = this.get(id);
+    valid(Boolean(existing),'Knowledge not found');
+    valid(existing.kind === DECISION_KIND,'Only decision knowledge can be promoted to a domain decision');
+    valid(Array.isArray(domainIds),'Decision domain ids must be an array');
+    const domains = [...new Set(domainIds.map((domain)=>safeText(String(domain),80,'domain id',true)))];
+    valid(domains.length <= 20,'Invalid decision domains');
+    const stamp = now();
+    const next = {
+      ...existing,
+      scope:'domain',
+      layer:'domain',
+      projectId:null,
+      domains,
+      originProjectId: existing.originProjectId ?? existing.projectId ?? null,
+      promotedFrom: existing.promotedFrom ?? { scope:existing.scope, projectId:existing.projectId ?? null },
+      promotedAt: existing.promotedAt ?? stamp
+    };
+    return this.update(id, next, {
+      expectedRevision: existing.revision,
+      actor: 'user',
+      note: `决策升为域级：${domains.join(', ') || '未命名域'}`
+    });
   }
 }
