@@ -1850,3 +1850,15 @@ pre.diff, pre.logs {
   border-radius: 999px;
   line-height: 17px;
 }
+/* #90 导出：路径要么完整显示（可复制），要么明确写「还没有导出」。 */
+.library-export { margin-top: 6px; }
+.library-export[hidden] { display: none; }
+.library-export-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.library-export-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+  word-break: break-all;
+}
