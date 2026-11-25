@@ -193,7 +193,10 @@ export function snapshotContentOf(view, { generatedAt = stamp(), note = '' } = {
   // section 字段只用于分节，不重复写进条目：条目本身不记录「当时在哪一节」以外的状态。
   const strip = ({ section: _section, ...entry }) => entry;
   const counts = {
-    ...countsOf(view?.counts),
+    // countsOf 认的是「带 counts 的对象」，这里传整份视图：四类计数（经验 / 域知识 /
+    // 贡献知识 / 画像与图谱）必须进快照，导出的人读物才能照快照写出「四类计数」，
+    // 不必在导出时重新聚合一次库。
+    ...countsOf(view),
     verified: verified.length,
     observing: observing.length,
     total: entries.length
@@ -419,6 +422,29 @@ export class ProjectSnapshotStore {
     return rowToVersion(this.db.prepare(
       'SELECT * FROM project_snapshot_versions WHERE project_id=? AND version=?'
     ).get(id, version));
+  }
+
+  /**
+   * 导出（#90）要的是「那一版存进去的字节」：直接回读 content 文本，不 JSON.parse 再
+   * stringify——否则导出的 snapshot.json 可能和发布时那一份有细微差异。
+   * 这里只读不写，也不改已发布版本。
+   */
+  getVersionRaw(projectId, version) {
+    const id = projectIdOf(projectId);
+    if (!Number.isSafeInteger(version) || version < 1) fail('Invalid snapshot version');
+    const row = this.db.prepare(
+      'SELECT * FROM project_snapshot_versions WHERE project_id=? AND version=?'
+    ).get(id, version);
+    if (!row) return null;
+    return {
+      projectId: row.project_id,
+      version: row.version,
+      contentText: row.content,
+      contentHash: row.content_hash,
+      counts: safeParse(row.counts_json, {}),
+      note: row.note ?? '',
+      publishedAt: row.published_at
+    };
   }
 
   /** 版本列表按从新到旧；不返回正文，版本详情留给下一张票。 */

@@ -2854,7 +2854,14 @@
   $('libraryPublish').onclick = () => {
     void libraryAction(
       (projectId) => window.companion.library.publish({ projectId }),
-      (result) => `已发布 ${result?.published?.label ?? '新版本'}`
+      (result) => {
+        const label = result?.published?.label ?? '新版本';
+        const dir = result?.published?.export?.dir;
+        // 发布成功就把可预测的导出路径写进提示；路径本身在库段里长期可见，不靠 toast 留住。
+        if (dir) return `已发布 ${label}，导出到 ${dir}`;
+        if (result?.published?.exportError) return `已发布 ${label}，但导出失败：${result.published.exportError}`;
+        return `已发布 ${label}（导出未完成）`;
+      }
     );
   };
   $('queueAdd').onclick = () => { void addQueueItem(); };
@@ -3090,6 +3097,48 @@
     return row;
   };
 
+  // ---- 项目库（#90）：导出到固定目录 ----
+  //
+  // 导出只读已发布的快照，路径由主进程算好（library.export），渲染层不再拼一次，
+  // 免得界面显示的路径和真正写出的目录不一致。
+  const renderLibraryExport = (library) => {
+    const holder = $('libraryExport');
+    if (!holder) return;
+    holder.replaceChildren();
+    const info = library?.export;
+    const versions = library?.snapshot?.versions ?? [];
+    if (!info || !versions.length) { holder.hidden = true; return; }
+    holder.hidden = false;
+
+    const line = el('div', 'library-export-line');
+    line.append(el('span', 'library-export-path',
+      info.exists ? `导出：${info.dir}` : `还没有导出 ${info.label}`));
+    if (info.exists) {
+      const open = el('button', 'ghost small', '打开目录');
+      open.type = 'button';
+      open.title = '在文件管理器里打开这一版的导出目录';
+      open.onclick = () => {
+        void window.companion.library.openExport({ path: info.dir })
+          .catch((error) => toast(cleanIpcError(error?.message ?? error), 6000));
+      };
+      line.append(open);
+    } else {
+      const run = el('button', 'ghost small', `导出 ${info.label}`);
+      run.type = 'button';
+      run.title = '把这一版已发布快照重新写到固定目录（重复导出内容不变）';
+      run.onclick = () => {
+        void libraryAction(
+          (projectId) => window.companion.library.export({ projectId, version: info.version }),
+          (result) => (result?.exported?.dir
+            ? `已导出 ${result.exported.label}：${result.exported.dir}`
+            : '已导出')
+        );
+      };
+      line.append(run);
+    }
+    holder.append(line);
+  };
+
   const renderLibrary = () => {
     const section = $('librarySection');
     if (!section) return;
@@ -3172,6 +3221,7 @@
         versions.append(chip);
       }
     }
+    renderLibraryExport(library);
   };
 
   /**
