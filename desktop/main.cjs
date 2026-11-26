@@ -1697,6 +1697,45 @@ const knowledgeDetail = ({ id } = {}) => {
   };
 
   /**
+   * 单个项目的未读预览：只读水位，读不到 git / 观察员事件的那一类记 null（未知），
+   * 绝不写成 0。定位屏刷新与行内「标记已读」共用这一份口径。
+   */
+  const attentionOfProject = async ({ id, root, locate, sinceModule, probe }) => {
+    let commits = null;
+    let dirty = null;
+    if (root) {
+      try {
+        commits = probe.readCommitList({ root, limit: 50 });
+        const working = probe.readWorkingTreeChanges({ root });
+        dirty = working === null ? null : working.filter((item) => !isNoisePath(item.path));
+      } catch (error) {
+        // 不是仓库 / git 读失败：提交与改动都按「未知」，不压成 0。
+        logError('locate.project', error);
+        commits = null;
+        dirty = null;
+      }
+    }
+    let unread = locate.unreadCountsOf({});
+    let lastReadAt = '';
+    if (memoryWatermarks) {
+      try {
+        const preview = sinceModule.previewSinceLastSeen({
+          projectId: id,
+          store: memoryWatermarks,
+          commits,
+          dirty,
+          events: observerEventsFor(id)
+        });
+        unread = locate.unreadCountsOf(preview.view);
+        lastReadAt = preview.lastReadAt;
+      } catch (error) {
+        logError('locate.preview', error);
+      }
+    }
+    return { unread, lastReadAt };
+  };
+
+  /**
    * #139 定位屏：不选项目时的项目行。只读取数，不推进任何水位、不触发扫描。
    *
    * - 待确认：知识候选（pending proposals）按 payload 项目或来源经验归因；决策候选读
@@ -1742,37 +1781,9 @@ const knowledgeDetail = ({ id } = {}) => {
 
     const attention = {};
     for (const project of projects) {
-      let commits = null;
-      let dirty = null;
-      if (project.root) {
-        try {
-          commits = probe.readCommitList({ root: project.root, limit: 50 });
-          const working = probe.readWorkingTreeChanges({ root: project.root });
-          dirty = working === null ? null : working.filter((item) => !isNoisePath(item.path));
-        } catch (error) {
-          // 不是仓库 / git 读失败：提交与改动都按「未知」，不压成 0。
-          logError('locate.project', error);
-          commits = null;
-          dirty = null;
-        }
-      }
-      let unread = locate.unreadCountsOf({});
-      let lastReadAt = '';
-      if (memoryWatermarks) {
-        try {
-          const preview = sinceModule.previewSinceLastSeen({
-            projectId: project.id,
-            store: memoryWatermarks,
-            commits,
-            dirty,
-            events: observerEventsFor(project.id)
-          });
-          unread = locate.unreadCountsOf(preview.view);
-          lastReadAt = preview.lastReadAt;
-        } catch (error) {
-          logError('locate.preview', error);
-        }
-      }
+      const { unread, lastReadAt } = await attentionOfProject({
+        id: project.id, root: project.root, locate, sinceModule, probe
+      });
       attention[project.id] = {
         unread,
         lastReadAt,
@@ -1781,6 +1792,42 @@ const knowledgeDetail = ({ id } = {}) => {
     }
 
     return locate.locateScreenView({ projects, pending, attention });
+  };
+
+  /**
+   * #140 行内「标记已读」：只把这个项目的水位推到当下，然后重算定位屏。
+   *
+   * 与 `/变化`（sinceLastSeenFor）分开：这里不算差异、不打开 `/变化`、不写项目目录，
+   * 也不动待确认候选。未读预览只用来判断「是不是已经没有未读」——已知为空时不写库，
+   * 连点同一行是空操作（ADR-0014）。
+   *
+   * @param {string} projectId
+   * @returns {Promise<{mark:object, view:object}>} mark 是回执，view 是刷新后的定位屏
+   */
+  const markLocateReadFor = async (projectId) => {
+    const id = String(projectId ?? '').trim();
+    if (!id) throw new Error('缺少项目 id');
+    const project = store?.getProject(id);
+    if (!project) throw new Error(`项目不存在：${id}`);
+    if (!memoryWatermarks) {
+      throw new Error('水位存储不可用：本地数据库打不开，请重启客户端。');
+    }
+    const [locate, sinceModule, probe] = await Promise.all([
+      loadLocateScreen(),
+      loadSinceLastSeen(),
+      loadObserverProbe()
+    ]);
+    const { unread } = await attentionOfProject({
+      id, root: String(project.root ?? ''), locate, sinceModule, probe
+    });
+    const mark = sinceModule.markProjectRead({
+      projectId: id,
+      store: memoryWatermarks,
+      unread
+    });
+    // 刷新定位屏：同一份只读口径重算，排序按新水位自然回退；其他项目的水位没动。
+    const view = await locateAttentionFor();
+    return { mark, view };
   };
 
 
@@ -3465,6 +3512,13 @@ const registerIpc = () => {
   ipcMain.handle('companion:locate-attention', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return locateAttentionFor();
+  });
+
+  // #140 行内「标记已读」：显式动作，只把这一个项目的水位推到当下并返回刷新后的定位屏。
+  // 不走 `/变化` 的算差异路径，也不写项目目录或候选表；已知没有未读时是空操作。
+  ipcMain.handle('companion:locate-mark-read', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return markLocateReadFor(String(input?.projectId ?? ''));
   });
 
   // #124 关联项目：只读一个项目的库视图摘要，给方法卡就地展开四类资料。

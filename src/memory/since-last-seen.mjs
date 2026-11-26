@@ -1,11 +1,13 @@
 // 「自上次看过」：把 #83 的变化窗口接到水位上的唯一入口。
 //
-// 这个文件只做两件事，都是为了让「先算差异、再推水位」这个顺序只有一个出口：
+// 这个文件只做三件事，都是为了让「先算差异、再推水位」这个顺序只有一个出口：
 // 1. computeSinceLastSeen：读旧水位 → 用旧水位算 changeWindowView → 算完才写新水位。
 //    顺序反了就是 ADR-0008 点名的典型 bug（打开一次什么都看不到），所以推进放在函数末尾，
 //    中间不允许任何提前 return。
 // 2. sinceSeenSection：把变化窗口视图压成面板要画的一段——首次查看要说「首次查看」而不是
 //    「没有变化」，三类全空要压成一行。这里不碰 DOM、不读库，可以纯函数测。
+// 3. markProjectRead（#140）：定位屏行内「标记已读」的唯一推进入口，只写一个项目的水位，
+//    不算差异、不打开 `/变化`；已知没有未读时不写库，重复标记是空操作（ADR-0014）。
 //
 // 没有水位时（第一次打开某项目）不变相等价于「全部都是新的」，也不等价于「没有变化」：
 // 交给 change-window 的 since=null，那里会把提交与事件标成 unknown，界面照它的说法写。
@@ -111,6 +113,70 @@ export function previewSinceLastSeen({ projectId, store, commits, dirty, events 
     events
   });
   return { view, previousAt, lastReadAt: previousAt };
+}
+
+/**
+ * 行内「标记已读」（#140）：把**一个**项目的水位推到 now，不读 git、不算差异、不打开 `/变化`。
+ *
+ * 这是 `/变化` 之外唯一允许推进水位的入口，所以规则写死在这里：
+ * - 只写传入的那一个项目，其他项目的水位一个字不动；
+ * - 已知该项目没有未读（unread.known && total === 0）时不写库，回执说明「已经没有未读」，
+ *   连点两次同一行不会把水位继续往后推；
+ * - 水位已经不早于 now（时钟回拨或并发标记）时同样不写，回执说「已是已读」；
+ * - 不碰候选表、不写项目目录：本函数只依赖 store.get / store.put。
+ *
+ * @param {object} input
+ * @param {string} input.projectId 项目 id
+ * @param {{get:Function, put:Function}} input.store 水位存储（见 watermark.mjs）
+ * @param {object|null} [input.unread] 只读预览算出的未读计数（unreadCountsOf 的输出）；省略按未知处理
+ * @param {Date|string|number} [input.now] 水位要推到（或比对的）时刻，默认当前
+ * @returns {{projectId:string, at:string, previousAt:string, changed:boolean,
+ *   reason:'advanced'|'nothing-unread'|'already-read', message:string}}
+ */
+export function markProjectRead({ projectId, store, unread = null, now = new Date() } = {}) {
+  const id = String(projectId ?? '').trim();
+  if (!id) throw new Error('缺少项目 id');
+  if (!store || typeof store.get !== 'function' || typeof store.put !== 'function') {
+    throw new Error('缺少水位存储');
+  }
+
+  const at = asIso(now);
+  const previous = store.get(id);
+  const previousAt = previous?.at ?? '';
+  const base = { projectId: id, previousAt };
+
+  // ① 已知没有未读：重复标记是空操作，不能靠「再推一次时间」假装清掉了什么。
+  if (unread?.known === true && Number(unread.total) === 0) {
+    return {
+      ...base,
+      at: previousAt,
+      changed: false,
+      reason: 'nothing-unread',
+      message: '这个项目已经没有未读变化：水位保持原样，这次没有改动。'
+    };
+  }
+
+  // ② 水位已在目标时刻之后：不往前写，回执照实说没变。
+  const previousMs = previousAt ? Date.parse(previousAt) : NaN;
+  if (Number.isFinite(previousMs) && previousMs >= Date.parse(at)) {
+    return {
+      ...base,
+      at: previousAt,
+      changed: false,
+      reason: 'already-read',
+      message: '这个项目已经是已读状态：水位没有变化，这次没有改动。'
+    };
+  }
+
+  // ③ 显式推进这一个项目；其他项目的水位与候选都不经过这里。
+  const advanced = store.put(id, at);
+  return {
+    ...base,
+    at: advanced?.at ?? at,
+    changed: true,
+    reason: 'advanced',
+    message: '已标记已读：这个项目的未读清零，其他项目不受影响。'
+  };
 }
 
 const textOf = (item) => {

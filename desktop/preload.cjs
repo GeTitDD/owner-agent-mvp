@@ -24,8 +24,10 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     projectLibrary: (input) => invoke('companion:card-project-library', input)
   }),
   // #139 定位屏：不选项目时的项目行（只读）。切换项目仍走 cardSessions.view。
+  // #140 行内「标记已读」：唯一会推进水位的定位屏动作，只动被点的那一个项目。
   locate: Object.freeze({
-    attention: () => invoke('companion:locate-attention')
+    attention: () => invoke('companion:locate-attention'),
+    markRead: (input) => invoke('companion:locate-mark-read', input)
   }),
   // #131 同步状态：get 是只读；attempt 是一次显式补同步，返回 {status, result}。
   // 断网时 attempt 只更新状态，不阻塞本地读写（本地写入不经过这条通道）。
