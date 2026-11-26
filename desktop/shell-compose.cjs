@@ -93,6 +93,7 @@
   const BUILTIN_COMMANDS = Object.freeze([
     Object.freeze({ id: 'setup', text: '/setup', description: '探测本机：逐项判定，一次确认写盘' }),
     Object.freeze({ id: '提炼经验', text: '/提炼经验', description: '把当前项目里未提炼的执行记录提炼成经验' }),
+    Object.freeze({ id: '提炼决策', text: '/提炼决策', description: '扫描当前项目的会话，产出决策候选并在流内确认' }),
     Object.freeze({ id: '经验', text: '/经验', description: '查看当前项目的经验与待审候选' }),
     Object.freeze({ id: '项目库', text: '/项目库', description: '当前项目的记忆计数与来源分组' }),
     Object.freeze({ id: '变化', text: '/变化', description: '自上次看过之后的变化（首次只记水位）' }),
@@ -319,6 +320,90 @@
         : '还没有经验：先在项目里用 /提炼经验 从执行记录提炼。')
       : `经验 ${cards.length} 条，待审核候选 ${candidates.length} 条。`;
     return { text, blocks: [...candidates, ...cards] };
+  };
+
+  /**
+   * `/提炼决策` 的候选卡：复用既有 review 块（kind=decision），不新建页面。
+   * 只画「现象 / 选择 / 放弃的方案 / 理由」四个字段与两个动作；
+   * 缺理由显式标注，接受时再问一句，跳过也保持「缺理由」。
+   */
+  const decisionCandidateBlocks = (pending = []) => (Array.isArray(pending) ? pending : [])
+    .slice(0, 5)
+    .map((item) => {
+      const missingReason = item?.missingReason === true || !String(item?.reason ?? '').trim();
+      const source = [String(item?.source ?? ''), String(item?.sessionId ?? '')]
+        .filter(Boolean)
+        .join(' · ');
+      return {
+        type: 'review',
+        kind: 'decision',
+        fingerprint: String(item?.fingerprint ?? ''),
+        projectId: String(item?.projectId ?? ''),
+        missingReason,
+        title: String(item?.phenomenon ?? '') || '待确认决策',
+        rows: [
+          ['现象', String(item?.phenomenon ?? '') || '（没有原话）'],
+          ['选择', String(item?.intent ?? '') || '（未记录）'],
+          ['放弃的方案', String(item?.abandoned ?? '') || '（未记录）'],
+          ['理由', missingReason ? '缺理由（接受时可补一句）' : String(item?.reason ?? '')],
+          ['来源', source || '会话扫描']
+        ],
+        actions: [{ id: 'accept', label: '接受' }, { id: 'reject', label: '拒绝' }],
+        note: missingReason
+          ? '缺理由：接受时会问一句，可跳过；跳过就保持「缺理由」。'
+          : '接受会写入知识库；拒绝只记指纹，以后不再提。'
+      };
+    });
+
+  /**
+   * `/提炼决策` 的回执：待办优先、空结果要说「没有新的决策」、失败不伪装成功。
+   * 新候选直接出卡，人不用再执行一次命令才看到内容。
+   */
+  const decisionReply = (result = {}) => {
+    const mode = String(result?.mode ?? '');
+    const receipt = result?.receipt && typeof result.receipt === 'object' ? result.receipt : {};
+    if (mode === 'no-project') {
+      return { text: '先选一个项目，再提炼决策：全局模式不会扫描会话。', blocks: [] };
+    }
+    if (mode === 'failed' || receipt.status === 'failed') {
+      const why = String(result?.reason ?? receipt.reason ?? '原因未知');
+      return { text: `没有扫成：${why}。没有写任何候选。`, blocks: [] };
+    }
+    const pending = Array.isArray(result?.pending) ? result.pending : [];
+    const cards = decisionCandidateBlocks(pending);
+    if (mode === 'pending') {
+      return {
+        text: `还有 ${pending.length} 条未处理的决策候选：先处理这些；处理完再执行 /提炼决策 才会继续扫描。`,
+        blocks: cards
+      };
+    }
+    const status = String(receipt.status ?? '');
+    const added = Number(receipt.added) || 0;
+    if (status === 'empty') {
+      // 空就是空：说清扫过、没有新取舍，不给空白回复，也不拿假的候选顶上。
+      return { text: '没有新的决策：当前项目的会话里没有出现新的取舍。', blocks: [] };
+    }
+    const unreadable = Number(receipt.unreadable) || 0;
+    const truncated = Number(receipt.truncated) || 0;
+    const rows = [
+      ['新增候选', `${added} 条`],
+      ['未处理', `${pending.length} 条`],
+      ['重复', `${Number(receipt.duplicates) || 0} 条`],
+      ['已拒绝', `${Number(receipt.suppressed) || 0} 条`]
+    ];
+    if (truncated > 0) rows.push(['未扫到', `${truncated} 段（超过本次上限）`]);
+    if (unreadable > 0) rows.push(['读不出来', `${unreadable} 段`]);
+    if (receipt.redactions > 0) rows.push(['脱敏', `${receipt.redactions} 处`]);
+    const partial = status === 'partial';
+    const text = partial
+      ? `扫描完成，但部分会话没读成：新增 ${added} 条候选，共 ${pending.length} 条未处理。`
+      : `扫描完成：新增 ${added} 条决策候选，共 ${pending.length} 条未处理。`;
+    return {
+      text,
+      blocks: added > 0 || pending.length > 0
+        ? [{ type: 'kv', title: '提炼决策回执', rows }, ...cards]
+        : []
+    };
   };
 
   const create = (ctx) => {
@@ -1062,6 +1147,49 @@
       }
     };
 
+    /**
+     * `/提炼决策`（#135）：显式扫描当前项目的会话，产决策候选；
+     * 没有候选、扫描失败、还有待办都各给一条明确回执，不调模型、不留后台任务。
+     * 待办与拒绝名单由主进程存进 memory-scan.json，壳只显示结果。
+     */
+    const runDecisionTurn = async (raw) => {
+      const bridge = window.companion?.memory;
+      if (typeof bridge?.scanDecisions !== 'function') {
+        ctx.ui.header.setError('这个窗口没有拿到决策扫描接口（companion.memory.scanDecisions）。');
+        return;
+      }
+      const sessionId = currentId();
+      busy = true;
+      try {
+        await store.append({ id: sessionId, role: 'user', text: raw });
+        input.value = threadApi.draftAfterSend();
+        resizeInput();
+        const projectId = ctx.ui.header.viewProjectId();
+        let result;
+        if (!projectId) {
+          // 全局模式不扫任何项目：明确说清，不拿全机会话凑候选。
+          result = { mode: 'no-project' };
+        } else {
+          try {
+            result = await bridge.scanDecisions({ projectId });
+          } catch (error) {
+            result = { mode: 'failed', reason: error?.message || '扫描请求失败' };
+          }
+        }
+        const reply = decisionReply(result);
+        await store.append({
+          id: sessionId,
+          role: 'assistant',
+          text: reply.text,
+          blocks: Array.isArray(reply.blocks) ? reply.blocks : []
+        });
+        await ctx.refreshThread();
+        input.focus();
+      } finally {
+        busy = false;
+      }
+    };
+
     const runSetupTurn = async (raw, { appendCommand = true } = {}) => {
       if (!setupProbes()) {
         ctx.ui.header.setError('探测模块还没加载好，稍等一下再试。');
@@ -1349,6 +1477,12 @@
         input.focus();
         return;
       }
+      // /提炼决策：只扫当前项目的会话，产决策候选并留在待办（不调模型）。
+      const decisionScan = /^\/提炼决策$/u.exec(raw.trim());
+      if (decisionScan) {
+        await runDecisionTurn(raw);
+        return;
+      }
       // /提炼经验：显式蒸馏当前项目里未提炼的执行记录（会调用模型）。
       const distill = /^\/提炼经验(?:\s+(\d{1,2}))?$/u.exec(raw.trim());
       if (distill) {
@@ -1626,5 +1760,5 @@
     };
   };
 
-  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, distillReply, lessonsReply, isExactBuiltinCommand, BUILTIN_COMMANDS, skillNameOf, create };
+  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, distillReply, lessonsReply, decisionCandidateBlocks, decisionReply, isExactBuiltinCommand, BUILTIN_COMMANDS, skillNameOf, create };
 });

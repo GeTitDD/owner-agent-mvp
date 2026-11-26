@@ -61,7 +61,7 @@ test('不是对象、缺类型、类型大小写：都落到可读的降级文�
   assert.equal(model.blocks[3].type, 'kpi', '类型大小写不该决定认不认识');
 });
 
-test('审核卡：kind 只认 lesson / candidate，行与动作都有上限且不吞空动作', () => {
+test('审核卡：kind 认 lesson / candidate / decision，行与动作都有上限且不吞空动作', () => {
   const lesson = blocks.normalizeBlock({
     type: 'review',
     lessonId: 'l1',
@@ -83,6 +83,21 @@ test('审核卡：kind 只认 lesson / candidate，行与动作都有上限且�
   assert.equal(candidate.kind, 'candidate');
   assert.equal(candidate.rows.length, 8);
   assert.equal(candidate.actions.length, 3);
+
+  // #135：决策候选与经验候选是不同的 kind，项目与指纹要带到渲染层。
+  const decision = blocks.normalizeBlock({
+    type: 'review',
+    kind: 'decision',
+    projectId: 'alpha',
+    fingerprint: 'fp-1',
+    missingReason: true,
+    rows: [['现象', '换 esbuild']],
+    actions: [{ id: 'accept', label: '接受' }, { id: 'reject', label: '拒绝' }]
+  });
+  assert.equal(decision.kind, 'decision');
+  assert.equal(decision.projectId, 'alpha');
+  assert.equal(decision.fingerprint, 'fp-1');
+  assert.equal(decision.missingReason, true);
 
   // 缺标题时给一个能读的默认值，不出现空标题。
   const bare = blocks.normalizeBlock({ type: 'review' });

@@ -274,6 +274,9 @@
   const normalizeAsk = (data) => {
     const free = isObject(data.free) ? data.free : {};
     const skip = isObject(data.skip) ? data.skip : {};
+    const decision = isObject(data.decision)
+      ? { projectId: str(data.decision.projectId), fingerprint: str(data.decision.fingerprint) }
+      : null;
     return {
       type: 'ask',
       // 问题缺了就补一句占位：提问块没有问题时仍然要能看懂、能点。
@@ -288,30 +291,42 @@
       skip: {
         label: str(skip.label) || '跳过，按你的判断来',
         note: str(skip.note) || '跳过之后，结论会标成「推断」，不算已验证。'
-      }
+      },
+      // #135：缺理由的决策候选点「接受」后追问一句；带上项目与指纹，
+      // 回答时由主进程按待办记录确认，回答本身不直接写库。
+      decision: decision?.projectId && decision?.fingerprint ? decision : null
     };
   };
 
   /**
-   * 经验 / 候选的审核卡（#2）：只画行与动作，判定交给调用方。
-   * kind=lesson 时动作是「提升为候选」；kind=candidate 时是「接受 / 拒绝」。
+   * 经验 / 候选 / 决策候选的审核卡：只画行与动作，判定交给调用方。
+   * kind=lesson 时动作是「提升为候选」；kind=candidate 时是「接受 / 拒绝」；
+   * kind=decision（#135）是会话扫描出的决策候选，动作是「接受 / 拒绝」，
+   * 并带上项目与指纹，好让主进程按待办里的记录确认，不信任渲染层传的字段。
    */
-  const normalizeReview = (data) => ({
-    type: 'review',
-    kind: data.kind === 'candidate' ? 'candidate' : 'lesson',
-    title: str(data.title) || (data.kind === 'candidate' ? '待审核候选' : '经验'),
-    rows: list(data.rows)
-      .map((row) => list(row).map(str).filter(Boolean))
-      .filter((row) => row.length > 0)
-      .slice(0, 8),
-    actions: list(data.actions)
-      .map((action) => ({ id: str(action?.id), label: str(action?.label) }))
-      .filter((action) => action.id && action.label)
-      .slice(0, 3),
-    lessonId: str(data.lessonId),
-    proposalId: str(data.proposalId),
-    note: str(data.note)
-  });
+  const normalizeReview = (data) => {
+    const kind = data.kind === 'candidate' || data.kind === 'decision' ? data.kind : 'lesson';
+    return {
+      type: 'review',
+      kind,
+      title: str(data.title) || (kind === 'candidate' ? '待审核候选' : (kind === 'decision' ? '待确认决策' : '经验')),
+      rows: list(data.rows)
+        .map((row) => list(row).map(str).filter(Boolean))
+        .filter((row) => row.length > 0)
+        .slice(0, 8),
+      actions: list(data.actions)
+        .map((action) => ({ id: str(action?.id), label: str(action?.label) }))
+        .filter((action) => action.id && action.label)
+        .slice(0, 3),
+      lessonId: str(data.lessonId),
+      proposalId: str(data.proposalId),
+      // 决策候选：项目 + 指纹是回主进程找待办记录的键；缺理由单独带出去，界面要显式标注。
+      projectId: str(data.projectId),
+      fingerprint: str(data.fingerprint),
+      missingReason: data.missingReason === true,
+      note: str(data.note)
+    };
+  };
 
   /** 写入确认卡（#113）：等级、三轴、逐条路径、可折叠判据、四个动作。
    * 结构归一化交给 risk-card.cjs：它会把缺等级 / 缺轴 / 空判据的存储数据降为高风险，

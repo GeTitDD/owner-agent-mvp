@@ -322,6 +322,9 @@
   const renderAsk = (model) => {
     const node = blockNode(model);
     node.dataset.askQuestion = model.question;
+    // #135：缺理由的决策追问带着待办键，回答时据此确认；普通提问块没有这两个字段。
+    if (model.decision?.projectId) node.dataset.decisionProjectId = model.decision.projectId;
+    if (model.decision?.fingerprint) node.dataset.decisionFingerprint = model.decision.fingerprint;
     node.append(headNode(model.question, model.answered ? '已记录' : '待你确认', 'block-badge-ask'));
     if (model.why) node.append(el('p', 'block-sub', model.why));
     if (model.tried.length > 0) {
@@ -644,11 +647,17 @@
     node.dataset.reviewKind = model.kind;
     if (model.lessonId) node.dataset.lessonId = model.lessonId;
     if (model.proposalId) node.dataset.proposalId = model.proposalId;
+    // #135 决策候选：项目 + 指纹是回到主进程待办的键；缺理由直接标出来。
+    if (model.projectId) node.dataset.projectId = model.projectId;
+    if (model.fingerprint) node.dataset.fingerprint = model.fingerprint;
+    if (model.missingReason) node.dataset.missingReason = '1';
 
+    const kindLabel = model.kind === 'candidate'
+      ? '待审核'
+      : (model.kind === 'decision' ? '决策候选' : '经验');
     const head = el('div', 'block-head');
     head.append(el('h4', '', model.title));
-    head.append(el('span', `review-kind kind-${model.kind}`,
-      model.kind === 'candidate' ? '待审核' : '经验'));
+    head.append(el('span', `review-kind kind-${model.kind}`, kindLabel));
     node.append(head);
 
     if (model.rows.length) {

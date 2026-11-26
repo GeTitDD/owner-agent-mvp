@@ -451,6 +451,54 @@
       const target = messages[messageIndex];
       // 同一个提问块只回答一次：旧节点若被重复点到，不再追加第二轮。
       if (!target || target.answers?.[blockIndex] !== undefined) return;
+      // #135：缺理由的决策追问。跳过 = 仍缺理由；自由回答 = 补一句再确认。
+      // 走主进程的 acceptDecision：按待办记录写库，不把候选字段放在消息里。
+      const decisionProjectId = askNode.dataset.decisionProjectId ?? '';
+      const decisionFingerprint = askNode.dataset.decisionFingerprint ?? '';
+      if (decisionProjectId && decisionFingerprint) {
+        const memory = window.companion?.memory;
+        if (typeof memory?.acceptDecision !== 'function') {
+          notify('决策接口还没加载好，稍等一下再试。', 'error');
+          return;
+        }
+        const skipped = button.dataset.askSkip !== undefined;
+        const submitted = button.dataset.askFreeSubmit !== undefined;
+        if (!skipped && !submitted) return;
+        const reason = submitted
+          ? String(askNode.querySelector('[data-ask-free]')?.value ?? '').trim()
+          : '';
+        // 自由回答为空：不改流，也不假装收到。
+        if (submitted && !reason) return;
+        const result = await memory.acceptDecision({
+          projectId: decisionProjectId,
+          fingerprint: decisionFingerprint,
+          reason
+        });
+        const answerLabel = result?.ok
+          ? (result.missingReason ? '接受（缺理由）' : '接受')
+          : (skipped ? '跳过失败' : '接受失败');
+        const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, answerLabel);
+        const answers = answered[messageIndex]?.answers ?? {};
+        if (Number.isInteger(target.seq)) {
+          await store.answers({ id: currentId(), seq: target.seq, answers });
+        }
+        await store.append({
+          id: currentId(),
+          role: 'user',
+          text: skipped ? '跳过理由，保持缺理由' : reason
+        });
+        await store.append({
+          id: currentId(),
+          role: 'assistant',
+          text: result?.ok
+            ? `已接受这条决策${reason ? `，理由：${reason}` : '，理由保持「缺理由」'}。${result.created ? '写入一条决策' : '库里已有同一指纹的决策，没有重复写'}，来源可回查。`
+            : `没接受成：${result?.reason || '原因未知'}。待办还在，可以稍后再试。`,
+          blocks: []
+        });
+        await ctx.refreshThread();
+        ctx.ui.compose.focus();
+        return;
+      }
       let action = null;
       if (button.dataset.askChoice !== undefined) {
         action = blocksApi.askAction({ question, kind: 'option', value: button.dataset.askChoice });
@@ -624,6 +672,60 @@
               : `已拒绝：${card.title}。只留记录，没有写入知识库。`,
             blocks: []
           };
+        }
+      } else if (card.kind === 'decision' && (action === 'accept' || action === 'reject')) {
+        // #135：决策候选走主进程的待办——接受才写库，拒绝只记指纹。
+        // 主进程按项目 + 指纹找记录，不信任渲染层带来的候选字段。
+        const memory = window.companion?.memory;
+        const projectId = cardNode.dataset.projectId || card.projectId || '';
+        const fingerprint = cardNode.dataset.fingerprint || card.fingerprint || '';
+        if (action === 'reject') {
+          if (typeof memory?.rejectDecision !== 'function') {
+            notify('决策接口还没加载好，稍等一下再试。', 'error');
+            return;
+          }
+          const result = await memory.rejectDecision({ projectId, fingerprint });
+          if (!result?.ok) {
+            answerLabel = '拒绝失败';
+            reply = { text: `没拒绝成：${result?.reason || '原因未知'}`, blocks: [] };
+          } else {
+            answerLabel = '拒绝';
+            reply = {
+              text: `已拒绝：${card.title}。只记了指纹，同一个内容以后不再提。`,
+              blocks: []
+            };
+          }
+        } else if (cardNode.dataset.missingReason === '1' || card.missingReason === true) {
+          // 缺理由：先问一句，可跳过；跳过仍保持「缺理由」，不编占位词。
+          answerLabel = '接受 · 待补理由';
+          reply = {
+            text: '这条决策缺理由：补一句为什么这样选，也可以跳过；跳过就保持「缺理由」。',
+            blocks: [{
+              type: 'ask',
+              question: '这条决策的理由',
+              why: String(card.title ?? ''),
+              free: { label: '写一句理由', placeholder: '例如：反馈速度比包体积更重要' },
+              skip: { label: '跳过，保持「缺理由」', note: '跳过不会编理由：决策仍会写库，但明确标成缺理由。' },
+              decision: { projectId, fingerprint }
+            }]
+          };
+        } else {
+          if (typeof memory?.acceptDecision !== 'function') {
+            notify('决策接口还没加载好，稍等一下再试。', 'error');
+            return;
+          }
+          const result = await memory.acceptDecision({ projectId, fingerprint });
+          if (!result?.ok) {
+            answerLabel = '接受失败';
+            reply = { text: `没接受成：${result?.reason || '原因未知'}`, blocks: [] };
+          } else {
+            answerLabel = '接受';
+            const trace = [result.source, result.sessionId].filter(Boolean).join(' · ');
+            reply = {
+              text: `已接受：${card.title}。${result.created ? '写入一条决策' : '这条决策已经在库里，没有重复写'}${trace ? `（来源 ${trace}）` : ''}，可回查。${result.missingReason ? ' 这条仍标为「缺理由」。' : ''}`,
+              blocks: []
+            };
+          }
         }
       } else {
         return;
