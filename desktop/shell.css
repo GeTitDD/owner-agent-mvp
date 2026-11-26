@@ -2244,3 +2244,256 @@ button.session-name { cursor: pointer; }
   font-size: 11.5px;
   overflow-wrap: anywhere;
 }
+
+/* ── #127 配置箱：顶栏一个齿轮 + 全窗口覆盖层（七个分区一个滚动容器） ── */
+.config-entry {
+  display: inline-flex;
+  flex: none;
+}
+
+.config-entry-btn {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.config-entry-btn:hover,
+.config-entry-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.config-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 8px;
+  background: rgba(20, 20, 20, 0.32);
+}
+
+.config {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  max-height: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.config-head {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.config-title { font-size: 13px; }
+.config-sub {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.config-close {
+  flex: none;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.config-close:hover { color: var(--text); }
+
+/* 唯一的滚动容器：七个分区都在里面，上半 / 下半靠它滚。 */
+.config-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 12px 10px;
+}
+
+.config-body::-webkit-scrollbar { width: 8px; }
+.config-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.cfg-group {
+  padding: 8px 0 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.cfg-group:last-child { border-bottom: 0; }
+
+.cfg-group-title {
+  margin: 0 0 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.cfg-group-hint {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: normal;
+}
+
+/* 一行：标签 | 值 | 来源；后果另起一行挂在值下面。 */
+.cfg-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 4px 0;
+}
+
+.cfg-label {
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.cfg-field {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.cfg-input {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.cfg-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.cfg-value {
+  min-width: 0;
+  color: var(--text);
+  font-size: 10.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.cfg-state {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  line-height: 1.6;
+}
+
+.cfg-state[data-state="present"] { background: var(--ok-soft); color: var(--ok); }
+.cfg-state[data-state="missing"] { background: var(--warn-soft); color: var(--warn); }
+
+.cfg-origin {
+  flex: none;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+/* 来源标注：探测是灰的，手改给一点底，扫一眼能分开。 */
+.cfg-source {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.6;
+}
+
+.cfg-source[data-source="manual"] {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.cfg-effect {
+  grid-column: 2 / 4;
+  margin: 0;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.config-status {
+  flex: none;
+  margin: 0;
+  padding: 6px 12px 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: normal;
+}
+
+.config-status[data-tone="ok"] { color: var(--ok); }
+.config-status[data-tone="error"] { color: var(--danger); }
+
+.config-foot {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.config-note {
+  flex: 1 1 120px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.config-btn {
+  flex: none;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.config-btn:hover { border-color: var(--accent); }
+.config-btn.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
+.config-btn:disabled { opacity: 0.6; cursor: default; }

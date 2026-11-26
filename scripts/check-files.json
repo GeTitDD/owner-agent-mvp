@@ -229,5 +229,10 @@
   "tests/project-write.test.mjs",
   "scripts/e2e/desktop-project-write.mjs",
   "src/memory/sync-run.mjs",
-  "tests/sync-run.test.mjs"
+  "tests/sync-run.test.mjs",
+  "src/config-box.mjs",
+  "desktop/config-box-host.mjs",
+  "desktop/shell-config.cjs",
+  "tests/config-box.test.mjs",
+  "scripts/e2e/desktop-config-box.mjs"
 ]

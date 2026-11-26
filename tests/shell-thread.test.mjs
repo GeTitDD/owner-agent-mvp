@@ -95,17 +95,25 @@ test('新壳引用的是自己那份实现，没有拉旧面板进来', () => {
   assert.doesNotMatch(js, /modeBar|opsZone|handoffProjectId/);
 });
 
-test('顶栏只放开两个入口：#106 的会话与 #107 的项目，其余三位仍是状态位', () => {
+test('顶栏只放开三个入口：#106 的会话、#107 的项目、#127 的配置，其余三位仍是状态位', () => {
   const html = read('desktop/shell.html');
   for (const slot of ['session', 'project', 'write', 'monitor', 'export']) {
     assert.match(html, new RegExp(`data-slot="${slot}"`), `缺顶栏状态位：${slot}`);
   }
   const header = html.slice(html.indexOf('id="shellHeader"'), html.indexOf('</header>'));
-  assert.equal((header.match(/class="capsule"/gu) ?? []).length, 2, '顶栏只有会话与项目两个入口');
-  // 两个入口之外（胶囊与它们自己的浮层）不再有按钮、输入框或链接：顶栏不是第二个菜单。
+  assert.equal((header.match(/class="capsule"/gu) ?? []).length, 2, '顶栏只有会话与项目两个胶囊');
+  // 两个胶囊入口之外（胶囊与它们自己的浮层）只允许 #127 的齿轮：它打开的是全窗口覆盖层，
+  // 不是第二套菜单；除它之外不再有按钮、输入框或链接。
   const entriesStart = header.indexOf('<div class="session-entry">');
   const entriesEnd = header.indexOf('<span class="slot" data-slot="write">');
   assert.ok(entriesStart > 0 && entriesEnd > entriesStart, '入口与状态位的顺序变了');
   const outsideEntries = header.slice(0, entriesStart) + header.slice(entriesEnd);
-  assert.doesNotMatch(outsideEntries, /<button|<select|<input|<a /u, '顶栏入口之外不放操作');
+  const configEntry = /<span class="config-entry">[\s\S]*?<\/span>/u.exec(outsideEntries);
+  assert.ok(configEntry, '缺少配置入口（#127 的齿轮）');
+  assert.equal((outsideEntries.match(/<span class="config-entry">/gu) ?? []).length, 1, '配置入口只能有一个');
+  assert.match(configEntry[0], /<button[^>]*id="configToggle"/u, '配置入口应是一个按钮');
+  // 配置箱本体挂在顶栏之外（全窗口覆盖层），别塞进 header。
+  assert.doesNotMatch(header, /id="configBox"/u, '配置箱不应塞进顶栏');
+  const withoutConfig = outsideEntries.replace(configEntry[0], '');
+  assert.doesNotMatch(withoutConfig, /<button|<select|<input|<a /u, '顶栏入口之外只放这一个齿轮');
 });
