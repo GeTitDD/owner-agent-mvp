@@ -410,6 +410,15 @@ test('forwardChatEvent 只转正文 / 思考 / 工具三类事件', () => {
   ]);
 });
 
+test('parseSkillCommand：允许带斜杠的技能 id（matt:分类/技能），问题不能为空', () => {
+  assert.deepEqual(parseSkillCommand('/skill:matt:engineering/ask-matt 帮我选技能'), {
+    id: 'matt:engineering/ask-matt',
+    question: '帮我选技能'
+  });
+  assert.equal(parseSkillCommand('/skill:matt:engineering/ask-matt'), null);
+  assert.equal(parseSkillCommand('/skill:how'), null);
+});
+
 test('askStream：turn-start → delta* → turn-done，done 的正文是权威全文', async () => {
   const events = [];
   const adapter = makeAdapter({ answer: '收到。' });

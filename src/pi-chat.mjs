@@ -50,7 +50,7 @@ export const MAX_IMPLICIT_SKILLS = 12;
 /** 解析 `/skill:id 问题`；不是这个形状返回 null。 */
 export function parseSkillCommand(question) {
   const text = String(question ?? '').trim();
-  const match = /^\/skill:([a-zA-Z0-9._:-]{1,80})\s+([\s\S]+)$/u.exec(text);
+  const match = /^\/skill:([^\s]{1,160})\s+([\s\S]+)$/u.exec(text);
   if (!match) return null;
   return { id: match[1], question: match[2].trim() };
 }

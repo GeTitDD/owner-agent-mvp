@@ -172,6 +172,7 @@ const openSlash = async (panel) => {
 };
 
 const firstQuickId = (model) => model.quick[0]?.id ?? '';
+const inputValue = (panel) => panel.evaluate("document.getElementById('input').value");
 
 const run = async () => {
   fs.mkdirSync(tempBase, { recursive: true });
@@ -186,7 +187,9 @@ const run = async () => {
     knowledgeDb: path.join(root, 'knowledge.sqlite'),
     env: {
       PSTACK_DIR: fixture.pstackRoot,
-      MATT_SKILLS_DIR: fixture.mattRoot
+      MATT_SKILLS_DIR: fixture.mattRoot,
+      // 技能点击不再发送脚本卡片；未知命令会被当普通消息发给模型，验收用假回答。
+      OWNER_AGENT_CHAT_FAKE: '1'
     },
     showPanel: true,
     page: 'shell.html'
@@ -304,24 +307,21 @@ const run = async () => {
       && model.empty.includes('definitely-no-such-skill'),
       model.empty);
 
-    // ④ 点技能行 = 调用技能；流里留下记录与结果卡。
+    // ④ 点技能行 = 把「/技能id 」放进输入框，不发送、不落库。
     await typeInput(panel, '/matt-plan');
     await waitFor(panel, "Boolean(document.querySelector('.slash-item[data-skill-row*=\"matt-plan\"]'))", 5000);
     model = await readPanel(panel);
     const mattId = model.rows.find((row) => row.id.includes('matt-plan'))?.id ?? '';
     check('the matt fixture is found by search', Boolean(mattId), mattId);
-    check('clicking a skill row invokes it',
+    check('clicking a skill row is accepted',
       await click(panel, `.slash-item[data-skill-row=${JSON.stringify(mattId)}]`));
     await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000);
-    await waitFor(panel, "document.querySelectorAll('#messages .msg').length === 2", 8000);
-    let thread = await readThread(panel);
-    check('skill invocation leaves a visible record',
-      thread.texts[0] === `调用技能 /${mattId}`, thread.texts[0]);
-    check('skill invocation leaves a result card',
-      thread.kv.length === 1 && thread.kv[0].includes(`/${mattId}`) && thread.kv[0].includes('matt'),
-      thread.kv.join(' | '));
+    check('clicking a skill only fills the composer',
+      (await inputValue(panel)) === `/${mattId} `, await inputValue(panel));
+    check('clicking a skill does not send a scripted card',
+      (await readThread(panel)).count === 0, String((await readThread(panel)).count));
 
-    // ⑤ 键盘：↑↓ 选、Enter 调数字行；数字行记「命令」。
+    // ⑤ 键盘：↑↓ 选、Enter 把数字行填进输入框（同样不发送）。
     check('reopening / shows the panel again', await openSlash(panel));
     model = await readPanel(panel);
     const secondQuickId = model.quick[1]?.id ?? 'alpha-01';
@@ -330,14 +330,12 @@ const run = async () => {
     for (let step = 0; step < model.builtin.length; step += 1) {
       await pressKey(panel, 'ArrowDown');
     }
-    check('Enter invokes the selected quick row', await pressKey(panel, 'Enter'));
-    await waitFor(panel, "document.querySelectorAll('#messages .msg').length === 4", 8000);
-    thread = await readThread(panel);
-    check('the numeric row records the command and its number',
-      thread.texts[2] === `命令 2 · /${secondQuickId}`, thread.texts[2]);
-    check('the numeric row also leaves a result card', thread.kv.length === 2);
-    check('Enter did not send the raw "/" as a chat message',
-      !thread.texts.includes('/'), JSON.stringify(thread.texts));
+    check('Enter is handled by the panel', await pressKey(panel, 'Enter'));
+    await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000);
+    check('the numeric row fills the composer with its command',
+      (await inputValue(panel)) === `/${secondQuickId} `, await inputValue(panel));
+    check('the numeric row does not send anything',
+      (await readThread(panel)).count === 0, String((await readThread(panel)).count));
 
     // ⑥ 改数字：先造冲突，再消解；改完按新数字能调用。
     check('reopening / for aliasing', await openSlash(panel));
@@ -384,30 +382,31 @@ const run = async () => {
     check('the new number filters to its skill',
       model.rows.length === 1 && model.rows[0].id === idA && model.rows[0].number === '2',
       JSON.stringify(model.rows));
-    check('clicking the renumbered row invokes it',
+    check('clicking the renumbered row is accepted',
       await click(panel, `.slash-item[data-skill-row="${idA}"]`));
-    await waitFor(panel, "document.querySelectorAll('#messages .msg').length === 6", 8000);
-    thread = await readThread(panel);
-    check('the record uses the new number', thread.texts[4] === `命令 2 · /${idA}`, thread.texts[4]);
+    await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000);
+    check('the renumbered row fills the composer with its command',
+      (await inputValue(panel)) === `/${idA} `, await inputValue(panel));
 
-    // ⑦ 刷新：数字别名仍在（localStorage 持久化 + 合并），调用照旧。
+    // ⑦ 刷新：数字别名仍在（localStorage 持久化 + 合并）。
     await panel.send('Page.reload');
     check('shell reloads', await waitFor(panel, "document.querySelector('#shellHeader')", 30000));
     check('the session still exists after reload',
       await waitFor(panel, "document.getElementById('input').disabled === false", 15000));
-    // #121 壳拆成四个脚本后，「input 可写」会比事件绑定早一步成立：
-    // 不等壳把历史画完就敲 `/`，这一下可能落在绑定之前（旧壳同样有这个窗口，只是单脚本更短）。
-    // 只加等待，不改任何断言。
+    // 顶栏把会话选出来之后面板才会稳定：太早敲 `/` 会被随后的 syncComposer 关掉。
+    check('the session is selected after reload',
+      await waitFor(panel,
+        "document.getElementById('sessionLabel').textContent.trim() !== '还没有会话'", 15000));
     await waitFor(panel,
-      "document.querySelectorAll('#messages .msg').length === 6", 15000);
+      "document.querySelectorAll('#messages .msg').length === 0", 15000);
     check('the panel opens after reload', await openSlash(panel));
     model = await readPanel(panel);
     check('custom numbers survive a reload',
       model.quick.find((row) => row.id === idA)?.number === '2'
       && model.quick.find((row) => row.id === idB)?.number === '1',
       model.quick.slice(0, 2).map((row) => `${row.number}:${row.id}`).join(' '));
-    check('history is still in the thread after reload',
-      (await readThread(panel)).count === 6, String((await readThread(panel)).count));
+    check('skill clicks never wrote history',
+      (await readThread(panel)).count === 0, String((await readThread(panel)).count));
 
     // ⑧ #132 回归：没有匹配项时 Enter 不能吞键——关面板，并把这条照常发出去。
     await typeInput(panel, '/definitely-no-such-skill');
@@ -416,9 +415,9 @@ const run = async () => {
     check('no match + Enter closes the panel',
       await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000));
     check('no match + Enter sends the draft as a normal message',
-      await waitFor(panel, "document.querySelectorAll('#messages .msg').length === 8", 8000),
+      await waitFor(panel, "document.querySelectorAll('#messages .msg').length === 2", 8000),
       String((await readThread(panel)).count));
-    thread = await readThread(panel);
+    const thread = await readThread(panel);
     check('the sent draft keeps its raw text',
       thread.texts.includes('/definitely-no-such-skill'), JSON.stringify(thread.texts));
 

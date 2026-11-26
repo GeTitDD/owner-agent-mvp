@@ -620,34 +620,41 @@
     };
 
     /**
-     * 点一行 / 按 Enter：数字行是「命令」，技能行是「调用技能」，
-     * 两条都按普通消息落库，所以切走再回来记录与结果卡都还在。
+     * 点一行技能：只把「/技能id 」放进输入框，不发送、不落库。
+     * 技能是给人接着写问题的前缀；真正的调用由 send() 转成 /skill:<id> <问题> 交给模型。
      */
-    const invokeSkill = (id, kind) => report('调用技能', async () => {
-      const skill = skillRows.find((item) => item.id === id);
-      if (!skill || !listApi.canCompose(currentId())) return;
-      const model = aliasModel();
-      const slot = model.slots.find((item) => item.id === id);
-      const number = kind === 'command' ? (slot?.number ?? null) : null;
-      const record = skillsApi.invocationFor(skill, { kind, number });
-      await store.append({ id: currentId(), role: 'user', text: record.userText });
-      await store.append({
-        id: currentId(),
-        role: 'assistant',
-        text: record.reply.text,
-        blocks: Array.isArray(record.reply.blocks) ? record.reply.blocks : []
-      });
-      input.value = threadApi.draftAfterSend();
-      resizeInput();
+    const composeSkill = (id) => {
+      if (!listApi.canCompose(currentId())) return;
       setSlashOpen(false);
-      await ctx.refreshThread();
+      input.value = `/${id} `;
+      resizeInput();
       input.focus();
-    });
+      try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* 忽略 */ }
+    };
+
+    /** 面板里的技能 id 带来源前缀（pstack: / matt:分类/ / domain:…），pi-chat 只认目录名。 */
+    const chatSkillIdOf = (id) => String(id ?? '').split(/[:/]/u).filter(Boolean).pop() ?? '';
+
+    /** 输入框里是不是「/某个已扫描技能 + 问题」；最长匹配，避免前缀互吃。 */
+    const skillCommandOf = (raw) => {
+      const text = String(raw ?? '').trim();
+      if (!text.startsWith('/')) return null;
+      const id = skillRows
+        .map((skill) => skill.id)
+        .filter((candidate) => text === `/${candidate}` || text.startsWith(`/${candidate} `))
+        .sort((a, b) => b.length - a.length)[0];
+      if (!id) return null;
+      return { id, question: text.slice(id.length + 1).trim() };
+    };
 
     const invokeSlashSelection = () => {
       const chosen = slashFlat[slashSelection];
       if (!chosen) return;
-      // 内置命令：收起面板，把整句放进输入框，走与手打完全相同的发送路径。
+      // 技能行（数字快捷与全部技能）都是「填进输入框」；内置命令才是「整句发送」。
+      if (chosen.kind === 'skill' || chosen.kind === 'command') {
+        composeSkill(chosen.id);
+        return;
+      }
       if (chosen.kind === 'builtin') {
         setSlashOpen(false);
         input.value = chosen.text;
@@ -655,7 +662,6 @@
         void send();
         return;
       }
-      void invokeSkill(chosen.id, chosen.kind);
     };
 
     /** 没有会话就锁死输入框：不给「无会话却能发消息」留半截状态。 */
@@ -975,7 +981,7 @@
      * 读不到项目文件，但能答通用问题、也能用 prompt 里的关联线索。
      * 没有模型时 pi-chat 返回 no-model，原样把原因给用户，不编答案。
      */
-    const askModel = async (raw) => {
+    const askModel = async (raw, questionForModel = raw) => {
       const bridge = window.companion?.chat;
       if (typeof bridge?.ask !== 'function') {
         return { text: '这个窗口没有拿到模型接口（companion.chat.ask）：重启客户端再试。', blocks: [] };
@@ -1001,7 +1007,7 @@
           turnId,
           sessionId: currentId(),
           projectId: ctx.ui.header.viewProjectId(),
-          question: String(raw ?? '')
+          question: String(questionForModel ?? '')
         });
         if (pendingAbort) {
           pendingAbort = false;
@@ -1071,6 +1077,16 @@
         await runProjectSyncTurn(syncCommand, raw);
         return;
       }
+      // 技能行：`/matt:xxx/yyy 问题` 交给模型时转成 /skill:<id> <问题>，
+      // 让 pi-chat 把技能正文强制带进这一轮；没有问题时把光标留在技能后面。
+      const skillCall = skillCommandOf(raw);
+      if (skillCall && !skillCall.question) {
+        ctx.notify?.('在技能后面写上要它做什么，再发送', 'warn');
+        input.value = `/${skillCall.id} `;
+        resizeInput();
+        input.focus();
+        return;
+      }
       // /setup：进配置箱的探测态；一次确认后写入，取消一项都不写。
       const setupCommand = setupProbes()?.parseCommand?.(raw) ?? null;
       if (setupCommand) {
@@ -1083,7 +1099,10 @@
         if (blocksApi.isSampleCommand(raw)) return blocksApi.sampleReply();
         if (riskApi.isRiskCommand(raw)) return await riskApi.buildRiskReply(raw);
         if (confirmCommand) return await window.OwnerConfirm.buildReply(confirmCommand);
-        return await askModel(raw);
+        return await askModel(
+          raw,
+          skillCall ? `/skill:${chatSkillIdOf(skillCall.id)} ${skillCall.question}` : raw
+        );
       };
       // #124 与 #125 都只服务这一次发送：先接「## 关联项目」段，再接会话指针段。
       const text = projectLinks()?.withLinks?.(raw) ?? raw;
@@ -1221,7 +1240,11 @@
       if (slashCustomizing) return;
       const row = event.target.closest?.('[data-skill-row]');
       if (!row) return;
-      void invokeSkill(row.dataset.skillRow, row.dataset.kind === 'command' ? 'command' : 'skill');
+      // 点行与回车选中走同一套：技能填充输入框，内置命令整句发送。
+      const index = Number(row.dataset.index);
+      if (!Number.isInteger(index) || index < 0) return;
+      slashSelection = index;
+      invokeSlashSelection();
     });
 
     // 数字输入就地生效：不重画列表，否则每敲一位就丢焦点。
