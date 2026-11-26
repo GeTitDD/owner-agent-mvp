@@ -3253,7 +3253,11 @@ const registerIpc = () => {
     }
 
     const controller = new AbortController();
-    if (turnId) chatTurns.set(turnId, controller);
+    const model = config.model || '';
+    const sessionId = String(input?.sessionId ?? '').trim();
+    if (turnId) {
+      chatTurns.set(turnId, { controller, service, project: target, model, sessionId, send });
+    }
 
     // 增量在 main 侧合并：50ms 或累计 80 字发一次，避免 token 级 IPC 洪泛。
     let pending = '';
@@ -3279,7 +3283,8 @@ const registerIpc = () => {
       return await service.askStream({
         project: target,
         question,
-        model: config.model || '',
+        model,
+        sessionId,
         signal: controller.signal,
         onEvent
       });
@@ -3293,10 +3298,28 @@ const registerIpc = () => {
   ipcMain.handle('companion:chat-abort', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const turnId = String(input?.turnId ?? '');
-    const controller = chatTurns.get(turnId);
-    if (!controller) return { aborted: false };
-    controller.abort();
+    const entry = chatTurns.get(turnId);
+    if (!entry) return { aborted: false };
+    entry.controller.abort();
     return { aborted: true };
+  });
+
+  // 引导（steer）：把一句话插进正在跑的那一轮，不中止它。
+  // 会话找不到、或这一轮已经结束，都如实返回 steered:false，让界面提示而不是假装成功。
+  ipcMain.handle('companion:chat-steer', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const turnId = String(input?.turnId ?? '');
+    const entry = chatTurns.get(turnId);
+    const text = String(input?.text ?? '').trim();
+    if (!entry || !text) return { steered: false, reason: entry ? 'empty' : 'no-active-turn' };
+    // 引导会被插进当前回答：先把已经流出来的旧文字清掉，避免两段答案粘在一起。
+    entry.send?.({ type: 'turn-reset' });
+    return entry.service.steer({
+      project: entry.project,
+      question: text,
+      model: entry.model,
+      sessionId: entry.sessionId
+    });
   });
 
   // 回答提问块：只写那一条消息的 answers（哪一块被答成了什么）。

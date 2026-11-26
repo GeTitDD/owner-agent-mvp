@@ -62,6 +62,7 @@ main → renderer    companion:chat-event { turnId, seq, ...payload }   （webCo
 | `thinking` | `text` | 思考增量：**默认折叠**，只露一行「思考中…（展开）」；done 后折叠成「思考过程 · Ns」 |
 | `tool` | `phase: start/end, name, summary` | 「读取 src/a.ts」这类活动 |
 | `turn-done` | `text, citations, missingCitations, usage, durationMs` | 正常结束，`text` 是权威全文 |
+| `turn-reset` | — | steer 插入了新引导：清空已流出的旧文字，从空开始 |
 | `turn-error` | `category, message, retryable` | 失败，`category` 见 §7 |
 | `turn-aborted` | `text` | 用户停止，`text` 是已产出的部分 |
 
@@ -133,6 +134,11 @@ error ──重试──▶ sending（沿用原问题，新 turnId）
   没有 thinking 块时不出现这一行（不能装出「它在思考」）。
 - **停止**：`send` 变 `停止`；点击 → `chat.abort` → 期望 `turn-aborted`。
   200ms 内没有收到事件也先把 UI 置为 `aborted`（本地先停视觉，服务端事件迟到就丢）。
+- **流式中再发一句**：输入框里已经有字时，`停止` 位置旁边有一个小按钮切换插入方式：
+  - `引导`（默认，steer）：把这一句插进当前回答（`streamingBehavior: 'steer'`），
+    当前一轮不中止；旧文字清空重画（`turn-reset`），最终答案以 steer 后的为准。
+  - `中止`（abort）：记下这一句，停止当前一轮；收尾落库后**自动接着发送**，不用按第二次。
+  - 会话还在创建时到达的 steer 会等会话建好（最多 5s），不会误报「没有会话」。
 - **重试**：沿用原问题，生成新 `turnId`；旧消息保留（不覆盖、不删除）。
 - **自动滚动**：仅当用户在底部 24px 内才跟随；用户上滚即停止跟随，并显示「回到底部」。
 - **代码块**：围栏未闭合时不语法高亮；闭合后（或 done 时）整体高亮一次，避免闪烁。

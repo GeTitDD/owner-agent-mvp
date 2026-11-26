@@ -712,6 +712,24 @@ button.session-name { cursor: pointer; }
 
 .send[disabled] { opacity: 0.35; cursor: not-allowed; }
 
+/* 流式中的插入方式：小一号、描边，别和「停止」抢注意力。 */
+.insert-mode {
+  flex: none;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.insert-mode:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 /* 只有读屏需要「输入消息」这个标签，视觉上不要多一行字。 */
 .sr-only {
   position: absolute;

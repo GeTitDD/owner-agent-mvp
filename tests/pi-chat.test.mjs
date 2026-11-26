@@ -455,6 +455,46 @@ test('askStream：中止时保留已产出的部分，事件是 turn-aborted', a
   assert.equal(events.some((event) => event.type === 'turn-error'), false, '中止不能报成失败');
 });
 
+test('steer：插进正在跑的那一轮，不中止；空闲会话如实拒绝', async () => {
+  const project = makeProject();
+  const adapter = makeAdapter({ hang: true });
+  const calls = [];
+  adapter.prompt = async (value, options) => {
+    calls.push({ value, options });
+    if (options?.streamingBehavior) return undefined;
+    return new Promise(() => {});
+  };
+  const { service } = fakeService(adapter, { timeoutMs: 5000 });
+  const controller = new AbortController();
+  const pending = service.askStream({
+    project,
+    question: '长任务',
+    model: 'fake/model',
+    sessionId: 'sess-1',
+    signal: controller.signal,
+    onEvent: () => {}
+  });
+  // 等 run() 建好会话、把 busy 置上。
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const ok = await service.steer({
+    project, question: '改成一句话', model: 'fake/model', sessionId: 'sess-1'
+  });
+  assert.deepEqual(ok, { steered: true });
+  const guided = calls.find((call) => call.options?.streamingBehavior === 'steer');
+  assert.ok(guided, '必须带 streamingBehavior=steer');
+  assert.equal(guided.value, '改成一句话');
+
+  // 换了会话 id 就找不到那条会话：不假装插入成功。
+  const missing = await service.steer({
+    project, question: '插到别处', model: 'fake/model', sessionId: 'sess-2'
+  });
+  assert.deepEqual(missing, { steered: false, reason: 'no-session' });
+
+  controller.abort();
+  await pending;
+});
+
 test('askStream：空闲超时是 turn-error，分类为 timeout', async () => {
   const events = [];
   const adapter = makeAdapter({ hang: true });

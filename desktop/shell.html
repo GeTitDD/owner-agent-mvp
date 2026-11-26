@@ -110,6 +110,9 @@
     <form class="composer" id="composer" autocomplete="off">
       <label class="sr-only" for="input">输入消息</label>
       <textarea id="input" rows="1" placeholder="说点什么。回车发送，Shift+回车换行"></textarea>
+      <!-- 流式中再发一句：引导（插进当前回答）或中止（先停再发）。只在有回答在跑时出现。 -->
+      <button type="button" class="insert-mode" id="insertMode" hidden
+              title="流式中发送：把这一句插进当前回答（steer）">引导</button>
       <button type="submit" class="send" id="send" disabled>发送</button>
     </form>
 

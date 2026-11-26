@@ -245,6 +245,8 @@
     const form = $('composer');
     const input = $('input');
     const sendButton = $('send');
+    // 流式中的插入方式开关（引导 / 中止）；只在有回答在跑时出现。
+    const insertButton = $('insertMode');
     // #108 技能面板的节点：面板本身、两段共用的滚动区、页脚提示与冲突提示。
     const slashPanel = $('skillPanel');
     const slashList = $('skillList');
@@ -278,6 +280,9 @@
     let busy = false;
     // 进行中的一轮：停止按钮按它来中止，不猜「当前那一轮」。
     let activeTurn = null;
+    // 流式中再发一句的两种方式：steer 插入当前回答 / abort 先停再发。
+    let insertMode = 'steer';
+    let pendingResend = null;
 
     /** 本地只存覆盖项；读失败就当没改过，不阻塞面板。 */
     const readAliases = () => {
@@ -909,7 +914,53 @@
     const setStreamingUi = (on) => {
       sendButton.textContent = on ? '停止' : '发送';
       input.readOnly = on;
+      if (insertButton) {
+        insertButton.hidden = !on;
+        if (on) renderInsertMode();
+      }
       if (!on) sendButton.disabled = !threadApi.canSend(input.value);
+    };
+
+    /** 插入方式的按钮文案：只显示当前会用哪一种，点一下切换。 */
+    const renderInsertMode = () => {
+      if (!insertButton) return;
+      insertButton.textContent = insertMode === 'steer' ? '引导' : '中止';
+      insertButton.title = insertMode === 'steer'
+        ? '流式中发送：把这一句插进当前回答（steer）'
+        : '流式中发送：先停止当前回答，再把这一句发出去';
+    };
+
+    /**
+     * 流式中再发一句。
+     * - steer：落库这句话、插进当前对话流，然后让运行中的会话把它当引导（streamingBehavior=steer），
+     *          当前那一轮不中止；
+     * - abort：记下这句当作待发，停止当前一轮；停止收尾后自动接着发。
+     */
+    const insertWhileStreaming = async (text) => {
+      const turn = activeTurn;
+      if (!turn) return;
+      if (insertMode === 'abort') {
+        pendingResend = text;
+        input.value = '';
+        resizeInput();
+        turn.stop();
+        return;
+      }
+      const bridge = window.companion?.chat;
+      input.value = '';
+      resizeInput();
+      const sessionId = currentId();
+      // 这句是这一轮的一部分：先落库，再插进流里（不重绘，否则临时气泡会被删掉）。
+      await store.append({ id: sessionId, role: 'user', text });
+      ctx.ui.stream.appendSteerMessage?.(text);
+      const result = typeof bridge?.steer === 'function'
+        ? await bridge.steer(turn.turnId, text)
+        : { steered: false, reason: 'unsupported' };
+      if (!result?.steered) {
+        ctx.notify?.(result?.reason === 'no-active-turn'
+          ? '没有插进去：这一轮刚结束，可以直接发送。'
+          : '没有插进去：当前回答已结束或模型不支持引导。', 'warn');
+      }
     };
 
     /**
@@ -933,6 +984,7 @@
           if (event.type === 'delta') stream.appendText(event.text);
           else if (event.type === 'thinking') stream.appendThinking(event.text);
           else if (event.type === 'tool') stream.appendTool(event);
+          else if (event.type === 'turn-reset') stream.resetStreamText();
         })
         : () => {};
       activeTurn = { turnId, stop: () => { void bridge.abort?.(turnId); } };
@@ -940,6 +992,7 @@
       try {
         const result = await bridge.ask({
           turnId,
+          sessionId: currentId(),
           projectId: ctx.ui.header.viewProjectId(),
           question: String(raw ?? '')
         });
@@ -968,6 +1021,16 @@
     };
 
     const send = () => report('发送', async () => {
+      // 流式中：有字就按当前插入方式处理，没字就是「停止」。
+      if (activeTurn) {
+        const draft = input.value.trim();
+        if (!draft) {
+          activeTurn.stop();
+          return;
+        }
+        await insertWhileStreaming(draft);
+        return;
+      }
       if (busy || !listApi.canCompose(currentId())) return;
       // 会话在发起时固定：流式跑着时切走会话，回答也要落在它自己的会话里。
       const sessionId = currentId();
@@ -1012,6 +1075,9 @@
       busy = true;
       try {
         await store.append({ id: sessionId, role: 'user', text: sentText });
+        // 输入框立刻清空：模型要跑一阵，不能让旧文字留在框里让人以为没发出去。
+        input.value = threadApi.draftAfterSend();
+        resizeInput();
         // 正文已经落库，胶囊与指针完成使命：清空；发送失败则保留，下一次还能再试。
         projectLinks()?.clear?.();
         sessionPoints?.consume?.();
@@ -1024,12 +1090,18 @@
           text: reply.text ?? '',
           blocks: Array.isArray(reply.blocks) ? reply.blocks : []
         });
-        input.value = threadApi.draftAfterSend();
-        resizeInput();
         await ctx.refreshThread();
         input.focus();
       } finally {
         busy = false;
+        // abort 插入：停止后把等着的这句接上去，用户不用再按一次发送。
+        if (pendingResend) {
+          const next = pendingResend;
+          pendingResend = null;
+          input.value = next;
+          resizeInput();
+          void send();
+        }
       }
     });
 
@@ -1153,11 +1225,17 @@
       input.focus();
     });
 
+    insertButton?.addEventListener('click', () => {
+      insertMode = insertMode === 'steer' ? 'abort' : 'steer';
+      renderInsertMode();
+      input.focus();
+    });
+
     form.addEventListener('submit', (event) => {
       event.preventDefault();
-      // 流式中：同一个按钮就是「停止」。先中止，不把这一下当发送。
+      // 流式中：同一个按钮/回车就是「停止」或「插一句」，交给 send() 统一分派。
       if (activeTurn) {
-        activeTurn.stop();
+        void send();
         return;
       }
       if (slashOpen) {

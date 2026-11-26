@@ -386,7 +386,7 @@ export function createChatSessionFactory({ loadSdk = null, skills = null } = {})
           let disposed = false;
           return {
             sessionId: () => String(session.sessionId ?? ''),
-            prompt: (value) => session.prompt(value),
+            prompt: (value, options) => session.prompt(value, options),
             abort: () => session.abort?.(),
             // 流式：把 AgentSessionEvent 原样转给调用方；没有 subscribe 的旧版 SDK 返回空函数。
             subscribe: typeof session.subscribe === 'function'
@@ -535,6 +535,8 @@ export class PiChatService {
     this.maxSessions = Math.max(1, Number(maxSessions) || 2);
     this.logger = logger;
     this.sessions = new Map();
+    // 正在创建中的会话：建好之前到达的 steer 要等它，而不是当成「没有会话」。
+    this.pending = new Map();
   }
 
   /** 模型变更后旧会话不再适用：直接释放，下一问重建。 */
@@ -547,6 +549,64 @@ export class PiChatService {
 
   disposeAll() {
     for (const key of [...this.sessions.keys()]) this.drop(key);
+  }
+
+  /** 会话键：同一「会话 + 项目 + 模型」复用一条 Pi 会话。ask 与 steer 必须用同一个算法。 */
+  sessionKey({ project, sessionId = '', model = this.model } = {}) {
+    const projectId = String(project?.id ?? '');
+    const root = path.resolve(String(project?.root ?? ''));
+    const resolvedModel = String(model ?? '').trim();
+    const chatKey = String(sessionId ?? '').trim();
+    return chatKey
+      ? `${chatKey}::${projectId}::${root}::${resolvedModel}`
+      : `${projectId}::${root}::${resolvedModel}`;
+  }
+
+  /**
+   * 引导（steer）：把一句话插进正在跑的那一轮，不中止。
+   * 只对「正在跑」的会话生效；找不到或已结束就返回 steered:false，不假装成功。
+   */
+  async steer({ project = null, question = '', model = this.model, sessionId = '' } = {}) {
+    const text = String(question ?? '').trim();
+    if (!text) return { steered: false, reason: 'empty' };
+    if (!project?.root) return { steered: false, reason: 'no-project' };
+    const key = this.sessionKey({ project, sessionId, model });
+    let entry = this.sessions.get(key);
+    // 会话还在创建：等它建好再插，别把「还没准备好」误报成「没有会话」。
+    if (!entry && this.pending.has(key)) {
+      try {
+        await this.pending.get(key);
+      } catch {
+        return { steered: false, reason: 'error' };
+      }
+      entry = this.sessions.get(key);
+    }
+    if (!entry?.session?.prompt) return { steered: false, reason: 'no-session' };
+    // 会话刚建好、回合还没真正开始：等它进入 streaming，否则 Pi 会拒绝带 streamingBehavior 的插入。
+    for (let attempt = 0; attempt < 500 && !entry.streaming; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!entry.streaming) return { steered: false, reason: 'no-active-turn' };
+    // 记一个「待处理的引导」：run() 在主回合结束后要等它，否则会带着旧答案收尾。
+    entry.pendingSteers = (entry.pendingSteers ?? 0) + 1;
+    if (!entry.steerGate) {
+      let resolve;
+      const promise = new Promise((r) => { resolve = r; });
+      entry.steerGate = { promise, resolve };
+    }
+    try {
+      await entry.session.prompt(text, { streamingBehavior: 'steer' });
+      entry.lastUsed = Date.now();
+      return { steered: true };
+    } catch (error) {
+      return { steered: false, reason: 'error', detail: String(error?.message ?? error) };
+    } finally {
+      entry.pendingSteers = Math.max(0, (entry.pendingSteers ?? 1) - 1);
+      if (entry.pendingSteers === 0) {
+        entry.steerGate?.resolve();
+        entry.steerGate = null;
+      }
+    }
   }
 
   drop(key) {
@@ -637,11 +697,7 @@ export class PiChatService {
     }
 
     const root = path.resolve(project.root);
-    // 每个持久化会话一个进程内 Pi 会话；同一个会话切换回来后仍能连续追问。
-    const chatKey = String(sessionId ?? '').trim();
-    const key = chatKey
-      ? `${chatKey}::${projectId}::${root}::${resolvedModel}`
-      : `${projectId}::${root}::${resolvedModel}`;
+    const key = this.sessionKey({ project: { id: projectId, root }, sessionId, model: resolvedModel });
     const existing = this.sessions.get(key) ?? null;
     if (existing?.busy) return this.failure({ projectId, category: 'busy', began, model: resolvedModel });
 
@@ -662,7 +718,14 @@ export class PiChatService {
 
     try {
       if (!session) {
-        const created = await this.sessionFactory.create({ cwd: root, model: resolvedModel });
+        const creating = this.sessionFactory.create({ cwd: root, model: resolvedModel });
+        this.pending.set(key, creating);
+        let created;
+        try {
+          created = await creating;
+        } finally {
+          this.pending.delete(key);
+        }
         let tools = null;
         // 二次核对：注入的工厂也要过同一道关，不能只靠工厂自己声明。
         // 校验失败时 assertChatToolSurface 自己会释放会话。
@@ -675,6 +738,9 @@ export class PiChatService {
       if (entry) {
         entry.busy = true;
         entry.lastUsed = Date.now();
+        // 这一轮可能被 steer 多次：等所有引导都处理完才算结束。
+        entry.pendingSteers = 0;
+        entry.steerGate = null;
       }
 
       // 空闲超时与整轮上限：任何事件都会重置空闲计时，避免读大文件被判超时。
@@ -702,8 +768,7 @@ export class PiChatService {
           forwardChatEvent(event, emit);
         });
       }
-      const canceled = new Promise((_, reject) => {
-        if (!signal) return;
+      const canceled = new Promise((_, reject) => {        if (!signal) return;
         const fail = () => {
           stopSession();
           reject(Object.assign(new Error('chat canceled'), { name: 'AbortError' }));
@@ -717,6 +782,7 @@ export class PiChatService {
         signal.addEventListener('abort', cancelListener, { once: true });
       });
 
+      if (entry) entry.streaming = true;
       await Promise.race([
         session.prompt(buildChatPrompt({
           project: { id: projectId, root },
@@ -730,6 +796,15 @@ export class PiChatService {
         hardExpired,
         canceled
       ]);
+
+      // 主回合结束不代表这一轮结束：还有引导在处理时，等它出结果再收尾，
+      // 否则会把「被 steer 打断前的旧答案」当成最终回答。
+      for (;;) {
+        const running = this.sessions.get(key);
+        if (!running || !(running.pendingSteers > 0)) break;
+        if (running.steerGate) await running.steerGate.promise;
+        else await Promise.resolve();
+      }
 
       // 上游可能以「空内容 + stopReason=error」结束（额度、鉴权、网络），必须显式失败。
       const last = session.lastMessage?.();
@@ -821,7 +896,10 @@ export class PiChatService {
       if (signal && cancelListener) signal.removeEventListener('abort', cancelListener);
       try { unsubscribe?.(); } catch { /* 取消订阅失败不影响收尾 */ }
       const entry = this.sessions.get(key);
-      if (entry) entry.busy = false;
+      if (entry) {
+        entry.busy = false;
+        entry.streaming = false;
+      }
     }
   }
 }

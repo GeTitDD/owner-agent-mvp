@@ -298,6 +298,26 @@
       streamThinkingText = '';
     };
 
+    /** 流式中插入的一句：插在临时气泡前面，保证「先我后它」的顺序。 */
+    const appendSteerMessage = (text) => {      const value = String(text ?? '').trim();
+      if (!value) return;
+      const item = el('li', 'msg user');
+      item.dataset.role = 'user';
+      const who = el('div', 'who');
+      who.append(el('span', 'who-name', '我'));
+      item.append(who);
+      item.append(el('p', 'bubble', value));
+      if (streamNode?.parentNode === messagesNode) messagesNode.insertBefore(item, streamNode);
+      else messagesNode.append(item);
+      threadNode.scrollTop = threadNode.scrollHeight;
+    };
+
+    /** steer 会打断当前回答：把已经流出来的旧文字清掉，新的从空开始。 */
+    const resetStreamText = () => {
+      streamText = '';
+      if (streamBubble) streamBubble.textContent = '';
+    };
+
     /**
      * 剪贴板写入点：先用注入的 writer（e2e 与测试用），否则走主进程剪贴板，
      * 再退到 navigator.clipboard。三者都不可用就抛错，由调用方给可见提示。
@@ -689,6 +709,8 @@
       appendText,
       appendThinking,
       appendTool,
+      appendSteerMessage,
+      resetStreamText,
       endStream,
       isStreaming: () => Boolean(streamNode),
       // #123：勾选态与选中集合由对话流持有，方法卡只读计数、只发「开/关」。
