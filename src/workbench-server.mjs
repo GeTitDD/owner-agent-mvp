@@ -12,6 +12,8 @@ import { defaultDbPath } from './storage.mjs';
 import { ObserverStore } from './observer/store.mjs';
 import { BOARD_EVENT_LIMIT, buildBoardViewModel, renderBoardPage } from './observer/board.mjs';
 import { resolveThresholdsFromEnvironment } from './observer/thresholds.mjs';
+import { buildLessonsView, renderLessonsPage } from './knowledge/lessons-view.mjs';
+import { isLessonStatus } from './lesson-status.mjs';
 
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const WEB=path.join(ROOT,'web','workbench');
@@ -100,6 +102,17 @@ export async function createWorkbenchServer({
     return buildBoardViewModel({projects:owner.listProjects(),events:observer.listEvents({limit:BOARD_EVENT_LIMIT}),thresholds});
   }finally{observer.close();}};
   const allUnits=()=>[...store.list({limit:2000}).map(x=>({...x,readOnly:false})),...staticCatalog.knowledge];
+  // 经验浏览（#136）：每次请求现查 SQLite，读完即渲染，不缓存、不写库。
+  // 状态筛选只认 lesson-status 的那五个值——未知状态直接 400，不能被当成「全部」静默放过。
+  const lessonsView=(url)=>{
+    const status=url.searchParams.get('status')??'';
+    if(status&&!isLessonStatus(status)){const e=new Error(`未知的经验状态：${status}`);e.status=400;throw e;}
+    return buildLessonsView({
+      lessons:store.listLessons({limit:1000}),
+      projectId:url.searchParams.get('projectId')??'',
+      status
+    });
+  };
   const handler=async(req,res)=>{
     try {
       const hostname=req.headers.host??'';
@@ -117,6 +130,13 @@ export async function createWorkbenchServer({
       if(req.method==='GET'&&url.pathname==='/observer'){html(res,renderBoardPage(boardView()));return;}
       if(req.method==='GET'&&url.pathname==='/observer.css') {
         const css=await readFile(path.join(ROOT,'web','observer','observer.css'));
+        res.writeHead(200,{'content-type':'text/css; charset=utf-8','cache-control':'no-cache','x-content-type-options':'nosniff'});
+        res.end(css);return;
+      }
+      // 经验浏览同样是普通 HTTP 路由：服务端渲染、只读、筛选走链接。
+      if(req.method==='GET'&&url.pathname==='/lessons'){html(res,renderLessonsPage(lessonsView(url)));return;}
+      if(req.method==='GET'&&url.pathname==='/lessons.css') {
+        const css=await readFile(path.join(WEB,'lessons.css'));
         res.writeHead(200,{'content-type':'text/css; charset=utf-8','cache-control':'no-cache','x-content-type-options':'nosniff'});
         res.end(css);return;
       }
@@ -177,6 +197,8 @@ export async function createWorkbenchServer({
         });
       }
       if(method==='GET'&&url.pathname==='/api/projects')return json(res,staticCatalog.projects);
+      // 经验只读浏览（#136）：同一条视图模型供页面复用；没有对应的写路由。
+      if(method==='GET'&&url.pathname==='/api/lessons')return json(res,lessonsView(url));
       if(method==='GET'&&url.pathname==='/api/knowledge') {
         const filters=Object.fromEntries(['q','domain','layer','scope','status','projectId'].map(k=>[k,url.searchParams.get(k)??'']));
         return json(res,filterEntries(allUnits(),filters).map(({content,...rest})=>({...rest,excerpt:content.slice(0,170)})));

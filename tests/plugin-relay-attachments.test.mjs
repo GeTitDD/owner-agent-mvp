@@ -10,7 +10,13 @@ import { listAttachments, readAttachments } from '../plugins/cindy-relay/node/li
 const HASH = 'a'.repeat(64);
 const SESSION = 'session-images';
 
-test('relay 附件：从 Cindy 消息库和 blobs 读取图片', async () => {
+// Cindy 是 Windows 应用：附件路径来自 LOCALAPPDATA 与盘符绝对路径。
+// 在 Linux CI 上没有这套路径语义，跳过而不是把断言改弱。
+const windowsOnly = process.platform === 'win32'
+  ? test
+  : (name, fn) => test(name, { skip: 'Cindy 附件路径仅 Windows（LOCALAPPDATA + 盘符）' }, fn);
+
+windowsOnly('relay 附件：从 Cindy 消息库和 blobs 读取图片', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-attach-'));
   const profile = path.join(root, 'CindyTest');
   const previous = process.env.LOCALAPPDATA;

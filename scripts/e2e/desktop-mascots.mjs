@@ -1,4 +1,4 @@
-// 动态桌宠验收：Codex Pet spritesheet 播放 + 一键换肤 + 设置页精灵缩略图。
+// 动态桌宠验收：Codex Pet spritesheet 播放 + 一键换肤（#111 后不再检查已删除的设置页网格）。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -169,22 +169,21 @@ const run = async () => {
     check('one-click skin cycle changes the active skin', cycled.skin && cycled.skin !== 'sprite-pet', cycled.skin);
     check('static skin falls back to mascot image', cycled.spriteHidden === true && cycled.mascotHidden === false && Boolean(cycled.mascotSrc), JSON.stringify(cycled));
 
-    // 面板设置里能看到精灵缩略图，并能一键切回精灵皮肤。
-    const panel = app.windows().find((page) => page.url().includes('panel.html'));
-    await petPage.evaluate(() => window.companion.showPanel());
-    await panel.waitForSelector('#taskInput', { timeout: 20000 });
-    await panel.locator('#openSettings').click();
-    await panel.waitForSelector('#mascotGrid .mascot-option', { timeout: 15000 });
-    const hasThumb = await panel.locator('#mascotGrid .mascot-option[data-skin="sprite-pet"] .mascot-thumb.sprite').count();
-    check('settings grid shows sprite thumbnail', hasThumb === 1, String(hasThumb));
-    await panel.locator('#mascotGrid .mascot-option[data-skin="sprite-pet"]').click();
-    await sleep(3600);
-    const restored = await petPage.evaluate(() => ({
-      skin: document.getElementById('pet')?.dataset.skin,
-      spriteHidden: document.getElementById('sprite')?.hidden
-    }));
-    check('settings one-click restores sprite pet', restored.skin === 'sprite-pet' && restored.spriteHidden === false, JSON.stringify(restored));
-    await panel.screenshot({ path: path.join(evidence, 'panel-mascot-grid.png') });
+    // #111 撤旧壳后设置页的皮肤网格随旧面板一起删除；换肤仍在宠物自己的工具条上，
+    // 这里继续用「↻」绕一圈，保证一键换肤能回到精灵皮肤。
+    let restored = null;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      restored = await petPage.evaluate(() => ({
+        skin: document.getElementById('pet')?.dataset.skin,
+        spriteHidden: document.getElementById('sprite')?.hidden
+      }));
+      if (restored.skin === 'sprite-pet') break;
+      await petPage.locator('.stage').hover();
+      await petPage.locator('#skinNext').click({ force: true });
+      await sleep(1200);
+    }
+    check('one-click skin cycle can return to sprite pet', restored?.skin === 'sprite-pet' && restored?.spriteHidden === false, JSON.stringify(restored));
+    await petPage.screenshot({ path: path.join(evidence, 'pet-sprite-restored.png') });
 
     if (failures.length) throw new Error(`${failures.length} assertion(s) failed`);
     failed = false;

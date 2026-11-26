@@ -31,8 +31,16 @@ const sessionIdOf = (candidate) => {
   return flatText(first?.sessionId);
 };
 
+/**
+ * 来源种类：会话扫描默认是 session-scan；`/记决策` 手动写的那条标 manual。
+ * 手动条目没有会话可回查，不能沿用 session-scan 的出处拼接，否则会凭空长出一条
+ * `session-scan::` 的假证据。
+ */
+const sourceKindOf = (candidate) => flatText(candidate?.sourceKind, 40) || 'session-scan';
+
 /** 会话出处：来源 + 会话 id（缺 id 时用文件路径）。超长按证据引用的上限截断。 */
 const sessionRefOf = (candidate) => {
+  if (sourceKindOf(candidate) === 'manual') return '';
   const source = flatText(candidate?.source);
   const sessionPath = flatText(candidate?.sessionPath);
   return flatText(`session-scan:${source}:${sessionIdOf(candidate) || sessionPath}`, REF_MAX);
@@ -96,7 +104,7 @@ export function decisionDraftFromCandidate({
   const fingerprint = flatText(candidate?.fingerprint, 128)
     || decisionFingerprint({ projectId: project, text: phenomenon });
   const source = {
-    kind: 'session-scan',
+    kind: sourceKindOf(candidate),
     source: flatText(candidate?.source),
     sessionId: sessionIdOf(candidate),
     sessionPath: flatText(candidate?.sessionPath, REF_MAX),

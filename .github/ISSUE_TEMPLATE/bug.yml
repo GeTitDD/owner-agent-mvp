@@ -1,0 +1,63 @@
+name: Bug report
+description: 报告一个可复现的问题
+title: "[bug] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先删掉密钥、webhook、审批令牌与项目路径中的隐私。
+        安全漏洞不要在这里提，见 SECURITY.md。
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 一句话说清现象。
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开客户端
+        2. 在项目 A 的会话里输入 ...
+        3. 看到 ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望 vs 实际
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / 提交
+      description: 打包版写 exe 版本；源码运行写 git commit。
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 影响范围
+      options:
+        - 对话 / 流式输出
+        - `/` 技能
+        - `@@` 方法
+        - 写入与确认卡
+        - 项目与项目记忆
+        - 监控
+        - 同步
+        - 配置 / `/setup`
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图
+      description: 控制台错误、`companion-errors.log` 片段或截图。先删敏感信息。
+    validations:
+      required: false

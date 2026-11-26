@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Owner Companion · 卡片</title>
+  <!-- #105 卡片壳：单列布局（顶栏一行 / 中部对话流 / 底部输入框）。
+       #111 撤旧壳后这是唯一渲染器：主进程启动即加载这一页，没有档位开关，也没有旧面板。 -->
+  <link rel="stylesheet" href="./shell.css" />
+</head>
+<body>
+  <div class="shell">
+    <!-- 顶栏只放状态位：#105 定了五个位置。#106 把「会话」做成入口（胶囊 + 浮层），
+         #107 把「项目」也做成入口（全局 / 已登记项目 + 切换确认），写范围改由 gate 文案回答；
+         监控与导出仍是状态位，顶栏不变成第二个菜单。 -->
+    <header class="top" id="shellHeader">
+      <div class="top-row" id="topRow">
+        <div class="session-entry">
+        <button type="button" class="capsule" id="sessionToggle" data-slot="session"
+                aria-haspopup="dialog" aria-expanded="false" title="会话">
+          <span class="slot-key">会话</span>
+          <span class="slot-value" id="sessionLabel">还没有会话</span>
+          <span class="cross-mark" id="sessionCross" hidden>跨项目</span>
+          <span class="caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="sessions" id="sessionPopover" role="dialog" aria-label="会话列表" hidden>
+          <div class="sessions-head">
+            <input type="search" id="sessionSearch" placeholder="搜索会话标题" autocomplete="off" />
+            <button type="button" class="sessions-new" id="sessionNew">新建</button>
+          </div>
+          <p class="sessions-hint" id="sessionListHint" hidden></p>
+          <ul class="sessions-list" id="sessionList"></ul>
+          <div class="sessions-foot">
+            <button type="button" class="sessions-archive" id="sessionArchive" aria-pressed="false">
+              已删除 0
+            </button>
+            <span class="sessions-error" id="sessionError" role="status" hidden></span>
+          </div>
+        </div>
+      </div>
+      <div class="project-entry">
+        <button type="button" class="capsule" id="projectToggle" data-slot="project"
+                aria-haspopup="dialog" aria-expanded="false" title="项目：不选就是全局（只读）">
+          <span class="slot-key">项目</span>
+          <span class="slot-value" id="projectLabel">全局</span>
+          <span class="caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="projects" id="projectPopover" role="dialog" aria-label="项目列表" hidden>
+          <p class="projects-hint" id="projectHint">不选项目就是全局：读所有项目的记忆，不写入任何项目。</p>
+          <ul class="projects-list" id="projectList"></ul>
+        </div>
+      </div>
+      <span class="config-entry">
+        <button type="button" class="config-entry-btn" id="configToggle"
+                aria-haspopup="dialog" aria-expanded="false" title="配置：七个分区，密钥只看来源"
+                aria-label="配置">⚙</button>
+      </span>
+      <!-- 无边框窗口必须自己给出口：以前旧面板有 ×，撤壳时丢了，窗口既关不掉也拖不动。
+           × 只收起窗口（后台继续跑）；真正退出在托盘菜单里，避免误点一下就把
+           正在跑的心跳和同步一起带走。 -->
+      <span class="window-controls">
+        <button type="button" class="win-btn" id="windowHide"
+                title="收起到托盘（退出在托盘菜单里）" aria-label="收起">×</button>
+      </span>
+      </div>
+      <!-- 第二行只放状态：写范围 + 同步。440px 的窗口塞不下五枚胶囊，
+           监控与导出本来也只是「占位」——它们现在分别由 /监控 与 /发布 承担，
+           留在这里只会把会话标题挤成「重启后还在的会话（已…」。 -->
+      <div class="status-row" id="syncRow">
+        <span class="slot" data-slot="write">
+          <span class="slot-value" id="writeScope" data-scope="global">只读·全局</span>
+        </span>
+        <span class="sync-entry" id="syncEntry" data-state="unknown">
+          <span class="sync-state" id="syncState" data-tone="unknown" data-state="unknown">未同步</span>
+        </span>
+        <span class="sync-detail" id="syncDetail">从未成功同步过</span>
+        <button type="button" class="sync-retry" id="syncRetry">补同步</button>
+      </div>
+    </header>
+
+    <main class="thread" id="thread">
+      <!-- #139 定位屏：不选项目时的主内容，替换原来的全局聚合数字。
+           每行 = 项目名 + 待确认候选 + 三类未读 + 上次看过 + 最近决策；排序由主进程算好。 -->
+      <section class="locate-view" id="locateView" hidden aria-label="定位屏">
+        <div class="locate-head">
+          <span class="locate-badge">只读</span>
+          <span class="locate-title" id="locateTitle">先看哪个</span>
+          <button type="button" class="locate-refresh" id="locateRefresh">刷新</button>
+        </div>
+        <p class="locate-hint" id="locateHint">
+          排序：待确认候选 &gt; 有未读变化 &gt; 超过 7 天未看 &gt; 其余。切换项目不会清零未读。
+        </p>
+        <p class="locate-status" id="locateStatus" role="status"></p>
+        <ul class="locate-list" id="locateList"></ul>
+        <p class="locate-empty" id="locateEmpty" hidden></p>
+      </section>
+      <p class="empty" id="emptyState">还没有会话。点顶栏的「会话」新建一个。</p>
+      <ol class="messages" id="messages"></ol>
+    </main>
+
+    <!-- #125 关联会话的指针胶囊：选中的会话只在这里留一枚指针，发送时进入 prompt 的
+         「关联会话」段；点 ✕ 移除，不产生任何正文副本。 -->
+    <div class="session-pointers" id="sessionPointers" aria-label="已关联的会话指针" hidden></div>
+    <!-- #124 关联项目：胶囊显示在输入框上方，可逐个移除；发送时进入 prompt 的
+         「## 关联项目」段。跨项目只读那一句写在胶囊旁边，不靠用户猜。 -->
+    <div class="link-bar" id="projectLinks" hidden aria-label="关联项目">
+      <div class="link-capsules" id="projectLinkList"></div>
+      <p class="link-hint" id="projectLinksHint"></p>
+    </div>
+
+    <!-- 选中的技能：胶囊在输入框上方，和问题分开；点 × 取消。
+         不把技能塞进 textarea 的原因：textarea 没法只高亮前一段，混在一起分不清。 -->
+    <div class="skill-chip-bar" id="skillChip" hidden aria-label="已选技能">
+      <span class="skill-chip" id="skillChipLabel"></span>
+      <button type="button" class="skill-chip-clear" id="skillChipClear" aria-label="取消选中的技能">✕</button>
+    </div>
+
+    <form class="composer" id="composer" autocomplete="off">
+      <label class="sr-only" for="input">输入消息</label>
+      <textarea id="input" rows="1" placeholder="说点什么。回车发送，Shift+回车换行"></textarea>
+      <!-- 流式中再发一句：引导（插进当前回答）或中止（先停再发）。只在有回答在跑时出现。 -->
+      <button type="button" class="insert-mode" id="insertMode" hidden
+              title="流式中发送：把这一句插进当前回答（steer）">引导</button>
+      <button type="submit" class="send" id="send" disabled>发送</button>
+    </form>
+
+    <!-- #108：输入 `/` 打开技能面板。上半是数字快捷（1-9，可改），
+         下半是扫描出来的全部技能；两段共用一个滚动容器，页脚写键盘用法。 -->
+    <div class="slash-panel" id="skillPanel" role="dialog" aria-label="技能面板" hidden>
+      <div class="slash-head">
+        <span class="slash-title">技能</span>
+        <span class="slash-count" id="skillCount">读取中…</span>
+        <button type="button" class="slash-link" id="skillAliasToggle" aria-pressed="false">自定义</button>
+        <button type="button" class="slash-close" id="skillClose" aria-label="关闭技能面板">✕</button>
+      </div>
+      <div class="slash-scroll" id="skillList"></div>
+      <p class="slash-hint" id="skillHint"></p>
+      <p class="slash-warn" id="skillConflict" hidden></p>
+      <p class="slash-error" id="skillError" role="status" hidden></p>
+    </div>
+
+    <!-- #122：输入 `@@` 打开方法菜单（小卡片，贴着输入框，不铺满窗口）。
+         容器只提供外壳：标题 + 返回 + 关闭；菜单项由 shell-at.cjs 的方法数据逐行画，
+         方法卡的内容由方法自己注册（#123 的「生成 prompt」、#125 的「关联会话」已接上控件）。 -->
+    <div class="at-panel" id="atPanel" role="dialog" aria-label="@@ 方法" hidden>
+      <div class="at-head">
+        <button type="button" class="at-back" id="atBack" aria-label="返回方法菜单" hidden>←</button>
+        <b class="at-title" id="atTitle">@@ 要做什么</b>
+        <span class="at-sub" id="atSub"></span>
+        <button type="button" class="at-close" id="atClose" aria-label="关闭 @@ 面板">✕</button>
+      </div>
+      <div class="at-body" id="atBody"></div>
+      <p class="at-hint" id="atHint"></p>
+    </div>
+
+    <!-- #110 导出会话：按钮放在输入框下面，不占顶栏。
+         顶栏本轮仍是状态位（#105 的口径），把「导出」做成操作是后续票的事。 -->
+    <div class="shell-actions">
+      <button type="button" class="export-button" id="exportConversation">导出 Markdown</button>
+      <span class="export-path" id="exportPath" hidden></span>
+    </div>
+
+    <!-- 复制/导出的可见回执：失败也走这里，不静默。 -->
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </div>
+
+  <!-- #107 切项目确认：四条后果固定写在弹窗里，两个出口并排；取消什么都不改。 -->
+  <div class="confirm-backdrop" id="projectConfirm" hidden>
+    <div class="confirm" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h2 id="confirmTitle">切换项目？</h2>
+      <p class="confirm-target" id="confirmTarget"></p>
+      <ul class="confirm-items" id="confirmItems"></ul>
+      <p class="confirm-hint">
+        「在本会话切换」保留历史归属、只改正在看与写入落点，会话会打「跨项目」标；
+        「新开会话并切换」让会话与项目一致，从零开始。
+      </p>
+      <div class="confirm-actions">
+        <button type="button" class="confirm-exit primary" id="confirmInSession">在本会话切换</button>
+        <button type="button" class="confirm-exit" id="confirmNewSession">新开会话并切换</button>
+        <button type="button" class="confirm-cancel" id="confirmCancel">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- #127 配置箱：全窗口覆盖层，七个分区一个滚动容器；每行「标签 + 值 + 一句后果」，
+       并标注这一项来自「探测」还是「手改」。密钥只显示来源（环境变量名）与状态，
+       不给输入框、不回显值。分区与行由 src/config-box.mjs 提供，这里只搭壳。 -->
+  <div class="config-backdrop" id="configBox" hidden>
+    <div class="config" role="dialog" aria-modal="true" aria-labelledby="configTitle">
+      <div class="config-head">
+        <b class="config-title" id="configTitle">配置</b>
+        <span class="config-sub">保存写回 companion.json；密钥只读环境变量，不写进文件</span>
+        <button type="button" class="config-close" id="configClose" aria-label="关闭配置箱">✕</button>
+      </div>
+      <!-- #128 /setup 的探测态：逐项判定 + 建议写入清单 + 一次确认 + 回执。
+           这里只搭壳，数据由主进程算好（src/setup-probe.mjs），判定文案不在渲染层另写一份。
+           放在 configBody 外面，是因为 configBody 每次重画都会 replaceChildren。 -->
+      <section class="cfg-probe" id="configProbePanel" aria-label="探测本机" hidden>
+        <div class="cfg-probe-head">
+          <b class="cfg-probe-title">探测本机</b>
+          <span class="cfg-probe-summary" id="configProbeSummary"></span>
+        </div>
+        <ul class="cfg-probe-items" id="configProbeItems"></ul>
+        <div class="cfg-probe-writes">
+          <h4 class="cfg-probe-writes-title">建议写入清单（只列会写盘的项）</h4>
+          <ul class="cfg-probe-write-list" id="configProbeWrites"></ul>
+          <p class="cfg-probe-note">清单里所有项共用下面这一次确认；取消则一项都不写。</p>
+        </div>
+        <ul class="cfg-probe-skips" id="configProbeSkips" hidden></ul>
+        <p class="cfg-probe-receipt" id="configProbeReceipt" role="status" hidden></p>
+        <ul class="cfg-probe-receipt-rows" id="configProbeReceiptRows" hidden></ul>
+        <div class="cfg-probe-actions">
+          <button type="button" class="config-btn" id="configProbeRecheck">重新探测</button>
+          <button type="button" class="config-btn" id="configProbeCancel">取消</button>
+          <button type="button" class="config-btn primary" id="configProbeApply">按清单写入</button>
+        </div>
+      </section>
+      <div class="config-body" id="configBody"></div>
+      <p class="config-status" id="configStatus" role="status" hidden></p>
+      <div class="config-foot">
+        <span class="config-note">探测 = 系统读到或默认值；手改 = 配置文件里是你写的值。</span>
+        <button type="button" class="config-btn" id="configProbeEntry">探测本机</button>
+        <button type="button" class="config-btn" id="configCancel">取消</button>
+        <button type="button" class="config-btn primary" id="configSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./shell-thread.cjs"></script>
+  <script src="./shell-sessions.cjs"></script>
+  <script src="./shell-skills.cjs"></script>
+  <script src="./shell-projects.cjs"></script>
+  <!-- #113 风险评级与确认卡：先于块渲染加载，块归一化要直接读它的纯函数。 -->
+  <script src="./risk-card.cjs"></script>
+  <!-- #116 外发 / 删除确认卡：同样先于块渲染；window.OwnerConfirmCards 被块归一化直接读。 -->
+  <script src="./confirm-cards.cjs"></script>
+  <!-- #138 决策改写与 /记决策 共用的一张表单（纯模型 + 动作分发） -->
+  <script src="./decision-form.cjs"></script>
+  <script src="./shell-blocks.cjs"></script>
+  <script src="./shell-copy.cjs"></script>
+  <script src="./shell-blocks-view.js"></script>
+  <!-- #121 三块界面：顶栏 / 输入区 / 对话流；shell.js 只做装配与事件接线。 -->
+  <script src="./shell-header.cjs"></script>
+  <!-- #127 配置箱：分区数据与来源规则在 src/config-box.mjs，经 host 模块挂到 window；
+       这里只加载画 DOM 的那一层，装配层再建实例。 -->
+  <script src="./shell-config.cjs"></script>
+  <!-- #122 `@@` 方法菜单：先于输入区加载，输入区要用它的触发判定与面板实例。 -->
+  <script src="./shell-at.cjs"></script>
+  <!-- #123 「生成 prompt」方法：流内勾选、计数与四段组装；方法卡进入时才 mount。 -->
+  <script src="./shell-at-prompt.cjs"></script>
+  <!-- #125 「关联会话」方法：来源切换、最近会话、线索解析与指针胶囊；只存指针。 -->
+  <script src="./shell-at-session.cjs"></script>
+  <!-- #124 「关联项目」方法：项目 → 资料的层级与输入框上方的胶囊；发送时拼 prompt 段。 -->
+  <script src="./shell-at-project.cjs"></script>
+  <!-- #126 「分享到飞书」方法：目标选择与发送；勾选沿用 #123，发送前过 #116 的外发确认。 -->
+  <script src="./shell-at-share.cjs"></script>
+  <!-- Markdown 渲染：标题/粗体/列表/代码块；只建 DOM，不拼 innerHTML。 -->
+  <script src="./shell-markdown.cjs"></script>
+  <script src="./shell-compose.cjs"></script>
+  <script src="./shell-stream.cjs"></script>
+  <script type="module" src="./card-scope-host.mjs"></script>
+  <!-- #114 自有目录写入：判定与回执的纯函数在这里挂窗口（模块脚本，晚于上面的经典脚本）。 -->
+  <script type="module" src="./own-write-host.mjs"></script>
+  <!-- #116 外发 / 删除的脚本化入口：算计划、出卡片，命令与卡片共用一份判定。 -->
+  <script type="module" src="./confirm-host.mjs"></script>
+  <!-- #115 项目目录同步：判定 / 清单 / 会话授权 / 回执；挂窗口的同样是纯函数的薄壳。 -->
+  <script type="module" src="./project-write-host.mjs"></script>
+  <!-- #127 配置箱的数据与来源规则（纯函数）：模块脚本晚于经典脚本，渲染层点了才读。 -->
+  <script type="module" src="./config-box-host.mjs"></script>
+  <!-- #128 /setup 探测：命令解析、判定文案与取消回执（纯函数）；探测本身在主进程。 -->
+  <script type="module" src="./setup-probe-host.mjs"></script>
+  <!-- #131 同步状态：三态判定与顶栏文案只此一份；壳读不到时退回静态「未同步」。 -->
+  <script type="module" src="./sync-status-host.mjs"></script>
+  <script src="./shell.js"></script>
+</body>
+</html>

@@ -9,3 +9,5 @@ dist-companion/
 dist/
 
 .owner-root-identity
+
+.verify/

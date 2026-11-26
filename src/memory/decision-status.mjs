@@ -35,10 +35,12 @@ export const DECISION_STATUS_LABELS = Object.freeze({
 /** 结束状态：这两种在检索与界面里都不再算现状。 */
 export const ENDED_DECISION_STATUSES = Object.freeze(['superseded', 'abandoned']);
 
-/** 来源文案：决策候选只来自两类会话，界面据此说清「这条是从哪读出来的」。 */
+/** 来源文案：决策候选只来自两类会话，界面据此说清「这条是从哪读出来的」；手动记的单独标。 */
 const SOURCE_LABELS = Object.freeze({
   codex: 'Codex 会话',
-  claude: 'Claude Code 会话'
+  claude: 'Claude Code 会话',
+  // #138 `/记决策`：人自己写的一条，不是从会话里读出来的，来源照实写「手动填写」。
+  manual: '手动填写'
 });
 
 /** 状态是否认识：不认识的返回空串，交给调用方按「没有状态」处理，不猜。 */

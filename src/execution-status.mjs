@@ -1,17 +1,13 @@
 // 执行状态的唯一判定处：终态、等你点头、仍在场内，以及「卡住 / 运行中 / 排队」的分界。
 //
 // 为什么要单独一个文件：#70 之前「哪些状态算终态」有四个副本（desktop/main.cjs、
-// desktop/panel.js、desktop/focus-detail.cjs、src/knowledge-loop/execution-records.mjs），
-// 彼此已经不完全一致。本票新增「跨项目运行中」时不能再造第五份，所以把判定收敛到这里：
+// 旧面板、旧详情卡、src/knowledge-loop/execution-records.mjs），彼此已经不完全一致。
+// 本票新增「跨项目运行中」时不能再造第五份，所以把判定收敛到这里：
 // - execution-records.mjs 决定「哪些能提炼」；
-// - src/focus-ops.mjs 决定「哪些还要你管」；
 // - desktop/main.cjs 决定「跨项目取哪些执行」。
-// 三处都读本文件的状态集，同一件事不会在执行记录里算已终态、在操作区里还在跑。
+// 两处都读本文件的状态集，同一件事不会在执行记录里算已终态、在别处还在跑。
 //
-// 没有跟着收敛的两处（如实说明，不是忘了）：
-// - desktop/panel.js 与 desktop/focus-detail.cjs 是经典脚本（<script src>），先于 ESM
-//   模块脚本执行，无法 import 本文件；它们维护的是「正向 active 列表」，只用于旧的
-//   运行账本与详情卡计数，不参与终态判断。本票新增的操作区运行中块不读它们。
+// #111 撤掉旧面板后，旧的「运行账本 / 详情卡计数」不再存在；本文件仍是执行状态的唯一判定。
 //
 // 「卡住」不是另造的时间阈值，而是仓库既有的两种数据事实：
 // - needs_reconciliation：owner-store 在租约过期后显式标记的状态，owner-agent.mjs

@@ -2,7 +2,7 @@
 //
 // 进程内启动 Owner sidecar + 常驻 Worker；审批令牌只留在主进程。
 // 渲染进程（桌宠/面板）只能通过受控 IPC 读取视图模型与触发操作。
-const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, dialog, Notification, shell } =
+const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, dialog, Notification, shell, clipboard } =
   require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -26,10 +26,10 @@ app.on('second-instance', () => {
   if (pet) { pet.show(); positionPet(); }
   showPanel();
 });
-const screenshotArg = process.argv.find((arg) => arg.startsWith('--screenshot-dir='));
-const screenshotDir = screenshotArg ? screenshotArg.slice('--screenshot-dir='.length) : '';
 // 验收/自动化实例不把桌宠和面板画到用户桌面上（否则会看到测试宠物一闪而过）。
 const e2eOffscreen = process.env.OWNER_AGENT_E2E_OFFSCREEN === '1';
+// #111 撤旧壳：卡片壳是唯一渲染器，窗口只加载 shell.html；没有档位开关，也没有旧面板兜底。
+const SHELL_PAGE = 'shell.html';
 const selfTestArg = process.argv.find((arg) => arg.startsWith('--self-test='));
 const selfTest = selfTestArg ? selfTestArg.slice('--self-test='.length) : '';
 const selfTestOutArg = process.argv.find((arg) => arg.startsWith('--self-test-out='));
@@ -94,28 +94,48 @@ let knowledgeTidyModule = null;
 let diagramModule = null;
 let executionStatusModule = null;
 let ideaCaptureModule = null;
+// #137 灵感 → Lesson：模块按需加载；提升只写经验表，候选仍由人在经验卡上再点一次。
+let ideaLessonModule = null;
 // #96 整理要访问外网：验收机用假的抓取器，真实环境才走网络（见 ideaFetchForAcceptance）。
 let ideaSortModule = null;
 // #86 会话扫描：模块按需加载；扫描是显式动作，不在启动或轮询里调用。
 let sessionScanModule = null;
+// #125 会话指针索引：只读元信息；按需加载，列最近会话 / 按线索找会话都走这里。
+let sessionPointerIndexModule = null;
 // #87 决策确认：候选确认入库与状态流转；同样按需加载。
 let decisionConfirmModule = null;
 let decisionRetrievalModule = null;
+// #135 `/提炼决策`：项目内的扫描回合与未处理候选存储；显式命令触发，不在启动或轮询里加载。
+let decisionScanModule = null;
+let decisionScanStore = null;
+let chatSessionStore = null;
+// 对话的模型后端（只读 Pi 会话）：按需创建，换模型时释放，退出时释放。
 let chatModule = null;
 let chatService = null;
-let chatSessionStore = null;
+// 模型目录：读 Pi 的 provider/model 清单，给配置箱做「已装模型」下拉。
+let modelCatalogModule = null;
 // #89：项目库视图与快照存储。视图复用 src/project-library.mjs，快照落 owner 库的同一连接。
 let projectLibraryModule = null;
+// #139：定位屏的计数 / 归因 / 排序（纯函数，只在进入定位屏或点「刷新」时按需加载）。
+let locateScreenModule = null;
 let snapshotModule = null;
 let snapshotStore = null;
 // #90：把已发布的快照导出到 <userData>/exports/<projectId>/vN/（只读快照，不重新聚合）。
 let exportModule = null;
+// #110：会话导出到 <userData>/conversations/<sessionId>.md；正文转换复用界面那份 shell-copy。
+let conversationExportModule = null;
 // #93：删除项目连带清理快照与导出目录；清单（plan）与执行分开，未确认不删。
 let projectDeletionModule = null;
+// #115：项目目录同步。清单（完整路径 + 字节数）与写入分开：先算清单给确认卡，确认后才落盘。
+let projectWriteModule = null;
 // #91：发布后发一条飞书文本卡片，投递结果记在单独的账本表上（快照本身不可变）。
 let publishCardModule = null;
 let publishCardStore = null;
 let feishuConfigModule = null;
+// #128 /setup 探测：模块按需加载；最近一次探测结果留在内存里，确认后按同一份清单写。
+let setupProbeModule = null;
+let pstackSkillsModule = null;
+let lastSetupProbe = null;
 // #92：历史版本浏览时的相邻版本 diff（纯函数，只读两份快照内容）。
 let versionDiffModule = null;
 // #84：水位与「自上次看过」。
@@ -146,7 +166,16 @@ const defaults = () => ({
   sandboxProjectDirByProject: {},
   panelPinned: false,
   // 对话的隐式技能：空数组表示用默认七个；上限 12 由 pi-chat 兜住。
-  chatSkills: []
+  chatSkills: [],
+  // #128 /setup 探测写入的路径：空 = 按环境变量 / 家目录现场探测。
+  // 探测写入的值记在 setupProbed 里，用来区分「探测」与「手改」：
+  // 配置值偏离 setupProbed = 人改过，重新探测一律不覆盖。
+  codexSessions: '',
+  opencodeData: '',
+  exportRoot: '',
+  pstackSkills: '',
+  mattSkills: '',
+  setupProbed: {}
 });
 let config = defaults();
 
@@ -189,36 +218,282 @@ const knowledgeDbPath = () =>
   || process.env.DOMAIN_CONTEXT_DB
   || path.join(os.homedir(), '.domain-context', 'index.sqlite');
 
+// #127 配置箱读的三处路径：技能目录与技能扫描共用这一份，别处不要再拼一次。
+const mattSkillsDir = () =>
+  process.env.MATT_SKILLS_DIR || path.join(os.homedir(), '.owner-agent', 'skills', 'matt');
+
+/**
+ * #127 配置箱的只读事实：路径、密钥「配没配 / 从哪读」、以及可写项的来源标注。
+ *
+ * 这里只回答状态，不回传任何密钥的值（值永远不出主进程）；真实环境探测是 #128 的事，
+ * 这一轮只把「配置文件里是不是人写的值」算清楚。
+ *
+ * @returns {Promise<{paths:object, secrets:object, sync:object, sources:object}>}
+ */
+const configBoxFacts = async () => {
+  const envText = (name) => String(process.env[name] ?? '').trim();
+  const envState = (names) => {
+    for (const name of names) {
+      if (envText(name)) return { present: true, origin: '环境变量' };
+    }
+    return { present: false, origin: '' };
+  };
+
+  // 飞书 webhook 的优先级与运行期一致：环境变量 > ~/.owner-agent/feishu.json > 未配置。
+  // 只保留「配没配 / 从哪读」，不把 URL 带出来。
+  let feishu = { present: false, origin: '' };
+  try {
+    feishuConfigModule ??= await importEsm('../src/observer/config.mjs');
+    const resolved = feishuConfigModule.resolveFeishuWebhook();
+    if (resolved.source === 'env') feishu = { present: true, origin: '环境变量' };
+    else if (resolved.source === 'config') feishu = { present: true, origin: 'feishu.json' };
+  } catch {
+    // 读不到就按未配置：配置箱不该因为一个凭据读失败而打不开。
+  }
+
+  // 同步令牌沿用 #130 的口径（GITHUB_TOKEN / GH_TOKEN，只回答命中了哪个变量）。
+  // syncCredential 的字段是 configured；配置箱统一用 present，这里只做一次换名。
+  let sync = { present: false, source: '' };
+  try {
+    const syncRun = await importEsm('../src/memory/sync-run.mjs');
+    const credential = syncRun.syncCredential();
+    sync = { present: credential.configured === true, source: credential.source ?? '' };
+  } catch {
+    // 同上：拿不到就按未配置。
+  }
+
+  // 监控状态库的默认位置由 src/watch/store.mjs 决定（OWNER_AGENT_WATCH_DIR 可改指）。
+  let watchDir = path.join(os.homedir(), '.owner-agent', 'watch');
+  try {
+    const watchStore = await importEsm('../src/watch/store.mjs');
+    watchDir = watchStore.defaultWatchDir();
+  } catch {
+    // 用上面那份默认路径兜底，与 store.mjs 的默认一致。
+  }
+
+  return {
+    paths: {
+      userData: app.getPath('userData'),
+      config: configPath(),
+      knowledge: knowledgeDbPath(),
+      watch: watchDir,
+      skills: mattSkillsDir()
+    },
+    // 密钥只给两件事：配没配、从哪读。名字是键，值是状态。
+    secrets: {
+      OWNER_OBSERVER_FEISHU_WEBHOOK: feishu,
+      OWNER_AGENT_APPROVAL_TOKEN: envState(['OWNER_AGENT_APPROVAL_TOKEN', 'OWNER_AGENT_APPROVAL_TOKEN_FILE']),
+      OWNER_AGENT_SIDECAR_TOKEN: envState(['OWNER_AGENT_SIDECAR_TOKEN', 'OWNER_AGENT_SIDECAR_TOKEN_FILE'])
+    },
+    sync,
+    sources: await configSources()
+  };
+};
+
+/**
+ * 可写项的来源：值偏离内置默认 = 手改（人写过），还是默认 = 探测（没人动过）。
+ * #128 的路径键（codexSessions / opencodeData / exportRoot / pstackSkills / mattSkills）
+ * 不能按默认值判：探测自己也会写值，按默认值会把探测结果误标成手改。
+ * 这五个键改按「值 vs 上次探测写入值」判，名单来自 src/setup-probe.mjs，不另抄一份。
+ */
+const configSources = async () => {
+  const base = defaults();
+  const sources = {};
+  // 探测模块加载失败不能拖垮配置箱：退回按默认值判来源，配置本体照常打开。
+  let setupKeys = new Set();
+  try {
+    const setupModule = setupProbeModule ??= await importEsm('../src/setup-probe.mjs');
+    setupKeys = new Set(setupModule.SETUP_PATH_KEYS);
+  } catch {
+    // 空集合 = 不特殊处理这五个路径键；#127 的既有行为不变。
+  }
+  for (const [key, value] of Object.entries(base)) {
+    // pet 是宠物窗位置，setupProbed 是合并用的账本：都不属于配置箱，也不该出现在来源表里。
+    if (key === 'pet' || key === 'setupProbed') continue;
+    if (setupKeys.has(key)) {
+      const current = String(config[key] ?? '').trim();
+      const probed = String(config.setupProbed?.[key] ?? '').trim();
+      sources[key] = current && current !== probed ? 'manual' : 'probe';
+      continue;
+    }
+    sources[key] = JSON.stringify(config[key] ?? null) === JSON.stringify(value ?? null)
+      ? 'probe'
+      : 'manual';
+  }
+  return sources;
+};
+
+// ---- #128 /setup 探测 ----
+//
+// 探测只读本机路径与 process.env：不联网、不写盘。真正建目录 / 写配置只在
+// companion:setup-apply 且 allow=true 时发生，与 #127 的 settings.set 写同一份 companion.json。
+//
+// 路径解析刻意不读 config：重新探测要能跟上环境变量与家目录的变化；
+// 手改值由 src/setup-probe.mjs 按「值 vs setupProbed」跳过。
+
+/** 这次看到的本机路径（不读配置里的旧值）。 */
+const setupProbePaths = async () => {
+  const home = os.homedir();
+  const dataHome = process.env.XDG_DATA_HOME
+    ? path.resolve(process.env.XDG_DATA_HOME)
+    : path.join(home, '.local', 'share');
+  const codexHome = process.env.CODEX_HOME
+    ? path.resolve(process.env.CODEX_HOME)
+    : path.join(home, '.codex');
+  // pstack skills 与 Playbook 共用同一套解析；解析不到时给一个可展示的候选，
+  // 判定仍是「缺失」，不会凭空建一个外部工具的目录。
+  let pstack = path.resolve(__dirname, '..', '..', 'pstack-pi', 'skills');
+  try {
+    const mod = pstackSkillsModule ??= await importEsm('../src/pstack/readonly-session.mjs');
+    pstack = mod.resolvePstackSkillsDir() ?? pstack;
+  } catch {
+    // 模块不可用就用上面的候选路径；探测本身不因此失败。
+  }
+  return {
+    codexSessions: path.join(codexHome, 'sessions'),
+    opencodeData: path.join(dataHome, 'opencode'),
+    exportRoot: path.join(app.getPath('userData'), 'exports'),
+    pstackSkills: pstack,
+    mattSkills: mattSkillsDir()
+  };
+};
+
+/** 只读文件系统：只回答存不存在、是不是目录、读不读得到、写不写得进。 */
+const setupProbeIo = {
+  stat: (target) => {
+    const value = String(target ?? '').trim();
+    if (!value) return { exists: false, isDir: false, readable: false, writable: false };
+    try {
+      const info = fs.statSync(value);
+      const allowed = (mode) => {
+        try {
+          fs.accessSync(value, mode);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      return {
+        exists: true,
+        isDir: info.isDirectory(),
+        readable: allowed(fs.constants.R_OK),
+        writable: allowed(fs.constants.W_OK)
+      };
+    } catch {
+      return { exists: false, isDir: false, readable: false, writable: false };
+    }
+  },
+  // 技能计数只数一级目录（matt 的两级由纯函数再往下数一层）；排序让结果稳定。
+  listDirs: (target) => {
+    try {
+      return fs.readdirSync(target, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      return [];
+    }
+  }
+};
+
+/**
+ * 探测一次并算好建议写入清单。结果留在 lastSetupProbe 里，
+ * 确认时按同一份清单写，避免「看到的」与「写下去的」不是同一批。
+ */
+const computeSetupProbe = async () => {
+  const mod = setupProbeModule ??= await importEsm('../src/setup-probe.mjs');
+  // 上一次的清单先作废：这一次探测失败时，不能让确认按钮拿到旧清单去写。
+  lastSetupProbe = null;
+  const probe = mod.probeSetup({
+    env: process.env,
+    paths: await setupProbePaths(),
+    io: setupProbeIo,
+    config,
+    probed: config.setupProbed ?? {},
+    at: new Date().toISOString()
+  });
+  const plan = mod.planSetupWrites({ probe, config, probed: config.setupProbed ?? {} });
+  lastSetupProbe = { probe, plan };
+  return lastSetupProbe;
+};
+
 // #86 会话扫描的本地状态：已扫过的会话键（重复点击不重复提炼），
 // 以及留给下一张票的「库里已有决策的指纹」位（现在是空数组）。
-// 只存这一份 JSON，不进知识库——扫描本身不写任何数据，确认入库是下一张票。
+// #135 起同一份 JSON 还存 `/提炼决策` 的未处理候选（pending）与拒绝指纹（rejected）。
+// 只存这一份 JSON，不进知识库——扫描本身不写任何数据，确认入库是 #87 的事。
 // 上限只为防无限增长：一年也到不了 5000 条，真到了丢最旧的会话键也不会重扫出重复候选
 // （重复问答还有指纹兜底）。
 const sessionScanStatePath = () => path.join(app.getPath('userData'), 'memory-scan.json');
 const SESSION_SCAN_STATE_LIMIT = 5000;
-const loadSessionScanState = () => {
-  try {
-    const raw = fs.readFileSync(sessionScanStatePath(), 'utf8').replace(/^\uFEFF/u, '');
-    const parsed = JSON.parse(raw);
-    return {
-      sessions: Array.isArray(parsed.sessions) ? parsed.sessions.filter((key) => typeof key === 'string') : [],
-      fingerprints: Array.isArray(parsed.fingerprints) ? parsed.fingerprints.filter((key) => typeof key === 'string') : []
-    };
-  } catch {
-    return { sessions: [], fingerprints: [] };
-  }
+const getDecisionScanStore = async () => {
+  if (decisionScanStore) return decisionScanStore;
+  const mod = await importEsm('../src/memory/decision-scan-store.mjs');
+  decisionScanStore = new mod.DecisionScanStore({
+    file: sessionScanStatePath(),
+    limits: { sessions: SESSION_SCAN_STATE_LIMIT, fingerprints: SESSION_SCAN_STATE_LIMIT }
+  });
+  return decisionScanStore;
 };
-const saveSessionScanState = ({ sessions = [], fingerprints = [] } = {}) => {
+// 老的 #86 入口沿用这两个名字；它们现在读写同一份状态，所以不会覆盖 pending / rejected。
+const loadSessionScanState = async () => (await getDecisionScanStore()).read();
+const saveSessionScanState = async ({ sessions = [], fingerprints = [] } = {}) => {
   try {
-    const state = {
-      sessions: [...new Set(sessions)].slice(-SESSION_SCAN_STATE_LIMIT),
-      fingerprints: [...new Set(fingerprints)].slice(-SESSION_SCAN_STATE_LIMIT)
-    };
-    fs.mkdirSync(path.dirname(sessionScanStatePath()), { recursive: true });
-    fs.writeFileSync(sessionScanStatePath(), JSON.stringify(state, null, 2), 'utf8');
+    const store = await getDecisionScanStore();
+    const current = store.read();
+    store.write({ ...current, sessions, fingerprints });
   } catch (error) {
     logError('session-scan-state', error);
   }
+};
+
+// ── #131 同步状态：离线照常读写，只在顶栏标「未同步」，联网后手动补同步 ──
+// 状态存成 userData 下的一个小 JSON：#127 的配置箱还没接进来，同步目标也还没有，
+// 所以这里先把「状态怎么变」与「执行器返回什么」分开——执行器的形状由 runSync 定义，
+// 状态判定由 src/memory/sync-status.mjs 定义，本文件只做落盘与注入。
+const syncStatusPath = () => path.join(app.getPath('userData'), 'sync-status.json');
+let syncStatusModule = null;
+let syncStatusStoreModule = null;
+let syncStatusStore = null;
+const loadSyncStatusModule = async () =>
+  (syncStatusModule ??= await importEsm('../src/memory/sync-status.mjs'));
+const getSyncStatusStore = async () => {
+  if (syncStatusStore) return syncStatusStore;
+  syncStatusStoreModule ??= await importEsm('../src/memory/sync-status-store.mjs');
+  syncStatusStore = new syncStatusStoreModule.SyncStatusStore({ file: syncStatusPath() });
+  return syncStatusStore;
+};
+
+/**
+ * 一次补同步的执行器。
+ *
+ * 真实适配器（读文档清单 → runSync → git 拉推）属于后续票；#127 之前没有同步目标可配，
+ * 所以这里如实返回 unconfigured，不假装成功——「未同步期间不假装成功」也包含这一层。
+ *
+ * `OWNER_AGENT_SYNC_FAKE=1` 时改读 <userData>/sync-fake.json 的 `result`，只给 #131 的
+ * 验收脚本注入失败/成功两种形状；不设这个变量时注入通道整条不存在。
+ */
+const runSyncAttempt = async () => {
+  if (process.env.OWNER_AGENT_SYNC_FAKE === '1') {
+    const file = path.join(app.getPath('userData'), 'sync-fake.json');
+    try {
+      const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/u, '');
+      const fake = JSON.parse(raw);
+      if (fake?.result && typeof fake.result === 'object') return fake.result;
+      return {
+        status: 'error', step: 'fake', code: 'fake-shape', message: '假的同步结果形状认不出。'
+      };
+    } catch (error) {
+      return {
+        status: 'error', step: 'fake', code: 'fake-missing', message: `读不到假的同步结果：${error?.message ?? error}`
+      };
+    }
+  }
+  return {
+    status: 'unconfigured',
+    step: 'target',
+    code: 'sync-target-missing',
+    message: '还没有配置同步目标（配置箱 #127 接入后可用）；本地读写照常。'
+  };
 };
 
 const digestCache = new Map();
@@ -330,6 +605,14 @@ async function startServices() {
   } catch (error) {
     console.error('project export module unavailable:', error.message);
     exportModule = null;
+  }
+  // #110：会话导出模块（纯转换 + 落盘）。不可用时只让「导出会话」报错，
+  // 复制与对话流本身不受影响。
+  try {
+    conversationExportModule = await importEsm('../src/conversation-exports.mjs');
+  } catch (error) {
+    console.error('conversation export module unavailable:', error.message);
+    conversationExportModule = null;
   }
   // #91：发布卡片。投递账本复用同一条连接；模块不可用时只影响「发卡片」这个动作，
   // 发布 / 导出照旧，面板会显示卡片未发送。
@@ -838,25 +1121,27 @@ const skillCatalogPayload = async ({ refresh = false } = {}) => {
         domainRoot: path.join(__dirname, '..', 'domains'),
         pluginsDir: path.join(__dirname, '..', 'plugins'),
         pstackSkillsDir: resolvePstackSkillsDir(),
-        mattSkillsDir: process.env.MATT_SKILLS_DIR
-          || path.join(os.homedir(), '.owner-agent', 'skills', 'matt'),
+        mattSkillsDir: mattSkillsDir(),
         pstackSkillIds: registry.PLAYBOOKS.map((item) => ({
           id: item.id,
           playbookLabel: item.label,
           // 图谱 playbook 由面板按钮直接生成，磁盘上没有 SKILL.md 是设计如此。
           noSkillDir: Boolean(item.diagramKind)
-        }))
+        })),
+        // #108 的 `/` 面板要滚动看全部技能：分组仍按 12 条截断，
+        // 另外带回未截断的 items；面板视图忽略这个字段，互不影响。
+        withItems: true
       })
     });
   }
-  return skillCatalogCache.read({ refresh: Boolean(refresh) }).then(async (view) => {
-    // 顺带把「哪些技能用于对话」带出去：面板要据此勾选，默认七个由 pi-chat 定义。
-    const chatMod = await importEsm('../src/pi-chat.mjs');
-    const picked = Array.isArray(config.chatSkills) && config.chatSkills.length
-      ? config.chatSkills
-      : chatMod.DEFAULT_SKILL_IDS;
-    return { ...view, implicitSkillIds: [...picked] };
-  });
+  // 缓存读是同步的（TTL 内直接返回旧值）；这里只补对话技能那几个 id。
+  const view = skillCatalogCache.read({ refresh: Boolean(refresh) });
+  // 顺带把「哪些技能用于对话」带出去：面板要据此勾选，默认七个由 pi-chat 定义。
+  const chatMod = await importEsm('../src/pi-chat.mjs');
+  const picked = Array.isArray(config.chatSkills) && config.chatSkills.length
+    ? config.chatSkills
+    : chatMod.DEFAULT_SKILL_IDS;
+  return { ...view, implicitSkillIds: [...picked] };
 };
 
 const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) => {
@@ -1119,6 +1404,7 @@ const knowledgeDetail = ({ id } = {}) => {
   const loadExecutionStatus = async () => (executionStatusModule ??= await importEsm('../src/execution-status.mjs'));
   const loadKnowledgeTidy = async () => (knowledgeTidyModule ??= await importEsm('../src/knowledge/tidy.mjs'));
   const loadDiagrams = async () => (diagramModule ??= await importEsm('../src/project-diagrams.mjs'));
+  const loadProjectWrite = async () => (projectWriteModule ??= await importEsm('../src/project-write.mjs'));
   const projectHeadCache = new Map();
   const triageDigestCache = new Map();
   /**
@@ -1268,6 +1554,10 @@ const knowledgeDetail = ({ id } = {}) => {
   const loadProjectLibrary = async () =>
     (projectLibraryModule ??= await importEsm('../src/project-library.mjs'));
 
+  // #139 定位屏的纯函数（计数 / 归因 / 排序）：按需加载，不在启动时增加加载项。
+  const loadLocateScreen = async () =>
+    (locateScreenModule ??= await importEsm('../src/memory/locate-screen.mjs'));
+
   // #92：版本 diff 是纯函数；按需加载，和库视图一样不在启动时增加加载项。
   const loadVersionDiff = async () =>
     (versionDiffModule ??= await importEsm('../src/project-version-diff.mjs'));
@@ -1404,6 +1694,140 @@ const knowledgeDetail = ({ id } = {}) => {
     // 面板每 2 秒轮询一次快照，groups 是全量条目，只给生成快照用，不随渲染下发。
     if (!full) delete payload.groups;
     return payload;
+  };
+
+  /**
+   * 单个项目的未读预览：只读水位，读不到 git / 观察员事件的那一类记 null（未知），
+   * 绝不写成 0。定位屏刷新与行内「标记已读」共用这一份口径。
+   */
+  const attentionOfProject = async ({ id, root, locate, sinceModule, probe }) => {
+    let commits = null;
+    let dirty = null;
+    if (root) {
+      try {
+        commits = probe.readCommitList({ root, limit: 50 });
+        const working = probe.readWorkingTreeChanges({ root });
+        dirty = working === null ? null : working.filter((item) => !isNoisePath(item.path));
+      } catch (error) {
+        // 不是仓库 / git 读失败：提交与改动都按「未知」，不压成 0。
+        logError('locate.project', error);
+        commits = null;
+        dirty = null;
+      }
+    }
+    let unread = locate.unreadCountsOf({});
+    let lastReadAt = '';
+    if (memoryWatermarks) {
+      try {
+        const preview = sinceModule.previewSinceLastSeen({
+          projectId: id,
+          store: memoryWatermarks,
+          commits,
+          dirty,
+          events: observerEventsFor(id)
+        });
+        unread = locate.unreadCountsOf(preview.view);
+        lastReadAt = preview.lastReadAt;
+      } catch (error) {
+        logError('locate.preview', error);
+      }
+    }
+    return { unread, lastReadAt };
+  };
+
+  /**
+   * #139 定位屏：不选项目时的项目行。只读取数，不推进任何水位、不触发扫描。
+   *
+   * - 待确认：知识候选（pending proposals）按 payload 项目或来源经验归因；决策候选读
+   *   #135 的 pendingSummary。动作级确认不在这两处，不会进排序。
+   * - 未读：previewSinceLastSeen 用旧水位算差异，只读不写；读不到 git / 观察员事件的项目
+   *   那几类计数是 null，界面显示「未知」。
+   * - 一个项目读不到不能拖垮整屏：逐项兜底，项目行照常保留。
+   */
+  const locateAttentionFor = async () => {
+    const projects = (store?.listProjects() ?? [])
+      .map((project) => ({
+        id: String(project.id ?? ''),
+        name: String(project.name ?? ''),
+        root: String(project.root ?? '')
+      }))
+      .filter((project) => project.id);
+    const locate = await loadLocateScreen();
+    const sinceModule = await loadSinceLastSeen();
+    const probe = await loadObserverProbe();
+
+    const readOr = (label, action, fallback) => {
+      try { return action(); } catch (error) {
+        logError(label, error);
+        return fallback;
+      }
+    };
+    // 待确认归因：只读两张表，不跑扫描。
+    const proposals = readOr('locate.proposals', () => personalStore?.proposals('pending') ?? [], []);
+    const lessons = readOr('locate.lessons', () => personalStore?.listLessons({ limit: 1000 }) ?? [], []);
+    const decisions = readOr('locate.decisions',
+      () => personalStore?.listDecisions({ includeEnded: false, limit: 500 }) ?? [], []);
+    let decisionSummary = { total: 0, projects: [] };
+    try {
+      decisionScanModule = decisionScanModule ?? await importEsm('../src/memory/decision-scan.mjs');
+      const scanStore = await getDecisionScanStore();
+      decisionSummary = decisionScanModule.pendingSummary(scanStore.read(), projects);
+    } catch (error) {
+      // 候选文件读不出时只让「决策候选」这一项缺失，不让整屏空掉。
+      logError('locate.decision-pending', error);
+    }
+    const pending = locate.pendingCountsOf({ proposals, lessons, decisionSummary }).byProject;
+    const latestDecisions = locate.latestDecisionsOf({ decisions, projects });
+
+    const attention = {};
+    for (const project of projects) {
+      const { unread, lastReadAt } = await attentionOfProject({
+        id: project.id, root: project.root, locate, sinceModule, probe
+      });
+      attention[project.id] = {
+        unread,
+        lastReadAt,
+        latestDecision: latestDecisions[project.id] ?? null
+      };
+    }
+
+    return locate.locateScreenView({ projects, pending, attention });
+  };
+
+  /**
+   * #140 行内「标记已读」：只把这个项目的水位推到当下，然后重算定位屏。
+   *
+   * 与 `/变化`（sinceLastSeenFor）分开：这里不算差异、不打开 `/变化`、不写项目目录，
+   * 也不动待确认候选。未读预览只用来判断「是不是已经没有未读」——已知为空时不写库，
+   * 连点同一行是空操作（ADR-0014）。
+   *
+   * @param {string} projectId
+   * @returns {Promise<{mark:object, view:object}>} mark 是回执，view 是刷新后的定位屏
+   */
+  const markLocateReadFor = async (projectId) => {
+    const id = String(projectId ?? '').trim();
+    if (!id) throw new Error('缺少项目 id');
+    const project = store?.getProject(id);
+    if (!project) throw new Error(`项目不存在：${id}`);
+    if (!memoryWatermarks) {
+      throw new Error('水位存储不可用：本地数据库打不开，请重启客户端。');
+    }
+    const [locate, sinceModule, probe] = await Promise.all([
+      loadLocateScreen(),
+      loadSinceLastSeen(),
+      loadObserverProbe()
+    ]);
+    const { unread } = await attentionOfProject({
+      id, root: String(project.root ?? ''), locate, sinceModule, probe
+    });
+    const mark = sinceModule.markProjectRead({
+      projectId: id,
+      store: memoryWatermarks,
+      unread
+    });
+    // 刷新定位屏：同一份只读口径重算，排序按新水位自然回退；其他项目的水位没动。
+    const view = await locateAttentionFor();
+    return { mark, view };
   };
 
 
@@ -2257,7 +2681,7 @@ const createPanel = () => {
     panel.setOpacity(0);
     panel.setIgnoreMouseEvents(true);
   }
-  panel.loadFile(path.join(__dirname, 'panel.html'));
+  panel.loadFile(path.join(__dirname, SHELL_PAGE));
   panel.on('closed', () => { panel = null; });
 };
 
@@ -2705,31 +3129,10 @@ const createPatchJob = async ({ text, projectId, jobType = 'code-write', ...rest
 };
 
 /**
- * Composer 交办：先只读分析（不写文件）。
+ * 交办：先只读分析（不写文件）。sidecar 的 submitChat 与队列派发共用这一条路。
  * - 只需要回答 → 直接返回结论，不创建 Job；
  * - 需要写入 → 创建 code-write 写请求（pending_approval，HITL），批准后才启动写入子 Agent。
  */
-/** 对话里的改进意见自动进「想法」池：只存文本，不触发任何执行。 */
-const captureIdeaFromMessage = async (text, projectId) => {
-  if (!projectId) return null;
-  try {
-    const mod = (ideaCaptureModule ??= await importEsm('../src/idea-capture.mjs'));
-    if (!mod.looksLikeIdea(text)) return null;
-    return await api('/owner/v1/queue', {
-      method: 'POST',
-      body: {
-        projectId,
-        title: mod.ideaTitle(text),
-        body: text,
-        kind: 'idea',
-        source: 'conversation'
-      }
-    });
-  } catch {
-    return null;
-  }
-};
-
 const submitCompanionTask = async ({ text, projectId }) => {
   // 交办必须显式指定项目：没给就报错，不静默回退到第一个，避免写进错项目。
   const project = await registeredProject(projectId, '先选择要交办的项目。');
@@ -2765,14 +3168,20 @@ const submitCompanionTask = async ({ text, projectId }) => {
   return result;
 };
 
+/** 会话存储不可用时明确报错，不返回一个空列表假装「没有历史」。 */
+const requireChatSessions = () => {
+  if (!chatSessionStore) throw new Error('会话存储不可用：本地数据库打不开，请重启客户端。');
+  return chatSessionStore;
+};
+
 /**
- * 对话模式的只读 Pi 会话：按需创建，进程内按项目连续追问。
- * 这里不做任何写操作；模型未配置时由服务返回明确的 no-model 提示。
+ * 对话的模型后端：按需创建的只读 Pi 会话（read/grep/find/ls），按项目复用。
+ * 没有配置模型时不创建会话，由 PiChatService 返回 no-model 的明确提示——
+ * 这里不猜默认值，也不在没模型时假装回答。
  */
 const getChatService = async () => {
   if (chatService) return chatService;
   chatModule ??= await importEsm('../src/pi-chat.mjs');
-  // 隐式技能来自 companion.json；空数组表示「用默认七个」，上限由 pi-chat 再兜一层。
   chatService = new chatModule.PiChatService({
     model: config.model || '',
     implicitSkillIds: Array.isArray(config.chatSkills) && config.chatSkills.length
@@ -2780,12 +3189,6 @@ const getChatService = async () => {
       : null
   });
   return chatService;
-};
-
-/** 会话存储不可用时明确报错，不返回一个空列表假装「没有历史」。 */
-const requireChatSessions = () => {
-  if (!chatSessionStore) throw new Error('会话存储不可用：本地数据库打不开，请重启客户端。');
-  return chatSessionStore;
 };
 
 /** 按 id 找已登记项目；找不到返回 null。主进程与渲染进程各留一份（不强行共用浏览器模块）。 */
@@ -2823,47 +3226,33 @@ const registerIpc = () => {
     return sinceLastSeenFor(String(input?.projectId ?? ''));
   });
 
-  ipcMain.handle('companion:submit', async (event, input) => {
+  // #106 卡片壳的会话入口：与旧的对话会话共用 owner_chat_sessions 两张表，
+  // 但规则不同——会话可以先不绑项目（全局会话），删除是软删除（记录留着、可找回）。
+  // 单独一组通道保留卡片壳自己的语义：新建可以先不绑项目，删除是软删除（可找回）。
+  ipcMain.handle('companion:card-sessions', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    const text = String(input?.text ?? '');
-    const projectId = String(input?.projectId ?? '');
-    // 自动采集：讨论中提到的改进意见进「想法」池（只收集，不执行）。
-    const captured = input?.captureIdea === false ? null : await captureIdeaFromMessage(text, projectId);
-    const result = await submitCompanionTask({ text, projectId });
-    return captured ? { ...result, capturedIdea: captured } : result;
+    return {
+      items: requireChatSessions().listSessions({
+        includeDeleted: input?.includeDeleted === true
+      })
+    };
   });
 
-  // 兼容旧渲染进程：同样走“只读分析 → HITL 写请求”，不再接受 mode 开关。
-  // 兼容旧入口：同样走只读分诊，只有需要写入时才创建 HITL 写请求。
-  ipcMain.handle('companion:create-job', async (event, input) => {
-    if (!fromCompanion(event)) throw new Error('Unauthorized');
-    return submitCompanionTask({
-      text: String(input?.text ?? ''),
-      projectId: String(input?.projectId ?? '')
-    });
-  });
-
-  // 对话会话：新建时必须绑定已登记项目，列表按项目分组由渲染层完成。
-  ipcMain.handle('companion:chat-sessions', async (event, input) => {
-    if (!fromCompanion(event)) throw new Error('Unauthorized');
-    return { items: requireChatSessions().listSessions({ projectId: String(input?.projectId ?? '') }) };
-  });
-
-  ipcMain.handle('companion:chat-session-get', async (event, input) => {
+  ipcMain.handle('companion:card-session-get', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return requireChatSessions().getSession(String(input?.id ?? ''));
   });
 
-  ipcMain.handle('companion:chat-session-create', async (event, input) => {
+  ipcMain.handle('companion:card-session-create', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    const project = await registeredProject(input?.projectId);
+    // #107 才接项目；本轮新会话一律先是全局会话。
     return requireChatSessions().createSession({
-      projectId: project.id,
+      projectId: String(input?.projectId ?? ''),
       title: String(input?.title ?? '')
     });
   });
 
-  ipcMain.handle('companion:chat-session-rename', async (event, input) => {
+  ipcMain.handle('companion:card-session-rename', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return requireChatSessions().renameSession(
       String(input?.id ?? ''),
@@ -2871,74 +3260,343 @@ const registerIpc = () => {
     );
   });
 
-  ipcMain.handle('companion:chat-session-delete', async (event, input) => {
+  ipcMain.handle('companion:card-session-pin', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    return requireChatSessions().deleteSession(String(input?.id ?? ''));
+    return requireChatSessions().setPinned(String(input?.id ?? ''), input?.pinned === true);
   });
 
-  ipcMain.handle('companion:chat-session-append', async (event, input) => {
+  ipcMain.handle('companion:card-session-soft-delete', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().softDeleteSession(String(input?.id ?? ''));
+  });
+
+  ipcMain.handle('companion:card-session-restore', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().restoreSession(String(input?.id ?? ''));
+  });
+
+  // 「当前选的是哪条」：落 last_opened_at，重启后回到同一条。
+  ipcMain.handle('companion:card-session-touch', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().markOpened(String(input?.id ?? ''));
+  });
+
+  ipcMain.handle('companion:card-session-append', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return requireChatSessions().appendMessage({
       sessionId: String(input?.id ?? ''),
       role: String(input?.role ?? ''),
       text: String(input?.text ?? ''),
-      status: input?.status === 'error' ? 'error' : 'ok',
-      citations: Array.isArray(input?.citations) ? input.citations : []
+      // #109 的块原样带过去：存储层不解释块结构。
+      blocks: Array.isArray(input?.blocks) ? input.blocks : []
     });
   });
 
-  // 对话模式：只读 Pi SDK 会话（read/grep/find/ls），不能写文件。
-  // 会话消息落本地库：模型失败也保留问题，重启后能接着看。
+  // 模型目录：配置箱的「主模型 / 图谱模型」用它列出已装模型。
+  // 只读 provider/model 与「有没有凭据」；不读、不回传任何密钥值。
+  // OWNER_AGENT_PI_HOME 只给验收用：指向假的 Pi 家目录，测试不依赖真机。
+  ipcMain.handle('companion:model-catalog', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const mod = modelCatalogModule ??= await importEsm('../src/model-catalog.mjs');
+    const home = process.env.OWNER_AGENT_PI_HOME || path.join(os.homedir(), '.pi');
+    const agentDir = path.join(home, 'agent');
+    const readJson = (file) => {
+      try {
+        return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/u, ''));
+      } catch {
+        return null;
+      }
+    };
+    const stores = ['models-store.json', 'models.json']
+      .map((name) => ({ file: name, data: readJson(path.join(agentDir, name)) }))
+      .filter((store) => store.data);
+    const auth = readJson(path.join(agentDir, 'auth.json')) ?? {};
+    const catalog = mod.buildModelCatalog({ stores, auth, env: process.env });
+    return { ...catalog, current: config.model || '', diagram: config.diagramModel || '' };
+  });
+
+  // 对话：只读 Pi 会话。会话消息由壳自己落库（见 companion:card-session-append），
+  // 这里只回答，不重复写一遍——否则同一条提问会在流里出现两次。
+  //
+  // 全局会话不是「没有项目所以不能问」，而是**它自己的一条 Pi 会话**：
+  // cwd 用 <userData>/global-chat 这个自有工作目录，读不到任何项目文件，
+  // 但能回答通用问题、也能用 prompt 里带进来的关联项目/会话线索。写能力本来就不给。
+  const GLOBAL_CHAT_ID = 'global';
+  const globalChatRoot = () => path.join(app.getPath('userData'), 'global-chat');
+
+  // 进行中的轮次：turnId → AbortController。停止时按 id 找，不猜「当前那一轮」。
+  const chatTurns = new Map();
+
   ipcMain.handle('companion:chat-ask', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    const service = await getChatService();
     const question = String(input?.question ?? '');
-    const sessionId = String(input?.sessionId ?? '').trim();
-    const session = sessionId ? requireChatSessions().getSession(sessionId) : null;
-    // 项目只认「会话绑定」或「本次显式传入」；找不到就让服务返回 no-project，不回退第一个。
-    const wantedId = String(session?.projectId || input?.projectId || '').trim();
-    const items = wantedId ? ((await api('/owner/v1/projects')).items ?? []) : [];
-    const project = findProjectById(items, wantedId);
-    // 续聊上下文在写入本次问题之前取，避免把问句重复塞进历史。
-    const history = session ? requireChatSessions().historyForPrompt(session.id) : [];
-    const text = question.trim();
-    const willPersist = Boolean(
-      session && text && text.length <= (chatModule?.MAX_QUESTION ?? 1200)
-    );
-    if (willPersist) {
-      requireChatSessions().appendMessage({
-        sessionId: session.id,
-        role: 'user',
-        text
-      });
+    const turnId = String(input?.turnId ?? '');
+    const sender = event.sender;
+    const send = (payload) => {
+      if (!turnId || sender.isDestroyed?.()) return;
+      sender.send('companion:chat-event', { turnId, ...payload });
+    };
+
+    // 验收注入：假流也走同一套事件，界面与失败分支都能在 e2e 里被测到。
+    if (process.env.OWNER_AGENT_CHAT_FAKE === '1') {
+      const answer = `（假回答）收到：${question.slice(0, 40)}`;
+      send({ type: 'turn-start', model: 'fake', startedAt: Date.now() });
+      for (const chunk of [answer.slice(0, 6), answer.slice(6)]) {
+        if (chunk) send({ type: 'delta', text: chunk });
+      }
+      send({ type: 'turn-done', text: answer, citations: [], missingCitations: [], durationMs: 1 });
+      return {
+        status: 'ok',
+        ok: true,
+        answer,
+        citations: [],
+        missingCitations: []
+      };
     }
-    const result = await service.ask({
-      project: project
-        ? {
-          id: project.id,
-          root: projectRootOf(project),
-          domain: project.primary_domain ?? project.primaryDomain ?? ''
-        }
-        : null,
-      question,
-      model: config.model || '',
-      sessionId: session?.id ?? '',
-      history
-    });
-    if (willPersist) {
-      requireChatSessions().appendMessage({
-        sessionId: session.id,
-        role: 'assistant',
-        text: String(result?.answer ?? result?.advice ?? '这次没有结论。'),
-        status: result?.status === 'ok' ? 'ok' : 'error',
-        citations: result?.citations ?? []
+
+    const service = await getChatService();
+    const projectId = String(input?.projectId ?? '').trim();
+    const project = projectId
+      ? (store?.listProjects() ?? []).find((item) => item.id === projectId) ?? null
+      : null;
+    let target = project
+      ? { id: project.id, root: project.root ?? '', domain: project.domain ?? '' }
+      : null;
+    if (!target && !projectId) {
+      const root = globalChatRoot();
+      try { fs.mkdirSync(root, { recursive: true }); } catch { /* 建不出来就交给 service 报错 */ }
+      target = { id: GLOBAL_CHAT_ID, root, domain: '' };
+    }
+
+    const controller = new AbortController();
+    const model = config.model || '';
+    const sessionId = String(input?.sessionId ?? '').trim();
+    if (turnId) {
+      chatTurns.set(turnId, { controller, service, project: target, model, sessionId, send });
+    }
+
+    // 增量在 main 侧合并：50ms 或累计 80 字发一次，避免 token 级 IPC 洪泛。
+    let pending = '';
+    let flushTimer = null;
+    const flush = () => {
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      if (!pending) return;
+      send({ type: 'delta', text: pending });
+      pending = '';
+    };
+    const onEvent = (payload) => {
+      if (payload?.type === 'delta') {
+        pending += String(payload.text ?? '');
+        if (pending.length >= 80) flush();
+        else if (!flushTimer) flushTimer = setTimeout(flush, 50);
+        return;
+      }
+      flush();
+      send(payload);
+    };
+
+    try {
+      return await service.askStream({
+        project: target,
+        question,
+        model,
+        sessionId,
+        signal: controller.signal,
+        onEvent
       });
+    } finally {
+      flush();
+      if (turnId) chatTurns.delete(turnId);
+    }
+  });
+
+  // 停止：只中止指定的那一轮；找不到就如实返回 false，不误伤别的会话。
+  ipcMain.handle('companion:chat-abort', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const turnId = String(input?.turnId ?? '');
+    const entry = chatTurns.get(turnId);
+    if (!entry) return { aborted: false };
+    entry.controller.abort();
+    return { aborted: true };
+  });
+
+  // 引导（steer）：把一句话插进正在跑的那一轮，不中止它。
+  // 会话找不到、或这一轮已经结束，都如实返回 steered:false，让界面提示而不是假装成功。
+  ipcMain.handle('companion:chat-steer', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const turnId = String(input?.turnId ?? '');
+    const entry = chatTurns.get(turnId);
+    const text = String(input?.text ?? '').trim();
+    if (!entry || !text) return { steered: false, reason: entry ? 'empty' : 'no-active-turn' };
+    // 引导会被插进当前回答：先把已经流出来的旧文字清掉，避免两段答案粘在一起。
+    entry.send?.({ type: 'turn-reset' });
+    return entry.service.steer({
+      project: entry.project,
+      question: text,
+      model: entry.model,
+      sessionId: entry.sessionId
+    });
+  });
+
+  // 撤回上一轮：Pi 会话树导航 + 本机会话表删掉这一问一答。
+  // Pi 侧失败（会话已经丢弃 / 重启过）不阻塞本地撤回：至少把界面上的这一轮拿掉。
+  ipcMain.handle('companion:chat-rewind', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const sessionId = String(input?.sessionId ?? '').trim();
+    const projectId = String(input?.projectId ?? '').trim();
+    const project = projectId
+      ? (store?.listProjects() ?? []).find((item) => item.id === projectId) ?? null
+      : null;
+    let target = project
+      ? { id: project.id, root: project.root ?? '', domain: project.domain ?? '' }
+      : null;
+    if (!target && !projectId) {
+      const root = globalChatRoot();
+      try { fs.mkdirSync(root, { recursive: true }); } catch { /* 建不出来就交给 service */ }
+      target = { id: GLOBAL_CHAT_ID, root, domain: '' };
+    }
+    let fromPi = { rewound: false, reason: '' };
+    try {
+      const service = await getChatService();
+      fromPi = await service.rewindLast({ project: target, sessionId, model: config.model || '' });
+    } catch {
+      fromPi = { rewound: false, reason: 'error' };
+    }
+    let local = null;
+    try {
+      local = requireChatSessions().removeLastTurn({ sessionId });
+    } catch {
+      local = null;
     }
     return {
-      ...result,
-      sessionId: session?.id ?? '',
-      sessionTitle: session ? requireChatSessions().getSession(session.id).title : ''
+      rewound: Boolean(fromPi?.rewound || local),
+      text: String(local?.text ?? fromPi?.text ?? ''),
+      pi: Boolean(fromPi?.rewound),
+      reason: String(fromPi?.reason ?? '')
     };
+  });
+
+  // 回答提问块：只写那一条消息的 answers（哪一块被答成了什么）。
+  ipcMain.handle('companion:card-session-answer', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().answerMessage({
+      sessionId: String(input?.id ?? ''),
+      seq: Number(input?.seq ?? 0),
+      answers: input?.answers
+    });
+  });
+
+  // #107 项目胶囊的下拉项：只给壳需要的 id / 名字 / 路径，不把项目整行递到渲染层。
+  // #124 起多一个 root：关联项目的 prompt 段要写「项目名（来源 · 路径）」。
+  ipcMain.handle('companion:card-projects', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return {
+      items: (store?.listProjects() ?? []).map((project) => ({
+        id: project.id, name: project.name, root: project.root ?? ''
+      }))
+    };
+  });
+
+  // #107 切「正在看的项目」：只改视图状态（会话绑定 / 历史归属不动）。
+  // 空 projectId = 切回全局。
+  ipcMain.handle('companion:card-session-view', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().setViewProject(
+      String(input?.id ?? ''),
+      String(input?.projectId ?? '')
+    );
+  });
+
+  // #139 定位屏（只读）：不选项目时的项目行。
+  // 读水位、git 与观察员事件，但不推进水位、不扫描、不写任何项目；切换项目走原有的会话视图通道。
+  ipcMain.handle('companion:locate-attention', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return locateAttentionFor();
+  });
+
+  // #140 行内「标记已读」：显式动作，只把这一个项目的水位推到当下并返回刷新后的定位屏。
+  // 不走 `/变化` 的算差异路径，也不写项目目录或候选表；已知没有未读时是空操作。
+  ipcMain.handle('companion:locate-mark-read', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return markLocateReadFor(String(input?.projectId ?? ''));
+  });
+
+  // #124 关联项目：只读一个项目的库视图摘要，给方法卡就地展开四类资料。
+  // 口径与项目库同一份（libraryForProject → project-library.mjs），这里只裁掉正文，
+  // 只留计数、条目种类与图谱 / 画像是否可用；分类与文案在渲染层（shell-at-project.cjs）。
+  ipcMain.handle('companion:card-project-library', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const projectId = String(input?.projectId ?? '');
+    const project = projectId ? store?.getProject(projectId) : null;
+    if (!project) throw new Error(`项目不存在：${projectId || '(空)'}`);
+    const library = await libraryForProject(project, { limit: 200, full: true });
+    return {
+      project: { id: project.id, name: project.name, root: project.root ?? '' },
+      counts: library?.counts ?? {},
+      groups: (library?.groups ?? []).map((group) => ({
+        key: group.key,
+        count: group.count,
+        kinds: (group.items ?? []).map((item) => item?.kind ?? '')
+      })),
+      assets: {
+        profile: { available: library?.assets?.profile?.available === true },
+        diagrams: (library?.assets?.diagrams ?? []).map((diagram) => ({
+          kind: diagram.kind, label: diagram.label, available: diagram.available === true
+        }))
+      }
+    };
+  });
+
+  // #131 同步状态：get 只读；attempt 是一次显式补同步，执行器返回什么就记什么。
+  // 本地读写不经这条通道，断网时点「补同步」只会更新标记与原因，不会挡住任何本地动作。
+  ipcMain.handle('companion:sync-status-get', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const store = await getSyncStatusStore();
+    return store.read();
+  });
+
+  ipcMain.handle('companion:sync-attempt', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const [mod, store] = await Promise.all([loadSyncStatusModule(), getSyncStatusStore()]);
+    const previous = store.read();
+    let result;
+    try {
+      result = await runSyncAttempt();
+    } catch (error) {
+      // 执行器自己抛错也要落成失败状态：不能因为异常把界面留在「已同步」。
+      result = {
+        status: 'error',
+        step: 'attempt',
+        code: 'attempt-threw',
+        message: error?.message ?? String(error)
+      };
+    }
+    const status = mod.applySyncAttempt(previous, result, new Date());
+    store.save(status);
+    return { status, result };
+  });
+
+  // #110 复制：渲染进程在 sandbox + contextIsolation 下不直接碰系统剪贴板，
+  // 统一由主进程写。写入失败原样抛回，界面据此给可见提示，不静默。
+  ipcMain.handle('companion:clipboard-write', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const text = String(input?.text ?? '');
+    if (!text) throw new Error('没有可复制的文本');
+    clipboard.writeText(text);
+    return { ok: true, length: text.length };
+  });
+
+  // #110 会话导出：<userData>/conversations/<sessionId>.md。
+  // 正文转换与界面同源（desktop/shell-copy.cjs），时间取会话自己的 startedAt，重复导出幂等。
+  ipcMain.handle('companion:conversation-export', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!conversationExportModule) throw new Error('会话导出模块尚未就绪，请重启后再试。');
+    return conversationExportModule.writeConversationExport({
+      root: app.getPath('userData'),
+      sessionId: String(input?.sessionId ?? ''),
+      context: input?.context,
+      messages: input?.messages
+    });
   });
 
   ipcMain.handle('companion:queue-add', async (event, input) => {
@@ -2965,6 +3623,131 @@ const registerIpc = () => {
       method: 'POST',
       body: { text: String(input?.text ?? '') }
     });
+  });
+
+  // #114 自有目录写入：卡片壳把「记灵感」这类动作交到这里，主进程只负责真正写库。
+  // 判定与回执在渲染层读 src/own-write.mjs（同一份 write-gate 规则），这里不重复判定；
+  // 与既有写通道一样走 sidecar 的 /owner/v1/*，不另开一条写库路径。
+  // 这一版只接了记灵感：其余动作（草稿 / 水位 / 入队 / 导出）还没有免确认的写入实现，
+  // 明确拒绝并把原因交回渲染层，由它写成一条失败回执——不静默、也不假装写过。
+  ipcMain.handle('companion:own-write', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const kind = String(input?.kind ?? '');
+    if (kind !== 'idea') {
+      throw new Error(`自有目录写入还没接上「${kind || '未知动作'}」：这一版只接了记灵感。`);
+    }
+    const text = String(input?.text ?? '');
+    const result = await api('/owner/v1/ideas', { method: 'POST', body: { text } });
+    const item = result?.item ?? {};
+    const ideaId = String(item.id ?? '') || '';
+    return {
+      ok: true,
+      // 去重命中时如实说「没有新增」，回执里的「写了什么」才准确。
+      wrote: result?.duplicate ? 'ideas 表 · 已有条目，未新增' : 'ideas 表 · 1 条',
+      result: ideaId || '已记录',
+      // #137 回执上的「提升为 Lesson」靠这个 id 找回灵感；拿不到 id 时渲染层不给动作。
+      ideaId
+    };
+  });
+
+  // #137 灵感回执上的「提升为 Lesson」：原文作为现象，绑定当前项目，来源与证据指回这条灵感。
+  // 只写经验表；知识候选要人在经验卡上再点一次（HITL 2），这里不自动入库。
+  ipcMain.handle('companion:idea-lesson', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) throw new Error('知识库未初始化，暂时不能把灵感提升为 Lesson。');
+    const projectId = String(input?.projectId ?? '').trim();
+    if (!projectId) throw new Error('提升为 Lesson 要先在顶栏选一个项目：这次什么都没写。');
+    if (!store?.getProject?.(projectId)) throw new Error(`项目不存在：${projectId}`);
+    ideaLessonModule = ideaLessonModule ?? await importEsm('../src/idea-lesson.mjs');
+    const result = ideaLessonModule.promoteIdeaToLesson({
+      store,
+      personalStore,
+      id: String(input?.ideaId ?? ''),
+      projectId
+    });
+    if (!result.ok) throw new Error(result.reason);
+    return result;
+  });
+
+  // #115 项目目录同步：两段式，先算清单再写。
+  // - 判定与会话授权在渲染层（src/project-write.mjs + write-gate）；主进程不重复判定，
+  //   但必须自己校验「每条路径都落在已登记项目根下」，不能把渲染层传来的路径直接落盘；
+  // - 清单（plan）只读：给确认卡提供完整路径与字节数，用户确认前不写任何文件；
+  // - 写入（write）按清单逐条落盘，返回每个文件的真实字节数，并回答「是否进 git 工作区」。
+  // 外发与删除不从这里走（#116）。
+  const gitWorktreeOf = async (root, relativePaths) => {
+    const inside = await execFileAsync('git', ['-C', root, 'rev-parse', '--is-inside-work-tree'], {
+      timeout: 5000, windowsHide: true
+    }).then((result) => result.stdout.trim()).catch(() => '');
+    if (inside !== 'true') return { repo: false, files: [] };
+    if (relativePaths.length === 0) return { repo: true, files: [] };
+    const stdout = await execFileAsync('git', ['-C', root, 'status', '--porcelain', '--', ...relativePaths], {
+      timeout: 10000, windowsHide: true
+    }).then((result) => result.stdout).catch(() => '');
+    const files = String(stdout).split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      // `?? path` / ` M path` 前两位是状态；重命名行取 `->` 后面的新路径。
+      .map((line) => line.slice(3).trim())
+      .map((file) => (file.includes(' -> ') ? file.split(' -> ').pop().trim() : file))
+      .filter(Boolean);
+    return { repo: true, files };
+  };
+
+  const projectSyncRoot = async (input) => {
+    const project = await registeredProject(input?.projectId, '同步到项目目录要先选一个项目。');
+    const root = projectRootOf(project);
+    if (!root) throw new Error(`项目没有根目录：${project.id}`);
+    // 项目目录必须在：不拿一条过期登记凭空造一个目录出来。
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
+      throw new Error(`项目根目录不存在：${root}`);
+    }
+    return { project, root };
+  };
+
+  const projectSyncPlan = async (input) => {
+    const { project, root } = await projectSyncRoot(input);
+    const mod = await loadProjectWrite();
+    return mod.planProjectSync({
+      projectId: project.id,
+      projectName: project.name ?? '',
+      projectRoot: root,
+      docs: Array.isArray(input?.docs) ? input.docs : []
+    });
+  };
+
+  ipcMain.handle('companion:project-sync-plan', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return projectSyncPlan(input);
+  });
+
+  ipcMain.handle('companion:project-sync-write', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const { project, root } = await projectSyncRoot(input);
+    const mod = await loadProjectWrite();
+    // 重新算一遍清单：写入只按主进程自己解析出的绝对路径落盘，不用渲染层的路径字符串。
+    const plan = mod.planProjectSync({
+      projectId: project.id,
+      projectName: project.name ?? '',
+      projectRoot: root,
+      docs: Array.isArray(input?.docs) ? input.docs : []
+    });
+    const written = [];
+    for (const file of plan.files) {
+      const target = mod.resolveUnderRoot(root, file.relativePath);
+      await fs.promises.mkdir(path.dirname(target), { recursive: true });
+      await fs.promises.writeFile(target, file.content, 'utf8');
+      written.push({ relativePath: file.relativePath, fullPath: target, bytes: file.bytes });
+    }
+    const git = await gitWorktreeOf(root, written.map((file) => file.relativePath));
+    return {
+      ok: true,
+      projectId: plan.projectId,
+      projectName: plan.projectName,
+      root,
+      files: written,
+      git
+    };
   });
 
   // 状态机在存储层：非法流转返回 409，面板把原因告诉用户，而不是把条目硬改过去。
@@ -3434,6 +4217,67 @@ const registerIpc = () => {
     };
   });
 
+  // 显式提炼：把当前项目里「已终态但还没提炼」的执行记录转成 Lesson。
+  // 只有这条 IPC 会真正调用模型；失败逐条返回原因，不写半截经验。
+  ipcMain.handle('companion:distill-lessons', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!store || !personalStore) return { ok: false, reason: '项目库或知识库未初始化' };
+    const projectId = String(input?.projectId ?? '') || config.projectId || '';
+    if (!projectId) return { ok: false, reason: '先选一个项目，再提炼经验' };
+    const list = store.listProjects?.() ?? [];
+    const project = list.find((item) => item.id === projectId) ?? null;
+    if (!project) return { ok: false, reason: `项目不存在：${projectId}` };
+    const distiller = await knowledgeDistiller();
+    if (!distiller) return { ok: false, reason: '知识库未就绪' };
+
+    const limit = Math.min(20, Math.max(1, Number(input?.limit) || 5));
+    const { createLessonExtractor } = await importEsm('../src/knowledge-loop/distill-extractor.mjs');
+    const extractor = createLessonExtractor({
+      model: config.model || '',
+      // 记录本身不带 root；会话只需要一个合法 cwd，不读盘。
+      cwd: project.root || app.getPath('userData')
+    });
+    try {
+      onDemandModule = onDemandModule ?? await importEsm('../src/knowledge-loop/on-demand.mjs');
+      const result = await onDemandModule.distillOnDemand({
+        distiller,
+        projectId,
+        limit,
+        extractor: (input) => extractor.extract(input)
+      });
+      return {
+        ok: true,
+        projectId,
+        attempted: result.attempted,
+        created: result.lessons.length,
+        inferred: result.inferred,
+        failed: result.failed,
+        pending: result.pending.length,
+        lessons: result.lessons.map(lessonListItem)
+      };
+    } catch (error) {
+      return { ok: false, reason: `提炼失败：${error?.message ?? error}` };
+    } finally {
+      extractor.dispose();
+    }
+  });
+
+  // 待审候选：/经验 打开时把还没审的候选一起带出来，重启后也能接着审。
+  ipcMain.handle('companion:pending-proposals', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) return { items: [] };
+    const rows = personalStore.proposals('pending') ?? [];
+    return {
+      items: rows.slice(0, 20).map((row) => ({
+        id: row.id,
+        title: String(row.payload?.title ?? row.payload?.claim ?? '').slice(0, 200),
+        claim: String(row.payload?.claim ?? '').slice(0, 600),
+        createdAt: String(row.created_at ?? ''),
+        lessonIds: Array.isArray(row.meta?.sourceLessonIds) ? row.meta.sourceLessonIds : []
+      }))
+    };
+  });
+
   // #61 经验列表（按项目）：项目级只看本项目，域级只列与项目主域相关的那些。
   ipcMain.handle('companion:lesson-list', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
@@ -3481,7 +4325,7 @@ const registerIpc = () => {
       name: project.name ?? '',
       root: project.root ?? ''
     }));
-    const state = loadSessionScanState();
+    const state = await loadSessionScanState();
     // 已确认入库的决策指纹从库里读（#87）：同一句话已经被确认过，就不该再作为候选出现。
     const confirmed = (() => {
       try { return personalStore?.decisionFingerprints?.() ?? []; } catch { return []; }
@@ -3492,7 +4336,7 @@ const registerIpc = () => {
       seenSessions: state.sessions,
       fingerprints: [...state.fingerprints, ...confirmed]
     });
-    saveSessionScanState({
+    await saveSessionScanState({
       sessions: [...state.sessions, ...result.scannedKeys],
       // 只记「哪些会话扫过」，不把未确认候选的指纹写进去：本轮提过的候选还没入库，
       // 占住指纹会让它以后再也没机会被提出来。跨轮的同内容去重靠会话键；
@@ -3500,6 +4344,27 @@ const registerIpc = () => {
       fingerprints: state.fingerprints
     });
     return result;
+  });
+
+  // #125 关联会话：只列指针元信息（来源 / id / 标题 / 时间 / 轮数 / 项目），
+  // 不返回会话正文；按线索找会话也只读文件头或数据库元信息列，不整段展开。
+  ipcMain.handle('companion:session-points', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    sessionPointerIndexModule = sessionPointerIndexModule
+      ?? await importEsm('../src/memory/session-pointer-index.mjs');
+    const home = String(process.env.OWNER_SESSION_HOME ?? '').trim() || os.homedir();
+    const projects = (store?.listProjects() ?? []).map((project) => ({
+      id: project.id,
+      name: project.name ?? '',
+      root: project.root ?? ''
+    }));
+    return sessionPointerIndexModule.listSessionPointers({
+      roots: sessionPointerIndexModule.sessionPointerRoots({ home, env: process.env }),
+      projects,
+      source: String(input?.source ?? ''),
+      clue: String(input?.clue ?? ''),
+      limit: input?.limit
+    });
   });
 
   // #87 决策确认：候选只在人点「确认」时入库；可选补一句理由，缺理由单独标记。
@@ -3541,6 +4406,88 @@ const registerIpc = () => {
       projectId: String(input?.projectId ?? '') || config.projectId || '',
       query: String(input?.query ?? ''),
       limit: input?.limit
+    });
+  });
+
+  // #135 `/提炼决策`：只扫当前项目的会话，候选先落进 memory-scan.json 的未处理列表。
+  // 有未处理候选时直接回候选列表，不再扫描；扫描失败 / 会话读不出来由回执说清，不伪造空成功。
+  ipcMain.handle('companion:decision-scan', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const projectId = String(input?.projectId ?? '');
+    const project = (store?.listProjects() ?? []).find((item) => item.id === projectId) ?? null;
+    if (!project) {
+      return {
+        ok: false, mode: 'no-project', reason: '先选一个项目，再提炼决策。',
+        pending: [], added: [], receipt: { mode: 'no-project', status: 'no-project', added: 0, pending: 0 }
+      };
+    }
+    decisionScanModule = decisionScanModule ?? await importEsm('../src/memory/decision-scan.mjs');
+    sessionScanModule = sessionScanModule ?? await importEsm('../src/memory/session-scan.mjs');
+    const scanStore = await getDecisionScanStore();
+    // 已确认入库的决策指纹从库里读（#87）：同一句话已经被确认过，就不该再作为候选出现。
+    const confirmed = (() => {
+      try { return personalStore?.decisionFingerprints?.() ?? []; } catch { return []; }
+    })();
+    const result = await decisionScanModule.runDecisionScan({
+      state: scanStore.read(),
+      project: { id: project.id, name: project.name ?? '', root: project.root ?? '' },
+      roots: sessionScanModule.sessionRootsFrom({ home: os.homedir(), env: process.env }),
+      scan: sessionScanModule.scanSessions,
+      confirmedFingerprints: confirmed
+    });
+    // 只有「扫描过」才写状态：候选模式原样返回；失败时连已扫记录都不推进，下次还能重试。
+    if (result.mode === 'scanned' && result.state) scanStore.write(result.state);
+    // 会话文件路径与整份状态留在主进程：渲染层只要回执、未处理候选与计数。
+    const visible = { ...result };
+    delete visible.state;
+    delete visible.scan;
+    return visible;
+  });
+
+  // #135 未处理候选摘要（只读）：定位屏以后按项目显示「待确认 N 条」，这里先给数据。
+  // 不扫描、不写库、不动已读；已删除项目留下的未处理候选也照实列出，计数才和 total 对得上。
+  ipcMain.handle('companion:decision-pending', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    decisionScanModule = decisionScanModule ?? await importEsm('../src/memory/decision-scan.mjs');
+    const scanStore = await getDecisionScanStore();
+    const projects = (store?.listProjects() ?? []).map((project) => ({
+      id: project.id,
+      name: project.name ?? ''
+    }));
+    const summary = decisionScanModule.pendingSummary(scanStore.read(), projects);
+    const projectId = String(input?.projectId ?? '');
+    return projectId ? { ...summary, projectId } : summary;
+  });
+
+  // #135 接受：按未处理候选里的记录确认一条决策（写知识库），再把候选从列表移除。
+  // 理由可以补；没补就保持「缺理由」，不编占位词。
+  // #138 改写：edits 只带选择 / 放弃的方案 / 理由三项；现象与指纹仍取未处理候选里的记录，
+  // 所以改写只改内容，不会写成第二条决策。
+  ipcMain.handle('companion:decision-accept', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    decisionScanModule = decisionScanModule ?? await importEsm('../src/memory/decision-scan.mjs');
+    const scanStore = await getDecisionScanStore();
+    return decisionScanModule.acceptPendingCandidate({
+      scanStore,
+      personalStore,
+      projectId: String(input?.projectId ?? ''),
+      fingerprint: String(input?.fingerprint ?? ''),
+      reason: String(input?.reason ?? ''),
+      edits: input?.edits && typeof input.edits === 'object' && !Array.isArray(input.edits)
+        ? input.edits
+        : null
+    });
+  });
+
+  // #135 拒绝：只记指纹并移除候选；同一内容以后不再出现在扫描结果里。
+  ipcMain.handle('companion:decision-reject', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    decisionScanModule = decisionScanModule ?? await importEsm('../src/memory/decision-scan.mjs');
+    const scanStore = await getDecisionScanStore();
+    return decisionScanModule.rejectPending({
+      scanStore,
+      projectId: String(input?.projectId ?? ''),
+      fingerprint: String(input?.fingerprint ?? '')
     });
   });
 
@@ -3927,6 +4874,24 @@ const registerIpc = () => {
     return githubActivityFor(project.root);
   });
 
+  // #126 分享到飞书：渲染层把组装好的「原文 + 出处」交过来，主进程只做一次投递。
+  // webhook 值与 #91 同一条通道（env → ~/.owner-agent/feishu.json），永不回传渲染层；
+  // 未配置时返回 skipped 与原因，界面据此给「未配置 + 去哪配」，不静默失败、不自动重试。
+  ipcMain.handle('companion:share-feishu', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const text = String(input?.text ?? '');
+    if (!text.trim()) return { status: 'failed', detail: '分享内容为空' };
+    const webhookUrl = await loadFeishuWebhook();
+    if (!webhookUrl) return { status: 'skipped', detail: 'feishu webhook not configured' };
+    try {
+      const feishu = await importEsm('../src/observer/feishu.mjs');
+      const result = await feishu.deliverFeishu({ webhookUrl, text });
+      return { status: result.status, detail: result.detail };
+    } catch (error) {
+      return { status: 'failed', detail: `feishu delivery error: ${error?.message ?? error}` };
+    }
+  });
+
   // 只允许打开 GitHub 仓库链接，避免渲染进程打开任意网址。
   ipcMain.handle('companion:open-external', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
@@ -4025,7 +4990,8 @@ const registerIpc = () => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     // 设置页每次打开都重新探测，提供“重新检测”入口。
     serviceCache = { at: 0, value: null };
-    return { ...config, services: await serviceStatus() };
+    // #127 配置箱：configBox 只带路径、密钥状态与来源标注，不带任何密钥值。
+    return { ...config, services: await serviceStatus(), configBox: await configBoxFacts() };
   });
 
   ipcMain.handle('companion:settings:set', async (event, input) => {
@@ -4040,13 +5006,16 @@ const registerIpc = () => {
     if (typeof input?.gatewayUrl === 'string') config.gatewayUrl = input.gatewayUrl.trim();
     if (typeof input?.model === 'string') config.model = input.model.trim();
     if (typeof input?.diagramModel === 'string') config.diagramModel = input.diagramModel.trim();
-    // 对话隐式技能：最多 12 个；改完立刻重建服务，下一条消息就用新配置。
+    // #128 五个探测路径也可手改：值偏离 setupProbed 就成「手改」，重新探测不再覆盖。
+    for (const key of ['codexSessions', 'opencodeData', 'exportRoot', 'pstackSkills', 'mattSkills']) {
+      if (typeof input?.[key] === 'string') config[key] = input[key].trim();
+    }
+    // 对话隐式技能：最多 12 个。旧对话入口随旧壳删除后这里只保留配置，
+    // 等新壳接回对话时由 pi-chat 读取这份清单。
     if (Array.isArray(input?.chatSkills)) {
       const unique = [...new Set(input.chatSkills.map((item) => String(item ?? '').trim()).filter(Boolean))];
       if (unique.length > 12) throw new Error('对话技能最多 12 个：再多会把提示词撑爆。');
       config.chatSkills = unique;
-      try { chatService?.disposeAll?.(); } catch { /* 释放失败也不影响下次创建 */ }
-      chatService = null;
     }
     // 不再接受 projectId：面板的项目选择只存在内存里，不允许通过设置写回配置。
     if (typeof input?.sandboxMode === 'string') {
@@ -4083,8 +5052,8 @@ const registerIpc = () => {
     if (modelChanged) {
       playbookRunner = null;
       triageRunner = null;
-      // 对话会话绑定模型：换模型后旧会话立即释放，下一问重建。
-      chatService?.setModel(config.model || '');
+      // 换模型后旧的只读会话立刻作废：下一次提问按新模型重建，不混用。
+      try { chatService?.setModel(config.model || ''); } catch { /* 释放失败不影响保存 */ }
     }
     let modelApplied = true;
     let modelPending = false;
@@ -4100,6 +5069,50 @@ const registerIpc = () => {
       }
     }
     return { ...config, services: await serviceStatus(), modelChanged, modelApplied, modelPending };
+  });
+
+  // #128 /setup：探测是只读；写入必须显式 allow=true，且按最近一次探测的清单落盘。
+  // - probe 返回逐项判定 + 建议写入清单，前端只画；
+  // - apply 只在确认后调用：建缺失的自有目录、把探测路径写进 companion.json（与 #127 同一份文件），
+  //   手改值由纯函数跳过，回执里逐条说明「写了什么 / 跳过了什么」。
+  // 取消不调用 apply，所以文件系统前后一致由「没有这个 IPC 调用」保证。
+  ipcMain.handle('companion:setup-probe', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const { probe, plan } = await computeSetupProbe();
+    return { ok: true, probe, plan };
+  });
+
+  ipcMain.handle('companion:setup-apply', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (input?.allow !== true) throw new Error('写入清单要先确认（allow=true）');
+    const mod = setupProbeModule ??= await importEsm('../src/setup-probe.mjs');
+    // 没有探测过就不能直接写：宁可让用户重新跑一次 /setup，也不猜一份清单。
+    if (!lastSetupProbe) {
+      throw new Error('没有可用的探测清单：先探测一次再确认。');
+    }
+    const result = await mod.applySetup({
+      plan: lastSetupProbe.plan,
+      config,
+      probed: config.setupProbed ?? {},
+      confirm: true,
+      mkdir: (target) => fs.promises.mkdir(target, { recursive: true })
+    });
+    if (result.ok) {
+      config = {
+        ...config,
+        ...result.patch,
+        setupProbed: { ...(config.setupProbed ?? {}), ...result.probed }
+      };
+      saveConfig();
+    }
+    // 清单只用于这一次确认：写入（成功或失败）后作废，下一次必须重新探测。
+    lastSetupProbe = null;
+    return {
+      ok: result.ok,
+      written: result.written,
+      skipped: result.skipped,
+      receipt: result.receipt
+    };
   });
 
   ipcMain.handle('companion:add-project', async (event) => {
@@ -4200,807 +5213,6 @@ async function boot() {
   if (!e2eOffscreen) createTray();
   registerDisplayHandlers();
 
-  // 自动化视觉验收：启动后截图并退出。
-  if (screenshotDir) {
-    setTimeout(async () => {
-      try {
-        fs.mkdirSync(screenshotDir, { recursive: true });
-        showPanel();
-        await new Promise((resolve) => setTimeout(resolve, 1800));
-        if (pet) {
-          const image = await pet.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'pet.png'), image.toPNG());
-        }
-        if (panel) {
-          // 三种模式各截一张：直接点顶部的模式按钮，避免 reload 的竞态。
-          for (const mode of ['focus', 'knowledge', 'chat']) {
-            await panel.webContents.executeJavaScript(
-              `document.querySelector('#modeBar button[data-mode="${mode}"]')?.click();`
-            );
-            await new Promise((resolve) => setTimeout(resolve, 900));
-            const image = await panel.webContents.capturePage();
-            fs.writeFileSync(path.join(screenshotDir, `panel-${mode}.png`), image.toPNG());
-            // 知识审核验收：先保留接受前的 B 模式，再点第一条候选的「接受」补一张。
-            if (mode === 'knowledge') {
-              const reviewProbe = await panel.webContents.executeJavaScript(`(async () => {
-                const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-                let button = null;
-                for (let i = 0; i < 30 && !button; i += 1) {
-                  button = document.querySelector('#kbGroups .kb-candidates .kb-act.accept');
-                  if (!button) await wait(100);
-                }
-                if (!button) return { reviewed: false, reason: 'no-candidate' };
-                const countOf = (key) => {
-                  const node = document.querySelector('#kbGroups .kb-' + key + ' .kb-group-count');
-                  return node ? node.textContent : '';
-                };
-                const before = countOf('candidates');
-                button.click();
-                for (let i = 0; i < 40; i += 1) {
-                  await wait(100);
-                  if (countOf('candidates') !== before) break;
-                }
-                return {
-                  reviewed: true,
-                  before,
-                  candidates: countOf('candidates'),
-                  pending: countOf('pending'),
-                  toast: document.getElementById('toast')?.textContent ?? ''
-                };
-              })()`);
-              fs.writeFileSync(
-                path.join(screenshotDir, 'knowledge-review-probe.json'),
-                JSON.stringify(reviewProbe, null, 2)
-              );
-              const afterImage = await panel.webContents.capturePage();
-              fs.writeFileSync(
-                path.join(screenshotDir, 'panel-B-after-review.png'),
-                afterImage.toPNG()
-              );
-            }
-          }
-          // #41 专注：取消全局「当前项目」。
-          // 第一次启动：没选项目时发送被拦；显式选项目后按钮显示项目名，概览/任务链切到该项目。
-          // 用同一个 --user-data-dir 再启动一次：选择不落盘，回到「未选 + 默认第一个」。
-          const focusMarker = path.join(app.getPath('userData'), 'focus-selection-run.txt');
-          const focusRestarted = fs.existsSync(focusMarker);
-          if (!focusRestarted) fs.writeFileSync(focusMarker, new Date().toISOString(), 'utf8');
-          const focusIdle = await panel.webContents.executeJavaScript(`(async () => {
-            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-            document.querySelector('#modeBar button[data-mode="focus"]')?.click();
-            await wait(700);
-            const chip = document.getElementById('handoffTarget');
-            const name = document.getElementById('handoffTargetName');
-            const input = document.getElementById('taskInput');
-            const before = {
-              projectId: chip?.dataset.projectId ?? '',
-              label: name?.textContent?.trim() ?? '',
-              needsPick: chip?.classList.contains('needs-pick') === true
-            };
-            input.value = '把首页文案改得更直接一点';
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            document.getElementById('submitTask')?.click();
-            await wait(500);
-            const toast = document.getElementById('toast');
-            // Toast 会自动消失，必须在 await 之前读快照，否则截到的是已隐藏状态。
-            const toastText = toast?.textContent ?? '';
-            const toastVisible = !(toast?.hidden ?? true);
-            const draftKept = input.value;
-            // #73 之后选项目只剩工作区顶部一处：视图项目只从切换标签读。
-            const detailTab = document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
-            // toast 位置验收：不能压住模式栏，也不能压住底部输入区。
-            const rectOf = (node) => {
-              if (!node) return null;
-              const rect = node.getBoundingClientRect();
-              return { top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
-            };
-            const toastRect = rectOf(toast);
-            const navRect = rectOf(document.getElementById('modeBar'));
-            const composerRect = rectOf(document.getElementById('composeSection'));
-            const view = await window.companion.snapshot();
-            const settings = await window.companion.settings.get();
-            return {
-              hasProjects: (view?.projects?.length ?? 0) > 0,
-              hasGlobalProjectSelect: Boolean(document.querySelector('#composeSection select#projectSelect')),
-              before,
-              blockedToast: toastText,
-              blockedToastVisible: toastVisible,
-              draftKept,
-              viewProjectFromDom: detailTab,
-              toastRect,
-              navRect,
-              composerRect,
-              toastOverlapsNav: Boolean(toastRect && navRect && toastRect.top < navRect.bottom),
-              toastOverlapsComposer: Boolean(toastRect && composerRect && toastRect.bottom > composerRect.top),
-              settingsProjectId: settings?.projectId ?? null
-            };
-          })()`);
-          fs.writeFileSync(
-            path.join(screenshotDir, 'focus-selection-probe.json'),
-            JSON.stringify(focusIdle, null, 2)
-          );
-          // 再点一次发送并立刻截图，把「未选项目被拦」的提示留在画面上。
-          await panel.webContents.executeJavaScript(
-            "document.getElementById('submitTask')?.click();"
-          );
-          await new Promise((resolve) => setTimeout(resolve, 300));
-          let focusImage = await panel.webContents.capturePage();
-          fs.writeFileSync(
-            path.join(screenshotDir, focusRestarted ? 'panel-A-restart.png' : 'panel-A-no-project.png'),
-            focusImage.toPNG()
-          );
-          // toast 三档位置验收：同一次显示内依次切模式截图（toast 2.6 秒后自动消失）。
-          fs.writeFileSync(path.join(screenshotDir, 'toast-A.png'), focusImage.toPNG());
-          for (const mode of ['knowledge', 'chat']) {
-            await panel.webContents.executeJavaScript(
-              `document.querySelector('#modeBar button[data-mode="${mode}"]')?.click();`
-            );
-            await new Promise((resolve) => setTimeout(resolve, 200));
-            const toastImage = await panel.webContents.capturePage();
-            fs.writeFileSync(path.join(screenshotDir, `toast-${mode}.png`), toastImage.toPNG());
-          }
-          // 回到专注：后面的项目选择与截图都在专注页。
-          await panel.webContents.executeJavaScript(
-            `document.querySelector('#modeBar button[data-mode="focus"]')?.click();`
-          );
-          await new Promise((resolve) => setTimeout(resolve, 300));
-          if (focusIdle.hasProjects) {
-            const focusPicked = await panel.webContents.executeJavaScript(`(async () => {
-              const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-              const chip = document.getElementById('handoffTarget');
-              const name = document.getElementById('handoffTargetName');
-              const beforeView = (await window.companion.snapshot())?.config?.projectId ?? '';
-              chip?.click();
-              await wait(300);
-              const options = [...document.querySelectorAll('#handoffTargetMenu .composer-project-option')];
-              const target = options.find((item) => item.dataset.project !== beforeView) ?? options[0];
-              target?.click();
-              // 选中后等界面真正换到该项目（快照要走一遍服务探测），最多等 6 秒。
-              let viewProject = '';
-              for (let i = 0; i < 40; i += 1) {
-                viewProject = document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
-                if (viewProject && viewProject === target?.dataset.project) break;
-                await wait(150);
-              }
-              await wait(400);
-              const picked = (await window.companion.snapshot())?.projects ?? [];
-              // 视图项目从界面读：快照不传项目时主进程只会默认第一个，不代表渲染层的选择。
-              const detailTab = document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
-              const snapOf = async (projectId) => {
-                if (!projectId) return null;
-                const snap = await window.companion.snapshot({ projectId });
-                return {
-                  project: snap?.config?.projectId ?? '',
-                  stage: snap?.stage ?? '',
-                  chainJob: snap?.chain?.job?.title ?? '',
-                  chainPatch: snap?.chain?.patch?.id ?? '',
-                  counts: snap?.counts ?? {},
-                  nextAction: snap?.nextAction?.label ?? ''
-                };
-              };
-              const settings = await window.companion.settings.get();
-              // 截图前把工作区滚到眼前（详情卡已在 #72 删除），并清掉自动生成图谱的报错提示。
-              document.getElementById('workZone')?.scrollIntoView({ block: 'start' });
-              await wait(400);
-              document.getElementById('toast').hidden = true;
-              return {
-                options: options.map((item) => item.dataset.project),
-                viewProject,
-                detailTab,
-                chip: { projectId: chip?.dataset.projectId ?? '', label: name?.textContent?.trim() ?? '' },
-                projectIds: picked.map((item) => item.id),
-                byProject: [await snapOf(picked[0]?.id ?? ''), await snapOf(picked[1]?.id ?? '')],
-                settingsProjectId: settings?.projectId ?? null
-              };
-            })()`);
-            fs.writeFileSync(
-              path.join(screenshotDir, 'focus-selection-picked.json'),
-              JSON.stringify(focusPicked, null, 2)
-            );
-            focusImage = await panel.webContents.capturePage();
-            fs.writeFileSync(path.join(screenshotDir, 'panel-A-picked.png'), focusImage.toPNG());
-          }
-          // 技能目录验收：列表（含插件组）、展开详情、缺失条目详情（#44）。
-          await panel.webContents.executeJavaScript(`
-            document.querySelector('#modeBar button[data-mode="knowledge"]')?.click();
-            document.getElementById('skillCatalog')?.scrollIntoView({ block: 'start' });
-          `);
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          const skillShots = [
-            ['panel-B-skills.png', '#skillCatalog', ''],
-            ['panel-B-skills-plugin.png', '#skillGroups > section:last-child', ''],
-            ['panel-B-skill-detail.png', '#skillGroups .skill-item', '#skillGroups .skill-item'],
-            ['panel-B-skill-missing.png', '#skillGroups .skill-item.is-missing', '#skillGroups .skill-item.is-missing']
-          ];
-          for (const [file, scrollTo, expand] of skillShots) {
-            const ready = await panel.webContents.executeJavaScript(`
-              (() => {
-                const expandSelector = '${expand}';
-                const row = expandSelector ? document.querySelector(expandSelector) : null;
-                if (row) row.open = true;
-                const target = document.querySelector('${scrollTo}');
-                target?.scrollIntoView({ block: '${expand ? 'center' : 'start'}' });
-                return Boolean(target);
-              })()
-            `);
-            if (!ready) continue;
-            await new Promise((resolve) => setTimeout(resolve, 500));
-            const image = await panel.webContents.capturePage();
-            fs.writeFileSync(path.join(screenshotDir, file), image.toPNG());
-          }
-          // 技能目录的接线探针：三处来源计数、缓存复用与强制刷新各走一次 IPC。
-          const skillsProbe = await panel.webContents.executeJavaScript(`
-            (async () => {
-              const first = await window.companion.skills.catalog({});
-              const second = await window.companion.skills.catalog({});
-              const forced = await window.companion.skills.catalog({ refresh: true });
-              return {
-                totals: first.totals,
-                sources: (first.groups ?? []).map((group) => ({
-                  key: group.key, label: group.label, count: group.count, missing: group.missing
-                })),
-                sample: (first.groups ?? []).map((group) => (group.items?.[0] ? {
-                  source: group.key, name: group.items[0].name, path: group.items[0].path,
-                  missing: group.items[0].missing, reason: group.items[0].reason
-                } : null)),
-                playbookOnly: (first.groups ?? []).flatMap((group) => group.items ?? [])
-                  .filter((item) => item.playbookOnly)
-                  .map((item) => ({ id: item.id, name: item.name, missing: item.missing, source: item.source })),
-                cachedFlags: [first.cached, second.cached, forced.cached]
-              };
-            })()
-          `);
-          fs.writeFileSync(path.join(screenshotDir, 'skills-probe.json'), JSON.stringify(skillsProbe, null, 2));
-          // 对话模式：没有模型时必须给出明确提示（不能静默失败）。
-          // 这里直接走一遍 IPC，顺带验证 preload 暴露的 chat.ask 接线。
-          const chatProbe = await panel.webContents.executeJavaScript(
-            `window.companion.chat.ask({ question: '这个项目是什么？', projectId: '' })
-               .then((r) => ({
-                 status: r?.status ?? null,
-                 category: r?.category ?? null,
-                 advice: String(r?.advice ?? '').slice(0, 160)
-               }))
-               .catch((e) => ({ error: String(e) }))`
-          );
-          fs.writeFileSync(
-            path.join(screenshotDir, 'chat-probe.json'),
-            JSON.stringify(chatProbe, null, 2)
-          );
-          // 多会话验收：首次运行新建两个会话（分别绑定两个项目）、提一个问题并让问题落库；
-          // 第二次运行同一个 user-data-dir 时，同一段脚本只读回会话与历史，证明重启后仍在。
-          const chatSessionProbe = await panel.webContents.executeJavaScript(`
-            (async () => {
-              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              const list = async () => (await window.companion.chat.sessions.list()).items ?? [];
-              const before = await list();
-              const view = await window.companion.snapshot();
-              const projects = view?.projects ?? [];
-              if (!before.length && projects.length) {
-                await window.companion.chat.sessions.create({ projectId: projects[0].id });
-                await window.companion.chat.sessions.create({
-                  projectId: (projects[1] ?? projects[0]).id,
-                  title: '重启后还在的会话'
-                });
-                document.querySelector('#modeBar button[data-mode="focus"]')?.click();
-                await wait(400);
-                document.querySelector('#modeBar button[data-mode="chat"]')?.click();
-                await wait(900);
-                const fresh = (await list()).find((s) => s.title === '新会话') ?? (await list())[0];
-                document.querySelector('[data-session-id="' + fresh.id + '"] .c-session-open')?.click();
-                await wait(500);
-                const input = document.querySelector('#cInput');
-                input.value = '这个项目为什么会卡住？';
-                document.querySelector('#cSend')?.click();
-                await wait(2200);
-                const listNode = document.querySelector('#cSessionList');
-                if (listNode) listNode.hidden = false;
-                document.querySelector('#cSessionsToggle')?.setAttribute('aria-expanded', 'true');
-                await wait(400);
-                return {
-                  hadSessions: false,
-                  projects: projects.map((p) => p.id),
-                  sessions: await list(),
-                  activeId: localStorage.getItem('owner-chat-session')
-                };
-              }
-              document.querySelector('#modeBar button[data-mode="chat"]')?.click();
-              await wait(900);
-              const sessions = await list();
-              const activeId = localStorage.getItem('owner-chat-session');
-              const active = sessions.find((s) => s.id === activeId) ?? sessions[0];
-              const detail = active ? await window.companion.chat.sessions.get({ id: active.id }) : null;
-              const listNode = document.querySelector('#cSessionList');
-              if (listNode) listNode.hidden = false;
-              document.querySelector('#cSessionsToggle')?.setAttribute('aria-expanded', 'true');
-              await wait(400);
-              return {
-                hadSessions: true,
-                projects: projects.map((p) => p.id),
-                sessions,
-                activeId,
-                activeTitle: detail?.title ?? '',
-                messages: (detail?.messages ?? []).map((m) => ({
-                  role: m.role,
-                  status: m.status,
-                  text: String(m.text ?? '').slice(0, 120)
-                }))
-              };
-            })()
-          `);
-          fs.writeFileSync(
-            path.join(screenshotDir, 'chat-sessions-probe.json'),
-            JSON.stringify(chatSessionProbe, null, 2)
-          );
-          const sessionShot = chatSessionProbe?.hadSessions
-            ? 'panel-C-restored.png'
-            : 'panel-C-sessions.png';
-          let sessionImage = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, sessionShot), sessionImage.toPNG());
-
-          // 重命名：只在第一次运行（还没有改过名）时做，随后重开列表截图。
-          const renameProbe = await panel.webContents.executeJavaScript(`
-            (async () => {
-              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              const items = (await window.companion.chat.sessions.list()).items ?? [];
-              const target = items.find((s) => s.title === '重启后还在的会话');
-              if (!target) return { renamed: false };
-              const renamed = await window.companion.chat.sessions.rename({
-                id: target.id,
-                title: '重启后还在的会话（已改名）'
-              });
-              document.querySelector('#modeBar button[data-mode="focus"]')?.click();
-              await wait(400);
-              document.querySelector('#modeBar button[data-mode="chat"]')?.click();
-              await wait(900);
-              const listNode = document.querySelector('#cSessionList');
-              if (listNode) listNode.hidden = false;
-              document.querySelector('#cSessionsToggle')?.setAttribute('aria-expanded', 'true');
-              await wait(500);
-              return { renamed: true, id: renamed.id, title: renamed.title };
-            })()
-          `);
-          fs.writeFileSync(
-            path.join(screenshotDir, 'chat-sessions-rename.json'),
-            JSON.stringify(renameProbe, null, 2)
-          );
-          if (renameProbe?.renamed) {
-            sessionImage = await panel.webContents.capturePage();
-            fs.writeFileSync(path.join(screenshotDir, 'panel-C-renamed.png'), sessionImage.toPNG());
-            // 切换验收：点开另一个项目的会话，截图后切回有历史的会话，保证重启截图仍能看到历史。
-            const activeId = String(chatSessionProbe?.activeId ?? '');
-            const switched = await panel.webContents.executeJavaScript(`
-              (async () => {
-                const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-                const row = [...document.querySelectorAll('.c-session-item')]
-                  .find((item) => !item.classList.contains('on'));
-                row?.querySelector('.c-session-open')?.click();
-                await wait(700);
-                return {
-                  title: document.querySelector('#cSessionTitle')?.textContent ?? '',
-                  messages: document.querySelectorAll('#cTranscript .c-msg').length
-                };
-              })()
-            `);
-            fs.writeFileSync(
-              path.join(screenshotDir, 'chat-sessions-switch.json'),
-              JSON.stringify(switched, null, 2)
-            );
-            sessionImage = await panel.webContents.capturePage();
-            fs.writeFileSync(path.join(screenshotDir, 'panel-C-switch.png'), sessionImage.toPNG());
-            if (activeId) {
-              await panel.webContents.executeJavaScript(`
-                (async () => {
-                  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-                  const row = document.querySelector('[data-session-id="${activeId}"]');
-                  row?.querySelector('.c-session-open')?.click();
-                  await wait(700);
-                })()
-              `);
-            }
-          }
-          // #47 对话：交办开关。默认关闭；关闭时发送只回答、不建任务；
-          // 打开后走既有审批链路生成待批准任务，生成后开关自动复位，任务出现在专注页待办里。
-          const handoffSteps = {};
-          // ⓪ 发送前：专注页待办基线（开关还没用过，这里应当 0）。
-          handoffSteps.before = await panel.webContents.executeJavaScript(`
-            (async () => {
-              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              document.querySelector('#modeBar button[data-mode="focus"]')?.click();
-              await wait(1000);
-              document.getElementById('needsSection')?.scrollIntoView({ block: 'start' });
-              document.getElementById('toast').hidden = true;
-              await wait(300);
-              return {
-                needsCount: document.getElementById('needsCount')?.textContent ?? '',
-                pendingCount: document.getElementById('pendingCount')?.textContent ?? '',
-                cards: document.querySelectorAll('#pendingList .pending-card').length
-              };
-            })()
-          `);
-          let handoffImage = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'panel-A-handoff-before.png'), handoffImage.toPNG());
-          // ① 默认状态：开关可见且关闭。会话列表先收起来，别挡住输入区。
-          // 特意打开一个「不是第一个项目」的会话，用来证明交办打到会话绑定的项目，而不是默认第一个。
-          handoffSteps.idle = await panel.webContents.executeJavaScript(`
-            (async () => {
-              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              document.querySelector('#modeBar button[data-mode="chat"]')?.click();
-              await wait(900);
-              const view = await window.companion.snapshot();
-              const projects = view?.projects ?? [];
-              let sessions = (await window.companion.chat.sessions.list()).items ?? [];
-              // 没有会话时先建一条（绑定第一个项目），别让发送落到「新建会话」弹窗里。
-              if (!sessions.length && projects.length) {
-                await window.companion.chat.sessions.create({ projectId: projects[0].id });
-                document.querySelector('#modeBar button[data-mode="focus"]')?.click();
-                await wait(400);
-                document.querySelector('#modeBar button[data-mode="chat"]')?.click();
-                await wait(900);
-                sessions = (await window.companion.chat.sessions.list()).items ?? [];
-              }
-              const pick = sessions.find((s) => s.projectId !== (projects[0]?.id ?? ''))
-                ?? sessions[0];
-              if (pick) {
-                const row = document.querySelector('[data-session-id="' + pick.id + '"]');
-                (row ?? document.querySelector('.c-session-item'))?.querySelector('.c-session-open')?.click();
-                await wait(800);
-              }
-              if (!document.getElementById('cSessionList')?.hidden) {
-                document.getElementById('cSessionsToggle')?.click();
-                await wait(300);
-              }
-              const toggle = document.getElementById('cHandoff');
-              const after = (await window.companion.chat.sessions.list()).items ?? [];
-              const activeId = localStorage.getItem('owner-chat-session') ?? '';
-              return {
-                hasToggle: Boolean(toggle),
-                ariaPressed: toggle?.getAttribute('aria-pressed') ?? '',
-                sendLabel: document.getElementById('cSend')?.textContent?.trim() ?? '',
-                targetHidden: document.getElementById('cHandoffTarget')?.hidden !== false,
-                targetLabel: document.getElementById('cHandoffTarget')?.textContent ?? '',
-                pending: (view?.pending ?? []).length,
-                firstProjectId: projects[0]?.id ?? '',
-                sessionProjectId: after.find((s) => s.id === activeId)?.projectId ?? '',
-                projectIds: projects.map((p) => p.id)
-              };
-            })()
-          `);
-          handoffImage = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'panel-C-handoff-default.png'), handoffImage.toPNG());
-          // ② 关闭状态发送：只回答，待办数不变。
-          handoffSteps.off = await panel.webContents.executeJavaScript(`
-            (async () => {
-              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              const input = document.getElementById('cInput');
-              input.value = '这个仓库为什么用 retry 封装？';
-              document.getElementById('cSend')?.click();
-              // 只回答走只读会话：没有模型时会尽快返回 no-model 提示，这里等到发送键恢复。
-              for (let i = 0; i < 150; i += 1) {
-                await wait(100);
-                if (!document.getElementById('cSend')?.disabled) break;
-              }
-              await wait(500);
-              const view = await window.companion.snapshot();
-              const bots = [...document.querySelectorAll('#cTranscript .c-msg.bot')];
-              return {
-                pending: (view?.pending ?? []).length,
-                togglePressed: document.getElementById('cHandoff')?.getAttribute('aria-pressed') ?? '',
-                lastBot: bots.length ? String(bots[bots.length - 1].textContent).slice(0, 160) : ''
-              };
-            })()
-          `);
-          handoffImage = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'panel-C-handoff-answer.png'), handoffImage.toPNG());
-          // ②b 回到专注页：待办数必须和发送前一样（关闭时发送不建任务）。
-          handoffSteps.focusAfterOff = await panel.webContents.executeJavaScript(`
-            (async () => {
-              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              document.querySelector('#modeBar button[data-mode="focus"]')?.click();
-              await wait(1000);
-              document.getElementById('needsSection')?.scrollIntoView({ block: 'start' });
-              document.getElementById('toast').hidden = true;
-              await wait(300);
-              return {
-                needsCount: document.getElementById('needsCount')?.textContent ?? '',
-                pendingCount: document.getElementById('pendingCount')?.textContent ?? '',
-                cards: document.querySelectorAll('#pendingList .pending-card').length
-              };
-            })()
-          `);
-          handoffImage = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'panel-A-handoff-after-answer.png'), handoffImage.toPNG());
-          // ③ 打开开关：按钮变「交办」，并把目标项目写在输入框旁。
-          handoffSteps.armed = await panel.webContents.executeJavaScript(`
-            (async () => {
-              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              document.querySelector('#modeBar button[data-mode="chat"]')?.click();
-              await wait(900);
-              document.getElementById('cHandoff')?.click();
-              await wait(250);
-              return {
-                ariaPressed: document.getElementById('cHandoff')?.getAttribute('aria-pressed') ?? '',
-                sendLabel: document.getElementById('cSend')?.textContent?.trim() ?? '',
-                targetHidden: document.getElementById('cHandoffTarget')?.hidden !== false,
-                targetLabel: document.getElementById('cHandoffTarget')?.textContent ?? ''
-              };
-            })()
-          `);
-          handoffImage = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'panel-C-handoff-armed.png'), handoffImage.toPNG());
-          // ④ 打开状态发送：生成待批准任务，开关复位。
-          handoffSteps.on = await panel.webContents.executeJavaScript(`
-            (async () => {
-              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              const input = document.getElementById('cInput');
-              input.value = '把 retry 的循环改回 attempts 次，并补一条测试';
-              document.getElementById('cSend')?.click();
-              let created = null;
-              for (let i = 0; i < 60; i += 1) {
-                await wait(300);
-                const view = await window.companion.snapshot();
-                const pending = view?.pending ?? [];
-                const item = pending.find((p) => String(p.title ?? '').startsWith('写请求'));
-                if (item) { created = item; break; }
-              }
-              await wait(600);
-              const view = await window.companion.snapshot();
-              const bots = [...document.querySelectorAll('#cTranscript .c-msg.bot')];
-              return {
-                created: created
-                  ? { id: created.id, title: created.title, projectId: created.projectId, kind: created.kind }
-                  : null,
-                pending: (view?.pending ?? []).length,
-                ariaPressed: document.getElementById('cHandoff')?.getAttribute('aria-pressed') ?? '',
-                sendLabel: document.getElementById('cSend')?.textContent?.trim() ?? '',
-                lastBot: bots.length ? String(bots[bots.length - 1].textContent).slice(0, 220) : ''
-              };
-            })()
-          `);
-          handoffImage = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'panel-C-handoff-done.png'), handoffImage.toPNG());
-          // ⑤ 专注页待办里要能看到这条任务。
-          handoffSteps.focus = await panel.webContents.executeJavaScript(`
-            (async () => {
-              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              document.querySelector('#modeBar button[data-mode="focus"]')?.click();
-              await wait(1200);
-              const cards = [...document.querySelectorAll('#pendingList .pending-card')];
-              const target = cards.find((card) =>
-                String(card.textContent ?? '').includes('写请求')) ?? cards[0] ?? null;
-              // 多个项目时待办按项目分组，非首组默认折叠：把这条所在的组展开再截图。
-              const group = target?.closest('details.pending-group');
-              if (group) group.open = true;
-              target?.scrollIntoView({ block: 'center' });
-              document.getElementById('toast').hidden = true;
-              await wait(500);
-              return {
-                needsCount: document.getElementById('needsCount')?.textContent ?? '',
-                pendingCount: document.getElementById('pendingCount')?.textContent ?? '',
-                cards: cards.length,
-                titles: cards.map((card) => String(card.querySelector('.pending-title')?.textContent ?? card.textContent ?? '').slice(0, 80))
-              };
-            })()
-          `);
-          handoffImage = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'panel-A-handoff-pending.png'), handoffImage.toPNG());
-          fs.writeFileSync(
-            path.join(screenshotDir, 'chat-handoff-probe.json'),
-            JSON.stringify(handoffSteps, null, 2)
-          );
-
-          // ---- 审查修复验收：P0-1 视图项目 / 交办目标分离 ----
-          const splitInitial = await panel.webContents.executeJavaScript(`(async () => {
-            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-            document.querySelector('#modeBar button[data-mode="focus"]')?.click();
-            await wait(1200);
-            const projects = (await window.companion.snapshot())?.projects ?? [];
-            const chip = document.getElementById('handoffTarget');
-            const name = document.getElementById('handoffTargetName');
-            const tabOf = () => document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
-            const handoffOf = () => ({ id: chip?.dataset.projectId ?? '', label: name?.textContent?.trim() ?? '' });
-            if (projects.length < 2) return { skipped: 'need-two-projects', count: projects.length };
-            const initial = { view: tabOf(), handoff: handoffOf() };
-            // 点工作区的项目切换标签看另一个项目：只应换视图，交办仍是「未选项目」。
-            const other = projects[1];
-            const tab = [...document.querySelectorAll('#fdTabs .fd-tab')]
-              .find((node) => node.dataset.project === other.id);
-            tab?.click();
-            for (let i = 0; i < 60; i += 1) {
-              await wait(150);
-              if (tabOf() === other.id) break;
-            }
-            await wait(600);
-            // 截图要同时看到工作区的项目切换（视图项目）与底部「交办到 …」（交办目标）。
-            document.getElementById('workZone')?.scrollIntoView({ block: 'start' });
-            await wait(500);
-            document.getElementById('toast').hidden = true;
-            return {
-              projectIds: projects.map((item) => item.id),
-              initial,
-              afterTab: { view: tabOf(), handoff: handoffOf() },
-              clicked: other.id
-            };
-          })()`);
-          let splitImage = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'panel-A-view-vs-handoff.png'), splitImage.toPNG());
-          const splitMenu = await panel.webContents.executeJavaScript(`(async () => {
-            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-            const projects = (await window.companion.snapshot())?.projects ?? [];
-            const viewBefore = document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '';
-            const target = projects.find((item) => item.id !== viewBefore) ?? projects[0];
-            document.getElementById('handoffTarget')?.click();
-            await wait(300);
-            document.querySelector('#handoffTargetMenu .composer-project-option[data-project="' + target.id + '"]')?.click();
-            await wait(500);
-            return {
-              viewBefore,
-              target: target.id,
-              viewAfter: document.querySelector('#fdTabs .fd-tab.on')?.dataset.project ?? '',
-              handoff: {
-                id: document.getElementById('handoffTarget')?.dataset.projectId ?? '',
-                label: document.getElementById('handoffTargetName')?.textContent?.trim() ?? ''
-              }
-            };
-          })()`);
-          splitImage = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'panel-A-handoff-menu-picked.png'), splitImage.toPNG());
-          fs.writeFileSync(
-            path.join(screenshotDir, 'view-handoff-split.json'),
-            JSON.stringify({ splitInitial, splitMenu }, null, 2)
-          );
-
-          // ---- 审查修复验收：P0-2 新建会话默认空选项、未选禁用创建 ----
-          const newSessionBefore = await panel.webContents.executeJavaScript(`(async () => {
-            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-            document.querySelector('#modeBar button[data-mode="chat"]')?.click();
-            await wait(900);
-            document.getElementById('cSessionNew')?.click();
-            await wait(500);
-            const modal = document.getElementById('modal');
-            const select = modal.querySelector('.sheet-body select');
-            const create = [...modal.querySelectorAll('.sheet-foot button')]
-              .find((node) => node.textContent.trim() === '新建会话');
-            return {
-              open: !modal.hidden,
-              value: select?.value ?? '',
-              options: select ? [...select.options].map((node) => ({
-                value: node.value, label: node.textContent, disabled: node.disabled
-              })) : [],
-              createDisabled: create?.disabled === true
-            };
-          })()`);
-          let sessionFormImage = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'panel-C-new-session-empty.png'), sessionFormImage.toPNG());
-          const newSessionAfter = await panel.webContents.executeJavaScript(`(async () => {
-            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-            const modal = document.getElementById('modal');
-            const select = modal.querySelector('.sheet-body select');
-            const create = [...modal.querySelectorAll('.sheet-foot button')]
-              .find((node) => node.textContent.trim() === '新建会话');
-            const option = [...(select?.options ?? [])].find((node) => node.value);
-            if (select && option) {
-              select.value = option.value;
-              select.dispatchEvent(new Event('change'));
-            }
-            await wait(250);
-            const enabled = create?.disabled === false;
-            document.getElementById('closeModal')?.click();
-            return { picked: option?.value ?? '', createEnabledAfterPick: enabled };
-          })()`);
-          fs.writeFileSync(
-            path.join(screenshotDir, 'new-session-probe.json'),
-            JSON.stringify({ before: newSessionBefore, after: newSessionAfter }, null, 2)
-          );
-
-          // ---- 审查修复验收：P0-5 知识档只剩两块；四个入口跳转 + 兜底 ----
-          const knowledgeBlocks = await panel.webContents.executeJavaScript(`(async () => {
-            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-            document.querySelector('#modeBar button[data-mode="knowledge"]')?.click();
-            await wait(1400);
-            document.getElementById('knowledgeBrowse')?.scrollIntoView({ block: 'start' });
-            await wait(400);
-            const modeB = document.getElementById('modeB');
-            const modeA = document.getElementById('modeA');
-            const workspace = document.getElementById('workWorkspace');
-            const browse = document.getElementById('knowledgeBrowse');
-            return {
-              blocks: [...modeB.querySelectorAll(':scope > .scroll > section')]
-                .map((node) => ({ id: node.id, className: node.className })),
-              hasWorkspaceInKnowledge: modeB.contains(workspace),
-              workspaceInFocus: modeA.contains(workspace),
-              // 工作区从 #69 起是常驻展开的 <section>（不再是 <details>）：只看它有没有被隐藏。
-              workspaceOpen: workspace?.hidden !== true,
-              renderMs: browse?.dataset.renderMs ?? '',
-              renderBudget: browse?.dataset.renderBudget ?? ''
-            };
-          })()`);
-          fs.writeFileSync(
-            path.join(screenshotDir, 'knowledge-mode-blocks.json'),
-            JSON.stringify(knowledgeBlocks, null, 2)
-          );
-          let knowledgeImage = await panel.webContents.capturePage();
-          fs.writeFileSync(path.join(screenshotDir, 'panel-knowledge-two-blocks.png'), knowledgeImage.toPNG());
-          const jumpTargets = {
-            knowledge: 'knowledgeBrowse',
-            tests: 'runningSection',
-            patches: 'opsZone',
-            runs: 'runningSection'
-          };
-          const jumpResults = [];
-          for (const key of Object.keys(jumpTargets)) {
-            const result = await panel.webContents.executeJavaScript(`(async () => {
-              const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-              document.querySelector('#modeBar button[data-mode="focus"]')?.click();
-              await wait(900);
-              const entry = document.querySelector('#workEntries .work-entry[data-entry="${key}"]');
-              if (!entry) return { key: '${key}', error: 'entry-not-rendered' };
-              entry.click();
-              await wait(1200);
-              const views = { focus: 'modeA', knowledge: 'modeB', chat: 'modeC' };
-              const visible = Object.entries(views)
-                .find(([, id]) => !document.getElementById(id).hidden)?.[0] ?? '';
-              const node = document.getElementById('${jumpTargets[key]}');
-              const workspace = document.getElementById('workWorkspace');
-              const rect = node?.getBoundingClientRect();
-              return {
-                key: '${key}',
-                visible,
-                target: '${jumpTargets[key]}',
-                inWorkspace: Boolean(workspace && node && workspace.contains(node)),
-                workspaceOpen: workspace?.hidden !== true,
-                top: rect ? Math.round(rect.top) : null
-              };
-            })()`);
-            jumpResults.push(result);
-            const image = await panel.webContents.capturePage();
-            fs.writeFileSync(path.join(screenshotDir, `focus-jump-${key}.png`), image.toPNG());
-          }
-          // 目标不存在时退回该模式顶部：临时摘掉 id，确认不抛错、仍停在专注页。
-          const jumpFallback = await panel.webContents.executeJavaScript(`(async () => {
-            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-            document.querySelector('#modeBar button[data-mode="focus"]')?.click();
-            await wait(700);
-            const node = document.getElementById('runningSection');
-            const saved = node.id;
-            node.id = 'runningSection-detached';
-            document.querySelector('#workEntries .work-entry[data-entry="runs"]')?.click();
-            await wait(900);
-            node.id = saved;
-            const wrap = document.querySelector('#modeA .a-wrap');
-            const rect = wrap?.getBoundingClientRect();
-            return {
-              stillFocus: !document.getElementById('modeA').hidden,
-              wrapTop: rect ? Math.round(rect.top) : null,
-              wrapScrollTop: wrap ? wrap.scrollTop : null
-            };
-          })()`);
-          fs.writeFileSync(
-            path.join(screenshotDir, 'focus-jump-probe.json'),
-            JSON.stringify({ knowledgeBlocks, jumpResults, jumpFallback }, null, 2)
-          );
-
-          // 顺手记录按项目取数的结果，验证预重构没有破坏默认行为。
-          const probe = [];
-          for (const projectId of ['companion-demo', 'cultivation-agent']) {
-            const result = await panel.webContents.executeJavaScript(
-              `window.companion.snapshot({ projectId: '${projectId}' }).then((v) => ({
-                 requested: '${projectId}',
-                 active: v?.config?.projectId ?? null,
-                 chainKeys: Object.keys(v?.chain ?? {}), chainJobTitle: v?.chain?.job?.title ?? null,
-                 projectCount: v?.projects?.length ?? 0
-               })).catch((e) => ({ requested: '${projectId}', error: String(e) }))`
-            );
-            probe.push(result);
-          }
-          fs.writeFileSync(path.join(screenshotDir, 'snapshot-probe.json'), JSON.stringify(probe, null, 2));
-        }
-        console.log(`screenshots written to ${screenshotDir}`);
-      } catch (error) {
-        console.error('screenshot failed:', error);
-      }
-      setTimeout(() => { quitting = true; app.quit(); }, 600);
-    }, 6000);
-  }
 }
 
 /** 打包后自检：验证 asarUnpack 后的 Monty 原生包与 worker 能否运行。 */
@@ -5061,8 +5273,6 @@ app.on('before-quit', () => {
 });
 app.on('will-quit', () => {
   try { if (mobileServer) void mobileServer.close(); } catch { /* best effort */ }
-  // 退出时释放只读对话会话，避免留下等待模型的进程内句柄。
-  try { chatService?.disposeAll(); } catch { /* best effort */ }
   // 退出时先结束仍在跑的 playbook 子进程，避免留下孤儿 node 进程继续调用模型。
   for (const child of playbookChildren.values()) {
     try { child.__cancel?.(); } catch { /* best effort */ }

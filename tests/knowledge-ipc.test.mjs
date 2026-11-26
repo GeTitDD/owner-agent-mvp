@@ -33,18 +33,12 @@ test('主进程注册了提议 / 经验列表 / 提升三个 IPC 频道', () => 
   assert.equal(/distillOnDemand|\.distill\(/u.test(body), false, '提议信号不能顺带触发提炼');
 });
 
-test('preload 暴露了对应方法，面板有「提升为候选」入口', () => {
+test('preload 暴露了提议 / 经验列表 / 提升三个方法', () => {
+  // #111 撤旧壳后不再断言旧面板里的入口；这一版只锁桥还在，等新卡的入口接上时再补界面断言。
   const preload = read('desktop/preload.cjs');
   for (const name of ['distillProposals', 'lessonList', 'promoteLesson']) {
     assert.ok(preload.includes(`${name}:`), `preload 缺少 ${name}`);
   }
-  const panel = read('desktop/panel.js');
-  assert.ok(panel.includes('提升为候选'), '经验条目上要有提升入口');
-  // #71 是「搬到操作区」：知识页不再渲染同一份提议（不再有 kbProposals 提示位）。
-  assert.equal(panel.includes('kbProposals'), false, '提议只在操作区出现，知识页不重复');
-  assert.ok(panel.includes('distillProposals'), '面板（操作区）要读提议信号');
-  // 知识页只做三层浏览；按项目取经验留给 IPC 的调用方，不在面板里重复读。
-  assert.equal(panel.includes('knowledge.lessonList'), false, '知识页不再为提议文案多读一次经验列表');
 });
 
 test('提议处理器：按项目统计未提炼记录，只提示不写库', () => {

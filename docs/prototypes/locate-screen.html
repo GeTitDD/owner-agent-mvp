@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>定位屏样稿 · Owner Companion</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f8f8f6;
+    --panel: #ffffff;
+    --text: #262626;
+    --muted: #737373;
+    --line: rgba(38, 38, 38, 0.10);
+    --line-soft: rgba(38, 38, 38, 0.06);
+    --accent: #262626;
+    --accent-fg: #ffffff;
+    --accent-soft: rgba(38, 38, 38, 0.08);
+    --warn: #ea6b17;
+    --warn-soft: rgba(234, 107, 23, 0.14);
+    --ok: #1f7a4d;
+    --ok-soft: rgba(31, 122, 77, 0.12);
+    --radius: 16px;
+    --radius-sm: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; padding: 32px 16px 48px;
+    background: #e9e9e5; color: var(--text);
+    font: 13px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .stage { display: flex; justify-content: center; }
+  .window {
+    width: 440px; height: 760px; display: flex; flex-direction: column;
+    overflow: hidden; background: var(--bg);
+    border: 1px solid rgba(38,38,38,.16); border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(38,38,38,.18);
+  }
+
+  /* 顶栏：与真实壳一致 */
+  .top {
+    flex: none; padding: 9px 10px; background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  .top-row { display: flex; align-items: center; gap: 6px; }
+  .capsule {
+    display: inline-flex; align-items: baseline; gap: 4px; flex: 1 1 auto; min-width: 0;
+    padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px;
+    background: var(--bg); font-size: 10.5px; white-space: nowrap;
+  }
+  .capsule.project-capsule { flex: 0 0 auto; }
+  .top-row > .capsule:first-child { flex: 1 1 170px; }
+  .slot-key { color: var(--muted); }
+  .slot-value { overflow: hidden; text-overflow: ellipsis; }
+  .caret { color: var(--muted); font-size: 9px; }
+  .icon-btn { flex: none;
+    width: 24px; height: 24px; padding: 0; border: 1px solid transparent;
+    border-radius: 7px; background: none; color: var(--muted); cursor: pointer;
+  }
+  .icon-btn:hover { border-color: var(--line); background: var(--bg); color: var(--text); }
+  .status-row {
+    display: flex; align-items: center; gap: 6px; margin-top: 4px;
+    padding-top: 4px; border-top: 1px solid var(--line-soft); font-size: 10.5px;
+  }
+  .pill { padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); }
+  .pill.warn { border-color: var(--warn); background: var(--warn-soft); color: var(--warn); }
+  .muted { color: var(--muted); }
+
+  /* 定位屏 */
+  .locate { flex: 1 1 auto; overflow-y: auto; padding: 14px 12px 8px; }
+  .locate-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .locate-head h1 { margin: 0; font-size: 15px; letter-spacing: .2px; }
+  .locate-head span { color: var(--muted); font-size: 10.5px; }
+  .why {
+    margin: 6px 0 10px; padding: 6px 9px; border: 1px dashed var(--line);
+    border-radius: 9px; color: var(--muted); font-size: 10.5px; line-height: 1.5;
+  }
+  .why b { color: var(--text); font-weight: 600; }
+
+  .project {
+    position: relative; display: block; width: 100%; margin: 0 0 8px; padding: 10px 12px;
+    text-align: left; border: 1px solid var(--line); border-radius: var(--radius-sm);
+    background: var(--panel); color: var(--text); cursor: pointer;
+    transition: border-color .12s ease, transform .12s ease;
+  }
+  .project:hover { border-color: var(--accent); }
+  .project:active { transform: scale(.995); }
+  .project[data-rank="2"] { opacity: .82; }
+  .project[data-rank="3"] { opacity: .62; }
+  .project-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .project-name { font-weight: 650; font-size: 12.5px; }
+  .rank-tag {
+    margin-left: auto; flex: none; padding: 0 7px; border-radius: 999px;
+    font-size: 9.5px; line-height: 18px; border: 1px solid transparent;
+  }
+  .rank-tag.candidate { color: var(--warn); background: var(--warn-soft); border-color: rgba(234,107,23,.22); }
+  .rank-tag.unread { color: var(--text); background: var(--accent-soft); }
+  .rank-tag.stale { color: var(--muted); background: var(--line-soft); }
+  .counts { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 3px; }
+  .count { color: var(--muted); font-size: 10.5px; }
+  .count b { color: var(--text); font-weight: 600; }
+  .count.candidate b { color: var(--warn); }
+  .meta { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; }
+  .decision {
+    margin: 5px 0 0; padding-top: 5px; border-top: 1px solid var(--line-soft);
+    color: var(--muted); font-size: 10.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .decision b { color: var(--text); font-weight: 500; }
+  .row-actions { display: flex; gap: 6px; margin-top: 7px; }
+  .ghost {
+    padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px;
+    background: var(--bg); color: var(--muted); font-size: 9.5px; cursor: pointer;
+  }
+  .ghost:hover { border-color: var(--accent); color: var(--text); }
+  .ghost.enter { color: var(--text); }
+
+  /* 输入区：全局模式仍可问，但不读项目文件 */
+  .composer-wrap { flex: none; padding: 8px 10px 10px; background: var(--panel); border-top: 1px solid var(--line); }
+  .composer { display: flex; align-items: flex-end; gap: 8px; }
+  .input {
+    flex: 1 1 auto; min-height: 40px; padding: 9px 12px; resize: none;
+    border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+    color: var(--muted); font: inherit;
+  }
+  .send {
+    flex: none; height: 40px; padding: 0 16px; border: 0; border-radius: 11px;
+    background: var(--accent); color: var(--accent-fg); font-weight: 600; cursor: pointer;
+  }
+  .export { margin-top: 8px; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    padding: 8px 14px; border-radius: 10px; background: #262626; color: #fff;
+    font-size: 11.5px; opacity: 0; pointer-events: none; transition: opacity .18s ease;
+  }
+  .toast.show { opacity: 1; }
+  .caption { width: 440px; margin: 14px auto 0; color: #6f6f6a; font-size: 11px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="window">
+    <header class="top">
+      <div class="top-row">
+        <span class="capsule">
+          <span class="slot-key">会话</span>
+          <span class="slot-value">定位：今天先看哪个</span>
+          <span class="caret">▾</span>
+        </span>
+        <span class="capsule project-capsule">
+          <span class="slot-key">项目</span>
+          <span class="slot-value">全局</span>
+          <span class="caret">▾</span>
+        </span>
+        <button class="icon-btn" title="配置">⚙</button>
+        <button class="icon-btn" title="收起到托盘">×</button>
+      </div>
+      <div class="status-row">
+        <span class="pill">只读·全局</span>
+        <span class="pill warn">未同步</span>
+        <span class="muted">从未成功同步过</span>
+        <span class="pill" style="margin-left:auto">补同步</span>
+      </div>
+    </header>
+
+    <main class="locate" id="locate">
+      <div class="locate-head">
+        <h1>先看哪个</h1>
+        <span>3 个项目</span>
+      </div>
+      <p class="why">
+        排序：<b>待确认候选 &gt; 有未读变化 &gt; 超过 7 天未看 &gt; 其余</b>。
+        行内标签说明它为什么排在这里；点「标记已读」才清零未读。
+      </p>
+
+      <div class="project" role="button" tabindex="0" data-rank="0" data-id="cultivation-agent" data-unread="4">
+        <div class="project-head">
+          <span class="project-name">cultivation-agent</span>
+          <span class="rank-tag candidate">待确认 2</span>
+        </div>
+        <div class="counts">
+          <span class="count candidate">待确认 <b>2</b> 条决策候选</span>
+          <span class="count">未读 <b>3</b> 提交 · <b>1</b> 改动 · <b>0</b> 知识</span>
+        </div>
+        <div class="meta"><span>30 分钟前看过</span><span>·</span><span>7 天内有活动</span></div>
+        <p class="decision">最近决策：<b>重试上限固定为 7 次，不再递归</b></p>
+        <div class="row-actions">
+          <button class="ghost enter" data-enter="1">进入项目</button>
+          <button class="ghost" data-mark="1">标记已读</button>
+        </div>
+      </div>
+
+      <div class="project" role="button" tabindex="0" data-rank="1" data-id="Companion Demo" data-unread="3">
+        <div class="project-head">
+          <span class="project-name">Companion Demo</span>
+          <span class="rank-tag unread">有未读</span>
+        </div>
+        <div class="counts">
+          <span class="count">未读 <b>2</b> 提交 · <b>0</b> 改动 · <b>1</b> 知识</span>
+        </div>
+        <div class="meta"><span>昨天看过</span><span>·</span><span>没有待确认</span></div>
+        <p class="decision">最近决策：<b>只读工具面固定为 read / grep / find / ls</b></p>
+        <div class="row-actions">
+          <button class="ghost enter" data-enter="1">进入项目</button>
+          <button class="ghost" data-mark="1">标记已读</button>
+        </div>
+      </div>
+
+      <div class="project" role="button" tabindex="0" data-rank="2" data-id="owner-agent-mvp" data-unread="0">
+        <div class="project-head">
+          <span class="project-name">owner-agent-mvp</span>
+          <span class="rank-tag stale">8 天未看</span>
+        </div>
+        <div class="counts">
+          <span class="count">没有未读变化</span>
+        </div>
+        <div class="meta"><span>8 天前看过</span><span>·</span><span>该决定还要不要继续</span></div>
+        <p class="decision">最近决策：<b>同步冲突交人，不自动合并</b></p>
+        <div class="row-actions">
+          <button class="ghost enter" data-enter="1">进入项目</button>
+        </div>
+      </div>
+
+      <div class="project" role="button" tabindex="0" data-rank="3" data-id="demo-repo" data-unread="0">
+        <div class="project-head">
+          <span class="project-name">demo-repo</span>
+          <span class="rank-tag stale">12 天未看</span>
+        </div>
+        <div class="counts"><span class="count">没有未读变化</span></div>
+        <div class="meta"><span>12 天前看过</span><span>·</span><span>没有决策记录</span></div>
+        <div class="row-actions">
+          <button class="ghost enter" data-enter="1">进入项目</button>
+        </div>
+      </div>
+    </main>
+
+    <div class="composer-wrap">
+      <form class="composer" onsubmit="return false">
+        <textarea class="input" rows="1" readonly>全局：能问，不读项目文件。/ 技能，@@ 方法</textarea>
+        <button class="send" type="submit">发送</button>
+      </form>
+      <button class="ghost export">导出 Markdown</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<p class="caption">
+  样稿：不选项目时的主内容。真实客户端里，顶栏、输入区与项目切换确认都沿用现有壳；
+  这里只把「先看哪个」的排序与未读语义画出来。点「标记已读」可看排序变化。
+</p>
+
+<script>
+  const toast = document.getElementById('toast');
+  let toastTimer = null;
+  const say = (text) => {
+    toast.textContent = text;
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
+  };
+
+  const locate = document.getElementById('locate');
+
+  const resort = () => {
+    const rows = [...locate.querySelectorAll('.project')];
+    rows.sort((a, b) => Number(a.dataset.rank) - Number(b.dataset.rank));
+    for (const row of rows) locate.appendChild(row);
+  };
+
+  locate.addEventListener('click', (event) => {
+    const project = event.target.closest('.project');
+    if (!project) return;
+    const name = project.dataset.id;
+
+    if (event.target.closest('[data-mark]')) {
+      event.stopPropagation();
+      project.dataset.rank = '3';
+      project.dataset.unread = '0';
+      project.querySelector('.rank-tag').className = 'rank-tag stale';
+      project.querySelector('.rank-tag').textContent = '刚刚已读';
+      project.querySelector('.counts').innerHTML = '<span class="count">没有未读变化</span>';
+      project.querySelector('.meta').innerHTML = '<span>刚刚标记已读</span><span>·</span><span>未进入项目</span>';
+      project.querySelector('[data-mark]')?.remove();
+      resort();
+      say(`已标记「${name}」已读：未读清零，但没有进入项目`);
+      return;
+    }
+
+    say(`进入「${name}」：沿用现有切换确认（四条后果）`);
+  });
+</script>
+</body>
+</html>
