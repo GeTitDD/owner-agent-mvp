@@ -2855,11 +2855,15 @@ button.session-name { cursor: pointer; }
   outline: none;
 }
 
-/* 模型行：输入框可手填，右侧下拉从已装模型里挑。窄窗口下输入框先让位。 */
+/* 模型行：输入框可手填，下面一行从已装模型里挑——并排放会把两个值都截断。 */
+.cfg-row[data-kind="model"] .cfg-field {
+  flex-wrap: wrap;
+}
+
 .cfg-model-pick {
-  flex: 0 0 auto;
-  max-width: 44%;
-  padding: 3px 4px;
+  flex: 1 1 100%;
+  max-width: none;
+  padding: 3px 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--bg);
