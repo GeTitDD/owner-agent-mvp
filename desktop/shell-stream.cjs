@@ -54,6 +54,11 @@
     // 悬停态只记一个节点：最后被指到的那一个（块或消息）亮按钮，另一个立刻收起。
     // 用属性而不是 :hover 叠加，是因为块本身也在消息里面，纯 CSS 会同时亮两个。
     let copyActive = null;
+    // #123 勾选态：只在「生成 prompt」方法卡打开时存在；selected 存消息下标。
+    // 计数监听给方法卡用，卡片关掉就退订，流这边不保留任何界面引用。
+    let selectMode = false;
+    let selected = new Set();
+    const selectionListeners = new Set();
 
     /** 当前会话由顶栏持有：对话流只读，不另存一份。 */
     const currentId = () => ctx.ui.header.currentId();
@@ -72,6 +77,58 @@
       copyActive?.setAttribute('data-copy-active', '1');
     };
 
+    // ── #123 勾选态 ──────────────────────────────────────────────────
+    // 状态只有「开没开 + 选中了哪几个下标」；标签编号与 prompt 组装在 shell-at-prompt.cjs。
+    // 没有文字的消息不参与勾选：引用的是原文，空正文引不出东西。
+
+    const canSelect = (message) => String(message?.text ?? '').trim().length > 0;
+
+    const selectionSnapshot = () => ({
+      count: selected.size,
+      indexes: [...selected].sort((a, b) => a - b)
+    });
+
+    const emitSelection = () => {
+      const snapshot = selectionSnapshot();
+      selectionListeners.forEach((listener) => {
+        try {
+          listener(snapshot);
+        } catch {
+          // 订阅方自己的错误不影响流的状态；下一次点击仍会重新广播。
+        }
+      });
+    };
+
+    /** 把勾选态刷到现有节点上：不重画消息，滚动位置与正在看的块都不跳。 */
+    const applySelection = () => {
+      messagesNode.classList.toggle('selecting', selectMode);
+      messagesNode.querySelectorAll('.msg').forEach((item) => {
+        const on = selectMode && selected.has(Number(item.dataset.index));
+        if (on) item.dataset.selected = 'true';
+        else item.removeAttribute('data-selected');
+        item.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+    };
+
+    const setSelectMode = (on) => {
+      selectMode = on === true;
+      // 每次进出勾选态都清空：上一次的勾选不能被下一次方法悄悄带上。
+      selected = new Set();
+      applySelection();
+      emitSelection();
+    };
+
+    const toggleMessageSelection = (index) => {
+      if (!selectMode) return;
+      const key = Number(index);
+      if (!Number.isInteger(key) || key < 0 || key >= messages.length) return;
+      if (!canSelect(messages[key])) return;
+      if (selected.has(key)) selected.delete(key);
+      else selected.add(key);
+      applySelection();
+      emitSelection();
+    };
+
     // ── 对话流 ────────────────────────────────────────────────────────
 
     /**
@@ -84,6 +141,9 @@
       item.dataset.role = message.role;
       // 块内按钮的点击要能找回「哪条消息的哪个提问块」，序号跟着消息走。
       item.dataset.index = String(index);
+      // #123：有没有可勾选的原文；勾选态是否显形由 .messages.selecting 统一给样式。
+      item.dataset.selectable = canSelect(message) ? 'true' : 'false';
+      item.setAttribute('aria-selected', 'false');
       if (message.role === 'agent' && threadApi.isPlaceholder(message)) {
         item.classList.add('is-placeholder');
         item.dataset.placeholder = 'true';
@@ -107,6 +167,8 @@
       // 重画会换掉旧节点：悬停态跟着旧节点一起作废，避免按钮挂在不存在的块上。
       setCopyActive(null);
       messagesNode.replaceChildren(...messages.map(renderMessage));
+      // 重画会换掉旧节点：勾选态与选中标记要跟着新节点重新穿上。
+      applySelection();
       // 空态分两种：一条会话都没有（不许发消息）与当前会话还没有消息。
       const hint = emptyHint({
         currentId: currentId(),
@@ -124,10 +186,15 @@
       const id = currentId();
       if (!id) {
         messages = [];
-        return;
+      } else {
+        const detail = await store.get({ id });
+        messages = threadApi.fromStored(detail?.messages);
       }
-      const detail = await store.get({ id });
-      messages = threadApi.fromStored(detail?.messages);
+      // 换了一批消息，旧下标不再指同一条：勾选态下重新开始，不留下错位的选中。
+      if (selectMode) {
+        selected = new Set();
+        emitSelection();
+      }
     };
 
     /** 回到流的顶部：进全局模式时用，别停在最后一条消息上。 */
@@ -426,7 +493,21 @@
       const button = event.target.closest?.(
         '[data-ask-choice], [data-ask-skip], [data-ask-free-submit]'
       );
-      if (button) void answerAsk(button);
+      if (button) {
+        void answerAsk(button);
+        return;
+      }
+      // #123 勾选：先让块内按钮 / 输入框拿到点击，其余位置（气泡、块正文）才算「选这条」。
+      if (!selectMode) return;
+      if (event.target.closest?.('button, a, input, textarea, select')) return;
+      const item = event.target.closest?.('.msg');
+      if (!item) return;
+      toggleMessageSelection(item.dataset.index);
+    });
+
+    // 勾选态下点流里的消息是「选它」，不是「点别处」：别让 @@ 卡片把这次按下当成外部点击收起来。
+    threadNode.addEventListener('mousedown', (event) => {
+      if (selectMode) event.stopPropagation();
     });
 
     // 自由回答框里的回车等同点「回答」；输入法组字中的回车照样交给输入法。
@@ -451,7 +532,18 @@
     return {
       load,
       render: renderThread,
-      resetScroll
+      resetScroll,
+      // #123：勾选态与选中集合由对话流持有，方法卡只读计数、只发「开/关」。
+      setSelectMode,
+      isSelecting: () => selectMode,
+      selectionCount: () => selected.size,
+      selectedIndexes: () => selectionSnapshot().indexes,
+      onSelectionChange: (listener) => {
+        if (typeof listener !== 'function') return () => {};
+        selectionListeners.add(listener);
+        return () => selectionListeners.delete(listener);
+      },
+      messages: () => messages
     };
   };
 

@@ -702,6 +702,7 @@
       currentId: () => currentId,
       currentSession,
       viewProjectId: () => viewProjectId,
+      projects: () => projects,
       sessions: () => sessions,
       render: renderSessions,
       renderScope,

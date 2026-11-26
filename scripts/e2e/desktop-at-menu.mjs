@@ -174,8 +174,8 @@ const run = async () => {
     check('the method card title comes from the method data',
       model.title === '生成 prompt' && model.sub === '方法卡片', `${model.title} / ${model.sub}`);
     check('the method card exposes a back button', model.backHidden === false);
-    check('the method card body comes from the method content (placeholder this round)',
-      model.hasBody && model.content.includes('占位'), model.content);
+    check('the method card body comes from the method content (prompt controls mounted)',
+      model.hasBody && model.content.includes('已选'), model.content);
     check('the method card stays a small card',
       model.height < model.winHeight * 0.6,
       `${Math.round(model.width)}x${Math.round(model.height)} in ${model.winWidth}x${model.winHeight}`);
