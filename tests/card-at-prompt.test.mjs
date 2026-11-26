@@ -139,12 +139,11 @@ test('选中的下标按消息顺序输出；越界与无文字的条目被忽�
   assert.equal(text.match(/> /gu)?.length, 2);
 });
 
-// ── 与 #122 容器的接缝：只给 prompt 注册 mount，其他方法仍是占位 ──
+// ── 与 #122 容器的接缝：prompt 与 session 都带 mount ────────────────
 
-test('方法卡注册表：prompt 带 mount，session 仍只有占位', () => {
+test('方法卡注册表：prompt 与 session 都带 mount，菜单数据不变', () => {
   assert.equal(typeof at.atContent('prompt').mount, 'function');
-  assert.equal(at.atContent('session').mount, undefined);
-  assert.ok(at.atContent('session').todo);
+  assert.equal(typeof at.atContent('session').mount, 'function');
   // 菜单数据没有因为这一票变动。
   assert.deepEqual(at.atMethods().map((method) => method.key), ['prompt', 'session']);
 });

@@ -607,9 +607,14 @@
           : confirmCommand
             ? await window.OwnerConfirm.buildReply(confirmCommand)
             : { text: threadApi.placeholderText(raw), blocks: [] };
+      // #125：已关联的会话只把指针段接在这条 prompt 后面；没有关联就一字不动。
+      const sessionPoints = ctx.ui.sessionPoints;
+      const sentText = sessionPoints ? sessionPoints.withPointers(raw) : raw;
       busy = true;
       try {
-        await store.append({ id: currentId(), role: 'user', text: raw });
+        await store.append({ id: currentId(), role: 'user', text: sentText });
+        // 消息已经落库，指针完成使命：清空胶囊；发送失败则保留，下一次还能再试。
+        sessionPoints?.consume?.();
         await store.append({
           id: currentId(),
           role: 'assistant',

@@ -70,7 +70,17 @@
     }),
     session: Object.freeze({
       lead: '指向别的 Agent 的会话；这里只存指针，不导入正文。',
-      todo: '占位：来源切换、最近会话与自定义线索随后续票接入。'
+      // #125：来源切换、最近会话、自定义线索与胶囊由 shell-at-session.cjs 注册；
+      // 状态挂在装配层的 ui.sessionPoints 上，卡片关掉以后胶囊仍然留在输入框上方。
+      mount: (wrap, tools) => {
+        const api = typeof globalThis === 'undefined' ? null : globalThis.OwnerShellAtSession;
+        const instance = tools?.ctx?.ui?.sessionPoints;
+        if (!api || typeof instance?.mount !== 'function') {
+          wrap.append(document.createTextNode('关联会话模块还没加载好，稍等一下再试。'));
+          return null;
+        }
+        return instance.mount(wrap, tools);
+      }
     })
   });
 

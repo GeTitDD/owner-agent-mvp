@@ -134,6 +134,8 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   // #87 决策：确认才入库；状态只写决策自己那一列（生效中 / 已被取代 / 已放弃）。
   memory: Object.freeze({
     scanSessions: () => invoke('companion:session-scan'),
+    // #125 关联会话：只取指针元信息（列最近 / 按线索找），不读会话正文。
+    sessionPoints: (input) => invoke('companion:session-points', input),
     confirmDecision: (input) => invoke('companion:decision-confirm', input),
     setDecisionStatus: (input) => invoke('companion:decision-status', input),
     decisions: (input) => invoke('companion:decision-retrieve', input)

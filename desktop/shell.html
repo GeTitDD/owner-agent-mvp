@@ -104,6 +104,10 @@
       <ol class="messages" id="messages"></ol>
     </main>
 
+    <!-- #125 关联会话的指针胶囊：选中的会话只在这里留一枚指针，发送时进入 prompt 的
+         「关联会话」段；点 ✕ 移除，不产生任何正文副本。 -->
+    <div class="session-pointers" id="sessionPointers" aria-label="已关联的会话指针" hidden></div>
+
     <form class="composer" id="composer" autocomplete="off">
       <label class="sr-only" for="input">输入消息</label>
       <textarea id="input" rows="1" placeholder="说点什么。回车发送，Shift+回车换行"></textarea>
@@ -127,7 +131,7 @@
 
     <!-- #122：输入 `@@` 打开方法菜单（小卡片，贴着输入框，不铺满窗口）。
          容器只提供外壳：标题 + 返回 + 关闭；菜单项由 shell-at.cjs 的方法数据逐行画，
-         方法卡的内容由方法自己注册（#123 的「生成 prompt」已接上控件，其余仍是占位）。 -->
+         方法卡的内容由方法自己注册（#123 的「生成 prompt」、#125 的「关联会话」已接上控件）。 -->
     <div class="at-panel" id="atPanel" role="dialog" aria-label="@@ 方法" hidden>
       <div class="at-head">
         <button type="button" class="at-back" id="atBack" aria-label="返回方法菜单" hidden>←</button>
@@ -208,6 +212,8 @@
   <script src="./shell-at.cjs"></script>
   <!-- #123 「生成 prompt」方法：流内勾选、计数与四段组装；方法卡进入时才 mount。 -->
   <script src="./shell-at-prompt.cjs"></script>
+  <!-- #125 「关联会话」方法：来源切换、最近会话、线索解析与指针胶囊；只存指针。 -->
+  <script src="./shell-at-session.cjs"></script>
   <script src="./shell-compose.cjs"></script>
   <script src="./shell-stream.cjs"></script>
   <script type="module" src="./card-scope-host.mjs"></script>
