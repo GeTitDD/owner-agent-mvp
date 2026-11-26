@@ -104,6 +104,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .nav-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .nav-btn:hover { background: var(--accent-soft); color: var(--text); }
 .nav-btn.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); border: 1px solid var(--line); padding: 7px 9px; }
+/* 经验浏览是链接而不是页签按钮：导航外观一致，但保留 <a> 的语义（同源跳转 /lessons）。 */
+a.nav-btn { text-decoration: none; }
 .count-badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 11px; line-height: 18px; text-align: center; }
 
 .section-header { margin-top: 26px; padding: 0 10px 6px; display: flex; justify-content: space-between; align-items: center; }

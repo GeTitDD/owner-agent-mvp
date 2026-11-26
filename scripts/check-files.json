@@ -257,5 +257,7 @@
   "desktop/shell-markdown.cjs",
   "tests/markdown.test.mjs",
   "src/knowledge-loop/distill-extractor.mjs",
-  "tests/distill-extractor.test.mjs"
+  "tests/distill-extractor.test.mjs",
+  "src/knowledge/lessons-view.mjs",
+  "tests/workbench-lessons.test.mjs"
 ]
