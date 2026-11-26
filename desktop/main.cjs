@@ -128,6 +128,10 @@ let projectWriteModule = null;
 let publishCardModule = null;
 let publishCardStore = null;
 let feishuConfigModule = null;
+// #128 /setup 探测：模块按需加载；最近一次探测结果留在内存里，确认后按同一份清单写。
+let setupProbeModule = null;
+let pstackSkillsModule = null;
+let lastSetupProbe = null;
 // #92：历史版本浏览时的相邻版本 diff（纯函数，只读两份快照内容）。
 let versionDiffModule = null;
 // #84：水位与「自上次看过」。
@@ -158,7 +162,16 @@ const defaults = () => ({
   sandboxProjectDirByProject: {},
   panelPinned: false,
   // 对话的隐式技能：空数组表示用默认七个；上限 12 由 pi-chat 兜住。
-  chatSkills: []
+  chatSkills: [],
+  // #128 /setup 探测写入的路径：空 = 按环境变量 / 家目录现场探测。
+  // 探测写入的值记在 setupProbed 里，用来区分「探测」与「手改」：
+  // 配置值偏离 setupProbed = 人改过，重新探测一律不覆盖。
+  codexSessions: '',
+  opencodeData: '',
+  exportRoot: '',
+  pstackSkills: '',
+  mattSkills: '',
+  setupProbed: {}
 });
 let config = defaults();
 
@@ -269,22 +282,135 @@ const configBoxFacts = async () => {
       OWNER_AGENT_SIDECAR_TOKEN: envState(['OWNER_AGENT_SIDECAR_TOKEN', 'OWNER_AGENT_SIDECAR_TOKEN_FILE'])
     },
     sync,
-    sources: configSources()
+    sources: await configSources()
   };
 };
 
-/** 可写项的来源：值偏离内置默认 = 手改（人写过），还是默认 = 探测（没人动过）。 */
-const configSources = () => {
+/**
+ * 可写项的来源：值偏离内置默认 = 手改（人写过），还是默认 = 探测（没人动过）。
+ * #128 的路径键（codexSessions / opencodeData / exportRoot / pstackSkills / mattSkills）
+ * 不能按默认值判：探测自己也会写值，按默认值会把探测结果误标成手改。
+ * 这五个键改按「值 vs 上次探测写入值」判，名单来自 src/setup-probe.mjs，不另抄一份。
+ */
+const configSources = async () => {
   const base = defaults();
   const sources = {};
+  // 探测模块加载失败不能拖垮配置箱：退回按默认值判来源，配置本体照常打开。
+  let setupKeys = new Set();
+  try {
+    const setupModule = setupProbeModule ??= await importEsm('../src/setup-probe.mjs');
+    setupKeys = new Set(setupModule.SETUP_PATH_KEYS);
+  } catch {
+    // 空集合 = 不特殊处理这五个路径键；#127 的既有行为不变。
+  }
   for (const [key, value] of Object.entries(base)) {
-    // pet 是宠物窗位置，不属于配置箱，也不该出现在来源表里。
-    if (key === 'pet') continue;
+    // pet 是宠物窗位置，setupProbed 是合并用的账本：都不属于配置箱，也不该出现在来源表里。
+    if (key === 'pet' || key === 'setupProbed') continue;
+    if (setupKeys.has(key)) {
+      const current = String(config[key] ?? '').trim();
+      const probed = String(config.setupProbed?.[key] ?? '').trim();
+      sources[key] = current && current !== probed ? 'manual' : 'probe';
+      continue;
+    }
     sources[key] = JSON.stringify(config[key] ?? null) === JSON.stringify(value ?? null)
       ? 'probe'
       : 'manual';
   }
   return sources;
+};
+
+// ---- #128 /setup 探测 ----
+//
+// 探测只读本机路径与 process.env：不联网、不写盘。真正建目录 / 写配置只在
+// companion:setup-apply 且 allow=true 时发生，与 #127 的 settings.set 写同一份 companion.json。
+//
+// 路径解析刻意不读 config：重新探测要能跟上环境变量与家目录的变化；
+// 手改值由 src/setup-probe.mjs 按「值 vs setupProbed」跳过。
+
+/** 这次看到的本机路径（不读配置里的旧值）。 */
+const setupProbePaths = async () => {
+  const home = os.homedir();
+  const dataHome = process.env.XDG_DATA_HOME
+    ? path.resolve(process.env.XDG_DATA_HOME)
+    : path.join(home, '.local', 'share');
+  const codexHome = process.env.CODEX_HOME
+    ? path.resolve(process.env.CODEX_HOME)
+    : path.join(home, '.codex');
+  // pstack skills 与 Playbook 共用同一套解析；解析不到时给一个可展示的候选，
+  // 判定仍是「缺失」，不会凭空建一个外部工具的目录。
+  let pstack = path.resolve(__dirname, '..', '..', 'pstack-pi', 'skills');
+  try {
+    const mod = pstackSkillsModule ??= await importEsm('../src/pstack/readonly-session.mjs');
+    pstack = mod.resolvePstackSkillsDir() ?? pstack;
+  } catch {
+    // 模块不可用就用上面的候选路径；探测本身不因此失败。
+  }
+  return {
+    codexSessions: path.join(codexHome, 'sessions'),
+    opencodeData: path.join(dataHome, 'opencode'),
+    exportRoot: path.join(app.getPath('userData'), 'exports'),
+    pstackSkills: pstack,
+    mattSkills: mattSkillsDir()
+  };
+};
+
+/** 只读文件系统：只回答存不存在、是不是目录、读不读得到、写不写得进。 */
+const setupProbeIo = {
+  stat: (target) => {
+    const value = String(target ?? '').trim();
+    if (!value) return { exists: false, isDir: false, readable: false, writable: false };
+    try {
+      const info = fs.statSync(value);
+      const allowed = (mode) => {
+        try {
+          fs.accessSync(value, mode);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      return {
+        exists: true,
+        isDir: info.isDirectory(),
+        readable: allowed(fs.constants.R_OK),
+        writable: allowed(fs.constants.W_OK)
+      };
+    } catch {
+      return { exists: false, isDir: false, readable: false, writable: false };
+    }
+  },
+  // 技能计数只数一级目录（matt 的两级由纯函数再往下数一层）；排序让结果稳定。
+  listDirs: (target) => {
+    try {
+      return fs.readdirSync(target, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      return [];
+    }
+  }
+};
+
+/**
+ * 探测一次并算好建议写入清单。结果留在 lastSetupProbe 里，
+ * 确认时按同一份清单写，避免「看到的」与「写下去的」不是同一批。
+ */
+const computeSetupProbe = async () => {
+  const mod = setupProbeModule ??= await importEsm('../src/setup-probe.mjs');
+  // 上一次的清单先作废：这一次探测失败时，不能让确认按钮拿到旧清单去写。
+  lastSetupProbe = null;
+  const probe = mod.probeSetup({
+    env: process.env,
+    paths: await setupProbePaths(),
+    io: setupProbeIo,
+    config,
+    probed: config.setupProbed ?? {},
+    at: new Date().toISOString()
+  });
+  const plan = mod.planSetupWrites({ probe, config, probed: config.setupProbed ?? {} });
+  lastSetupProbe = { probe, plan };
+  return lastSetupProbe;
 };
 
 // #86 会话扫描的本地状态：已扫过的会话键（重复点击不重复提炼），
@@ -4548,6 +4674,10 @@ const registerIpc = () => {
     if (typeof input?.gatewayUrl === 'string') config.gatewayUrl = input.gatewayUrl.trim();
     if (typeof input?.model === 'string') config.model = input.model.trim();
     if (typeof input?.diagramModel === 'string') config.diagramModel = input.diagramModel.trim();
+    // #128 五个探测路径也可手改：值偏离 setupProbed 就成「手改」，重新探测不再覆盖。
+    for (const key of ['codexSessions', 'opencodeData', 'exportRoot', 'pstackSkills', 'mattSkills']) {
+      if (typeof input?.[key] === 'string') config[key] = input[key].trim();
+    }
     // 对话隐式技能：最多 12 个；改完立刻重建服务，下一条消息就用新配置。
     if (Array.isArray(input?.chatSkills)) {
       const unique = [...new Set(input.chatSkills.map((item) => String(item ?? '').trim()).filter(Boolean))];
@@ -4608,6 +4738,50 @@ const registerIpc = () => {
       }
     }
     return { ...config, services: await serviceStatus(), modelChanged, modelApplied, modelPending };
+  });
+
+  // #128 /setup：探测是只读；写入必须显式 allow=true，且按最近一次探测的清单落盘。
+  // - probe 返回逐项判定 + 建议写入清单，前端只画；
+  // - apply 只在确认后调用：建缺失的自有目录、把探测路径写进 companion.json（与 #127 同一份文件），
+  //   手改值由纯函数跳过，回执里逐条说明「写了什么 / 跳过了什么」。
+  // 取消不调用 apply，所以文件系统前后一致由「没有这个 IPC 调用」保证。
+  ipcMain.handle('companion:setup-probe', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const { probe, plan } = await computeSetupProbe();
+    return { ok: true, probe, plan };
+  });
+
+  ipcMain.handle('companion:setup-apply', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (input?.allow !== true) throw new Error('写入清单要先确认（allow=true）');
+    const mod = setupProbeModule ??= await importEsm('../src/setup-probe.mjs');
+    // 没有探测过就不能直接写：宁可让用户重新跑一次 /setup，也不猜一份清单。
+    if (!lastSetupProbe) {
+      throw new Error('没有可用的探测清单：先探测一次再确认。');
+    }
+    const result = await mod.applySetup({
+      plan: lastSetupProbe.plan,
+      config,
+      probed: config.setupProbed ?? {},
+      confirm: true,
+      mkdir: (target) => fs.promises.mkdir(target, { recursive: true })
+    });
+    if (result.ok) {
+      config = {
+        ...config,
+        ...result.patch,
+        setupProbed: { ...(config.setupProbed ?? {}), ...result.probed }
+      };
+      saveConfig();
+    }
+    // 清单只用于这一次确认：写入（成功或失败）后作废，下一次必须重新探测。
+    lastSetupProbe = null;
+    return {
+      ok: result.ok,
+      written: result.written,
+      skipped: result.skipped,
+      receipt: result.receipt
+    };
   });
 
   ipcMain.handle('companion:add-project', async (event) => {

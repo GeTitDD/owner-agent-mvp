@@ -88,6 +88,8 @@
     const ownWrites = () => window.OwnerOwnWrite ?? null;
     // #115：项目目录同步同理（判定 / 清单 / 会话授权在 src/project-write.mjs）。
     const projectSyncs = () => window.OwnerProjectWrite ?? null;
+    // #128：`/setup` 的命令解析在 src/setup-probe.mjs（经 setup-probe-host.mjs 挂到窗口）。
+    const setupProbes = () => window.OwnerSetupProbe ?? null;
 
     const $ = (id) => document.getElementById(id);
     const form = $('composer');
@@ -379,8 +381,10 @@
       const value = input.value;
       // #116：/外发、/删除、/同步 与 /blocks 一样是整句命令，没有可调用的技能，
       // 不能让 `/` 面板把回车吃掉——否则「有匹配项才调用」会变成「永远调不到」。
+      // #128：/setup 同样不塞进技能面板（面板只列技能），否则会被 setup-pstack 之类的技能截走。
       const legacySample = value.trim() === blocksApi.SAMPLE_COMMAND
-        || Boolean(window.OwnerConfirm?.isCommand(value));
+        || Boolean(window.OwnerConfirm?.isCommand(value))
+        || Boolean(window.OwnerSetupProbe?.isCommand?.(value));
       if (!value.startsWith('/') || legacySample) {
         if (slashOpen) setSlashOpen(false);
         return;
@@ -584,6 +588,51 @@
       }
     };
 
+    /**
+     * `/setup`（#128）：探测 → 逐项判定 → 建议写入清单 → 一次确认 → 写入 → 回执。
+     *
+     * 这里只负责把命令落进流并打开配置箱的探测态；探测与确认都在配置箱里完成。
+     * 回执通过 onReceipt 回调回来，作为一条普通回复落库（键值块），与 #114 / #115 同形。
+     * 取消 / 直接关闭配置箱也走这条回调，回执会写明「0 处写入」。
+     */
+    const runSetupTurn = async (raw) => {
+      if (!setupProbes()) {
+        ctx.ui.header.setError('探测模块还没加载好，稍等一下再试。');
+        return;
+      }
+      if (!ctx.ui.config?.openProbe) {
+        ctx.ui.header.setError('配置箱还没有探测入口，稍等一下再试。');
+        return;
+      }
+      busy = true;
+      try {
+        const sessionId = currentId();
+        await store.append({ id: sessionId, role: 'user', text: raw });
+        const opened = await ctx.ui.config.openProbe({
+          onReceipt: async (receipt, meta = {}) => {
+            if (!receipt) return;
+            await store.append({
+              id: sessionId,
+              role: 'assistant',
+              text: receipt.text ?? '',
+              blocks: Array.isArray(receipt.blocks) ? receipt.blocks : []
+            });
+            await ctx.refreshThread();
+            // 取消也刷新：流里要能看到「0 处写入」的回执，而不是静默收起。
+            if (meta.cancelled === true) input.focus();
+          }
+        });
+        if (!opened) {
+          ctx.ui.header.setError('探测没有完成，配置与目录都没有变化。');
+          return;
+        }
+        input.value = threadApi.draftAfterSend();
+        resizeInput();
+      } finally {
+        busy = false;
+      }
+    };
+
     const send = () => report('发送', async () => {
       if (busy || !listApi.canCompose(currentId())) return;
       const raw = input.value;
@@ -598,6 +647,12 @@
       const syncCommand = projectSyncs()?.parseCommand?.(raw) ?? null;
       if (syncCommand) {
         await runProjectSyncTurn(syncCommand, raw);
+        return;
+      }
+      // /setup：进配置箱的探测态；一次确认后写入，取消一项都不写。
+      const setupCommand = setupProbes()?.parseCommand?.(raw) ?? null;
+      if (setupCommand) {
+        await runSetupTurn(raw);
         return;
       }
       // 还没接模型：普通消息回占位回复；/blocks 块全览；/risk 确认卡；/外发 /删除 走 #116 的确认卡。

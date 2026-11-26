@@ -24,10 +24,26 @@
     const saveButton = $('configSave');
     const cancelButton = $('configCancel');
     const closeButton = $('configClose');
+    // #128 /setup 探测态的节点；缺任何一个都不阻塞 #127 的配置箱本体。
+    const probePanel = $('configProbePanel');
+    const probeSummary = $('configProbeSummary');
+    const probeItemsNode = $('configProbeItems');
+    const probeWritesNode = $('configProbeWrites');
+    const probeSkipsNode = $('configProbeSkips');
+    const probeReceiptNode = $('configProbeReceipt');
+    const probeReceiptRows = $('configProbeReceiptRows');
+    const probeEntry = $('configProbeEntry');
+    const probeRecheck = $('configProbeRecheck');
+    const probeApply = $('configProbeApply');
+    const probeCancel = $('configProbeCancel');
 
     const settings = window.companion?.settings ?? null;
+    // #128 探测与写入走单独的 IPC：探测只读，写入必须一次确认（allow=true）。
+    const setupBridge = window.companion?.setup ?? null;
     // 数据与规则模块是 ESM，晚于本脚本执行；打开那一刻再取，读不到就明说。
     const data = () => window.OwnerConfigBox ?? null;
+    // 判定文案与取消回执只认 src/setup-probe.mjs 这一份（经 setup-probe-host.mjs）。
+    const probeApi = () => window.OwnerSetupProbe ?? null;
 
     // 本轮注入的事实：paths / secrets / sync / sources。打开时整份换掉，不增量合并。
     let facts = {};
@@ -36,6 +52,12 @@
     let busy = false;
     // 每次打开/重载自增：慢回来的旧响应不能覆盖新状态。
     let loadToken = 0;
+    // #128 探测态：probeView = { probe, plan }；receipt 是本次确认 / 取消的回执。
+    let probeView = null;
+    let probeReceipt = null;
+    let probeBusy = false;
+    // `/setup` 打开时登记的回调：确认或取消后把回执落到对话流。配置箱自己关闭算取消。
+    let probeOnReceipt = null;
 
     const setStatus = (message, tone = '') => {
       statusNode.textContent = String(message ?? '');
@@ -165,6 +187,237 @@
       }
     };
 
+    // ── #128 /setup 探测态 ────────────────────────────────────────────
+    // 探测结果、建议写入清单与回执全部由主进程算好；这里只画，并按一次确认调用 apply。
+    // 取消不调用任何 IPC，所以「取消 = 文件系统前后一致」不靠界面自觉。
+
+    const setProbeBusy = (next) => {
+      probeBusy = Boolean(next);
+      if (probeEntry) probeEntry.disabled = probeBusy;
+      if (probeRecheck) probeRecheck.disabled = probeBusy;
+      if (probeCancel) probeCancel.disabled = probeBusy;
+      if (probeApply) {
+        probeApply.disabled = probeBusy || !(probeView?.plan?.entries?.length > 0);
+      }
+    };
+
+    const sourceTagFor = (item) => {
+      const tag = el('span', 'cfg-probe-source', item.sourceLabel || '探测');
+      tag.dataset.source = item.source === 'manual' ? 'manual' : 'probe';
+      return tag;
+    };
+
+    /** 一行判定：标签 + 值 + 判定徽章 + 来源；空目录与说明另起一行。 */
+    const renderProbeItem = (item) => {
+      const node = el('li', 'cfg-probe-item');
+      node.dataset.probeItem = item.id;
+      node.dataset.verdict = item.verdict;
+      // 0 个技能是「存在但为空」：保留判定（可用 / 只读），另用 data-empty 标出来。
+      node.dataset.empty = item.empty === true ? 'true' : 'false';
+      const badge = el('span', 'cfg-probe-badge', item.verdictLabel || item.verdict);
+      badge.dataset.verdict = item.verdict;
+      node.append(
+        el('span', 'cfg-probe-label', item.label),
+        el('span', 'cfg-probe-value', item.value || '—'),
+        badge,
+        sourceTagFor(item)
+      );
+      if (item.empty === true) node.append(el('span', 'cfg-probe-empty', '存在但为空'));
+      if (item.detail) node.append(el('span', 'cfg-probe-detail', item.detail));
+      return node;
+    };
+
+    /** 建议写入清单：只画 plan.entries（会写盘的项）；手改跳过单独写一行，不算写入项。 */
+    const renderProbeWrites = () => {
+      if (!probeWritesNode) return;
+      const plan = probeView?.plan ?? null;
+      const entries = Array.isArray(plan?.entries) ? plan.entries : [];
+      const nodes = [];
+      const skipNodes = [];
+      if (entries.length === 0) {
+        nodes.push(el('li', 'cfg-probe-nowrite', '没有会写盘的项：探测结果可以直接用。'));
+      }
+      for (const entry of entries) {
+        const row = el('li', 'cfg-probe-write');
+        row.dataset.writeEntry = entry.id;
+        row.dataset.writeKind = (entry.writes ?? []).map((write) => write.kind).join(',');
+        row.append(el('span', 'cfg-probe-write-label', entry.label));
+        for (const write of Array.isArray(entry.writes) ? entry.writes : []) {
+          row.append(el('span', 'cfg-probe-write-line', write.kind === 'mkdir'
+            ? `新建目录 ${write.path}`
+            : `写入配置 ${write.key} = ${write.value}`));
+        }
+        row.append(el('span', 'cfg-probe-write-to', `写到 ${entry.writeTo || 'companion.json'}`));
+        nodes.push(row);
+      }
+      for (const skip of Array.isArray(plan?.skipped) ? plan.skipped : []) {
+        const row = el('li', 'cfg-probe-skip', `跳过 ${skip.label}：${skip.reason}`);
+        row.dataset.skipEntry = skip.itemId;
+        skipNodes.push(row);
+      }
+      probeWritesNode.replaceChildren(...nodes);
+      if (probeSkipsNode) {
+        probeSkipsNode.replaceChildren(...skipNodes);
+        probeSkipsNode.hidden = skipNodes.length === 0;
+      }
+      if (probeApply) probeApply.disabled = probeBusy || entries.length === 0;
+    };
+
+    const renderProbeSummary = () => {
+      if (!probeSummary) return;
+      const api = probeApi();
+      const summary = api?.summarize?.(probeView?.probe)
+        ?? { text: probeView?.probe?.items?.length ? `共 ${probeView.probe.items.length} 项` : '' };
+      probeSummary.textContent = summary.text;
+    };
+
+    const renderProbeReceipt = () => {
+      if (!probeReceiptNode) return;
+      const receipt = probeReceipt;
+      probeReceiptNode.textContent = receipt?.text ?? '';
+      probeReceiptNode.dataset.tone = receipt ? (receipt.tone || 'ok') : '';
+      probeReceiptNode.hidden = !receipt?.text;
+      if (!probeReceiptRows) return;
+      const block = Array.isArray(receipt?.blocks) ? receipt.blocks[0] : null;
+      const rows = Array.isArray(block?.rows) ? block.rows : [];
+      probeReceiptRows.replaceChildren(...rows.map((row) => {
+        const line = el('li');
+        line.append(el('b', '', String(row?.[0] ?? '')));
+        line.append(el('span', '', String(row?.[1] ?? '')));
+        return line;
+      }));
+      probeReceiptRows.hidden = rows.length === 0;
+    };
+
+    const renderProbe = () => {
+      if (!probePanel) return;
+      if (!probeView) {
+        probePanel.hidden = true;
+        return;
+      }
+      probePanel.hidden = false;
+      renderProbeSummary();
+      const items = Array.isArray(probeView.probe?.items) ? probeView.probe.items : [];
+      probeItemsNode?.replaceChildren(...items.map(renderProbeItem));
+      renderProbeWrites();
+      renderProbeReceipt();
+    };
+
+    /** 探测一次：只读；失败也把面板留着，并写清为什么没探成。 */
+    const runProbe = async ({ clearReceipt = true } = {}) => {
+      if (!setupBridge?.probe) {
+        setStatus('这个窗口没有拿到探测接口（companion.setup），无法探测本机。', 'error');
+        return false;
+      }
+      if (clearReceipt) probeReceipt = null;
+      setProbeBusy(true);
+      setStatus('正在探测本机…');
+      try {
+        const payload = await setupBridge.probe();
+        if (!payload?.probe) throw new Error('主进程没有返回探测结果');
+        probeView = { probe: payload.probe, plan: payload.plan ?? null };
+        renderProbe();
+        setStatus('');
+        return true;
+      } catch (error) {
+        setStatus(`探测失败：${error?.message ?? error}`, 'error');
+        return false;
+      } finally {
+        setProbeBusy(false);
+      }
+    };
+
+    /** 一次确认覆盖整张清单：成功与失败都给回执；失败不伪装成已写入。 */
+    const applyProbe = async () => {
+      if (!setupBridge?.apply) {
+        setStatus('这个窗口没有拿到写入接口（companion.setup），一项都没写。', 'error');
+        return false;
+      }
+      const count = probeView?.plan?.entries?.length ?? 0;
+      if (count === 0) {
+        setStatus('清单里没有会写盘的项，不用确认。', '');
+        return false;
+      }
+      if (probeBusy) return false;
+      setProbeBusy(true);
+      setStatus('正在按清单写入…');
+      try {
+        const result = await setupBridge.apply({ allow: true });
+        // 写到哪、跳过什么都由主进程的回执回答；这里只把它画出来并落到对话流。
+        probeReceipt = {
+          ...(result?.receipt ?? {}),
+          tone: result?.ok ? 'ok' : 'error'
+        };
+        // 重读配置与探测：新建的目录与新写入的路径要立刻反映在判定上。
+        await load();
+        await runProbe({ clearReceipt: false });
+        renderProbeReceipt();
+        setStatus(result?.ok
+          ? '已按清单写入；回执见上方。'
+          : '写入没有完成，回执里有原因。', result?.ok ? 'ok' : 'error');
+        const callback = probeOnReceipt;
+        probeOnReceipt = null;
+        await callback?.(result?.receipt ?? null, { cancelled: false });
+        ctx.notify?.(result?.ok ? '已按清单写入' : '写入清单没有完成', result?.ok ? 'ok' : 'error');
+        return Boolean(result?.ok);
+      } catch (error) {
+        setStatus(`写入失败：${error?.message ?? error}`, 'error');
+        ctx.notify?.('写入清单没有完成', 'error');
+        return false;
+      } finally {
+        setProbeBusy(false);
+      }
+    };
+
+    /**
+     * 取消：不调用写入 IPC。回执由纯函数按同一份清单算出，证明「0 处写入」。
+     * 取消不是「稍后执行」，所以这里也不排队、不重试。
+     */
+    const cancelProbe = ({ notifyBridge = true } = {}) => {
+      const api = probeApi();
+      const receipt = api?.cancelReceipt
+        ? api.cancelReceipt({ plan: probeView?.plan ?? null })
+        : { text: '已取消：一项都没写。', blocks: [] };
+      probeReceipt = { ...receipt, tone: 'ok' };
+      renderProbe();
+      setStatus('已取消：清单里所有写入都跳过了。', '');
+      const callback = probeOnReceipt;
+      probeOnReceipt = null;
+      if (notifyBridge) void callback?.(receipt, { cancelled: true });
+      return true;
+    };
+
+    /** 打开探测态：先露箱子读配置，再探测。`/setup` 与页脚的「探测本机」共用。 */
+    const openProbe = async ({ onReceipt } = {}) => {
+      if (!backdrop) return false;
+      reveal();
+      resetProbe();
+      probeOnReceipt = typeof onReceipt === 'function' ? onReceipt : null;
+      const loaded = await load();
+      const probed = await runProbe();
+      // 读配置失败也要把探测结果画出来：判定不依赖配置，只有手改合并依赖它。
+      return loaded || probed;
+    };
+
+    /** 清空探测态：关闭箱子、重开配置箱时都不该留着上一轮的结果。 */
+    const resetProbe = () => {
+      probeView = null;
+      probeReceipt = null;
+      probeOnReceipt = null;
+      if (probePanel) probePanel.hidden = true;
+      probeItemsNode?.replaceChildren();
+      probeWritesNode?.replaceChildren();
+      probeSkipsNode?.replaceChildren();
+      if (probeSkipsNode) probeSkipsNode.hidden = true;
+      probeReceiptRows?.replaceChildren();
+      if (probeReceiptNode) {
+        probeReceiptNode.textContent = '';
+        probeReceiptNode.hidden = true;
+      }
+      if (probeSummary) probeSummary.textContent = '';
+      setProbeBusy(false);
+    };
+
     /** 当前输入框里的草稿：只收可写行，id 与数据模块一致。 */
     const readDraft = () => {
       const draft = {};
@@ -204,10 +457,17 @@
     };
 
     /** 打开：先把箱子露出来，再读配置。先露出来是为了让「读取中」也是可见的。 */
-    const open = () => {
+    const reveal = () => {
       if (!backdrop) return false;
       backdrop.hidden = false;
       toggle?.setAttribute('aria-expanded', 'true');
+      return true;
+    };
+
+    const open = () => {
+      if (!reveal()) return false;
+      // 齿轮入口只看配置本体：上一轮的探测结果（含回执）随关闭一起清掉。
+      resetProbe();
       setStatus('');
       void load();
       return true;
@@ -216,6 +476,17 @@
     /** 关掉：不写任何东西，草稿随 DOM 一起丢掉，下次打开重新读文件。 */
     const close = () => {
       if (!backdrop) return;
+      // `/setup` 探测后还没确认就关闭，等同取消：补一条「0 处写入」回执，绝不偷偷落盘。
+      if (probeView && probeOnReceipt) {
+        const api = probeApi();
+        const receipt = api?.cancelReceipt
+          ? api.cancelReceipt({ plan: probeView.plan ?? null })
+          : { text: '已取消：一项都没写。', blocks: [] };
+        const callback = probeOnReceipt;
+        probeOnReceipt = null;
+        void callback(receipt, { cancelled: true });
+      }
+      resetProbe();
       backdrop.hidden = true;
       toggle?.setAttribute('aria-expanded', 'false');
       bodyNode.replaceChildren();
@@ -243,6 +514,11 @@
       if (event.target === backdrop) close();
     });
     saveButton?.addEventListener('click', () => void save());
+    // #128 探测入口：齿轮打开后点「探测本机」进入探测态；结果仍留在同一个配置箱里。
+    probeEntry?.addEventListener('click', () => void openProbe());
+    probeRecheck?.addEventListener('click', () => void runProbe());
+    probeApply?.addEventListener('click', () => void applyProbe());
+    probeCancel?.addEventListener('click', () => cancelProbe());
     // 输入框里回车不提交表单（这一块不在 form 里），但别让回车丢焦点。
     bodyNode?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && event.target instanceof HTMLInputElement) event.preventDefault();
@@ -258,7 +534,13 @@
       render,
       rows: () => rows,
       facts: () => facts,
-      values: () => values
+      values: () => values,
+      // #128：`/setup` 与页脚入口共用；回执通过 onReceipt 落回对话流。
+      openProbe,
+      probeNow: runProbe,
+      applyProbe,
+      cancelProbe,
+      probe: () => probeView
     };
   };
 
