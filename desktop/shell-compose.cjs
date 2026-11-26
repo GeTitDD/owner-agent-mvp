@@ -89,6 +89,7 @@
    */
   const BUILTIN_COMMANDS = Object.freeze([
     Object.freeze({ id: 'setup', text: '/setup', description: '探测本机：逐项判定，一次确认写盘' }),
+    Object.freeze({ id: '提炼经验', text: '/提炼经验', description: '把当前项目里未提炼的执行记录提炼成经验' }),
     Object.freeze({ id: '项目库', text: '/项目库', description: '当前项目的记忆计数与来源分组' }),
     Object.freeze({ id: '变化', text: '/变化', description: '自上次看过之后的变化（首次只记水位）' }),
     Object.freeze({ id: '发布', text: '/发布', description: '生成发布草稿：下一版、草稿条目数' }),
@@ -224,6 +225,44 @@
           ['投递', delivery ? String(delivery.detail || delivery.status || '已处理') : '未投递']
         ]
       }]
+    };
+  };
+
+  /**
+   * `/提炼经验` 的回执：只报数，不把每条经验全文塞进对话；
+   * 失败逐条给原因，未尝试就说明「没有待提炼」。
+   */
+  const distillReply = (result) => {
+    if (!result || result.ok !== true) {
+      return { text: `没提炼成：${result?.reason || '原因未知'}`, blocks: [] };
+    }
+    if (result.attempted === 0) {
+      return { text: '没有待提炼的执行记录：已经提炼过的不会重复。', blocks: [] };
+    }
+    const rows = [
+      ['尝试', `${result.attempted} 条`],
+      ['写入', `${result.created} 条经验`],
+      ['推断', `${result.inferred} 条（没有可追溯证据）`],
+      ['失败', `${result.failed?.length ?? 0} 条`],
+      ['剩余待提炼', `${result.pending} 条`]
+    ];
+    if (Array.isArray(result.failed) && result.failed.length) {
+      rows.push(['失败原因', result.failed.slice(0, 3)
+        .map((item) => `${item.recordId}: ${item.reason}`).join('；')]);
+    }
+    const table = Array.isArray(result.lessons) && result.lessons.length
+      ? [{
+        type: 'table',
+        title: '本次写入的经验',
+        head: ['现象', '状态'],
+        rows: result.lessons.slice(0, 5).map((lesson) => [
+          String(lesson.phenomenon ?? ''), String(lesson.verificationStatus ?? '')
+        ])
+      }]
+      : [];
+    return {
+      text: `提炼了 ${result.created} 条经验（尝试 ${result.attempted}，失败 ${result.failed?.length ?? 0}）。`,
+      blocks: [{ type: 'kv', title: '提炼回执', rows }, ...table]
     };
   };
 
@@ -884,6 +923,40 @@
      * 回执通过 onReceipt 回调回来，作为一条普通回复落库（键值块），与 #114 / #115 同形。
      * 取消 / 直接关闭配置箱也走这条回调，回执会写明「0 处写入」。
      */
+    /**
+     * `/提炼经验`：显式触发一次蒸馏（执行记录 → Lesson），回执落进流。
+     * 不选项目时由主进程拒绝并给出原因；不后台跑、不重复提炼。
+     */
+    const runDistillTurn = async (raw, limit) => {
+      const bridge = window.companion?.knowledge;
+      if (typeof bridge?.distill !== 'function') {
+        ctx.ui.header.setError('这个窗口没有拿到提炼接口（companion.knowledge.distill）。');
+        return;
+      }
+      const sessionId = currentId();
+      busy = true;
+      try {
+        await store.append({ id: sessionId, role: 'user', text: raw });
+        input.value = threadApi.draftAfterSend();
+        resizeInput();
+        const result = await bridge.distill({
+          projectId: ctx.ui.header.viewProjectId(),
+          limit
+        });
+        const reply = distillReply(result);
+        await store.append({
+          id: sessionId,
+          role: 'assistant',
+          text: reply.text,
+          blocks: Array.isArray(reply.blocks) ? reply.blocks : []
+        });
+        await ctx.refreshThread();
+        input.focus();
+      } finally {
+        busy = false;
+      }
+    };
+
     const runSetupTurn = async (raw, { appendCommand = true } = {}) => {
       if (!setupProbes()) {
         ctx.ui.header.setError('探测模块还没加载好，稍等一下再试。');
@@ -1171,6 +1244,12 @@
         input.focus();
         return;
       }
+      // /提炼经验：显式蒸馏当前项目里未提炼的执行记录（会调用模型）。
+      const distill = /^\/提炼经验(?:\s+(\d{1,2}))?$/u.exec(raw.trim());
+      if (distill) {
+        await runDistillTurn(raw, Number(distill[1]) || 5);
+        return;
+      }
       // /setup：进配置箱的探测态；一次确认后写入，取消一项都不写。
       const setupCommand = setupProbes()?.parseCommand?.(raw) ?? null;
       if (setupCommand) {
@@ -1429,5 +1508,5 @@
     };
   };
 
-  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, BUILTIN_COMMANDS, skillNameOf, create };
+  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, distillReply, BUILTIN_COMMANDS, skillNameOf, create };
 });

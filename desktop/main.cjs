@@ -4072,6 +4072,51 @@ const registerIpc = () => {
     };
   });
 
+  // 显式提炼：把当前项目里「已终态但还没提炼」的执行记录转成 Lesson。
+  // 只有这条 IPC 会真正调用模型；失败逐条返回原因，不写半截经验。
+  ipcMain.handle('companion:distill-lessons', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!store || !personalStore) return { ok: false, reason: '项目库或知识库未初始化' };
+    const projectId = String(input?.projectId ?? '') || config.projectId || '';
+    if (!projectId) return { ok: false, reason: '先选一个项目，再提炼经验' };
+    const list = store.listProjects?.() ?? [];
+    const project = list.find((item) => item.id === projectId) ?? null;
+    if (!project) return { ok: false, reason: `项目不存在：${projectId}` };
+    const distiller = await knowledgeDistiller();
+    if (!distiller) return { ok: false, reason: '知识库未就绪' };
+
+    const limit = Math.min(20, Math.max(1, Number(input?.limit) || 5));
+    const { createLessonExtractor } = await importEsm('../src/knowledge-loop/distill-extractor.mjs');
+    const extractor = createLessonExtractor({
+      model: config.model || '',
+      // 记录本身不带 root；会话只需要一个合法 cwd，不读盘。
+      cwd: project.root || app.getPath('userData')
+    });
+    try {
+      onDemandModule = onDemandModule ?? await importEsm('../src/knowledge-loop/on-demand.mjs');
+      const result = await onDemandModule.distillOnDemand({
+        distiller,
+        projectId,
+        limit,
+        extractor: (input) => extractor.extract(input)
+      });
+      return {
+        ok: true,
+        projectId,
+        attempted: result.attempted,
+        created: result.lessons.length,
+        inferred: result.inferred,
+        failed: result.failed,
+        pending: result.pending.length,
+        lessons: result.lessons.map(lessonListItem)
+      };
+    } catch (error) {
+      return { ok: false, reason: `提炼失败：${error?.message ?? error}` };
+    } finally {
+      extractor.dispose();
+    }
+  });
+
   // #61 经验列表（按项目）：项目级只看本项目，域级只列与项目主域相关的那些。
   ipcMain.handle('companion:lesson-list', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');

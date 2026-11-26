@@ -161,6 +161,29 @@ test('斜杠面板的内置命令：能单独执行，能被打字同一条命�
   assert.equal(compose.parseCapabilityCommand('/发布 确认').confirm, true);
 });
 
+test('/提炼经验：回执按结果分型，命令出现在内置命令里', () => {
+  assert.ok(compose.BUILTIN_COMMANDS.some((command) => command.text === '/提炼经验'));
+
+  const empty = compose.distillReply({ ok: true, attempted: 0 });
+  assert.match(empty.text, /没有待提炼/u);
+
+  const rejected = compose.distillReply({ ok: false, reason: '先选一个项目，再提炼经验' });
+  assert.match(rejected.text, /先选一个项目/u);
+
+  const done = compose.distillReply({
+    ok: true,
+    attempted: 2,
+    created: 1,
+    inferred: 1,
+    failed: [{ recordId: 'r2', reason: '提取器失败' }],
+    pending: 0,
+    lessons: [{ phenomenon: '重试上限没有写进配置', verificationStatus: 'unverified' }]
+  });
+  assert.match(done.text, /提炼了 1 条经验/u);
+  assert.deepEqual(done.blocks[0].rows[3], ['失败', '1 条']);
+  assert.deepEqual(done.blocks[1].rows[0][0], '重试上限没有写进配置');
+});
+
 test('#111 项目库回复：计数与三个来源分组都在块里', () => {
   const reply = compose.libraryReply({
     project: { id: 'alpha', name: 'Alpha' },

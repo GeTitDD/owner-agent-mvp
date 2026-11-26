@@ -255,5 +255,7 @@
   "src/model-catalog.mjs",
   "tests/model-catalog.test.mjs",
   "desktop/shell-markdown.cjs",
-  "tests/markdown.test.mjs"
+  "tests/markdown.test.mjs",
+  "src/knowledge-loop/distill-extractor.mjs",
+  "tests/distill-extractor.test.mjs"
 ]

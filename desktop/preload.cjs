@@ -137,6 +137,8 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     lessons: (input) => invoke('companion:lesson-retrieve', input),
     // #58：未提炼执行记录的提议信号；#61：按项目取经验 / 一键提为候选。
     distillProposals: (input) => invoke('companion:knowledge-distill-proposals', input),
+    // 显式提炼：执行记录 → Lesson（会调用模型；失败逐条返回原因）。
+    distill: (input) => invoke('companion:distill-lessons', input),
     lessonList: (input) => invoke('companion:lesson-list', input),
     promoteLesson: (input) => invoke('companion:lesson-promote', input),
     detail: (input) => invoke('companion:knowledge-detail', input),
