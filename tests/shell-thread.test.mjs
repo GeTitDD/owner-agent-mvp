@@ -107,5 +107,12 @@ test('顶栏只放开两个入口：#106 的会话与 #107 的项目，其余三
   const entriesEnd = header.indexOf('<span class="slot" data-slot="write">');
   assert.ok(entriesStart > 0 && entriesEnd > entriesStart, '入口与状态位的顺序变了');
   const outsideEntries = header.slice(0, entriesStart) + header.slice(entriesEnd);
-  assert.doesNotMatch(outsideEntries, /<button|<select|<input|<a /u, '顶栏入口之外不放操作');
+  // #131 例外只有一处：未同步时的「补同步」是显式动作，且只在未同步时出现。
+  // 去掉这一颗按钮之后，顶栏仍不允许出现别的操作——它依旧不是第二个菜单。
+  const withoutSyncRetry = outsideEntries.replace(
+    /<button[^>]*id="syncRetry"[^>]*>[^<]*<\/button>/u,
+    ''
+  );
+  assert.match(outsideEntries, /id="syncRetry"/, '#131 的补同步入口要在顶栏');
+  assert.doesNotMatch(withoutSyncRetry, /<button|<select|<input|<a /u, '顶栏入口之外不放其他操作');
 });

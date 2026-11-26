@@ -34,6 +34,12 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   cardScope: Object.freeze({
     globalLibrary: (input) => invoke('companion:card-global-library', input)
   }),
+  // #131 同步状态：get 是只读；attempt 是一次显式补同步，返回 {status, result}。
+  // 断网时 attempt 只更新状态，不阻塞本地读写（本地写入不经过这条通道）。
+  syncStatus: Object.freeze({
+    get: () => invoke('companion:sync-status-get'),
+    attempt: () => invoke('companion:sync-attempt')
+  }),
   cardSessions: Object.freeze({
     list: (input) => invoke('companion:card-sessions', input),
     get: (input) => invoke('companion:card-session-get', input),

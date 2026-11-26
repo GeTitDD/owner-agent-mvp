@@ -231,6 +231,56 @@ const saveSessionScanState = ({ sessions = [], fingerprints = [] } = {}) => {
   }
 };
 
+// ── #131 同步状态：离线照常读写，只在顶栏标「未同步」，联网后手动补同步 ──
+// 状态存成 userData 下的一个小 JSON：#127 的配置箱还没接进来，同步目标也还没有，
+// 所以这里先把「状态怎么变」与「执行器返回什么」分开——执行器的形状由 runSync 定义，
+// 状态判定由 src/memory/sync-status.mjs 定义，本文件只做落盘与注入。
+const syncStatusPath = () => path.join(app.getPath('userData'), 'sync-status.json');
+let syncStatusModule = null;
+let syncStatusStoreModule = null;
+let syncStatusStore = null;
+const loadSyncStatusModule = async () =>
+  (syncStatusModule ??= await importEsm('../src/memory/sync-status.mjs'));
+const getSyncStatusStore = async () => {
+  if (syncStatusStore) return syncStatusStore;
+  syncStatusStoreModule ??= await importEsm('../src/memory/sync-status-store.mjs');
+  syncStatusStore = new syncStatusStoreModule.SyncStatusStore({ file: syncStatusPath() });
+  return syncStatusStore;
+};
+
+/**
+ * 一次补同步的执行器。
+ *
+ * 真实适配器（读文档清单 → runSync → git 拉推）属于后续票；#127 之前没有同步目标可配，
+ * 所以这里如实返回 unconfigured，不假装成功——「未同步期间不假装成功」也包含这一层。
+ *
+ * `OWNER_AGENT_SYNC_FAKE=1` 时改读 <userData>/sync-fake.json 的 `result`，只给 #131 的
+ * 验收脚本注入失败/成功两种形状；不设这个变量时注入通道整条不存在。
+ */
+const runSyncAttempt = async () => {
+  if (process.env.OWNER_AGENT_SYNC_FAKE === '1') {
+    const file = path.join(app.getPath('userData'), 'sync-fake.json');
+    try {
+      const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/u, '');
+      const fake = JSON.parse(raw);
+      if (fake?.result && typeof fake.result === 'object') return fake.result;
+      return {
+        status: 'error', step: 'fake', code: 'fake-shape', message: '假的同步结果形状认不出。'
+      };
+    } catch (error) {
+      return {
+        status: 'error', step: 'fake', code: 'fake-missing', message: `读不到假的同步结果：${error?.message ?? error}`
+      };
+    }
+  }
+  return {
+    status: 'unconfigured',
+    step: 'target',
+    code: 'sync-target-missing',
+    message: '还没有配置同步目标（配置箱 #127 接入后可用）；本地读写照常。'
+  };
+};
+
 const digestCache = new Map();
 const resolveDigest = (imageRef = 'node:22-alpine') => {
   const explicit = process.env.OWNER_AGENT_SANDBOX_IMAGE_DIGEST;
@@ -3021,6 +3071,35 @@ const registerIpc = () => {
   ipcMain.handle('companion:card-global-library', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return globalLibraryFor({ limit: Number(input?.limit ?? 5) });
+  });
+
+  // #131 同步状态：get 只读；attempt 是一次显式补同步，执行器返回什么就记什么。
+  // 本地读写不经这条通道，断网时点「补同步」只会更新标记与原因，不会挡住任何本地动作。
+  ipcMain.handle('companion:sync-status-get', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const store = await getSyncStatusStore();
+    return store.read();
+  });
+
+  ipcMain.handle('companion:sync-attempt', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const [mod, store] = await Promise.all([loadSyncStatusModule(), getSyncStatusStore()]);
+    const previous = store.read();
+    let result;
+    try {
+      result = await runSyncAttempt();
+    } catch (error) {
+      // 执行器自己抛错也要落成失败状态：不能因为异常把界面留在「已同步」。
+      result = {
+        status: 'error',
+        step: 'attempt',
+        code: 'attempt-threw',
+        message: error?.message ?? String(error)
+      };
+    }
+    const status = mod.applySyncAttempt(previous, result, new Date());
+    store.save(status);
+    return { status, result };
   });
 
   ipcMain.handle('companion:chat-session-append', async (event, input) => {

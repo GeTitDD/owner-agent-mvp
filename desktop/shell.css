@@ -88,14 +88,22 @@ button, textarea { font: inherit; color: inherit; }
 .top {
   flex: none;
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 3px;
   padding: 9px 10px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
   white-space: nowrap;
   /* 浮层要从这一行往下探，所以这里不能裁切；横向溢出由 .shell 兜底。 */
   overflow: visible;
+}
+
+/* #131 第一行仍是 #105 的五个位置；同步行在下面单独一行，不跟它们抢宽度。 */
+.top-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .slot {
@@ -121,6 +129,75 @@ button, textarea { font: inherit; color: inherit; }
 /* 五个位都只是状态：不做 hover、不做 focus，读起来就是状态而不是入口。
    唯一的例外是 #106 的会话胶囊——顶栏只放开这一个入口。 */
 .slot[data-slot="export"] { margin-left: auto; }
+
+/* ── #131 同步标记：离线也要一眼看出来，且不能冒充「已同步」 ──
+   三态只由 src/memory/sync-status.mjs 判定：已同步（绿）/ 未同步（橙）/ 从未成功同步（灰）。
+   这里不写第三套判定，只把 data-tone 翻成颜色。
+   它单独占顶栏第二行：440px 的窗口里再塞第六个胶囊会把会话/项目挤得读不出来。 */
+.sync-row {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-top: 3px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 10.5px;
+}
+
+.sync-entry {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+}
+
+.sync-state {
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+/* 只有真正同步过才给绿色；未同步（含从未成功同步）一律不是 --ok。 */
+.sync-state[data-tone="ok"] { color: var(--ok); }
+.sync-state[data-tone="warn"] { color: var(--warn); }
+.sync-state[data-tone="unknown"] { color: var(--muted); }
+
+.sync-entry[data-state="unsynced"] {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+/* 说明行：最后成功时间与失败原因都在这里露出，不靠悬停才看得到。 */
+.sync-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-retry {
+  flex: none;
+  margin-left: auto;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 9.5px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.sync-retry:disabled {
+  color: var(--muted);
+  cursor: default;
+}
 
 /* ── #106 会话入口：胶囊 + 一个浮层（列表 / 搜索 / 新建 / 改名 / 置顶 / 删除） ── */
 .session-entry {

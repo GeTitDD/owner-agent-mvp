@@ -229,5 +229,10 @@
   "tests/project-write.test.mjs",
   "scripts/e2e/desktop-project-write.mjs",
   "src/memory/sync-run.mjs",
-  "tests/sync-run.test.mjs"
+  "tests/sync-run.test.mjs",
+  "src/memory/sync-status.mjs",
+  "src/memory/sync-status-store.mjs",
+  "desktop/sync-status-host.mjs",
+  "tests/sync-status.test.mjs",
+  "scripts/e2e/desktop-sync-offline.mjs"
 ]
