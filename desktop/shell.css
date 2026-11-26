@@ -2801,3 +2801,174 @@ button.session-name { cursor: pointer; }
 .config-btn:hover { border-color: var(--accent); }
 .config-btn.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
 .config-btn:disabled { opacity: 0.6; cursor: default; }
+/* #124 关联项目：胶囊栏在输入框上方，可逐个移除；跨项目只读那一句跟着胶囊走。 */
+.link-bar {
+  flex: none;
+  padding: 8px 12px 2px;
+  background: var(--panel);
+}
+
+.link-capsules { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.link-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 4px 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.link-capsule-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-capsule-remove {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.link-capsule-remove:hover { background: var(--danger-soft); color: var(--danger); }
+
+.link-hint { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+
+/* 胶囊多一行时把 `@@` 卡片抬高，别让它压住胶囊（只动位置，不动容器行为）。 */
+.shell.has-links .at-panel { bottom: 128px; }
+
+/* #124 方法卡：项目行就地展开资料；勾「让 Agent 自己找」时四类资料置灰。 */
+.at-project { display: flex; flex-direction: column; gap: 6px; }
+
+.at-project-readonly { margin: 0; color: var(--muted); font-size: 10.5px; }
+
+.at-project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.at-project-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.at-project-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.at-project-head:hover,
+.at-project-head:focus-visible { background: var(--bg); }
+
+.at-project-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.at-project-meta { flex: none; color: var(--muted); font-size: 10.5px; }
+.at-project-caret { flex: none; color: var(--muted); font-size: 12px; }
+
+.at-project-body {
+  padding: 4px 9px 8px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--bg);
+}
+
+.at-project-options { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+
+.at-material {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+}
+
+.at-material input { margin: 0; }
+.at-material.is-empty { opacity: 0.45; }
+.at-material-count { color: var(--muted); font-size: 10.5px; }
+.at-material-auto { flex-basis: 100%; }
+
+.at-project-loading { margin: 2px 0; color: var(--muted); font-size: 11px; }
+
+.at-project-retry {
+  margin-top: 2px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.at-project-retry:hover { border-color: var(--accent); color: var(--text); }
+
+.at-project-error { margin: 0; color: var(--danger); font-size: 11px; }
+.at-project-empty { margin: 0; color: var(--muted); font-size: 11px; }
+
+/* 底部（错误行 + 计数 + 关联）吸在滚动区底部：项目多时也点得到「关联」。 */
+.at-project-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0 2px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--panel);
+}
+
+.at-project-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.at-project-count { margin-right: auto; color: var(--muted); font-size: 10.5px; }
+
+.at-project-link {
+  padding: 2px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 11.5px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.at-project-link:disabled { opacity: 0.4; cursor: default; }
+

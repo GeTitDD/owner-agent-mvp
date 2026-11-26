@@ -32,7 +32,9 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     list: () => invoke('companion:card-projects')
   }),
   cardScope: Object.freeze({
-    globalLibrary: (input) => invoke('companion:card-global-library', input)
+    globalLibrary: (input) => invoke('companion:card-global-library', input),
+    // #124 关联项目：按项目读一份只读库摘要（四类资料计数），用于方法卡就地展开。
+    projectLibrary: (input) => invoke('companion:card-project-library', input)
   }),
   // #131 同步状态：get 是只读；attempt 是一次显式补同步，返回 {status, result}。
   // 断网时 attempt 只更新状态，不阻塞本地读写（本地写入不经过这条通道）。

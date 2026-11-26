@@ -147,8 +147,9 @@ const run = async () => {
     check('the menu sits above the composer instead of covering the draft',
       model.bottom <= model.composerTop + 1,
       `${Math.round(model.bottom)} <= ${Math.round(model.composerTop)}`);
-    check('the menu rows are the method data (2 rows, same keys)',
-      JSON.stringify(model.methods.map((row) => row.key))
+    check('the menu rows are the method data (same rows and keys)',
+      model.methods.length === dataMethods.length
+      && JSON.stringify(model.methods.map((row) => row.key))
       === JSON.stringify(dataMethods.map((method) => method.key)),
       JSON.stringify(model.methods.map((row) => row.key)));
     check('the menu rows carry the data titles and descriptions',
@@ -186,7 +187,7 @@ const run = async () => {
     // ④ 返回菜单：卡片收掉，菜单重新出现，焦点落在第一行。
     check('back returns to the menu', await click(panel, '#atBack'));
     check('the menu is shown again', await waitFor(panel,
-      "document.querySelectorAll('#atBody .at-method').length === 2", 5000));
+      "document.querySelectorAll('#atBody .at-method').length === window.OwnerShellAt.atMethods().length", 5000));
     model = await readPanel(panel);
     check('focus returns to the first method row',
       await waitFor(panel,

@@ -147,9 +147,10 @@ test('指针相等：来源 + 会话 id 决定同一条，标题变了也不重�
   assert.equal(session.samePointer(left, { ...right, source: 'claude' }), false);
 });
 
-test('方法卡注册表：session 已带 mount，不再画占位；methods 数据不变', () => {
+test('方法卡注册表：session 已带 mount，不再画占位', () => {
   const at = require('../desktop/shell-at.cjs');
   assert.equal(typeof at.atContent('session').mount, 'function');
   assert.equal(at.atContent('session').todo, undefined);
-  assert.deepEqual(at.atMethods().map((method) => method.key), ['prompt', 'session']);
+  // #124 之后菜单多了一条「关联项目」，顺序按父 spec：#123 → #124 → #125。
+  assert.deepEqual(at.atMethods().map((method) => method.key), ['prompt', 'project', 'session']);
 });

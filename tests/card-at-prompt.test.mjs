@@ -141,9 +141,9 @@ test('选中的下标按消息顺序输出；越界与无文字的条目被忽�
 
 // ── 与 #122 容器的接缝：prompt 与 session 都带 mount ────────────────
 
-test('方法卡注册表：prompt 与 session 都带 mount，菜单数据不变', () => {
-  assert.equal(typeof at.atContent('prompt').mount, 'function');
-  assert.equal(typeof at.atContent('session').mount, 'function');
-  // 菜单数据没有因为这一票变动。
-  assert.deepEqual(at.atMethods().map((method) => method.key), ['prompt', 'session']);
+test('方法卡注册表：三个方法都带 mount，菜单顺序按父 spec', () => {
+  ['prompt', 'project', 'session'].forEach((key) => {
+    assert.equal(typeof at.atContent(key).mount, 'function', `${key} 缺 mount`);
+  });
+  assert.deepEqual(at.atMethods().map((method) => method.key), ['prompt', 'project', 'session']);
 });
