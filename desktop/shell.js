@@ -3,6 +3,7 @@
 // 分层（按职责拆开，行为零变化）：
 // - shell-header.cjs：顶栏——会话胶囊与列表、项目胶囊与切换确认、写范围状态位、全局只读区；
 // - shell-at.cjs：`@@` 方法菜单与方法卡容器——触发判定、方法列表数据、菜单 ↔ 方法卡迁移；
+// - shell-at-session.cjs：「关联会话」——来源切换、最近会话、线索、指针胶囊与发送段；
 // - shell-compose.cjs：输入区——输入框与发送、`/` 技能面板、`@@` 面板开合、占位文案与锁定；
 // - shell-stream.cjs：对话流——消息渲染、块挂载、悬停复制、提问 / 确认卡动作、导出。
 // 规则模块仍是 shell-thread / shell-sessions / shell-projects / shell-skills / shell-blocks /
@@ -17,6 +18,7 @@
   const streamApi = window.OwnerShellStream;
   if (!headerApi) throw new Error('shell-header.cjs 未加载');
   if (!atApi) throw new Error('shell-at.cjs 未加载');
+  if (!window.OwnerShellAtSession) throw new Error('shell-at-session.cjs 未加载');
   if (!composeApi) throw new Error('shell-compose.cjs 未加载');
   if (!streamApi) throw new Error('shell-stream.cjs 未加载');
   if (!window.OwnerShellThread) throw new Error('shell-thread.cjs 未加载');
@@ -70,6 +72,8 @@
   // 输入区在运行期才取 ui.at，所以两块不锁构造顺序。
   ui.at = atApi.create(ctx);
   ui.stream = streamApi.create(ctx);
+  // #125：指针胶囊与「关联会话」卡片共用一份状态；方法卡关闭后胶囊仍在，发送后清空。
+  ui.sessionPoints = window.OwnerShellAtSession.create(ctx);
 
   /** 发完一条消息之后要刷的几件事：列表（标题/轮数/排序）、当前流、顶栏与输入框。 */
   ctx.refreshThread = async () => {

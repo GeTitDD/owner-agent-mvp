@@ -102,6 +102,8 @@ let ideaCaptureModule = null;
 let ideaSortModule = null;
 // #86 会话扫描：模块按需加载；扫描是显式动作，不在启动或轮询里调用。
 let sessionScanModule = null;
+// #125 会话指针索引：只读元信息；按需加载，列最近会话 / 按线索找会话都走这里。
+let sessionPointerIndexModule = null;
 // #87 决策确认：候选确认入库与状态流转；同样按需加载。
 let decisionConfirmModule = null;
 let decisionRetrievalModule = null;
@@ -3773,6 +3775,27 @@ const registerIpc = () => {
       fingerprints: state.fingerprints
     });
     return result;
+  });
+
+  // #125 关联会话：只列指针元信息（来源 / id / 标题 / 时间 / 轮数 / 项目），
+  // 不返回会话正文；按线索找会话也只读文件头或数据库元信息列，不整段展开。
+  ipcMain.handle('companion:session-points', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    sessionPointerIndexModule = sessionPointerIndexModule
+      ?? await importEsm('../src/memory/session-pointer-index.mjs');
+    const home = String(process.env.OWNER_SESSION_HOME ?? '').trim() || os.homedir();
+    const projects = (store?.listProjects() ?? []).map((project) => ({
+      id: project.id,
+      name: project.name ?? '',
+      root: project.root ?? ''
+    }));
+    return sessionPointerIndexModule.listSessionPointers({
+      roots: sessionPointerIndexModule.sessionPointerRoots({ home, env: process.env }),
+      projects,
+      source: String(input?.source ?? ''),
+      clue: String(input?.clue ?? ''),
+      limit: input?.limit
+    });
   });
 
   // #87 决策确认：候选只在人点「确认」时入库；可选补一句理由，缺理由单独标记。
