@@ -459,14 +459,10 @@
         .filter((slot) => slot.skill);
       const quick = skillsApi.filterSlots(quickAll, slashQuery);
       const quickIds = new Set(quickAll.map((slot) => slot.id));
+      const slotsById = new Map(quickAll.map((slot) => [slot.id, slot]));
       // 纯数字只指数字快捷：这时下半段不再按 id 里的数字捞人，否则打 /2
       // 会把 alpha-12 之类也带出来，和「按数字调用」的语义打架。
       const numericQuery = /^[0-9]+$/u.test(skillsApi.normalizeQuery(slashQuery));
-      // 两段合起来覆盖扫描到的每一条技能：数字快捷里的不再在下面重复一遍。
-      const rest = numericQuery ? [] : skillsApi.searchSkills(
-        skillRows.filter((skill) => !quickIds.has(skill.id)),
-        slashQuery
-      );
       const conflictIds = new Set(model.conflicts.ids);
       // 内置命令排在最前：打 `/` 先看到「能做什么」，再看到「装了哪些技能」。
       const query = skillsApi.normalizeQuery(slashQuery);
@@ -474,12 +470,6 @@
         !query || command.id.includes(query) || command.text.includes(query)
         || command.description.includes(query));
       const builtinRows = builtin.map((command) => ({ id: command.id, kind: 'builtin', text: command.text }));
-      slashFlat = [
-        ...builtinRows,
-        ...quick.map((slot) => ({ id: slot.id, kind: 'command' })),
-        ...rest.map((skill) => ({ id: skill.id, kind: 'skill' }))
-      ];
-      if (slashSelection >= slashFlat.length) slashSelection = Math.max(0, slashFlat.length - 1);
 
       slashList.replaceChildren();
       slashList.append(el('div', 'slash-group',
@@ -487,21 +477,57 @@
       builtin.forEach((command, index) => {
         slashList.append(builtinRow(command, index));
       });
-      slashList.append(el('div', 'slash-group',
-        `数字快捷 · ${quick.length}${slashCustomizing ? '（改数字 1-9，空着回默认）' : ''}`));
-      quick.forEach((slot, index) => {
-        slashList.append(slashRow(slot.skill, {
-          kind: 'command', index: builtin.length + index, slot, conflictIds
-        }));
-      });
-      const filtered = Boolean(query);
-      slashList.append(el('div', 'slash-group',
-        `全部技能 · ${rest.length}${filtered ? '（已过滤）' : ''}`));
-      rest.forEach((skill, offset) => {
-        slashList.append(slashRow(skill, {
-          kind: 'skill', index: builtin.length + quick.length + offset, slot: null, conflictIds
-        }));
-      });
+
+      if (query) {
+        // 搜索模式：合成一张列表，按相关度排（名字前缀优先）。
+        // 不再先摆「数字快捷」——否则打 `ask` 会先看到说明里带 ask 的无关技能。
+        const matched = numericQuery
+          ? quick.map((slot) => ({ skill: slot.skill, slot }))
+          : skillsApi.searchSkills(skillRows, slashQuery)
+            .map((skill) => ({ skill, slot: slotsById.get(skill.id) ?? null }));
+        slashFlat = [
+          ...builtinRows,
+          ...matched.map(({ skill, slot }) => ({
+            id: skill.id, kind: slot ? 'command' : 'skill'
+          }))
+        ];
+        if (slashSelection >= slashFlat.length) {
+          slashSelection = Math.max(0, slashFlat.length - 1);
+        }
+        slashList.append(el('div', 'slash-group', `匹配 · ${matched.length}（已过滤）`));
+        matched.forEach((entry, offset) => {
+          slashList.append(slashRow(entry.skill, {
+            kind: entry.slot ? 'command' : 'skill',
+            index: builtin.length + offset,
+            slot: entry.slot,
+            conflictIds
+          }));
+        });
+      } else {
+        // 空查询：保持两段——数字快捷 + 全部技能。
+        const rest = skillRows.filter((skill) => !quickIds.has(skill.id));
+        slashFlat = [
+          ...builtinRows,
+          ...quickAll.map((slot) => ({ id: slot.id, kind: 'command' })),
+          ...rest.map((skill) => ({ id: skill.id, kind: 'skill' }))
+        ];
+        if (slashSelection >= slashFlat.length) {
+          slashSelection = Math.max(0, slashFlat.length - 1);
+        }
+        slashList.append(el('div', 'slash-group',
+          `数字快捷 · ${quickAll.length}${slashCustomizing ? '（改数字 1-9，空着回默认）' : ''}`));
+        quickAll.forEach((slot, index) => {
+          slashList.append(slashRow(slot.skill, {
+            kind: 'command', index: builtin.length + index, slot, conflictIds
+          }));
+        });
+        slashList.append(el('div', 'slash-group', `全部技能 · ${rest.length}`));
+        rest.forEach((skill, offset) => {
+          slashList.append(slashRow(skill, {
+            kind: 'skill', index: builtin.length + quickAll.length + offset, slot: null, conflictIds
+          }));
+        });
+      }
 
       if (slashFlat.length === 0) {
         const message = !skillsLoaded && skillsLoading

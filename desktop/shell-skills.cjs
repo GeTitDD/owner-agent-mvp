@@ -170,20 +170,42 @@
     return next;
   };
 
-  /** 全部技能搜索：按 id、原名、说明都命中；空查询原样返回。 */
+  /** 技能显示名：去掉来源前缀，取最后一段（与面板显示一致）。 */
+  const shortNameOf = (id) => str(id).split(/[:/]/u).filter(Boolean).pop() ?? '';
+
+  /**
+   * 搜索相关度：名字前缀 > 名字包含 > 完整 id 包含 > 说明包含。
+   * -1 表示不命中。名字优先是补全的核心：打 `ask` 应该先出 `ask-matt`，
+   * 而不是说明里恰好有 "ask" 的无关技能。
+   */
+  const rankSkill = (skill, query) => {
+    const id = str(skill?.id).toLowerCase();
+    const name = shortNameOf(id);
+    const display = str(skill?.name).toLowerCase();
+    if (!query) return 0;
+    if (name.startsWith(query) || display.startsWith(query)) return 0;
+    if (name.includes(query) || display.includes(query)) return 1;
+    if (id.includes(query)) return 2;
+    if (str(skill?.description).toLowerCase().includes(query)) return 3;
+    return -1;
+  };
+
+  /** 全部技能搜索：命中后按相关度排，同分按 id；空查询原样返回。 */
   const searchSkills = (skills, rawQuery) => {
     const items = Array.isArray(skills) ? skills : [];
     const query = normalizeQuery(rawQuery).toLowerCase();
     if (!query) return items;
-    return items.filter((skill) =>
-      str(skill?.id).toLowerCase().includes(query)
-      || str(skill?.name).toLowerCase().includes(query)
-      || str(skill?.description).toLowerCase().includes(query));
+    return items
+      .map((skill) => ({ skill, rank: rankSkill(skill, query) }))
+      .filter((entry) => entry.rank >= 0)
+      .sort((a, b) => a.rank - b.rank
+        || str(a.skill?.id).localeCompare(str(b.skill?.id)))
+      .map((entry) => entry.skill);
   };
 
   /**
    * 数字快捷的过滤：纯数字按「数字前缀」找（打 /1 能定位 1），
-   * 其余按技能 id / 原名 / 说明找。slot.skill 由调用方挂上。
+   * 其余按同一套相关度（名字前缀优先）。
    */
   const filterSlots = (slots, rawQuery) => {
     const items = Array.isArray(slots) ? slots : [];
@@ -193,12 +215,12 @@
       return items.filter((slot) => str(slot?.number).startsWith(query));
     }
     const lower = query.toLowerCase();
-    return items.filter((slot) => {
-      const skill = slot?.skill ?? {};
-      return str(skill.id).toLowerCase().includes(lower)
-        || str(skill.name).toLowerCase().includes(lower)
-        || str(skill.description).toLowerCase().includes(lower);
-    });
+    return items
+      .map((slot) => ({ slot, rank: rankSkill(slot?.skill ?? {}, lower) }))
+      .filter((entry) => entry.rank >= 0)
+      .sort((a, b) => a.rank - b.rank
+        || str(a.slot?.skill?.id).localeCompare(str(b.slot?.skill?.id)))
+      .map((entry) => entry.slot);
   };
 
   /**
@@ -261,6 +283,8 @@
     applyAliasEdit,
     searchSkills,
     filterSlots,
+    rankSkill,
+    shortNameOf,
     invocationFor
   };
 });

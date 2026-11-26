@@ -56,6 +56,30 @@ test('searchSkills：按 id、按说明、空查询与大小写都能命中', ()
   assert.deepEqual(slash.searchSkills(skills, 'no-such-skill'), []);
 });
 
+test('searchSkills：名字前缀优先于说明命中（补全先给 /ask-matt）', () => {
+  const skills = [
+    skill('pstack:principle-x', { description: 'Ask whether the premise holds.' }),
+    skill('matt:engineering/ask-matt', {
+      source: 'matt', sourceLabel: 'matt', description: 'Router over the skills in this repo.'
+    }),
+    skill('pstack:arena', { description: 'Spawn N candidates and ask the judges.' })
+  ];
+  const ids = slash.searchSkills(skills, 'ask').map((item) => item.id);
+  assert.equal(ids[0], 'matt:engineering/ask-matt');
+  assert.equal(ids.length, 3);
+  // 三档相关度：名字前缀 0，说明命中 3。
+  assert.equal(slash.rankSkill(skills[1], 'ask'), 0);
+  assert.equal(slash.rankSkill(skills[0], 'ask'), 3);
+});
+
+test('filterSlots：名字命中排在说明命中之前', () => {
+  const slots = [
+    { id: 'x', number: 1, skill: skill('x', { description: 'asks a question' }) },
+    { id: 'ask-one', number: 2, skill: skill('ask-one', { description: 'plain' }) }
+  ];
+  assert.deepEqual(slash.filterSlots(slots, 'ask').map((slot) => slot.id), ['ask-one', 'x']);
+});
+
 test('filterSlots：纯数字按数字前缀找，其余按技能 id / 说明找', () => {
   const slots = [
     { id: 'a', number: 1, skill: skill('a', { description: '第一颗' }) },
