@@ -247,6 +247,10 @@
     const sendButton = $('send');
     // 流式中的插入方式开关（引导 / 中止）；只在有回答在跑时出现。
     const insertButton = $('insertMode');
+    // 已选技能的胶囊（在输入框上方），与问题分开显示。
+    const skillChipBar = $('skillChip');
+    const skillChipLabel = $('skillChipLabel');
+    const skillChipClear = $('skillChipClear');
     // #108 技能面板的节点：面板本身、两段共用的滚动区、页脚提示与冲突提示。
     const slashPanel = $('skillPanel');
     const slashList = $('skillList');
@@ -287,6 +291,8 @@
     let pendingAbort = false;
     // 「已按下发送、ask 还没起来」的短窗口：这期间停止按钮也必须可点。
     let starting = false;
+    // 从技能面板选中的技能：显示成胶囊，发送时才拼进消息。
+    let pickedSkill = null;
 
     /** 本地只存覆盖项；读失败就当没改过，不阻塞面板。 */
     const readAliases = () => {
@@ -626,17 +632,37 @@
     };
 
     /**
-     * 点一行技能：只把「/技能id 」放进输入框，不发送、不落库。
-     * 技能是给人接着写问题的前缀；真正的调用由 send() 转成 /skill:<id> <问题> 交给模型。
+     * 点一行技能：选中成胶囊，输入框只留问题。
+     * 技能是「这一问要用的方法」，和问题分开显示才不会混成一句话。
      */
+    const renderSkillChip = () => {
+      if (!skillChipBar) return;
+      skillChipBar.hidden = !pickedSkill;
+      if (skillChipLabel) skillChipLabel.textContent = pickedSkill ? `/${pickedSkill}` : '';
+      if (!pickedSkill) return;
+      input.placeholder = '问这个技能要做什么…';
+    };
+
     const composeSkill = (id) => {
       if (!listApi.canCompose(currentId())) return;
+      pickedSkill = String(id ?? '');
+      // 面板是用 `/` 搜出来的：选中后把搜索串清掉，输入框只留问题。
+      if (input.value.trim().startsWith('/')) {
+        input.value = '';
+        resizeInput();
+      }
       setSlashOpen(false);
-      input.value = `/${id} `;
-      resizeInput();
+      renderSkillChip();
+      input.placeholder = '问这个技能要做什么…';
       input.focus();
-      try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* 忽略 */ }
     };
+
+    skillChipClear?.addEventListener('click', () => {
+      pickedSkill = null;
+      renderSkillChip();
+      syncComposer();
+      input.focus();
+    });
 
     /** 面板里的技能 id 带来源前缀（pstack: / matt:分类/ / domain:…），pi-chat 只认目录名。 */
     const chatSkillIdOf = (id) => String(id ?? '').split(/[:/]/u).filter(Boolean).pop() ?? '';
@@ -678,7 +704,9 @@
       input.disabled = !open;
       // 全局模式不是「不能说话」，而是「不写项目」：消息仍落本机自有库，所以输入框不锁；
       // 提示里说清落点为空，要写项目先选项目。
-      input.placeholder = composerPlaceholder({ open, viewProjectId: ctx.ui.header.viewProjectId() });
+      input.placeholder = pickedSkill
+        ? '问这个技能要做什么…'
+        : composerPlaceholder({ open, viewProjectId: ctx.ui.header.viewProjectId() });
       // 流式中按钮是「停止」：输入框已经清空，但按钮必须可点。
       sendButton.disabled = (activeTurn || starting) ? false : (!open || !threadApi.canSend(input.value));
     };
@@ -1063,7 +1091,9 @@
       if (!listApi.canCompose(currentId())) return;
       // 会话在发起时固定：流式跑着时切走会话，回答也要落在它自己的会话里。
       const sessionId = currentId();
-      const raw = input.value;
+      const draftText = input.value;
+      // 选中的技能拼成消息原文（显示与落库都用这一句），输入框本身只放问题。
+      const raw = pickedSkill ? `/${pickedSkill} ${draftText.trim()}` : draftText;
       if (!threadApi.canSend(raw)) return;
       // #111 旧能力的最小入口：/项目库、/变化、/发布、/监控 先于普通消息处理。
       const capability = parseCapabilityCommand(raw);
@@ -1085,11 +1115,12 @@
       }
       // 技能行：`/matt:xxx/yyy 问题` 交给模型时转成 /skill:<id> <问题>，
       // 让 pi-chat 把技能正文强制带进这一轮；没有问题时把光标留在技能后面。
-      const skillCall = skillCommandOf(raw);
+      const skillCall = pickedSkill
+        ? { id: pickedSkill, question: draftText.trim() }
+        : skillCommandOf(raw);
       if (skillCall && !skillCall.question) {
-        ctx.notify?.('在技能后面写上要它做什么，再发送', 'warn');
-        input.value = `/${skillCall.id} `;
-        resizeInput();
+        ctx.notify?.('给这个技能写一句要它做什么，再发送', 'warn');
+        renderSkillChip();
         input.focus();
         return;
       }
@@ -1121,6 +1152,10 @@
       sendButton.disabled = false;
       try {
         await store.append({ id: sessionId, role: 'user', text: sentText });
+        // 技能只服务这一问：消息落库后清掉胶囊，下一句默认还是一般对话。
+        pickedSkill = null;
+        renderSkillChip();
+        syncComposer();
         // 输入框立刻清空：模型要跑一阵，不能让旧文字留在框里让人以为没发出去。
         input.value = threadApi.draftAfterSend();
         resizeInput();

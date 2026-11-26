@@ -107,6 +107,13 @@
       <p class="link-hint" id="projectLinksHint"></p>
     </div>
 
+    <!-- 选中的技能：胶囊在输入框上方，和问题分开；点 × 取消。
+         不把技能塞进 textarea 的原因：textarea 没法只高亮前一段，混在一起分不清。 -->
+    <div class="skill-chip-bar" id="skillChip" hidden aria-label="已选技能">
+      <span class="skill-chip" id="skillChipLabel"></span>
+      <button type="button" class="skill-chip-clear" id="skillChipClear" aria-label="取消选中的技能">✕</button>
+    </div>
+
     <form class="composer" id="composer" autocomplete="off">
       <label class="sr-only" for="input">输入消息</label>
       <textarea id="input" rows="1" placeholder="说点什么。回车发送，Shift+回车换行"></textarea>

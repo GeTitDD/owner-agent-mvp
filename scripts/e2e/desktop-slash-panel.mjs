@@ -173,6 +173,9 @@ const openSlash = async (panel) => {
 
 const firstQuickId = (model) => model.quick[0]?.id ?? '';
 const inputValue = (panel) => panel.evaluate("document.getElementById('input').value");
+const chipText = (panel) => panel.evaluate(
+  "document.getElementById('skillChip').hidden ? '' : document.getElementById('skillChipLabel').textContent.trim()"
+);
 
 const run = async () => {
   fs.mkdirSync(tempBase, { recursive: true });
@@ -316,12 +319,14 @@ const run = async () => {
     check('clicking a skill row is accepted',
       await click(panel, `.slash-item[data-skill-row=${JSON.stringify(mattId)}]`));
     await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000);
-    check('clicking a skill only fills the composer',
-      (await inputValue(panel)) === `/${mattId} `, await inputValue(panel));
+    check('clicking a skill shows it as a chip',
+      (await chipText(panel)) === `/${mattId}`, await chipText(panel));
+    check('the composer holds only the question',
+      (await inputValue(panel)) === '', await inputValue(panel));
     check('clicking a skill does not send a scripted card',
       (await readThread(panel)).count === 0, String((await readThread(panel)).count));
     // 选完技能接着写问题：不能又被当成分组搜索重新弹出。
-    await typeInput(panel, `${await inputValue(panel)}这个问题怎么答`);
+    await typeInput(panel, '这个问题怎么答');
     await new Promise((resolve) => setTimeout(resolve, 200));
     check('typing the question after a skill keeps the panel closed',
       await panel.evaluate("document.getElementById('skillPanel').hidden === true"));
@@ -337,8 +342,10 @@ const run = async () => {
     }
     check('Enter is handled by the panel', await pressKey(panel, 'Enter'));
     await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000);
-    check('the numeric row fills the composer with its command',
-      (await inputValue(panel)) === `/${secondQuickId} `, await inputValue(panel));
+    check('the numeric row shows the skill as a chip',
+      (await chipText(panel)) === `/${secondQuickId}`, await chipText(panel));
+    check('the numeric row leaves the composer empty',
+      (await inputValue(panel)) === '', await inputValue(panel));
     check('the numeric row does not send anything',
       (await readThread(panel)).count === 0, String((await readThread(panel)).count));
 
@@ -390,8 +397,8 @@ const run = async () => {
     check('clicking the renumbered row is accepted',
       await click(panel, `.slash-item[data-skill-row="${idA}"]`));
     await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000);
-    check('the renumbered row fills the composer with its command',
-      (await inputValue(panel)) === `/${idA} `, await inputValue(panel));
+    check('the renumbered row shows the skill as a chip',
+      (await chipText(panel)) === `/${idA}`, await chipText(panel));
 
     // ⑦ 刷新：数字别名仍在（localStorage 持久化 + 合并）。
     await panel.send('Page.reload');

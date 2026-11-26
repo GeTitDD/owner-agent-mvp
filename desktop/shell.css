@@ -791,6 +791,47 @@ button.session-name { cursor: pointer; }
 
 .send[disabled] { opacity: 0.35; cursor: not-allowed; }
 
+/* 已选技能：胶囊在输入框上方，和问题分开。 */
+.skill-chip-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px 0;
+}
+
+.skill-chip {
+  max-width: 100%;
+  padding: 2px 9px;
+  overflow: hidden;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 10.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.skill-chip-clear {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.skill-chip-clear:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 /* 流式中的插入方式：小一号、描边，别和「停止」抢注意力。 */
 .insert-mode {
   flex: none;
