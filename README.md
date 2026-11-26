@@ -25,6 +25,38 @@
 - **新开发**：`plugins/owner-companion/`，以 Cindy 为宿主和客户端，自包含项目数据、画像、想法、知识与依赖图；手机端复用 Cindy 手机 App。
 - **旧客户端**：`desktop/`（Electron）与 `src/mobile-server.mjs` 保留为迁移与备份，不再新增功能；等插件稳定后归档。
 
+## 单入口卡片（v1.3，当前桌面形态）
+
+桌面窗口只有一个输入框，没有档位切换、没有分区页面。两种前缀分工固定：
+
+- `/`：不带对象的技能调用。列出全部技能（英文原名 + 说明 + 来源徽章），数字可快速调用。
+- `@@`：先指认对象，再选方法——生成 prompt、关联项目、关联会话、分享到飞书。
+
+写模型按目的地分级，不按「是否写入」分级（ADR-0012）：
+
+| 目的地 | 行为 |
+| --- | --- |
+| 自己的记忆库 | 直接执行，给回执 |
+| 被观察的项目目录 | 每次确认；同一会话可授权，换会话重新问 |
+| 本机之外（飞书等） | 每次确认，没有「以后不用问」 |
+| 删除 | 永远逐条确认，没有批量放行 |
+
+旧面板删掉后，能力按下面的方式保留。**表格是当前唯一的能力落点说明**，找不到的能力就是已下线：
+
+| 能力 | 现在的入口 |
+| --- | --- |
+| 项目库 | `/项目库`（计数 + 来源分组） |
+| 变化窗口 | `/变化`（首次查看不写成「没有变化」） |
+| 灵感捕获 | `/记灵感` |
+| 快照、版本、导出、飞书卡片 | `/发布` 生成草稿，`/发布 确认` 发布并给导出路径与投递结果 |
+| 监控 | `/监控`，或在配置箱里看状态 |
+| 配置与探测 | 顶栏齿轮；`/setup` 逐项探测并一次确认写盘 |
+| 同步 | 顶栏同步状态；未同步不会显示成已同步 |
+
+已下线（代码与数据层保留，界面不再重建）：知识页、决策提炼页、Playbook 按钮、沙箱配置页、操作提案、会话扫描/脱敏页、composer 片段、多项目视图。仍待接回新入口的三项见 #92（版本浏览与 diff）、#93（删除项目）、#94 / #96 / #97（灵感收件箱、整理、提升）。
+
+对应的旧 e2e 脚本已改名为 `e2e:legacy:*`，文件头写明「已废弃」及原因；它们验证的 DOM 已不存在，业务逻辑由 `tests/` 下的单元测试覆盖。
+
 ## 桌面宠物 Owner Companion（v1.0）
 
 ![Owner Companion](docs/assets/companion/shell-panel.png)
@@ -32,11 +64,11 @@
 桌宠是产品入口：自然语言交办、处理决策、异常恢复、查看成果。它启动进程内 Owner Runtime（sidecar + Worker），审批令牌只留在主进程；L1 不依赖 OpenClaw，L2 完整工作台才连接 OpenClaw Control UI。
 
 - 运行：`npm install && npm run desktop`
-- pstack Playbook：面板内 12 个按钮 + 4 个一键沉淀预设；只读分析，结论可沉淀为项目知识候选，改动一律走「提案 → 你批准 → 沙箱」。见 [docs/PSTACK_PLAYBOOKS_V1.md](docs/PSTACK_PLAYBOOKS_V1.md)
+- pstack Playbook：旧面板里的 12 个按钮已随 `#111` 下线；数据层仍保留，界面待接回（见上一节的能力表）
 - GitHub 关联：自动从 `git remote` 识别仓库，项目行 `GH` 徽章打开仓库；用本机 `gh` CLI 读取私有/公开、默认分支、星标、最近提交与打开的 Issues/PR；复测通过后可预览并二次确认创建 Draft PR（只推 owner/ 分支，不合并）
 - Windows 打包：`npm run desktop:pack`（CI `desktop-package` 上传私有 RC Artifact + SHA256）
-- 桌面 E2E：`npm run e2e:desktop`（真实 Docker + 真实 Pi）
-- 定向回归：`npm run e2e:desktop:sandbox-config`、`npm run e2e:desktop:multiproject`、`npm run e2e:desktop:knowledge`、`npm run e2e:desktop:playbooks`
+- 桌面 E2E：`npm run e2e:desktop:card-shell`（单入口卡片壳）；旧面板的脚本见 `e2e:legacy:*`
+- 定向回归：`npm run e2e:desktop:card-projects`、`e2e:desktop:at-menu`、`e2e:desktop:at-prompt`
 - 用户语义层：首页只暴露「理解项目 / 整理知识 / 复盘沉淀 / 验收 / 修复 / 交付」，并给出一个「下一步建议」；一键理解先本地快速扫描，深度理解可选，画像按 commit 判断过期
 - 双层工作区：上半部分围绕当前项目（画像、图谱、想法、知识、Playbook），下半部分跨项目管理（决定、运行、结果）；「想法」是改进意见收件箱，对话里提到的建议自动采集，只收集不执行
 - 输入框只保留项目选择 + 一句话 + 发送；分析与讨论都在同一处继续，不再显示沙箱/范围/模型等额外组件
