@@ -703,6 +703,68 @@ button.session-name { cursor: pointer; }
   font-size: 10.5px;
 }
 
+/* #138 决策表单：候选改写与 /记决策 共用一张卡。
+   候选点「改写」后在卡内展开，原来的行与顶部动作让位给表单；记决策默认展开。 */
+.review-form {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.review-form[hidden] {
+  display: none;
+}
+
+.review-field {
+  display: grid;
+  gap: 3px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.review-field-label {
+  color: var(--muted);
+}
+
+.review-field-hint {
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.review-input,
+.review-readonly {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 10.5px;
+}
+
+.review-input {
+  resize: vertical;
+}
+
+.review-readonly {
+  display: block;
+  overflow-wrap: anywhere;
+  background: transparent;
+  border-style: dashed;
+}
+
+.type-review.editing .review-rows,
+.type-review.editing .review-actions {
+  display: none;
+}
+
+.review-form-actions {
+  display: flex;
+  gap: 6px;
+}
+
 /* 撤回：只出现在最后一条助手消息上，悬停显形，别抢正文注意力。 */
 .rewind-affordance {
   padding: 0 6px;

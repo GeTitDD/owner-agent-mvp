@@ -262,7 +262,9 @@
   "tests/distill-extractor.test.mjs",
   "src/memory/decision-scan.mjs",
   "src/memory/decision-scan-store.mjs",
+  "desktop/decision-form.cjs",
   "tests/decision-scan.test.mjs",
+  "tests/decision-rewrite.test.mjs",
   "src/knowledge/lessons-view.mjs",
   "tests/workbench-lessons.test.mjs"
 ]

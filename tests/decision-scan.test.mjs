@@ -407,7 +407,7 @@ test('候选卡：四个字段都在，缺理由显式标注，动作只有接�
     assert.ok(labels.includes(label), `缺字段：${label}`);
   }
   assert.match(card.rows.find((row) => row[0] === '理由')[1], /缺理由/u);
-  assert.deepEqual(card.actions.map((action) => action.id), ['accept', 'reject']);
+  assert.deepEqual(card.actions.map((action) => action.id), ['accept', 'rewrite', 'reject']);
 
   // 只有缺理由时提示会追问；理由已经在的候选不再多问。
   assert.match(card.note, /可跳过/u);

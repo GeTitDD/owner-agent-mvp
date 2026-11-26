@@ -58,6 +58,8 @@
     const blocksApi = ctx.blocksApi;
     const blocksView = ctx.blocksView;
     const riskApi = ctx.riskApi;
+    // #138 决策改写与 /记决策 的动作分发只在 desktop/decision-form.cjs（经典脚本，先于本文件加载）。
+    const decisionForms = window.OwnerDecisionForm ?? null;
     const copyApi = ctx.copyApi;
     const store = ctx.store;
     const notify = ctx.notify;
@@ -619,6 +621,23 @@
     });
 
     /**
+     * 决策卡表单的四个字段（#138）：只认 data-decision-field，缺字段按空串。
+     * 值只在点「保存并接受 / 确认写入」时读一次——改写本身不往会话里写东西。
+     */
+    const decisionFieldsOf = (cardNode) => {
+      const read = (name) => {
+        const field = cardNode?.querySelector?.(`[data-decision-field="${name}"]`) ?? null;
+        return String(field?.value ?? '').trim();
+      };
+      return {
+        phenomenon: read('phenomenon'),
+        intent: read('intent'),
+        abandoned: read('abandoned'),
+        reason: read('reason')
+      };
+    };
+
+    /**
      * 经验 / 候选审核卡（第 2 张票）：提升为候选、接受、拒绝。
      * 与确认卡同一套「点过留 answers」：动作只执行一次，回执落成普通消息。
      */
@@ -692,13 +711,40 @@
             blocks: []
           };
         }
-      } else if (card.kind === 'decision' && (action === 'accept' || action === 'reject')) {
-        // #135：决策候选走主进程的待办——接受才写库，拒绝只记指纹。
-        // 主进程按项目 + 指纹找记录，不信任渲染层带来的候选字段。
+      } else if (card.kind === 'decision' && (action === 'accept' || action === 'reject' || action === 'rewrite'
+        || action === 'save-accept' || action === 'cancel-edit' || action === 'confirm' || action === 'cancel')) {
+        // #135 / #138：决策候选与 `/记决策` 共用一张卡。
+        // 动作先由纯函数 reviewIntent 分发；改写只把本卡表单展开 / 收起，不写任何东西。
+        // 接受仍走主进程的待办（按项目 + 指纹找记录），改写字段只作为 edits 附过去。
         const memory = window.companion?.memory;
+        if (!decisionForms) {
+          notify('决策表单还没加载好，稍等一下再试。', 'error');
+          return;
+        }
         const projectId = cardNode.dataset.projectId || card.projectId || '';
         const fingerprint = cardNode.dataset.fingerprint || card.fingerprint || '';
-        if (action === 'reject') {
+        const mode = card.mode === 'compose' ? 'compose' : 'candidate';
+        // 只有「保存并接受」与「记决策确认」才读表单：普通接受不能把改写后没保存的内容带进去。
+        const fields = (mode === 'compose' || action === 'save-accept') ? decisionFieldsOf(cardNode) : null;
+        const intent = decisionForms.reviewIntent({ mode, action, card, fields });
+        if (intent.type === 'expand' || intent.type === 'collapse') {
+          // 展开 / 收起只动 DOM：不改流、不写库、也不把这张卡标成已选择。
+          cardNode.classList.toggle('editing', intent.type === 'expand');
+          const form = cardNode.querySelector('[data-decision-form]');
+          if (form) form.hidden = intent.type !== 'expand';
+          return;
+        }
+        if (intent.type === 'none') return;
+        if (intent.type === 'invalid') {
+          // 现象空着就没有「当时发生了什么」：当场说清，不写半个决策。
+          notify(intent.message, 'warn');
+          return;
+        }
+        if (intent.type === 'cancel') {
+          // `/记决策` 的取消：只回一条回执，知识库与待办都不动。
+          answerLabel = '取消';
+          reply = { text: '已取消：没有写入任何决策。', blocks: [] };
+        } else if (intent.type === 'reject') {
           if (typeof memory?.rejectDecision !== 'function') {
             notify('决策接口还没加载好，稍等一下再试。', 'error');
             return;
@@ -714,7 +760,7 @@
               blocks: []
             };
           }
-        } else if (cardNode.dataset.missingReason === '1' || card.missingReason === true) {
+        } else if (intent.type === 'ask-reason') {
           // 缺理由：先问一句，可跳过；跳过仍保持「缺理由」，不编占位词。
           answerLabel = '接受 · 待补理由';
           reply = {
@@ -728,20 +774,56 @@
               decision: { projectId, fingerprint }
             }]
           };
-        } else {
+        } else if (intent.type === 'accept') {
           if (typeof memory?.acceptDecision !== 'function') {
             notify('决策接口还没加载好，稍等一下再试。', 'error');
             return;
           }
-          const result = await memory.acceptDecision({ projectId, fingerprint });
+          const result = await memory.acceptDecision({
+            projectId,
+            fingerprint,
+            reason: intent.reason,
+            // 未改写时 edits 是 null：主进程按待办里的原内容确认，与 #135 完全一致。
+            edits: intent.edits
+          });
           if (!result?.ok) {
             answerLabel = '接受失败';
-            reply = { text: `没接受成：${result?.reason || '原因未知'}`, blocks: [] };
+            reply = { text: `没接受成：${result?.reason || '原因未知'}。待办还在，可以稍后再试。`, blocks: [] };
           } else {
-            answerLabel = '接受';
+            answerLabel = intent.edits ? '保存并接受' : '接受';
             const trace = [result.source, result.sessionId].filter(Boolean).join(' · ');
             reply = {
-              text: `已接受：${card.title}。${result.created ? '写入一条决策' : '这条决策已经在库里，没有重复写'}${trace ? `（来源 ${trace}）` : ''}，可回查。${result.missingReason ? ' 这条仍标为「缺理由」。' : ''}`,
+              text: `已接受：${card.title}。${intent.edits ? '写入的是改写后的内容，' : ''}${result.created ? '写入一条决策' : '库里已有同一指纹的决策，没有重复写'}${trace ? `（来源 ${trace}）` : ''}，可回查。${result.missingReason ? ' 这条仍标为「缺理由」。' : ''}`,
+              blocks: []
+            };
+          }
+        } else if (intent.type === 'confirm') {
+          // `/记决策`：与候选卡同一张表单，但走既有的确认 API 写一条新决策。
+          if (typeof memory?.confirmDecision !== 'function') {
+            notify('决策接口还没加载好，稍等一下再试。', 'error');
+            return;
+          }
+          if (!projectId) {
+            notify('这条决策没有归属项目：先选一个项目再确认。', 'warn');
+            return;
+          }
+          const result = await memory.confirmDecision({
+            candidate: decisionForms.composeCandidate({
+              projectId,
+              projectName: card.projectName,
+              fields: intent.fields
+            }),
+            reason: intent.fields.reason
+          });
+          if (!result?.ok) {
+            answerLabel = '写入失败';
+            reply = { text: `没写成：${result?.reason || '原因未知'}`, blocks: [] };
+          } else {
+            answerLabel = '已确认写入';
+            reply = {
+              text: result.created
+                ? `已写入：${intent.fields.phenomenon}。写入一条决策${result.missingReason ? '，理由仍标为「缺理由」' : ''}。`
+                : `没有重复写：库里已有同一现象与项目的决策（${intent.fields.phenomenon}）${result.missingReason ? '，那条仍标为「缺理由」' : ''}。`,
               blocks: []
             };
           }
