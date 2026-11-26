@@ -19,7 +19,7 @@
     if (!open) return '没有会话时不能发消息：先在顶栏新建一个会话。';
     return viewProjectId
       ? '说点什么，/ 技能，@@ 方法。回车发送，Shift+回车换行'
-      : '全局只读：能问不能写。/ 技能，@@ 方法';
+      : '全局只读：选项目后可提问。/ 技能，@@ 方法';
   };
 
   /**
@@ -903,6 +903,36 @@
       }
     };
 
+    /**
+     * 普通消息：交给只读 Pi 会话（read/grep/find/ls）回答。
+     *
+     * 三种情况都明确说清，不编答案：
+     * - 没选项目：全局模式没有 cwd 可读，先让用户选项目；
+     * - 没拿到桥：窗口不是主进程起的，重启；
+     * - 没配模型：pi-chat 返回 no-model，原样把原因给用户。
+     */
+    const askModel = async (raw) => {
+      const projectId = ctx.ui.header.viewProjectId();
+      if (!projectId) {
+        return {
+          text: '这条会话还没有选项目：先在顶栏「项目」里选一个，再提问。全局模式只能看记忆摘要，不能读项目文件。',
+          blocks: []
+        };
+      }
+      const bridge = window.companion?.chat;
+      if (typeof bridge?.ask !== 'function') {
+        return { text: '这个窗口没有拿到模型接口（companion.chat.ask）：重启客户端再试。', blocks: [] };
+      }
+      const result = await bridge.ask({ projectId, question: String(raw ?? '') });
+      const text = String(result?.answer ?? '').trim() || '这次没有结论。';
+      const cites = Array.isArray(result?.citations) ? result.citations.filter(Boolean) : [];
+      const missing = Array.isArray(result?.missingCitations) ? result.missingCitations.filter(Boolean) : [];
+      const rows = [];
+      if (cites.length) rows.push(['引用', cites.slice(0, 6).join('、')]);
+      if (missing.length) rows.push(['未找到', missing.slice(0, 6).join('、')]);
+      return { text, blocks: rows.length ? [{ type: 'kv', title: '引用', rows }] : [] };
+    };
+
     const send = () => report('发送', async () => {
       if (busy || !listApi.canCompose(currentId())) return;
       const raw = input.value;
@@ -933,13 +963,12 @@
       }
       // 还没接模型：普通消息回占位回复；/blocks 块全览；/risk 确认卡；/外发 /删除 走 #116 的确认卡。
       const confirmCommand = window.OwnerConfirm?.parseCommand(raw) ?? null;
-      const reply = blocksApi.isSampleCommand(raw)
-        ? blocksApi.sampleReply()
-        : riskApi.isRiskCommand(raw)
-          ? await riskApi.buildRiskReply(raw)
-          : confirmCommand
-            ? await window.OwnerConfirm.buildReply(confirmCommand)
-            : { text: threadApi.placeholderText(raw), blocks: [] };
+      const buildReply = async () => {
+        if (blocksApi.isSampleCommand(raw)) return blocksApi.sampleReply();
+        if (riskApi.isRiskCommand(raw)) return await riskApi.buildRiskReply(raw);
+        if (confirmCommand) return await window.OwnerConfirm.buildReply(confirmCommand);
+        return await askModel(raw);
+      };
       // #124 与 #125 都只服务这一次发送：先接「## 关联项目」段，再接会话指针段。
       const text = projectLinks()?.withLinks?.(raw) ?? raw;
       const sessionPoints = ctx.ui.sessionPoints;
@@ -950,6 +979,9 @@
         // 正文已经落库，胶囊与指针完成使命：清空；发送失败则保留，下一次还能再试。
         projectLinks()?.clear?.();
         sessionPoints?.consume?.();
+        // 先刷新一次：模型可能要跑几秒，用户至少要立刻看到自己那句话进去了。
+        await ctx.refreshThread();
+        const reply = await buildReply();
         await store.append({
           id: currentId(),
           role: 'assistant',

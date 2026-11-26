@@ -97,6 +97,11 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     probe: () => invoke('companion:setup-probe'),
     apply: (input) => invoke('companion:setup-apply', input)
   }),
+  // 对话：只读 Pi 会话（read/grep/find/ls）。消息由壳自己落库，这里只取回答。
+  // 没配模型时返回 no-model 的明确说明，不编答案。
+  chat: Object.freeze({
+    ask: (input) => invoke('companion:chat-ask', input)
+  }),
   diagrams: Object.freeze({
     dependency: (input) => invoke('companion:diagram-dependency', input),
     generate: (input) => invoke('companion:diagram-generate', input)

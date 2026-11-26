@@ -216,7 +216,11 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     await setPopover(panel, false);
     check('a line goes into the current session', await sendLine(panel, '第一条会话的问题', 2));
     const firstThreadAfter = await readThread(panel);
-    check('the reply is still the placeholder', firstThreadAfter.placeholders[1] === true);
+    // 全局模式没有可读的项目根：回复必须说清「先选项目」，不能假装回答了。
+    check('global mode asks for a project instead of answering',
+      firstThreadAfter.placeholders[1] === false
+      && firstThreadAfter.texts[1].includes('先'),
+      JSON.stringify(firstThreadAfter.texts));
     check('the session auto-titles itself from the first question',
       firstThreadAfter.count === 2);
 

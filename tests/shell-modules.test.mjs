@@ -55,7 +55,7 @@ test('同步输入区：没有会话时锁死并给出去处', () => {
 test('同步输入区：全局模式说清只读，项目下只提示发送', () => {
   assert.equal(
     compose.composerPlaceholder({ open: true, viewProjectId: '' }),
-    '全局只读：能问不能写。/ 技能，@@ 方法'
+    '全局只读：选项目后可提问。/ 技能，@@ 方法'
   );
   assert.equal(
     compose.composerPlaceholder({ open: true, viewProjectId: 'alpha' }),
@@ -220,6 +220,19 @@ test('#111 发布回复：草稿要求再确认，发布后给版本与导出', 
   assert.deepEqual(rows[0], ['版本', 'v3']);
   assert.deepEqual(rows[2], ['导出', 'D:/owner/exports/alpha/v3']);
   assert.deepEqual(rows[3], ['投递', '已发送飞书卡片']);
+});
+
+// ── 对话接到 Pi 只读会话：壳只调用，模型与工具面在主进程 ──────────────
+
+test('普通消息走 companion.chat.ask，主进程有 chat-ask 通道与 PiChatService', () => {
+  const composeSrc = fs.readFileSync(path.join(root, 'desktop/shell-compose.cjs'), 'utf8');
+  assert.match(composeSrc, /window\.companion\?\.chat/u, '壳必须从主进程桥取模型接口');
+  assert.match(composeSrc, /ask\(\{ projectId, question/u, '提问要带项目与正文');
+  const mainSrc = fs.readFileSync(path.join(root, 'desktop/main.cjs'), 'utf8');
+  assert.match(mainSrc, /companion:chat-ask/u, '主进程要有 chat-ask 通道');
+  assert.match(mainSrc, /PiChatService/u, '对话后端必须是只读 Pi 会话');
+  const preloadSrc = fs.readFileSync(path.join(root, 'desktop/preload.cjs'), 'utf8');
+  assert.match(preloadSrc, /chat: Object\.freeze\(\{[\s\S]*?companion:chat-ask/u, 'preload 要暴露 chat.ask');
 });
 
 // ── 写范围文案只有一处来源：顶栏的兜底不能和 writeScopeText 走散 ──────────

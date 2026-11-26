@@ -104,6 +104,9 @@ let sessionPointerIndexModule = null;
 let decisionConfirmModule = null;
 let decisionRetrievalModule = null;
 let chatSessionStore = null;
+// 对话的模型后端（只读 Pi 会话）：按需创建，换模型时释放，退出时释放。
+let chatModule = null;
+let chatService = null;
 // #89：项目库视图与快照存储。视图复用 src/project-library.mjs，快照落 owner 库的同一连接。
 let projectLibraryModule = null;
 // #107：全局模式的跨项目聚合（复用库视图口径，只读）。
@@ -3053,6 +3056,23 @@ const requireChatSessions = () => {
   return chatSessionStore;
 };
 
+/**
+ * 对话的模型后端：按需创建的只读 Pi 会话（read/grep/find/ls），按项目复用。
+ * 没有配置模型时不创建会话，由 PiChatService 返回 no-model 的明确提示——
+ * 这里不猜默认值，也不在没模型时假装回答。
+ */
+const getChatService = async () => {
+  if (chatService) return chatService;
+  chatModule ??= await importEsm('../src/pi-chat.mjs');
+  chatService = new chatModule.PiChatService({
+    model: config.model || '',
+    implicitSkillIds: Array.isArray(config.chatSkills) && config.chatSkills.length
+      ? config.chatSkills
+      : null
+  });
+  return chatService;
+};
+
 /** 按 id 找已登记项目；找不到返回 null。主进程与渲染进程各留一份（不强行共用浏览器模块）。 */
 const findProjectById = (projects, projectId) => {
   const id = String(projectId ?? '').trim();
@@ -3151,6 +3171,24 @@ const registerIpc = () => {
       text: String(input?.text ?? ''),
       // #109 的块原样带过去：存储层不解释块结构。
       blocks: Array.isArray(input?.blocks) ? input.blocks : []
+    });
+  });
+
+  // 对话：只读 Pi 会话。会话消息由壳自己落库（见 companion:card-session-append），
+  // 这里只回答，不重复写一遍——否则同一条提问会在流里出现两次。
+  ipcMain.handle('companion:chat-ask', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const service = await getChatService();
+    const projectId = String(input?.projectId ?? '').trim();
+    const project = projectId
+      ? (store?.listProjects() ?? []).find((item) => item.id === projectId) ?? null
+      : null;
+    return service.ask({
+      project: project
+        ? { id: project.id, root: project.root ?? '', domain: project.domain ?? '' }
+        : null,
+      question: String(input?.question ?? ''),
+      model: config.model || ''
     });
   });
 
@@ -4558,6 +4596,8 @@ const registerIpc = () => {
     if (modelChanged) {
       playbookRunner = null;
       triageRunner = null;
+      // 换模型后旧的只读会话立刻作废：下一次提问按新模型重建，不混用。
+      try { chatService?.setModel(config.model || ''); } catch { /* 释放失败不影响保存 */ }
     }
     let modelApplied = true;
     let modelPending = false;
