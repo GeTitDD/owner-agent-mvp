@@ -204,3 +204,18 @@ test('#111 发布回复：草稿要求再确认，发布后给版本与导出', 
   assert.deepEqual(rows[2], ['导出', 'D:/owner/exports/alpha/v3']);
   assert.deepEqual(rows[3], ['投递', '已发送飞书卡片']);
 });
+
+// ── 写范围文案只有一处来源：顶栏的兜底不能和 writeScopeText 走散 ──────────
+
+test('顶栏写范围的兜底文案与 writeScopeText 同源', () => {
+  const { writeScopeText } = require('../src/global-write.mjs');
+  const source = fs.readFileSync(path.join(root, 'desktop/shell-header.cjs'), 'utf8');
+  const glob = writeScopeText({ viewProjectId: '' });
+  const project = writeScopeText({ viewProjectId: 'alpha' });
+  // 兜底只在 card-scope-host 还没执行时用（模块脚本晚于经典脚本），文案必须与判定模块一致；
+  // 否则启动瞬间会出现一句和随后渲染结果不同的写范围，等于对用户说了两种话。
+  assert.ok(
+    source.includes(`label: viewProjectId ? '${project.label}' : '${glob.label}'`),
+    '兜底文案与 writeScopeText 不一致'
+  );
+});

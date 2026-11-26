@@ -15,7 +15,7 @@ import {
   parseProjectSyncCommand,
   planProjectSync,
   projectCancelReceipt,
-  projectGranted,
+  sessionHasGrant,
   projectWriteDecision,
   resetProjectGrant,
   resolveUnderRoot,
@@ -78,15 +78,15 @@ test('会话授权：键是会话 id，换会话查不到；重置与不可变�
   const empty = {};
   const forA = grantProject({ grants: empty, sessionId: 'session-a' });
   assert.deepEqual(empty, {}, '授权不修改原对象');
-  assert.equal(projectGranted({ grants: forA, sessionId: 'session-a' }), true);
-  assert.equal(projectGranted({ grants: forA, sessionId: 'session-b' }), false, '换会话重置');
-  assert.equal(projectGranted({ grants: forA, sessionId: '' }), false);
+  assert.equal(sessionHasGrant({ grants: forA, sessionId: 'session-a' }), true);
+  assert.equal(sessionHasGrant({ grants: forA, sessionId: 'session-b' }), false, '换会话重置');
+  assert.equal(sessionHasGrant({ grants: forA, sessionId: '' }), false);
   // 'true' / 1 这类「看起来像授权」不算。
-  assert.equal(projectGranted({ grants: { 'session-a': 'true' }, sessionId: 'session-a' }), false);
+  assert.equal(sessionHasGrant({ grants: { 'session-a': 'true' }, sessionId: 'session-a' }), false);
 
   const reset = resetProjectGrant({ grants: forA, sessionId: 'session-a' });
-  assert.equal(projectGranted({ grants: reset, sessionId: 'session-a' }), false);
-  assert.equal(projectGranted({ grants: forA, sessionId: 'session-a' }), true, '重置不修改原对象');
+  assert.equal(sessionHasGrant({ grants: reset, sessionId: 'session-a' }), false);
+  assert.equal(sessionHasGrant({ grants: forA, sessionId: 'session-a' }), true, '重置不修改原对象');
 });
 
 test('清单：逐条完整路径、顺序不变、字节数按 UTF-8 算', () => {

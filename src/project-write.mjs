@@ -160,7 +160,7 @@ export function planProjectSync({ projectId, projectName = '', projectRoot, docs
 /**
  * 这个会话有没有项目目录授权。只认严格 true，'true' / 1 之类不算（宁可多一次确认）。
  */
-export function projectGranted({ grants, sessionId } = {}) {
+export function sessionHasGrant({ grants, sessionId } = {}) {
   const id = String(sessionId ?? '').trim();
   if (!id) return false;
   return grants?.[id] === true;
@@ -191,7 +191,7 @@ export function resetProjectGrant({ grants = {}, sessionId } = {}) {
  *   gate: {outcome: 'allow'|'confirm'|'deny', reason: string, scope: string}}}
  */
 export function projectWriteDecision({ sessionId, grants = {}, deletes = false } = {}) {
-  const granted = projectGranted({ grants, sessionId });
+  const granted = sessionHasGrant({ grants, sessionId });
   const gate = writeGate({ destination: 'project', deletes, granted: { project: granted } });
   return {
     allowed: gate.outcome === 'allow',
