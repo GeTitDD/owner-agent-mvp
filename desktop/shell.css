@@ -548,6 +548,47 @@ button.session-name { cursor: pointer; }
   color: var(--muted);
 }
 
+/* 流式：光标块跟着最后一个字，思考默认折叠，工具活动只占一行。 */
+.msg.is-streaming .bubble::after {
+  content: '▌';
+  margin-left: 2px;
+  color: var(--accent);
+  animation: stream-cursor 1s steps(2, start) infinite;
+}
+
+@keyframes stream-cursor {
+  50% { opacity: 0; }
+}
+
+.stream-thinking {
+  max-width: 86%;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.stream-thinking summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.stream-thinking-body {
+  max-height: 140px;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  white-space: pre-wrap;
+  font-size: 10.5px;
+}
+
+.stream-tool {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
 .who {
   display: inline-flex;
   align-items: center;

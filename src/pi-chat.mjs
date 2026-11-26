@@ -156,9 +156,14 @@ export function buildForcedSkillSection(skill) {
 
 export const MAX_QUESTION = 1200;
 const MAX_ANSWER = 8000;
+// 空闲超时与整轮硬上限分开：读大文件时工具事件会一直刷新空闲计时，
+// 但整轮最多跑 10 分钟，避免一条提问挂住整个会话。
+const DEFAULT_IDLE_TIMEOUT_MS = Number(process.env.OWNER_CHAT_IDLE_TIMEOUT_MS) || 120000;
+const DEFAULT_MAX_DURATION_MS = Number(process.env.OWNER_CHAT_MAX_DURATION_MS) || 600000;
 const MAX_CITATIONS = 12;
 
-const DEFAULT_TIMEOUT_MS = Number(process.env.OWNER_CHAT_TIMEOUT_MS) || 120000;
+// 兼容旧环境变量：没设新的空闲超时就沿用它。
+const DEFAULT_TIMEOUT_MS = Number(process.env.OWNER_CHAT_TIMEOUT_MS) || DEFAULT_IDLE_TIMEOUT_MS;
 
 // 失败后给用户可执行的一句话，而不是只显示分类名。
 export const CHAT_FAILURE_ADVICE = Object.freeze({
@@ -383,6 +388,10 @@ export function createChatSessionFactory({ loadSdk = null, skills = null } = {})
             sessionId: () => String(session.sessionId ?? ''),
             prompt: (value) => session.prompt(value),
             abort: () => session.abort?.(),
+            // 流式：把 AgentSessionEvent 原样转给调用方；没有 subscribe 的旧版 SDK 返回空函数。
+            subscribe: typeof session.subscribe === 'function'
+              ? (listener) => session.subscribe(listener)
+              : () => () => {},
             activeTools: () => [...active],
             lastMessage: () => readLastMessage(session),
             getLastText: () => String(session.getLastAssistantText?.() ?? ''),
@@ -457,6 +466,47 @@ export function classifyChatProviderError(rawMessage) {
 }
 
 /**
+ * 把 SDK 的 AgentSessionEvent 翻成界面事件。
+ * 只转三类：正文增量、思考增量、工具活动；其余（消息结束、turn 事件）由 run() 统一收尾。
+ * 纯函数：事件对象注入，测试不用起会话。
+ */
+export function forwardChatEvent(event, emit) {
+  if (typeof emit !== 'function') return;
+  const type = String(event?.type ?? '');
+  if (type === 'message_update') {
+    const inner = event.assistantMessageEvent;
+    if (inner?.type === 'text_delta' && inner.delta) {
+      emit({ type: 'delta', text: String(inner.delta) });
+    } else if (inner?.type === 'thinking_delta' && inner.delta) {
+      emit({ type: 'thinking', text: String(inner.delta) });
+    }
+    return;
+  }
+  if (type === 'tool_execution_start') {
+    emit({
+      type: 'tool',
+      phase: 'start',
+      name: String(event.toolName ?? ''),
+      summary: toolSummaryOf(event.args)
+    });
+    return;
+  }
+  if (type === 'tool_execution_end') {
+    emit({ type: 'tool', phase: 'end', name: String(event.toolName ?? '') });
+  }
+}
+
+/** 工具参数里最值得展示的一项：路径 > 模式 > 查询。 */
+function toolSummaryOf(args) {
+  if (!args || typeof args !== 'object') return '';
+  for (const key of ['path', 'file', 'pattern', 'query', 'command']) {
+    const value = args[key];
+    if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 120);
+  }
+  return '';
+}
+
+/**
  * 对话服务：按「项目 + 模型」持有一个进程内会话，支持连续追问。
  * 失败即丢弃会话，避免半截上下文继续用；模型切换时整体重置。
  */
@@ -464,6 +514,7 @@ export class PiChatService {
   constructor({
     model = '',
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    maxDurationMs = DEFAULT_MAX_DURATION_MS,
     sessionFactory = null,
     skills = null,
     implicitSkillIds = null,
@@ -472,6 +523,7 @@ export class PiChatService {
   } = {}) {
     this.model = String(model ?? '').trim();
     this.timeoutMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_TIMEOUT_MS;
+    this.maxDurationMs = Number(maxDurationMs) > 0 ? Number(maxDurationMs) : DEFAULT_MAX_DURATION_MS;
     // 技能目录可注入：主进程只扫一次，测试不碰磁盘。
     this.skills = Array.isArray(skills) ? skills : null;
     // 隐式集合来自配置；空/非法值退回默认七个，并保证不超过上限。
@@ -534,7 +586,24 @@ export class PiChatService {
     };
   }
 
-  async ask({ project = null, question = '', model = this.model, signal, sessionId = '', history = [] } = {}) {
+  async ask(input = {}) {
+    return this.run({ ...input, onEvent: null });
+  }
+
+  /**
+   * 流式问答：与 ask 同一套判定与收尾，只是把过程中的事件转给调用方。
+   * 事件形状见 docs/STREAMING_AND_STREAM_STATES.md §3.2。
+   */
+  async askStream(input = {}) {
+    return this.run({
+      ...input,
+      onEvent: typeof input?.onEvent === 'function' ? input.onEvent : null
+    });
+  }
+
+  async run({
+    project = null, question = '', model = this.model, signal, sessionId = '', history = [], onEvent = null
+  } = {}) {
     const began = Date.now();
     const projectId = String(project?.id ?? '');
     // /skill:id 的问题：id 单独解析，问题正文去掉前缀。
@@ -579,8 +648,14 @@ export class PiChatService {
     let session = existing?.session ?? null;
     // 只有新建的 Pi 会话才需要落库历史补上下文；活会话已经带着自己的消息。
     let freshSession = false;
-    let timer = null;
+    let idleTimer = null;
+    let hardTimer = null;
     let cancelListener = null;
+    let unsubscribe = null;
+    const emit = (payload) => {
+      if (!onEvent) return;
+      try { onEvent(payload); } catch { /* 界面回调抛错不能影响这一轮 */ }
+    };
     const stopSession = () => {
       try { session?.abort?.(); } catch { /* 中止失败也要继续 dispose */ }
     };
@@ -602,18 +677,43 @@ export class PiChatService {
         entry.lastUsed = Date.now();
       }
 
-      const timedOut = new Promise((_, reject) => {
-        timer = setTimeout(() => {
+      // 空闲超时与整轮上限：任何事件都会重置空闲计时，避免读大文件被判超时。
+      let rejectIdle = () => {};
+      let rejectHard = () => {};
+      const idleExpired = new Promise((_, reject) => { rejectIdle = reject; });
+      const hardExpired = new Promise((_, reject) => { rejectHard = reject; });
+      const armIdle = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
           stopSession();
-          reject(Object.assign(new Error('chat timeout'), { name: 'TimeoutError' }));
+          rejectIdle(Object.assign(new Error('chat idle timeout'), { name: 'TimeoutError' }));
         }, this.timeoutMs);
-      });
+      };
+      hardTimer = setTimeout(() => {
+        stopSession();
+        rejectHard(Object.assign(new Error('chat max duration'), { name: 'TimeoutError' }));
+      }, this.maxDurationMs);
+
+      armIdle();
+      emit({ type: 'turn-start', model: resolvedModel, startedAt: Date.now() });
+      if (onEvent && typeof session.subscribe === 'function') {
+        unsubscribe = session.subscribe((event) => {
+          armIdle();
+          forwardChatEvent(event, emit);
+        });
+      }
       const canceled = new Promise((_, reject) => {
         if (!signal) return;
-        cancelListener = () => {
+        const fail = () => {
           stopSession();
           reject(Object.assign(new Error('chat canceled'), { name: 'AbortError' }));
         };
+        // 已经中止的信号不会再触发 abort 事件：先查一次，避免「点了停止却要等超时」。
+        if (signal.aborted) {
+          fail();
+          return;
+        }
+        cancelListener = fail;
         signal.addEventListener('abort', cancelListener, { once: true });
       });
 
@@ -626,7 +726,8 @@ export class PiChatService {
           implicitIds: this.implicitIds,
           forcedSkill
         })),
-        timedOut,
+        idleExpired,
+        hardExpired,
         canceled
       ]);
 
@@ -650,13 +751,14 @@ export class PiChatService {
       const { citations, missing } = verifyChatCitations(root, raw);
       const tools = this.sessions.get(key)?.tools ?? CHAT_TOOLS;
       const answer = composeChatAnswer(raw, missing);
-      return {
+      const finalAnswer = forcedSkill ? `${answer}\n\n技能：${forcedSkill.id}` : answer;
+      const result = {
         status: 'ok',
         ok: true,
         projectId,
         sessionId: String(session.sessionId?.() ?? ''),
         // 点名的技能在末尾单独标一行：让 Owner 能核对它有没有照做。
-        answer: forcedSkill ? `${answer}\n\n技能：${forcedSkill.id}` : answer,
+        answer: finalAnswer,
         skill: forcedSkill?.id ?? '',
         rawAnswer: raw.trim().slice(0, MAX_ANSWER),
         citations,
@@ -665,23 +767,59 @@ export class PiChatService {
         model: session.model ?? resolvedModel,
         durationMs: Date.now() - began
       };
+      // done 的正文是权威全文：渲染层用它覆盖累积的增量。
+      emit({
+        type: 'turn-done',
+        text: finalAnswer,
+        citations,
+        missingCitations: missing,
+        durationMs: result.durationMs
+      });
+      return result;
     } catch (error) {
+      // 中止不是失败：保留已产出的部分，让界面标「已停止」。
+      const partial = String(session?.getLastText?.() ?? '').trim().slice(0, MAX_ANSWER);
+      const category = classifyChatError(error);
       // 出错即丢弃会话：半截上下文继续追问只会放大误导。
       this.drop(key);
-      const category = classifyChatError(error);
+      if (category === 'canceled') {
+        emit({ type: 'turn-aborted', text: partial });
+        return {
+          status: 'aborted',
+          ok: false,
+          canceled: true,
+          projectId,
+          category,
+          answer: partial,
+          citations: [],
+          missingCitations: [],
+          tools: [],
+          model: resolvedModel,
+          durationMs: Date.now() - began
+        };
+      }
       if (category === 'readonly-violation') {
         this.logger?.error?.(`chat session aborted: ${String(error?.message ?? error)}`);
       }
-      return this.failure({
+      const failure = this.failure({
         projectId,
         category,
         began,
         model: resolvedModel,
         detail: String(error?.detail ?? '')
       });
+      emit({
+        type: 'turn-error',
+        category,
+        message: partial ? `${failure.answer}\n\n已产出的部分：${partial}` : failure.answer,
+        retryable: category !== 'readonly-violation'
+      });
+      return failure;
     } finally {
-      if (timer) clearTimeout(timer);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (hardTimer) clearTimeout(hardTimer);
       if (signal && cancelListener) signal.removeEventListener('abort', cancelListener);
+      try { unsubscribe?.(); } catch { /* 取消订阅失败不影响收尾 */ }
       const entry = this.sessions.get(key);
       if (entry) entry.busy = false;
     }

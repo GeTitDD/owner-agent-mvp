@@ -202,6 +202,102 @@
       threadNode.scrollTop = 0;
     };
 
+    // ── 流式输出：临时气泡 ────────────────────────────────────────────
+    //
+    // 这一块不落库：只在当前会话里画一条「生成中」的消息，增量更新；
+    // 结束后由调用方落库并 renderThread，临时节点随之移除。
+    // 思考默认折叠：只露一行「思考中…」，展开才看内容；不写进会话（结束即丢弃）。
+    let streamNode = null;
+    let streamBubble = null;
+    let streamText = '';
+    let streamThinking = null;
+    let streamThinkingText = '';
+    let streamToolLine = null;
+    let streamStartedAt = 0;
+    let streamTimer = null;
+
+    /** 只有用户已经在底部时才跟随；上滚就停，避免抢滚动条。 */
+    const pinnedToBottom = () => {
+      const gap = threadNode.scrollHeight - threadNode.scrollTop - threadNode.clientHeight;
+      return gap < 24;
+    };
+
+    const tickStream = () => {
+      if (!streamNode) return;
+      const seconds = Math.max(1, Math.round((Date.now() - streamStartedAt) / 1000));
+      const summary = streamThinking?.querySelector('summary');
+      if (summary) summary.textContent = `思考中…（${seconds}s）`;
+    };
+
+    const beginStream = () => {
+      if (streamNode) return;
+      streamText = '';
+      streamThinkingText = '';
+      streamStartedAt = Date.now();
+      const item = el('li', 'msg agent is-streaming');
+      item.dataset.role = 'agent';
+      item.dataset.streaming = 'true';
+      const who = el('div', 'who');
+      who.append(el('span', 'who-name', 'Companion'), el('span', 'badge', '生成中'));
+      item.append(who);
+      streamBubble = el('p', 'bubble', '思考中…');
+      item.append(streamBubble);
+      streamThinking = el('details', 'stream-thinking');
+      streamThinking.hidden = true;
+      streamThinking.append(el('summary', '', '思考中…（0s）'));
+      streamThinking.append(el('pre', 'stream-thinking-body'));
+      item.append(streamThinking);
+      streamToolLine = el('p', 'stream-tool');
+      streamToolLine.hidden = true;
+      item.append(streamToolLine);
+      messagesNode.append(item);
+      streamNode = item;
+      emptyNode.hidden = true;
+      threadNode.scrollTop = threadNode.scrollHeight;
+      if (streamTimer) clearInterval(streamTimer);
+      streamTimer = setInterval(tickStream, 1000);
+    };
+
+    const appendText = (text) => {
+      const chunk = String(text ?? '');
+      if (!chunk) return;
+      if (!streamNode) beginStream();
+      const pinned = pinnedToBottom();
+      streamText += chunk;
+      streamBubble.textContent = streamText;
+      if (pinned) threadNode.scrollTop = threadNode.scrollHeight;
+    };
+
+    const appendThinking = (text) => {
+      const chunk = String(text ?? '');
+      if (!chunk) return;
+      if (!streamNode) beginStream();
+      streamThinkingText += chunk;
+      streamThinking.hidden = false;
+      const body = streamThinking.querySelector('pre');
+      if (body) body.textContent = streamThinkingText;
+    };
+
+    const appendTool = (event) => {
+      if (!streamNode) beginStream();
+      const name = String(event?.name ?? '');
+      if (!name) return;
+      const label = event?.phase === 'end' ? `完成 ${name}` : `读取 ${event?.summary || name}`;
+      streamToolLine.hidden = false;
+      streamToolLine.textContent = label;
+    };
+
+    const endStream = () => {
+      if (streamTimer) { clearInterval(streamTimer); streamTimer = null; }
+      streamNode?.remove();
+      streamNode = null;
+      streamBubble = null;
+      streamThinking = null;
+      streamToolLine = null;
+      streamText = '';
+      streamThinkingText = '';
+    };
+
     /**
      * 剪贴板写入点：先用注入的 writer（e2e 与测试用），否则走主进程剪贴板，
      * 再退到 navigator.clipboard。三者都不可用就抛错，由调用方给可见提示。
@@ -588,6 +684,13 @@
       load,
       render: renderThread,
       resetScroll,
+      // 流式：先画一个临时气泡，增量更新；结束时移除，由落库后的正式消息接管。
+      beginStream,
+      appendText,
+      appendThinking,
+      appendTool,
+      endStream,
+      isStreaming: () => Boolean(streamNode),
       // #123：勾选态与选中集合由对话流持有，方法卡只读计数、只发「开/关」。
       setSelectMode,
       isSelecting: () => selectMode,

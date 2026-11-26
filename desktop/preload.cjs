@@ -100,7 +100,14 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   // 对话：只读 Pi 会话（read/grep/find/ls）。消息由壳自己落库，这里只取回答。
   // 没配模型时返回 no-model 的明确说明，不编答案。
   chat: Object.freeze({
-    ask: (input) => invoke('companion:chat-ask', input)
+    ask: (input) => invoke('companion:chat-ask', input),
+    abort: (turnId) => invoke('companion:chat-abort', { turnId: String(turnId ?? '') }),
+    // 流式事件：只转给订阅者，返回取消订阅函数。
+    onEvent: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('companion:chat-event', listener);
+      return () => ipcRenderer.removeListener('companion:chat-event', listener);
+    }
   }),
   // 模型目录：配置箱用来列「已装模型」，只返回 provider/model 与有无凭据。
   models: Object.freeze({

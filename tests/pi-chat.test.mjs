@@ -15,6 +15,7 @@ import {
   composeChatAnswer,
   createChatSessionFactory,
   createSkillTool,
+  forwardChatEvent,
   parseSkillCommand,
   verifyChatCitations
 } from '../src/pi-chat.mjs';
@@ -385,4 +386,89 @@ test('skill 工具不接受路径：只认索引里的 id', async () => {
   const tool = createSkillTool({ skills: [{ id: 'how', name: 'how', description: '', path: '/tmp/x/SKILL.md', origin: 'pstack' }] });
   const escape = await tool.execute('call-3', { id: '../../etc/passwd' });
   assert.equal(escape.isError, true);
+});
+
+// ── 流式：事件翻译与收尾 ──────────────────────────────────────────
+
+test('forwardChatEvent 只转正文 / 思考 / 工具三类事件', () => {
+  const seen = [];
+  const emit = (event) => seen.push(event);
+
+  forwardChatEvent({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '你' } }, emit);
+  forwardChatEvent({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '想' } }, emit);
+  forwardChatEvent({ type: 'tool_execution_start', toolName: 'read', args: { path: 'src/a.mjs' } }, emit);
+  forwardChatEvent({ type: 'tool_execution_end', toolName: 'read' }, emit);
+  // 不认识的类型与空增量都不能变成界面事件。
+  forwardChatEvent({ type: 'message_end' }, emit);
+  forwardChatEvent({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '' } }, emit);
+
+  assert.deepEqual(seen, [
+    { type: 'delta', text: '你' },
+    { type: 'thinking', text: '想' },
+    { type: 'tool', phase: 'start', name: 'read', summary: 'src/a.mjs' },
+    { type: 'tool', phase: 'end', name: 'read' }
+  ]);
+});
+
+test('askStream：turn-start → delta* → turn-done，done 的正文是权威全文', async () => {
+  const events = [];
+  const adapter = makeAdapter({ answer: '收到。' });
+  adapter.subscribe = (listener) => {
+    listener({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '收' } });
+    listener({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '到' } });
+    return () => {};
+  };
+  const { service } = fakeService(adapter);
+  const result = await service.askStream({
+    project: makeProject(),
+    question: '在吗',
+    model: 'fake/model',
+    onEvent: (event) => events.push(event)
+  });
+
+  assert.deepEqual(events.map((event) => event.type), ['turn-start', 'delta', 'delta', 'turn-done']);
+  assert.equal(events[0].model, 'fake/model');
+  assert.equal(events[3].text, result.answer);
+  assert.equal(result.status, 'ok');
+});
+
+test('askStream：中止时保留已产出的部分，事件是 turn-aborted', async () => {
+  const events = [];
+  const adapter = makeAdapter({ answer: '已经写了一半', hang: true });
+  const { service } = fakeService(adapter);
+  const controller = new AbortController();
+  const pending = service.askStream({
+    project: makeProject(),
+    question: '继续',
+    model: 'fake/model',
+    signal: controller.signal,
+    onEvent: (event) => events.push(event)
+  });
+  controller.abort();
+  const result = await pending;
+
+  assert.equal(result.status, 'aborted');
+  assert.equal(result.answer, '已经写了一半');
+  const aborted = events.find((event) => event.type === 'turn-aborted');
+  assert.ok(aborted, '必须有 turn-aborted 事件');
+  assert.equal(aborted.text, '已经写了一半');
+  assert.equal(events.some((event) => event.type === 'turn-error'), false, '中止不能报成失败');
+});
+
+test('askStream：空闲超时是 turn-error，分类为 timeout', async () => {
+  const events = [];
+  const adapter = makeAdapter({ hang: true });
+  const { service } = fakeService(adapter, { timeoutMs: 30 });
+  const result = await service.askStream({
+    project: makeProject(),
+    question: '慢',
+    model: 'fake/model',
+    onEvent: (event) => events.push(event)
+  });
+
+  assert.equal(result.status, 'error');
+  assert.equal(result.category, 'timeout');
+  const failed = events.find((event) => event.type === 'turn-error');
+  assert.equal(failed?.category, 'timeout');
+  assert.equal(failed?.retryable, true);
 });

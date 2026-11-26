@@ -59,7 +59,7 @@ main → renderer    companion:chat-event { turnId, seq, ...payload }   （webCo
 | --- | --- | --- |
 | `turn-start` | `turnId, model, startedAt` | 已建/复用会话，开始一轮 |
 | `delta` | `text` | 正文增量，**已按 40–60ms 合并**，不是逐 token |
-| `thinking` | `text` | 思考增量（默认折叠，只显示「思考中…」） |
+| `thinking` | `text` | 思考增量：**默认折叠**，只露一行「思考中…（展开）」；done 后折叠成「思考过程 · Ns」 |
 | `tool` | `phase: start/end, name, summary` | 「读取 src/a.ts」这类活动 |
 | `turn-done` | `text, citations, missingCitations, usage, durationMs` | 正常结束，`text` 是权威全文 |
 | `turn-error` | `category, message, retryable` | 失败，`category` 见 §7 |
@@ -128,6 +128,9 @@ error ──重试──▶ sending（沿用原问题，新 turnId）
 
 ## 5. 交互细节
 
+- **思考过程默认折叠**：流式中只露一行「思考中…（展开 Ns）」；点开展开一个限高滚动区，
+  不跟随自动滚动、不参与复制。**思考不落库**：结束后随临时气泡一起丢弃，只把答案写进会话。
+  没有 thinking 块时不出现这一行（不能装出「它在思考」）。
 - **停止**：`send` 变 `停止`；点击 → `chat.abort` → 期望 `turn-aborted`。
   200ms 内没有收到事件也先把 UI 置为 `aborted`（本地先停视觉，服务端事件迟到就丢）。
 - **重试**：沿用原问题，生成新 `turnId`；旧消息保留（不覆盖、不删除）。
@@ -155,7 +158,7 @@ error ──重试──▶ sending（沿用原问题，新 turnId）
 | --- | --- | --- | --- |
 | `no-model` | `config.model` 为空 | 「还没选模型」 | 打开配置箱 · 模型接口 |
 | `quota` | 429 / 额度用尽 | 「额度用尽（429）」 | 换模型 |
-| `timeout` | 超过 120s 无新事件 | 「这条回答超时了」 | 重试 |
+| `timeout` | 空闲 120s（无任何事件）或整轮 600s | 「这条回答超时了」 | 重试 |
 | `tool-error` | 工具连续失败 | 「读文件失败」+ 路径 | 重试 / 换问法 |
 | `empty-answer` | done 且正文为空 | 「这次没有结论」 | 重试 |
 | `session-error` | 其余异常 | 原始 message（脱敏后） | 重试 |

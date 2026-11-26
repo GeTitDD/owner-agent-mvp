@@ -276,6 +276,8 @@
     let slashCustomizing = false;
     let slashFlat = [];
     let busy = false;
+    // 进行中的一轮：停止按钮按它来中止，不猜「当前那一轮」。
+    let activeTurn = null;
 
     /** 本地只存覆盖项；读失败就当没改过，不阻塞面板。 */
     const readAliases = () => {
@@ -903,8 +905,15 @@
       }
     };
 
+    /** 流式中：发送变停止，输入框只读（避免连发两轮）。 */
+    const setStreamingUi = (on) => {
+      sendButton.textContent = on ? '停止' : '发送';
+      input.readOnly = on;
+      if (!on) sendButton.disabled = !threadApi.canSend(input.value);
+    };
+
     /**
-     * 普通消息：交给只读 Pi 会话（read/grep/find/ls）回答。
+     * 普通消息：交给只读 Pi 会话（read/grep/find/ls）回答，边跑边画。
      *
      * 全局会话也一样——它只是另一条 Pi 会话（工作目录是自有目录），不是「不能问」：
      * 读不到项目文件，但能答通用问题、也能用 prompt 里的关联线索。
@@ -915,21 +924,53 @@
       if (typeof bridge?.ask !== 'function') {
         return { text: '这个窗口没有拿到模型接口（companion.chat.ask）：重启客户端再试。', blocks: [] };
       }
-      const result = await bridge.ask({
-        projectId: ctx.ui.header.viewProjectId(),
-        question: String(raw ?? '')
-      });
-      const text = String(result?.answer ?? '').trim() || '这次没有结论。';
-      const cites = Array.isArray(result?.citations) ? result.citations.filter(Boolean) : [];
-      const missing = Array.isArray(result?.missingCitations) ? result.missingCitations.filter(Boolean) : [];
-      const rows = [];
-      if (cites.length) rows.push(['引用', cites.slice(0, 6).join('、')]);
-      if (missing.length) rows.push(['未找到', missing.slice(0, 6).join('、')]);
-      return { text, blocks: rows.length ? [{ type: 'kv', title: '引用', rows }] : [] };
+      const turnId = globalThis.crypto?.randomUUID?.() ?? `turn-${Date.now()}-${Math.random()}`;
+      const stream = ctx.ui.stream;
+      stream.beginStream();
+      const off = typeof bridge.onEvent === 'function'
+        ? bridge.onEvent((event) => {
+          if (event?.turnId !== turnId) return;
+          if (event.type === 'delta') stream.appendText(event.text);
+          else if (event.type === 'thinking') stream.appendThinking(event.text);
+          else if (event.type === 'tool') stream.appendTool(event);
+        })
+        : () => {};
+      activeTurn = { turnId, stop: () => { void bridge.abort?.(turnId); } };
+      setStreamingUi(true);
+      try {
+        const result = await bridge.ask({
+          turnId,
+          projectId: ctx.ui.header.viewProjectId(),
+          question: String(raw ?? '')
+        });
+        // 停止：保留已产出的部分，标「已停止」，不伪装成完整回答。
+        if (result?.status === 'aborted') {
+          const partial = String(result.answer ?? '').trim();
+          return {
+            text: partial ? `${partial}\n\n（已停止）` : '（已停止：这次没有产出内容）',
+            blocks: [],
+            aborted: true
+          };
+        }
+        const text = String(result?.answer ?? '').trim() || '这次没有结论。';
+        const cites = Array.isArray(result?.citations) ? result.citations.filter(Boolean) : [];
+        const missing = Array.isArray(result?.missingCitations) ? result.missingCitations.filter(Boolean) : [];
+        const rows = [];
+        if (cites.length) rows.push(['引用', cites.slice(0, 6).join('、')]);
+        if (missing.length) rows.push(['未找到', missing.slice(0, 6).join('、')]);
+        return { text, blocks: rows.length ? [{ type: 'kv', title: '引用', rows }] : [] };
+      } finally {
+        off();
+        stream.endStream();
+        activeTurn = null;
+        setStreamingUi(false);
+      }
     };
 
     const send = () => report('发送', async () => {
       if (busy || !listApi.canCompose(currentId())) return;
+      // 会话在发起时固定：流式跑着时切走会话，回答也要落在它自己的会话里。
+      const sessionId = currentId();
       const raw = input.value;
       if (!threadApi.canSend(raw)) return;
       // #111 旧能力的最小入口：/项目库、/变化、/发布、/监控 先于普通消息处理。
@@ -970,7 +1011,7 @@
       const sentText = sessionPoints ? sessionPoints.withPointers(text) : text;
       busy = true;
       try {
-        await store.append({ id: currentId(), role: 'user', text: sentText });
+        await store.append({ id: sessionId, role: 'user', text: sentText });
         // 正文已经落库，胶囊与指针完成使命：清空；发送失败则保留，下一次还能再试。
         projectLinks()?.clear?.();
         sessionPoints?.consume?.();
@@ -978,7 +1019,7 @@
         await ctx.refreshThread();
         const reply = await buildReply();
         await store.append({
-          id: currentId(),
+          id: sessionId,
           role: 'assistant',
           text: reply.text ?? '',
           blocks: Array.isArray(reply.blocks) ? reply.blocks : []
@@ -1114,6 +1155,11 @@
 
     form.addEventListener('submit', (event) => {
       event.preventDefault();
+      // 流式中：同一个按钮就是「停止」。先中止，不把这一下当发送。
+      if (activeTurn) {
+        activeTurn.stop();
+        return;
+      }
       if (slashOpen) {
         // 与 Enter 同一套规则：有可选项执行，没有匹配就关面板照常发送。
         if (slashFlat.length) invokeSlashSelection();

@@ -3208,19 +3208,36 @@ const registerIpc = () => {
   const GLOBAL_CHAT_ID = 'global';
   const globalChatRoot = () => path.join(app.getPath('userData'), 'global-chat');
 
+  // 进行中的轮次：turnId → AbortController。停止时按 id 找，不猜「当前那一轮」。
+  const chatTurns = new Map();
+
   ipcMain.handle('companion:chat-ask', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const question = String(input?.question ?? '');
-    // 验收注入：e2e 不调真模型（真实凭据下会慢且不确定），只验证回执落到了流里。
+    const turnId = String(input?.turnId ?? '');
+    const sender = event.sender;
+    const send = (payload) => {
+      if (!turnId || sender.isDestroyed?.()) return;
+      sender.send('companion:chat-event', { turnId, ...payload });
+    };
+
+    // 验收注入：假流也走同一套事件，界面与失败分支都能在 e2e 里被测到。
     if (process.env.OWNER_AGENT_CHAT_FAKE === '1') {
+      const answer = `（假回答）收到：${question.slice(0, 40)}`;
+      send({ type: 'turn-start', model: 'fake', startedAt: Date.now() });
+      for (const chunk of [answer.slice(0, 6), answer.slice(6)]) {
+        if (chunk) send({ type: 'delta', text: chunk });
+      }
+      send({ type: 'turn-done', text: answer, citations: [], missingCitations: [], durationMs: 1 });
       return {
         status: 'ok',
         ok: true,
-        answer: `（假回答）收到：${question.slice(0, 40)}`,
+        answer,
         citations: [],
         missingCitations: []
       };
     }
+
     const service = await getChatService();
     const projectId = String(input?.projectId ?? '').trim();
     const project = projectId
@@ -3234,11 +3251,52 @@ const registerIpc = () => {
       try { fs.mkdirSync(root, { recursive: true }); } catch { /* 建不出来就交给 service 报错 */ }
       target = { id: GLOBAL_CHAT_ID, root, domain: '' };
     }
-    return service.ask({
-      project: target,
-      question,
-      model: config.model || ''
-    });
+
+    const controller = new AbortController();
+    if (turnId) chatTurns.set(turnId, controller);
+
+    // 增量在 main 侧合并：50ms 或累计 80 字发一次，避免 token 级 IPC 洪泛。
+    let pending = '';
+    let flushTimer = null;
+    const flush = () => {
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      if (!pending) return;
+      send({ type: 'delta', text: pending });
+      pending = '';
+    };
+    const onEvent = (payload) => {
+      if (payload?.type === 'delta') {
+        pending += String(payload.text ?? '');
+        if (pending.length >= 80) flush();
+        else if (!flushTimer) flushTimer = setTimeout(flush, 50);
+        return;
+      }
+      flush();
+      send(payload);
+    };
+
+    try {
+      return await service.askStream({
+        project: target,
+        question,
+        model: config.model || '',
+        signal: controller.signal,
+        onEvent
+      });
+    } finally {
+      flush();
+      if (turnId) chatTurns.delete(turnId);
+    }
+  });
+
+  // 停止：只中止指定的那一轮；找不到就如实返回 false，不误伤别的会话。
+  ipcMain.handle('companion:chat-abort', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const turnId = String(input?.turnId ?? '');
+    const controller = chatTurns.get(turnId);
+    if (!controller) return { aborted: false };
+    controller.abort();
+    return { aborted: true };
   });
 
   // 回答提问块：只写那一条消息的 answers（哪一块被答成了什么）。

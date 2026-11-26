@@ -63,7 +63,8 @@ const readSessions = (panel) => panel.evaluate(`(() => {
 
 /** 对话流 + 输入框：条数、正文、空态文案、是否锁死。 */
 const readThread = (panel) => panel.evaluate(`(() => {
-  const items = [...document.querySelectorAll('#messages .msg')];
+  // 流式中的临时气泡不算一条消息：它还没落库，结束就会被移除。
+  const items = [...document.querySelectorAll('#messages .msg:not([data-streaming])')];
   const empty = document.getElementById('emptyState');
   const input = document.getElementById('input');
   return {
@@ -141,7 +142,11 @@ const createSession = async (panel) => {
 const sendLine = async (panel, text, expectedCount) => {
   await typeDraft(panel, text);
   await pressEnter(panel);
-  return waitFor(panel, `document.querySelectorAll('#messages .msg').length === ${expectedCount}`, 8000);
+  return waitFor(
+    panel,
+    `document.querySelectorAll('#messages .msg:not([data-streaming])').length === ${expectedCount}`,
+    8000
+  );
 };
 
 /** 两步删除：先点删除，等确认行，再点确认。 */
