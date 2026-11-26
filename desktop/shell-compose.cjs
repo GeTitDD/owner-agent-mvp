@@ -70,7 +70,142 @@
     return { action: 'none', preventDefault: false };
   };
 
-  /** 建立输入区这一块：查 DOM、绑事件，返回给装配层用的入口。 */
+  // ── #111 旧能力在新壳的最小入口 ─────────────────────────────────────
+  //
+  // 旧壳删掉后，项目库 / 变化窗口 / 发布 / 监控在新壳里各留一条 `/` 命令：
+  // 只做「取数 → 一条回复」，不重建旧界面，也不新增持久状态。数据仍走既有主进程通道
+  // （card-project-library / since-last-seen / library-draft|publish / config-box）。
+  const CAPABILITY_LABELS = Object.freeze({
+    library: '项目库',
+    since: '变化窗口',
+    publish: '发布',
+    monitor: '监控'
+  });
+
+  /**
+   * 把输入框里的一句话解析成 #111 的旧能力命令；认不出返回 null（照常当普通消息）。
+   * `/发布` 只生成草稿，`/发布 确认` 才发布：版本号发布后不能回收，所以确认必须
+   * 在命令里再写一次，不靠一次误触。
+   */
+  const parseCapabilityCommand = (input) => {
+    const raw = String(input ?? '').trim();
+    const publish = /^\/发布(?:\s+(确认))?$/u.exec(raw);
+    if (publish) return { kind: 'publish', confirm: publish[1] === '确认' };
+    if (raw === '/项目库') return { kind: 'library', confirm: false };
+    if (raw === '/变化') return { kind: 'since', confirm: false };
+    if (raw === '/监控') return { kind: 'monitor', confirm: false };
+    return null;
+  };
+
+  /** 项目库回复：计数 + 三个来源分组。条目正文留给 `@@ 关联项目`，这里只给摘要。 */
+  const libraryReply = (view) => {
+    const counts = view?.counts ?? {};
+    const name = String(view?.project?.name || view?.project?.id || '当前项目');
+    const groups = Array.isArray(view?.groups) ? view.groups : [];
+    const rows = groups.map((group) => [
+      String(group?.key ?? '分组'),
+      `${Number(group?.count ?? 0)} 条`,
+      Array.isArray(group?.kinds) ? [...new Set(group.kinds.map(String).filter(Boolean))].join(' / ') : ''
+    ]);
+    return {
+      text: `项目库（${name}）：共 ${Number(counts.total ?? 0)} 条，已验证 ${Number(counts.verified ?? 0)} 条、观察中 ${Number(counts.observing ?? 0)} 条。`,
+      blocks: [
+        {
+          type: 'kv',
+          title: `项目库 · ${name}`,
+          rows: [
+            ['条目', `${Number(counts.total ?? 0)} 条`],
+            ['已验证 / 观察中', `${Number(counts.verified ?? 0)} / ${Number(counts.observing ?? 0)}`],
+            ['画像 / 图谱', `${Number(counts.profile ?? 0)} / ${Number(counts.diagrams ?? 0)}`],
+            ['版本', '`/发布` 生成草稿，`/发布 确认` 发布']
+          ]
+        },
+        ...(rows.length
+          ? [{ type: 'table', title: '条目来源', head: ['分组', '数量', '种类'], rows }]
+          : [])
+      ]
+    };
+  };
+
+  /**
+   * 变化窗口回复：首次查看不写成「没有变化」；算不全时如实带一句原因。
+   * 这条命令会推进水位（进入项目即「看过了」），在回复里明说，避免下次看不到同一批变化时误判。
+   */
+  const sinceReply = (view) => {
+    const counts = view?.counts ?? {};
+    const known = view?.watermark?.known === true;
+    const status = String(view?.status ?? 'unknown');
+    const blocks = Array.isArray(view?.blocks) ? view.blocks : [];
+    const rows = blocks
+      .filter((block) => Array.isArray(block?.items) && block.items.length > 0)
+      .map((block) => [String(block.title ?? '变化'), `${block.items.length} 条`]);
+    const text = !known
+      ? '首次查看：还没有上次看过的时间点，从这次开始记水位，下次只看新增的变化。'
+      : (status === 'ok' && view?.empty === true
+        ? '自上次看过：没有新变化。'
+        : `自上次看过：${Number(counts.total ?? 0)} 处变化${status === 'ok' ? '' : '（有类别算不全）'}。`);
+    return {
+      text,
+      blocks: [
+        ...(status === 'ok' ? [] : [{
+          type: 'kv',
+          title: '变化窗口 · 算不全',
+          rows: [['原因', String(view?.unknownText ?? '有一类变化读不到，不能当成没有变化。')]]
+        }]),
+        ...(rows.length
+          ? [{ type: 'table', title: '本次变化', head: ['类别', '条目'], rows }]
+          : []),
+        {
+          type: 'kv',
+          title: '变化窗口 · 水位',
+          rows: [
+            ['上次看过', String(view?.previousAt ?? '（没有水位）')],
+            ['本次检查', String(view?.checkedAt ?? '')],
+            ['说明', '这次检查已推进水位，下次只看新增。']
+          ]
+        }
+      ]
+    };
+  };
+
+  /** 发布回复：草稿阶段给「下一版 + 确认方式」，发布阶段给版本、导出与投递结果。 */
+  const publishReply = (view, { confirmed = false } = {}) => {
+    const snapshot = view?.snapshot ?? {};
+    const published = view?.published ?? null;
+    if (!published) {
+      const draft = snapshot.draft ?? null;
+      const next = String(snapshot.nextLabel || `v${Number(snapshot.nextVersion ?? 1)}`);
+      return {
+        text: `已生成草稿：下一版 ${next}。确认发布请输入 /发布 确认；发布后版本号不能回收。`,
+        blocks: [{
+          type: 'kv',
+          title: '发布草稿',
+          rows: [
+            ['下一版', next],
+            ['草稿条目', `${Number(draft?.counts?.total ?? 0)} 条`],
+            ['草稿时间', String(draft?.generatedAt ?? '')],
+            ['确认', '/发布 确认']
+          ]
+        }]
+      };
+    }
+    const exportDir = String(published.export?.dir ?? view?.export?.dir ?? '');
+    const delivery = published.delivery ?? null;
+    return {
+      text: `已发布 ${String(published.label ?? `v${published.version}`)}。`,
+      blocks: [{
+        type: 'kv',
+        title: '发布回执',
+        rows: [
+          ['版本', String(published.label ?? `v${published.version}`)],
+          ['时间', String(published.publishedAt ?? '')],
+          ['导出', exportDir || (published.exportError ? `导出失败：${published.exportError}` : '未导出')],
+          ['投递', delivery ? String(delivery.detail || delivery.status || '已处理') : '未投递']
+        ]
+      }]
+    };
+  };
+
   const create = (ctx) => {
     const threadApi = ctx.threadApi;
     const listApi = ctx.listApi;
@@ -633,10 +768,86 @@
       }
     };
 
+    /**
+     * #111 旧能力命令：一条用户消息 + 一条普通回复，落库与刷新走与其它回复相同的路径。
+     * 失败也留在流里（不静默），并明确说这次没有写成。
+     */
+    const runCapabilityTurn = async (command, raw) => {
+      const label = CAPABILITY_LABELS[command.kind] ?? '命令';
+      const bridge = window.companion ?? null;
+      const projectId = ctx.ui.header.viewProjectId();
+      busy = true;
+      try {
+        const sessionId = currentId();
+        await store.append({ id: sessionId, role: 'user', text: raw });
+        let reply;
+        try {
+          if (command.kind === 'monitor') {
+            const opened = ctx.ui.config?.openSection?.('watch') === true;
+            reply = {
+              text: opened
+                ? '监控在配置箱的「监控」分区：心跳、水位与变更队列只写自有目录。'
+                : '监控配置读不到：配置箱没有打开。',
+              blocks: [{
+                type: 'kv',
+                title: '监控',
+                rows: [
+                  ['入口', '顶栏「监控」状态位 + `/监控`'],
+                  ['状态库', '配置箱 · 监控 · 监控状态库'],
+                  ['心跳', '显式触发：observerctl 手动跑一次']
+                ]
+              }]
+            };
+          } else if (!projectId) {
+            reply = {
+              text: `「${label}」要先在顶栏选一个项目：全局模式只读聚合，不写任何项目。`,
+              blocks: []
+            };
+          } else if (command.kind === 'library') {
+            const api = bridge?.cardScope?.projectLibrary;
+            if (typeof api !== 'function') throw new Error('项目库接口还没就绪，稍等一下再试。');
+            reply = libraryReply(await api({ projectId }));
+          } else if (command.kind === 'since') {
+            if (typeof bridge?.sinceLastSeen !== 'function') {
+              throw new Error('变化窗口接口还没就绪，稍等一下再试。');
+            }
+            reply = sinceReply(await bridge.sinceLastSeen({ projectId }));
+          } else {
+            if (typeof bridge?.library?.draft !== 'function') {
+              throw new Error('项目库接口还没就绪，稍等一下再试。');
+            }
+            reply = command.confirm
+              ? publishReply(await bridge.library.publish({ projectId }), { confirmed: true })
+              : publishReply(await bridge.library.draft({ projectId }));
+          }
+        } catch (error) {
+          reply = { text: `没有完成「${label}」：${error?.message || '未知原因'}`, blocks: [] };
+        }
+        await store.append({
+          id: sessionId,
+          role: 'assistant',
+          text: reply.text ?? '',
+          blocks: Array.isArray(reply.blocks) ? reply.blocks : []
+        });
+        input.value = threadApi.draftAfterSend();
+        resizeInput();
+        await ctx.refreshThread();
+        input.focus();
+      } finally {
+        busy = false;
+      }
+    };
+
     const send = () => report('发送', async () => {
       if (busy || !listApi.canCompose(currentId())) return;
       const raw = input.value;
       if (!threadApi.canSend(raw)) return;
+      // #111 旧能力的最小入口：/项目库、/变化、/发布、/监控 先于普通消息处理。
+      const capability = parseCapabilityCommand(raw);
+      if (capability) {
+        await runCapabilityTurn(capability, raw);
+        return;
+      }
       // 自有目录写入（/记灵感 等）：直接执行，不弹确认卡。
       const command = ownWrites()?.parseCommand(raw) ?? null;
       if (command) {
@@ -834,5 +1045,5 @@
     };
   };
 
-  return { composerPlaceholder, composerKeyAction, create };
+  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, create };
 });

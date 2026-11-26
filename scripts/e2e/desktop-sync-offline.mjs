@@ -140,7 +140,7 @@ const startShell = (root) => startApp({
   userData: root.userData,
   ownerDb: root.ownerDb,
   knowledgeDb: root.knowledgeDb,
-  env: { OWNER_AGENT_SHELL: '1', OWNER_AGENT_SYNC_FAKE: '1' },
+  env: { OWNER_AGENT_SYNC_FAKE: '1' },
   showPanel: true,
   page: 'shell.html'
 });

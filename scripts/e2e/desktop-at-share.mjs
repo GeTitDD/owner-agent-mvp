@@ -151,7 +151,6 @@ const run = async () => {
     ownerDb: path.join(root, 'owner.sqlite'),
     knowledgeDb: path.join(root, 'knowledge.sqlite'),
     env: {
-      OWNER_AGENT_SHELL: '1',
       // 本机若配过 webhook 也不让 e2e 看见：真实投递一律走注入的假实现。
       OWNER_OBSERVER_FEISHU_WEBHOOK: ''
     },

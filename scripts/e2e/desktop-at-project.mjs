@@ -189,7 +189,6 @@ const run = async () => {
 
   const app = await startApp({
     userData, ownerDb, knowledgeDb,
-    env: { OWNER_AGENT_SHELL: '1' },
     showPanel: true,
     page: 'shell.html'
   });

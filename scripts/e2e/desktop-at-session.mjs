@@ -191,7 +191,6 @@ const run = async () => {
     ownerDb: path.join(root, 'owner.sqlite'),
     knowledgeDb: path.join(root, 'knowledge.sqlite'),
     env: {
-      OWNER_AGENT_SHELL: '1',
       // 会话索引只看这个临时 home；OpenCode 库指到不存在的位置，验证降级原因。
       OWNER_SESSION_HOME: home,
       CODEX_HOME: path.join(home, '.codex'),

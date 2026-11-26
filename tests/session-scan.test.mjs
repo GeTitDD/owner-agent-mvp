@@ -589,29 +589,14 @@ test('指纹基于脱敏后文本：同一句话换一个密钥仍只出一条�
   }
 });
 
-// 界面接线：知识页的入口、预加载桥与主进程处理器必须对上，否则点了没反应。
-test('知识页有「扫描会话」入口，且从面板到主进程是一条完整的线', () => {
+// 界面接线：预加载桥与主进程处理器必须对上。#111 撤旧壳后旧面板的扫描入口不再断言，
+// 等新卡给「扫描会话」一个入口时再补界面那一层。
+test('会话扫描从预加载桥到主进程是一条完整的线', () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const read = (file) => fs.readFileSync(path.join(repoRoot, file), 'utf8');
-  const html = read('desktop/panel.html');
-  const panel = read('desktop/panel.js');
   const preload = read('desktop/preload.cjs');
   const main = read('desktop/main.cjs');
 
-  // 入口在知识模式里，和「刷新」并排；结果块藏在知识浏览内部，不新增模式块。
-  const knowledge = html.slice(html.indexOf('id="modeB"'), html.indexOf('id="modeC"'));
-  assert.match(knowledge, /id="kbScanSessions"/u);
-  assert.match(knowledge, /id="kbScan"/u);
-  assert.match(knowledge, /id="kbScanSummary"/u);
-  // #98：脱敏计数固定显示（0 也显示），且 OpenCode 不在范围内要写清。
-  assert.match(knowledge, /id="kbScanRedactions"/u);
-  assert.match(knowledge, /OpenCode 的会话库体量太大，不在扫描范围内/u);
-  // 合入时残留的冲突标记会把 `<<<<<<< HEAD` 直接画到界面上，这里当回归护栏。
-  assert.equal(/^(?:<{7}|={7}|>{7})/mu.test(html), false);
-  assert.match(panel, /kbScanRedactions'\)\.textContent = `本次脱敏/u);
-  assert.match(panel, /dataset\.redactions/u);
-  assert.match(panel, /kbScanSessions'\)\.onclick/u);
-  assert.match(panel, /window\.companion\.memory\.scanSessions\(\)/u);
   assert.match(preload, /scanSessions:\s*\(\)\s*=>\s*invoke\('companion:session-scan'\)/u);
   assert.match(main, /ipcMain\.handle\('companion:session-scan'/u);
   // 扫描必须是显式动作：没有定时器把它挂在轮询里。

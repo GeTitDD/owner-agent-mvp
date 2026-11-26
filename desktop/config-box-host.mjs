@@ -2,7 +2,7 @@
 //
 // 为什么要这一层：shell-config.cjs 是普通脚本（<script src>），无法 import ESM；
 // 而「七行分区 + 来源标注」的数据只允许有一份（src/config-box.mjs，单测也只测那一份），
-// 不能让渲染层再抄一套。与 card-scope-host.mjs / write-gate-host.mjs 同一套做法：
+// 不能让渲染层再抄一套。与 card-scope-host.mjs / own-write-host.mjs 同一套做法：
 // 模块脚本把纯函数原样搬到 window，渲染层只做「调用 + 画 DOM」。
 //
 // 时序：模块脚本晚于经典脚本执行。配置箱是点了才开，所以渲染层在打开那一刻再读

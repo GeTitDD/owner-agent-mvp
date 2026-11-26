@@ -384,21 +384,14 @@ test('正文拼装：缺哪行省哪行，理由不编造', () => {
   assert.equal('decisionStatus' in payload.decision, false);
 });
 
-// 界面接线：知识页的「确认」入口、预加载桥与主进程处理器必须对上，否则点了没反应。
-test('知识页有确认入口与决策状态动作，且从面板到主进程是一条完整的线', () => {
+// 界面接线：预加载桥与主进程处理器必须对上；#111 撤旧壳后旧面板入口不再断言，
+// 等新卡给确认动作一个入口时再补界面那一层。
+test('决策确认从预加载桥到主进程是一条完整的线', () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const read = (file) => fs.readFileSync(path.join(repoRoot, file), 'utf8');
-  const html = read('desktop/panel.html');
-  const panel = read('desktop/panel.js');
   const preload = read('desktop/preload.cjs');
   const main = read('desktop/main.cjs');
 
-  const knowledge = html.slice(html.indexOf('id="modeB"'), html.indexOf('id="modeC"'));
-  assert.match(knowledge, /id="kbScanCandidates"/u);
-  assert.match(panel, /dataset\.role = 'decision-confirm'/u);
-  assert.match(panel, /window\.companion\.memory\.confirmDecision/u);
-  assert.match(panel, /window\.companion\.memory\.setDecisionStatus/u);
-  assert.match(panel, /缺理由/u);
   assert.match(preload, /confirmDecision:\s*\(input\)\s*=>\s*invoke\('companion:decision-confirm'/u);
   assert.match(preload, /setDecisionStatus:\s*\(input\)\s*=>\s*invoke\('companion:decision-status'/u);
   assert.match(main, /ipcMain\.handle\('companion:decision-confirm'/u);

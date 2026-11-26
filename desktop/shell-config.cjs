@@ -473,6 +473,20 @@
       return true;
     };
 
+    /**
+     * #111 `/监控` 的落点：打开配置箱并滚到指定分区。
+     * 不新增一套监控页面；分区与行仍来自 src/config-box.mjs，这里只负责定位。
+     */
+    const openSection = (id) => {
+      if (!reveal()) return false;
+      resetProbe();
+      setStatus('');
+      void load().then(() => {
+        bodyNode?.querySelector(`[data-section="${String(id)}"]`)?.scrollIntoView({ block: 'start' });
+      });
+      return true;
+    };
+
     /** 关掉：不写任何东西，草稿随 DOM 一起丢掉，下次打开重新读文件。 */
     const close = () => {
       if (!backdrop) return;
@@ -526,6 +540,7 @@
 
     return {
       open,
+      openSection,
       close,
       dismiss,
       isOpen,

@@ -139,7 +139,6 @@ const run = async () => {
     userData,
     ownerDb: path.join(root, 'owner.sqlite'),
     knowledgeDb: path.join(root, 'knowledge.sqlite'),
-    env: { OWNER_AGENT_SHELL: '1' },
     showPanel: true,
     page: 'shell.html'
   });

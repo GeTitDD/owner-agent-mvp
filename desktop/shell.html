@@ -5,8 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Owner Companion · 卡片</title>
   <!-- #105 卡片壳：单列布局（顶栏一行 / 中部对话流 / 底部输入框）。
-       这一版是新旧并存的 expand 步骤：旧面板整页原样保留，默认仍走它；
-       主进程用 OWNER_AGENT_SHELL=1 或 --shell 才加载这一页。 -->
+       #111 撤旧壳后这是唯一渲染器：主进程启动即加载这一页，没有档位开关，也没有旧面板。 -->
   <link rel="stylesheet" href="./shell.css" />
 </head>
 <body>
@@ -55,9 +54,9 @@
         <span class="slot-key">写范围</span>
         <span class="slot-value" id="writeScope" data-scope="global">只读·全局</span>
       </span>
-      <span class="slot" data-slot="monitor">
+      <span class="slot" data-slot="monitor" title="监控：心跳、水位与变更队列只写自有目录；输入 /监控 打开配置箱的监控分区">
         <span class="slot-key">监控</span>
-        <span class="slot-value">占位</span>
+        <span class="slot-value">配置</span>
       </span>
       <span class="slot" data-slot="export">
         <span class="slot-key">导出</span>

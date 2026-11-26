@@ -184,7 +184,6 @@ const run = async () => {
     ownerDb: path.join(root, 'owner.sqlite'),
     knowledgeDb: path.join(root, 'knowledge.sqlite'),
     env: {
-      OWNER_AGENT_SHELL: '1',
       PSTACK_DIR: fixture.pstackRoot,
       MATT_SKILLS_DIR: fixture.mattRoot
     },
