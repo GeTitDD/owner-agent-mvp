@@ -474,6 +474,36 @@ button.session-name { cursor: pointer; }
 .msg.user { align-items: flex-end; }
 .msg.agent { align-items: flex-start; }
 
+/* #123 流内勾选：进「生成 prompt」后消息才可点；选中用描边 + 角标，
+   与悬停复制互不冲突（复制按钮仍然优先吃点击）。 */
+.messages.selecting .msg[data-selectable="true"] {
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.messages.selecting .msg[data-selectable="true"]:hover { background: var(--accent-soft); }
+
+.msg[data-selected="true"] {
+  border-radius: 10px;
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.msg[data-selected="true"]::after {
+  content: "✓";
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 10px;
+  line-height: 17px;
+  text-align: center;
+}
+
 .bubble {
   max-width: 86%;
   margin: 0;
@@ -1805,6 +1835,38 @@ button.session-name { cursor: pointer; }
 .at-content { padding: 8px 6px 6px; }
 .at-lead { margin: 0 0 4px; font-size: 12px; }
 .at-todo { margin: 0; color: var(--muted); font-size: 11px; }
+
+/* #123「生成 prompt」的方法卡：计数 / 指令 / 生成，三样都在这一个竖列里。 */
+.at-prompt { display: flex; flex-direction: column; gap: 5px; }
+.at-prompt-count { margin: 0; font-size: 12px; font-weight: 600; }
+.at-prompt-label { color: var(--muted); font-size: 10.5px; }
+.at-prompt-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  max-height: 96px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+.at-prompt-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.at-prompt-actions { display: flex; justify-content: flex-end; }
+.at-prompt-generate {
+  padding: 2px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 11.5px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.at-prompt-generate:disabled { opacity: 0.4; cursor: default; }
 
 .at-hint {
   flex: none;
