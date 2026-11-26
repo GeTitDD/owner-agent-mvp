@@ -1784,6 +1784,31 @@ button.session-name { cursor: pointer; }
 
 .locate-row-name:hover { text-decoration: underline; }
 
+/* #140 行内「标记已读」：与项目名同排，弱化为次要动作；已知没有未读时置灰。 */
+.locate-mark-read {
+  flex: none;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: 9.5px;
+  line-height: 17px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.locate-mark-read:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.locate-mark-read:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .locate-tier {
   flex: none;
   padding: 0 7px;

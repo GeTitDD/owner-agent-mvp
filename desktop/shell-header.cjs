@@ -85,6 +85,8 @@
     // #139 定位屏：进入全局（不选项目）时读一次，点「刷新」再读；不参与轮询，也不推进水位。
     let locateData = null;
     let locateBusy = false;
+    // #140 标记已读的回执：留在状态行里说明「这次做了什么」，刷新或换范围时清掉。
+    let locateReceipt = '';
     // 切项目确认弹窗：null = 关着；'' 是合法目标（切回全局），所以不能用假值判断。
     let pendingTarget = null;
     // #131 同步状态：null = 还没读到（按「从未成功同步」显示）；busy 只挡重复点击。
@@ -271,6 +273,18 @@
         tag.dataset.tier = row.tier;
         head.append(tag);
       }
+      // #140 行内「标记已读」：只清这一行的未读。已知没有未读时置灰，
+      // 免得点了没有反应；真正的空操作回执由主进程给。
+      const mark = el('button', 'locate-mark-read', '标记已读');
+      mark.type = 'button';
+      mark.dataset.markRead = row.projectId;
+      const alreadyRead = row.unread.known === true && row.unread.total === 0;
+      mark.disabled = locateBusy || alreadyRead;
+      mark.setAttribute('aria-label', `标记「${row.name}」为已读`);
+      mark.title = alreadyRead
+        ? '这个项目没有未读变化'
+        : `把「${row.name}」的未读清零（不打开 /变化，也不影响其他项目）`;
+      head.append(mark);
 
       const counts = el('p', 'locate-counts');
       const pending = el('span', 'locate-pending', row.pendingLabel);
@@ -299,7 +313,7 @@
         ?? '排序：待确认候选 > 有未读变化 > 超过 7 天未看 > 其余。切换项目不会清零未读。';
       locateStatus.textContent = locateBusy
         ? '正在读取各项目的关注顺序…'
-        : (locateData ? '' : '还没有读到定位屏数据，点「刷新」重试。');
+        : (locateReceipt || (locateData ? '' : '还没有读到定位屏数据，点「刷新」重试。'));
       if (!locateData) {
         locateList.replaceChildren();
         locateEmpty.hidden = true;
@@ -322,11 +336,43 @@
         return;
       }
       locateBusy = true;
+      locateReceipt = '';
       renderLocate();
       try {
         locateData = await locateStore.attention() ?? null;
       } catch (error) {
         setError(`读取定位屏失败：${error?.message ?? error}`);
+      } finally {
+        locateBusy = false;
+      }
+      renderLocate();
+    };
+
+    /**
+     * #140 行内「标记已读」：唯一的定位屏写动作，只清被点的那一个项目。
+     * 主进程推进水位后返回刷新好的定位屏；这里只替换数据、显示回执，不自己算未读。
+     * 不打开 `/变化`：切换项目与刷新仍走只读通道。
+     */
+    const markLocateRead = async (projectId) => {
+      const id = String(projectId ?? '').trim();
+      if (!id || locateBusy) return;
+      if (!locateStore?.markRead) {
+        locateStatus.textContent = '标记已读不可用：这个窗口没有拿到主进程接口。';
+        return;
+      }
+      locateBusy = true;
+      locateReceipt = '';
+      renderLocate();
+      try {
+        setError('');
+        const result = await locateStore.markRead({ projectId: id }) ?? null;
+        if (result?.view) locateData = result.view;
+        const message = String(result?.mark?.message ?? '已标记已读。');
+        // 回执留在状态行：读屏与「点完就消失的 toast」各有各的用处。
+        locateReceipt = message;
+        ctx.notify?.(message, 'ok');
+      } catch (error) {
+        setError(`标记已读失败：${error?.message ?? error}`);
       } finally {
         locateBusy = false;
       }
@@ -345,6 +391,8 @@
     /** 范围变了：回到全局要读定位屏，项目下直接收起定位屏。 */
     const applyScopeChange = () => {
       applySessionScope();
+      // 上一行的标记回执不该跟着换项目继续挂着。
+      locateReceipt = '';
       renderScope();
       if (!viewProjectId) {
         // 定位屏在流的最上面：进全局先把它露出来，而不是停在最后一条消息上。
@@ -719,8 +767,13 @@
     });
 
     // 定位屏的一行就是切换入口：走与项目胶囊同一个确认流程，不清零未读（ADR-0014）。
-    // 「标记已读」属于 #140，这里不做行内动作。
+    // #140「标记已读」是这一屏唯一的写动作，先认它，避免落进下面的切换确认。
     locateList.addEventListener('click', (event) => {
+      const mark = event.target.closest?.('button[data-mark-read]');
+      if (mark) {
+        void markLocateRead(mark.dataset.markRead ?? '');
+        return;
+      }
       const button = event.target.closest?.('button[data-project]');
       if (!button) return;
       void chooseScope(button.dataset.project ?? '');
@@ -736,6 +789,7 @@
 
     locateRefresh.addEventListener('click', () => {
       locateData = null;
+      locateReceipt = '';
       void loadLocate();
     });
 
