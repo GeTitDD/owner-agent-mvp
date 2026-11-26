@@ -75,9 +75,9 @@ export const connectCdp = async (url) => {
 
 /**
  * 在 CDP 的 /json/list 里等目标页面的调试地址。
- * 默认等旧面板；#105 的卡片壳传 'shell.html'。
+ * 默认等卡片壳（#111 之后唯一渲染器；旧面板已删除）。
  */
-export const findPanelTarget = async (port, pageFile = 'panel.html') => {
+export const findPanelTarget = async (port, pageFile = 'shell.html') => {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/json/list`);
@@ -114,9 +114,9 @@ export const waitFor = async (panel, expression, timeoutMs = 30000) => {
  * @param {string} options.knowledgeDb 临时知识库
  * @param {Record<string,string>} [options.env] 额外环境变量（如 OWNER_TRIAGE_TIMEOUT_MS）
  * @param {boolean} [options.showPanel] 启动后是否调用 companion.showPanel()
- * @param {string} [options.page] 要连的页面文件，默认旧面板 panel.html；#105 传 shell.html
+ * @param {string} [options.page] 要连的页面文件，默认 shell.html（#111 之后唯一渲染器）
  */
-export const startApp = async ({ userData, ownerDb, knowledgeDb, env = {}, showPanel = false, page = 'panel.html' }) => {
+export const startApp = async ({ userData, ownerDb, knowledgeDb, env = {}, showPanel = false, page = 'shell.html' }) => {
   const port = await freePort();
   const child = spawn(electronPath, [
     path.join(repoRoot, 'desktop', 'main.cjs'),

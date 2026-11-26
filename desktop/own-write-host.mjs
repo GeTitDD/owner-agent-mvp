@@ -2,7 +2,7 @@
 //
 // 为什么需要这一层：shell.js / shell-thread.cjs 都是普通脚本（<script src>），
 // 没法 import ESM；而「自有目录写入的判定与回执」只允许有一份（#114）。
-// 与 write-gate-host.mjs / focus-ops-host.mjs 同一套做法：模块脚本把纯函数原样搬到
+// 与 card-scope-host.mjs / config-box-host.mjs 同一套做法：模块脚本把纯函数原样搬到
 // window，渲染层只做「调用 + 画 DOM」。
 //
 // 时序：模块脚本晚于经典脚本执行，所以 shell.js 在真正发送时才读 window.OwnerOwnWrite；

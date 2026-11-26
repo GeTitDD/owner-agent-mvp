@@ -170,7 +170,6 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     userData,
     ownerDb,
     knowledgeDb,
-    env: { OWNER_AGENT_SHELL: '1' },
     showPanel: true,
     page: 'shell.html'
   });
@@ -186,8 +185,10 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     check('only the session and project slots are entries',
       header.capsules === 2 && header.otherControls === 0,
       `capsules=${header.capsules} others=${header.otherControls}`);
+    // #111：监控状态位从「占位」改成「配置」（`/监控` 打开配置箱的监控分区）；
+    // 导出仍是占位，写范围由 card-scope 给出「只读·全局」。
     check('the remaining status slots keep their labels',
-      header.placeholders.length === 3 && header.placeholders.filter((text) => text.includes('占位')).length === 2,
+      JSON.stringify(header.placeholders) === JSON.stringify(['只读·全局', '配置', '占位']),
       JSON.stringify(header.placeholders));
     check('the capsule says there is no session yet', header.label === '还没有会话', header.label);
 
@@ -364,11 +365,11 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     const errors = consoleErrors(panel);
     check('console is clean on first run', errors.length === 0, errors.slice(0, 3).join(' | '));
 
-    // 旧面板文件必须还在（expand 步骤：只并存，不删）。
-    check('old panel files are untouched and still present',
-      fs.existsSync(path.join(repoRoot, 'desktop', 'panel.html'))
-      && fs.existsSync(path.join(repoRoot, 'desktop', 'panel.js'))
-      && fs.existsSync(path.join(repoRoot, 'desktop', 'panel.css')));
+    // #111 撤旧壳：旧面板三个文件必须已经删除，不能靠开关绕开。
+    check('old panel files are gone',
+      !fs.existsSync(path.join(repoRoot, 'desktop', 'panel.html'))
+      && !fs.existsSync(path.join(repoRoot, 'desktop', 'panel.js'))
+      && !fs.existsSync(path.join(repoRoot, 'desktop', 'panel.css')));
     return seen;
   } finally {
     await app.stop();
@@ -381,7 +382,6 @@ const secondRun = async ({ userData, ownerDb, knowledgeDb }, seen) => {
     userData,
     ownerDb,
     knowledgeDb,
-    env: { OWNER_AGENT_SHELL: '1' },
     showPanel: true,
     page: 'shell.html'
   });
@@ -481,9 +481,9 @@ const secondRun = async ({ userData, ownerDb, knowledgeDb }, seen) => {
   }
 };
 
-/** 不开开关时仍然是旧面板：新壳不能改变默认入口。 */
+/** #111 默认入口就是新壳：不给 env、不给 page，窗口仍必须加载 shell.html。 */
 const runDefaultEntry = async () => {
-  const root = fs.mkdtempSync(path.join(tempBase, 'card-shell-106-default-'));
+  const root = fs.mkdtempSync(path.join(tempBase, 'card-shell-111-default-'));
   const userData = path.join(root, 'userdata');
   fs.mkdirSync(userData, { recursive: true });
   const app = await startApp({
@@ -493,20 +493,22 @@ const runDefaultEntry = async () => {
     showPanel: true
   });
   try {
-    check('without the switch the window still loads panel.html',
-      await waitFor(app.panel, "document.querySelector('#modeBar')", 30000));
-    const modes = await app.panel.evaluate(
-      "document.querySelectorAll('#modeBar button').length"
-    );
-    check('old panel still has its three modes', modes === 3, String(modes));
-    const zones = await app.panel.evaluate("Boolean(document.getElementById('opsZone'))");
-    check('old panel still has its two zones', zones === true);
+    // 默认页面由 lib/cdp.mjs 的 page 缺省值（shell.html）选中；这里再验 DOM 是新壳。
+    check('without any switch the window loads shell.html',
+      await waitFor(app.panel, "document.querySelector('#shellHeader')", 30000));
+    check('the old mode bar is not in the DOM',
+      (await app.panel.evaluate("Boolean(document.getElementById('modeBar'))")) === false);
+    check('the old two-zone layout is not in the DOM',
+      (await app.panel.evaluate("Boolean(document.getElementById('opsZone'))")) === false);
+    const url = String(await app.panel.evaluate('location.pathname'));
+    check('the page is shell.html', url.endsWith('/shell.html'), url);
     const errors = consoleErrors(app.panel);
-    check('old panel boots with a clean console', errors.length === 0, errors.slice(0, 3).join(' | '));
+    check('shell boots with a clean console by default', errors.length === 0, errors.slice(0, 3).join(' | '));
+    await capture(app.panel, path.join(shotsDir, 'card-shell-default-entry.png'));
   } finally {
     await app.stop();
     if (failures.length === 0) safeRemove(root);
-    else console.warn(`[CARD-SHELL-#106] kept state: ${root}`);
+    else console.warn(`[CARD-SHELL-#111] kept state: ${root}`);
   }
 };
 

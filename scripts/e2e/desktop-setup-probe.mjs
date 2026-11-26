@@ -116,7 +116,6 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb, roots }) => {
   const app = await startApp({
     userData, ownerDb, knowledgeDb,
     env: {
-      OWNER_AGENT_SHELL: '1',
       // 模型密钥「已检测到」；值只用来证明页面不回显。
       DEEPSEEK_API_KEY: MODEL_SECRET,
       OPENAI_API_KEY: '',

@@ -725,7 +725,7 @@
       void loadGlobal();
     });
 
-    // 判定模块晚于本脚本：挂载后补画写范围这一格（与 panel.js 读 write-gate 同一套时序）。
+    // 判定模块晚于本脚本：挂载后补画写范围这一格（与旧面板读 write-gate 同一套时序，钩子仍叫 card-scope）。
     window.addEventListener('owner-card-scope-ready', () => {
       scopeApi = window.OwnerCardScope ?? scopeApi;
       renderWriteScope();

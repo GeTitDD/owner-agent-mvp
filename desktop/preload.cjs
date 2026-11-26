@@ -6,19 +6,6 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   snapshot: (input) => invoke('companion:snapshot', input),
   // #84：进入项目时算「自上次看过」并推进水位（有副作用，不要放进轮询）。
   sinceLastSeen: (input) => invoke('companion:since-last-seen', input),
-  submit: (input) => invoke('companion:submit', input),
-  chat: Object.freeze({
-    ask: (input) => invoke('companion:chat-ask', input),
-    sessions: Object.freeze({
-      list: (input) => invoke('companion:chat-sessions', input),
-      get: (input) => invoke('companion:chat-session-get', input),
-      create: (input) => invoke('companion:chat-session-create', input),
-      append: (input) => invoke('companion:chat-session-append', input),
-      rename: (input) => invoke('companion:chat-session-rename', input),
-      remove: (input) => invoke('companion:chat-session-delete', input)
-    })
-  }),
-  createJob: (input) => invoke('companion:create-job', input),
   // #110 复制：沙箱里的渲染进程不能直接写系统剪贴板，走主进程。
   writeClipboard: (text) => invoke('companion:clipboard-write', { text: String(text ?? '') }),
   // #110 会话导出：正文 + 上下文头落到 <userData>/conversations/<sessionId>.md。
@@ -26,7 +13,7 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     export: (input) => invoke('companion:conversation-export', input)
   }),
   // #106 卡片壳：会话列表 / 切换 / 新建 / 重命名 / 置顶 / 软删除 / 找回。
-  // 与 chat.sessions 分开，是因为卡片壳允许「不绑项目的会话」且删除是软删除。
+  // 卡片壳的会话通道：允许「不绑项目的会话」且删除是软删除（这是与旧对话入口的区别）。
   // #107 起多两个：#107 的「正在看的项目」是会话上的视图状态；项目列表与全局聚合只读。
   cardProjects: Object.freeze({
     list: () => invoke('companion:card-projects')

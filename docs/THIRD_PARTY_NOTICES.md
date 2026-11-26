@@ -9,11 +9,8 @@
 - 使用范围：
   - `desktop/assets/mascots/`：Agent Island 皮肤资源（Cindy 的 `native/agent-island/mascots` 与 `renderer/assets/agent-island-pululu.svg`）。
   - 会话阶段命名（`running` / `needs-interaction` / `completed` / `error`）与皮肤 id 集合，用于 `src/mascots.mjs`。
-  - `desktop/panel.css`、`desktop/pet.css` 中的部分颜色与圆角取值，取自 Cindy 的语义设计令牌。
-  - `desktop/panel.js` 中皮肤选择网格的交互形态参考其 `AgentIslandSection`。
-  - `desktop/composer-list.js` 移植自其 `renderer/lib/composerListContinuation.ts` 与
-    `composerListTextarea.ts`（列表接续与空项退格），并按 textarea 场景改写。
-  - `desktop/panel.html` / `panel.js` 的活动流与 Composer 卡片结构参考其
+  - `desktop/shell.css`、`desktop/pet.css` 中的部分颜色与圆角取值，取自 Cindy 的语义设计令牌。
+  - `desktop/shell.html` / `shell.js` / `shell-stream.cjs` 的活动流与 Composer 卡片结构参考其
     `ComposerCard.tsx`、`ListComposerTextarea.tsx` 与 Agent Island 活动行模型。
 - 未使用：Cindy 的 React 渲染栈、macOS 原生灵动岛实现、声音系统与远程会话同步。
 

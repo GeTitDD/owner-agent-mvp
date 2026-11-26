@@ -311,19 +311,18 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 
 | 区域 | 文件 |
 | --- | --- |
-| Companion 首屏 | `desktop/panel.html`、`desktop/panel.js`、`desktop/panel.css` |
+| Companion 首屏（唯一界面） | `desktop/shell.html`、`desktop/shell.css`、`desktop/shell.js`（#111 撤旧壳后启动即加载） |
 | 视图数据 | `desktop/main.cjs`（`buildView`、`toPending`、`chain`；按 `projectId` 取数，不读全局当前项目） |
-| 模式切换 | `desktop/panel.js`（`MODE_VIEW`、`setMode`、`renderFocusMode`）；`desktop/panel.html` 的 `data-mode="focus|knowledge|chat"` |
-| 视图项目 / 交办目标 | `desktop/panel-selection.cjs`（`findProject`、`viewProject`、`submitProject`）；`desktop/panel.js` 的 `viewProjectId` / `handoffProjectId` |
-| 待办分组 | `desktop/pending-groups.cjs`（`groupPending`：分组顺序 + 首组展开；吃操作区模型的 items） |
-| 操作区视图模型 | `src/focus-ops.mjs`（`focusOpsView`：三段块顺序、空态文案、两个计数口径）；`desktop/focus-ops-host.mjs` 把 ESM 挂到 `window.OwnerFocusOps` |
+| 会话 / 项目 / 全局模式 | `desktop/shell-header.cjs`（会话胶囊、项目胶囊、切换确认、全局只读区） |
+| 输入区 / 技能面板 / `@@` 触发 | `desktop/shell-compose.cjs`；技能目录 `src/knowledge/skills.mjs` |
+| `@@` 方法（生成 prompt / 关联项目 / 关联会话 / 分享飞书） | `desktop/shell-at.cjs`、`shell-at-prompt.cjs`、`shell-at-project.cjs`、`shell-at-session.cjs`、`shell-at-share.cjs` |
+| 对话流 / 块 / 复制 / 导出 | `desktop/shell-stream.cjs`、`shell-thread.cjs`、`shell-blocks*.{cjs,js}`、`shell-copy.cjs` |
+| 旧能力入口（#111） | `desktop/shell-compose.cjs`：`/项目库`、`/变化`、`/发布 [确认]`、`/监控`；灵感仍是 `/记灵感` |
 | 执行状态判定 | `src/execution-status.mjs`（终态 / 审批态 / 相位；`listInFlightExecutions` 给快照 `view.executions`） |
-| 工作区入口条 | `desktop/panel.html` 的 `#workProjectBar` / `#workEntries`；`desktop/panel.js` 的 `renderWorkProjectBar` / `renderWorkEntries`（项目切换只改视图项目，「添加项目」在切换行尾） |
-| 交办开关 | `desktop/chat-handoff.cjs`（`routeOf`、`sendLabel`、`consume`、`resultKind`） |
 | 知识浏览 / 技能目录 | `src/knowledge/browse.mjs`、`src/knowledge/skills.mjs` |
 | 知识详情 | `web/workbench/app.js`（`renderEditor`、`loadHistory`、`loadProvenance`） |
 | 维护页 | `web/workbench/index.html`、`app.js`（`loadMaintenance`）、`styles.css` |
-| 设计令牌 | `desktop/panel.css`、`web/workbench/styles.css` |
+| 设计令牌 | `desktop/shell.css`、`web/workbench/styles.css` |
 
 ## 6. 不做的事
 
@@ -334,6 +333,11 @@ Tab：`内容 | 修订 | 来源 | 使用 | 冲突`
 - 不把 Letta 式开发者三栏直接塞给普通用户，保持渐进披露。
 
 ## 7. 验证
+
+> #111 撤旧壳后，依赖 `panel.html` / `panel.js` 的旧 e2e 统一改名为 `e2e:legacy:*`：
+> 脚本只打印 `[DEPRECATED]` 并以 0 退出。下表中旧面板相关的行保留为历史记录；
+> 新壳验收见 `tests/shell-modules.test.mjs` 与 `e2e:desktop:card-*`、`at-*`、`config-box`、
+> `sync-offline`、`own-write`、`risk-card`、`confirm-cards`、`slash`、`blocks`、`copy-export`。
 
 | 验收 | 结果 |
 | --- | --- |

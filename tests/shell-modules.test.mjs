@@ -5,9 +5,13 @@
 // 纯搬运的渲染代码不在这里重复断言（理由见任务报告）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const header = require('../desktop/shell-header.cjs');
 const compose = require('../desktop/shell-compose.cjs');
 const stream = require('../desktop/shell-stream.cjs');
@@ -98,4 +102,105 @@ test('导出上下文头：项目归属照实写，标题由调用方给', () =>
     time: '',
     model: '未接入（占位回复）'
   });
+});
+
+// ── #111 撤旧壳：启动页只有 shell.html，旧壳文件与开关都不在了 ──────────
+
+test('启动只加载 shell.html：不认 OWNER_AGENT_SHELL / --shell，也没有旧面板兜底', () => {
+  const main = fs.readFileSync(path.join(root, 'desktop/main.cjs'), 'utf8');
+  assert.match(main, /const SHELL_PAGE = 'shell\.html';/u);
+  assert.match(main, /panel\.loadFile\(path\.join\(__dirname, SHELL_PAGE\)\);/u);
+  for (const token of ['OWNER_AGENT_SHELL', "'--shell'", 'panelPage', "'panel.html'"]) {
+    assert.equal(main.includes(token), false, `main.cjs 仍引用 ${token}`);
+  }
+  const html = fs.readFileSync(path.join(root, 'desktop/shell.html'), 'utf8');
+  assert.equal(html.includes('panel.css'), false);
+  assert.equal(html.includes('panel.js'), false);
+  assert.equal(html.includes('panel.html'), false);
+  // 旧壳三个文件已删除：不是靠开关绕开，而是没有可加载的旧页。
+  for (const legacy of ['desktop/panel.html', 'desktop/panel.js', 'desktop/panel.css']) {
+    assert.equal(fs.existsSync(path.join(root, legacy)), false, `${legacy} 应该已删除`);
+  }
+});
+
+// ── #111 旧能力在新壳的最小入口：四条 `/` 命令与两条回复 ──────────────
+
+test('#111 旧能力命令：项目库 / 变化 / 发布分两步 / 监控', () => {
+  assert.deepEqual(compose.parseCapabilityCommand('/项目库'), { kind: 'library', confirm: false });
+  assert.deepEqual(compose.parseCapabilityCommand('  /变化 '), { kind: 'since', confirm: false });
+  assert.deepEqual(compose.parseCapabilityCommand('/监控'), { kind: 'monitor', confirm: false });
+  // 发布必须先出草稿；只有命令里再写一次「确认」才真的发布。
+  assert.deepEqual(compose.parseCapabilityCommand('/发布'), { kind: 'publish', confirm: false });
+  assert.deepEqual(compose.parseCapabilityCommand('/发布 确认'), { kind: 'publish', confirm: true });
+  // 认不出的输入不能被吃掉：照常当普通消息。
+  assert.equal(compose.parseCapabilityCommand('/项目库 全部'), null);
+  assert.equal(compose.parseCapabilityCommand('发布'), null);
+});
+
+test('#111 项目库回复：计数与三个来源分组都在块里', () => {
+  const reply = compose.libraryReply({
+    project: { id: 'alpha', name: 'Alpha' },
+    counts: { total: 3, verified: 1, observing: 2, profile: 1, diagrams: 0 },
+    groups: [
+      { key: 'experiences', count: 1, kinds: ['lesson'] },
+      { key: 'domainKnowledge', count: 1, kinds: ['knowledge'] },
+      { key: 'contributedKnowledge', count: 1, kinds: ['knowledge'] }
+    ]
+  });
+  assert.match(reply.text, /Alpha/u);
+  assert.equal(reply.blocks[0].type, 'kv');
+  assert.deepEqual(reply.blocks[0].rows[0], ['条目', '3 条']);
+  assert.equal(reply.blocks[1].type, 'table');
+  assert.deepEqual(reply.blocks[1].rows[0], ['experiences', '1 条', 'lesson']);
+});
+
+test('#111 变化窗口：首次查看不写成「没有变化」，算不全要带原因', () => {
+  const first = compose.sinceReply({
+    status: 'ok',
+    empty: false,
+    counts: { total: 0 },
+    watermark: { known: false },
+    blocks: [],
+    previousAt: '',
+    checkedAt: '2026-01-02T00:00:00.000Z'
+  });
+  assert.match(first.text, /首次查看/u);
+  assert.equal(first.text.includes('没有新变化'), false);
+
+  const unknown = compose.sinceReply({
+    status: 'unknown',
+    counts: { total: 1 },
+    watermark: { known: true },
+    blocks: [{ key: 'commits', title: '提交', items: [{ id: 'c1' }] }],
+    unknownText: '观察员事件读不到',
+    previousAt: '2026-01-01T00:00:00.000Z',
+    checkedAt: '2026-01-02T00:00:00.000Z'
+  });
+  assert.match(unknown.text, /算不全/u);
+  assert.ok(unknown.blocks.some((block) => block.type === 'kv' && block.rows[0][1].includes('读不到')));
+  assert.ok(unknown.blocks.some((block) => block.type === 'table' && block.rows[0][0] === '提交'));
+});
+
+test('#111 发布回复：草稿要求再确认，发布后给版本与导出', () => {
+  const draft = compose.publishReply({
+    snapshot: { nextLabel: 'v3', draft: { generatedAt: '2026-01-02T00:00:00.000Z', counts: { total: 4 } } }
+  });
+  assert.match(draft.text, /\/发布 确认/u);
+  assert.deepEqual(draft.blocks[0].rows[0], ['下一版', 'v3']);
+  assert.deepEqual(draft.blocks[0].rows[3], ['确认', '/发布 确认']);
+
+  const published = compose.publishReply({
+    published: {
+      version: 3,
+      label: 'v3',
+      publishedAt: '2026-01-02T00:00:00.000Z',
+      export: { dir: 'D:/owner/exports/alpha/v3' },
+      delivery: { status: 'sent', detail: '已发送飞书卡片' }
+    }
+  });
+  assert.match(published.text, /v3/u);
+  const rows = published.blocks[0].rows;
+  assert.deepEqual(rows[0], ['版本', 'v3']);
+  assert.deepEqual(rows[2], ['导出', 'D:/owner/exports/alpha/v3']);
+  assert.deepEqual(rows[3], ['投递', '已发送飞书卡片']);
 });

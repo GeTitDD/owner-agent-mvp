@@ -118,7 +118,6 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
   const app = await startApp({
     userData, ownerDb, knowledgeDb,
     env: {
-      OWNER_AGENT_SHELL: '1',
       // 审批令牌「已检测到」、同步令牌「已检测到」、侧车令牌「未配置」：三种状态都由
       // 环境变量固定下来，结果不随开发机上的真实凭据漂移。
       OWNER_AGENT_APPROVAL_TOKEN: APPROVAL_TOKEN,
@@ -294,7 +293,6 @@ const secondRun = async ({ userData, ownerDb, knowledgeDb }) => {
   const app = await startApp({
     userData, ownerDb, knowledgeDb,
     env: {
-      OWNER_AGENT_SHELL: '1',
       OWNER_AGENT_APPROVAL_TOKEN: '',
       OWNER_AGENT_APPROVAL_TOKEN_FILE: '',
       GITHUB_TOKEN: '',

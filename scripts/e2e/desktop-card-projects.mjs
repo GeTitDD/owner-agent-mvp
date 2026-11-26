@@ -172,7 +172,6 @@ const seedData = ({ root, ownerDb, knowledgeDb }) => {
 const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
   const app = await startApp({
     userData, ownerDb, knowledgeDb,
-    env: { OWNER_AGENT_SHELL: '1' },
     showPanel: true,
     page: 'shell.html'
   });
@@ -340,7 +339,6 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
 const secondRun = async ({ userData, ownerDb, knowledgeDb }, seen) => {
   const app = await startApp({
     userData, ownerDb, knowledgeDb,
-    env: { OWNER_AGENT_SHELL: '1' },
     showPanel: true,
     page: 'shell.html'
   });
