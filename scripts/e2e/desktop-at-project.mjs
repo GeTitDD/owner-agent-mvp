@@ -218,6 +218,9 @@ const run = async () => {
       "document.getElementById('toast').textContent.includes('一项都没选')", 5000));
     check('nothing selected creates no capsule', card.capsules.length === 0 && card.capsulesHidden === true,
       JSON.stringify(card.capsules));
+    // 等回执条自己收起再继续：展开态的截图里不该压着上一步的错误提示。
+    check('the no-selection toast clears on its own',
+      await waitFor(panel, "document.getElementById('toast').hidden === true", 6000));
 
     // ③ 点 Alpha 就地展开：四类资料计数来自 Alpha 的项目库视图。
     check('expanding Alpha reads its library materials', await expandProject(panel, 'alpha'));
@@ -296,6 +299,9 @@ const run = async () => {
       labels.join(' | '));
     check('the capsule bar carries the read-only rule',
       card.hint.includes('跨项目只读') && card.hint.includes('已关联 2 个项目'), card.hint);
+    // 等成功回执收起再截图：胶囊旁那一句只读提示要看得见。
+    check('the commit toast clears before the screenshot',
+      await waitFor(panel, "document.getElementById('toast').hidden === true", 6000));
     await capture(panel, path.join(shotsDir, 'at-project-capsules.png'));
 
     // ⑦ 胶囊可逐个移除：去掉 Beta，再把它作为「让 Agent 自己找」加回来。
@@ -341,6 +347,8 @@ const run = async () => {
     check('capsules are consumed by the send', card.capsules.length === 0 && card.capsulesHidden === true,
       JSON.stringify(card.capsules));
     await sleep(150);
+    check('the send toast clears before the screenshot',
+      await waitFor(panel, "document.getElementById('toast').hidden === true", 6000));
     await capture(panel, path.join(shotsDir, 'at-project-prompt.png'));
 
     const errors = consoleErrors(panel);
