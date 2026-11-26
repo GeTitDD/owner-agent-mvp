@@ -489,10 +489,12 @@ test('默认提炼器只在像决策的原话上产候选（没有模型时的�
 });
 
 test('默认会话根目录：CODEX_HOME 覆盖 Codex 的 home，Claude Code 固定在 ~/.claude', () => {
-  const home = path.join('C:', 'Users', 'me');
-  const roots = sessionRootsFrom({ home, env: { CODEX_HOME: path.join('D:', 'codex-home') } });
+  // 平台无关路径：源码对 CODEX_HOME 做 path.resolve，硬编码盘符在 Linux CI 上必红。
+  const home = path.join(os.tmpdir(), 'session-home');
+  const codex = path.join(os.tmpdir(), 'session-codex');
+  const roots = sessionRootsFrom({ home, env: { CODEX_HOME: codex } });
   assert.deepEqual(roots.map((root) => root.source), ['codex', 'claude']);
-  assert.equal(roots[0].dir, path.join('D:', 'codex-home', 'sessions'));
+  assert.equal(roots[0].dir, path.join(path.resolve(codex), 'sessions'));
   assert.equal(roots[1].dir, path.join(home, '.claude', 'projects'));
   const fallback = sessionRootsFrom({ home, env: {} });
   assert.equal(fallback[0].dir, path.join(home, '.codex', 'sessions'));

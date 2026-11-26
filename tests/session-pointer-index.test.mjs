@@ -240,14 +240,15 @@ test('大文件只读头部：正文后半段不会出现在结果里', async ()
 });
 
 test('sessionPointerRoots：OWNER_SESSION_HOME / CODEX_HOME / XDG_DATA_HOME 都按配置走', () => {
+  // 用平台无关的临时路径：源码会 path.resolve 这些值，硬编码 D:\ 在 Linux CI 上必红。
+  const home = path.join(os.tmpdir(), 'fixture-home');
+  const codex = path.join(os.tmpdir(), 'fixture-codex');
+  const data = path.join(os.tmpdir(), 'fixture-data');
   const roots = sessionPointerRoots({
-    home: 'D:\\fixture-home',
-    env: {
-      CODEX_HOME: 'D:\\fixture-codex',
-      XDG_DATA_HOME: 'D:\\fixture-data'
-    }
+    home,
+    env: { CODEX_HOME: codex, XDG_DATA_HOME: data }
   });
-  assert.equal(roots.codex, path.join('D:\\fixture-codex', 'sessions'));
-  assert.equal(roots.claude, path.join('D:\\fixture-home', '.claude', 'projects'));
-  assert.equal(roots.opencodeDb, path.join('D:\\fixture-data', 'opencode', 'opencode.db'));
+  assert.equal(roots.codex, path.join(path.resolve(codex), 'sessions'));
+  assert.equal(roots.claude, path.join(home, '.claude', 'projects'));
+  assert.equal(roots.opencodeDb, path.join(path.resolve(data), 'opencode', 'opencode.db'));
 });
