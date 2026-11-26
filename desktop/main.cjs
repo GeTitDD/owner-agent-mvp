@@ -295,8 +295,14 @@ const configBoxFacts = async () => {
 const configSources = async () => {
   const base = defaults();
   const sources = {};
-  const setupModule = setupProbeModule ??= await importEsm('../src/setup-probe.mjs');
-  const setupKeys = new Set(setupModule.SETUP_PATH_KEYS);
+  // 探测模块加载失败不能拖垮配置箱：退回按默认值判来源，配置本体照常打开。
+  let setupKeys = new Set();
+  try {
+    const setupModule = setupProbeModule ??= await importEsm('../src/setup-probe.mjs');
+    setupKeys = new Set(setupModule.SETUP_PATH_KEYS);
+  } catch {
+    // 空集合 = 不特殊处理这五个路径键；#127 的既有行为不变。
+  }
   for (const [key, value] of Object.entries(base)) {
     // pet 是宠物窗位置，setupProbed 是合并用的账本：都不属于配置箱，也不该出现在来源表里。
     if (key === 'pet' || key === 'setupProbed') continue;
