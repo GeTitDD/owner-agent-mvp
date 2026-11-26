@@ -269,6 +269,7 @@ probe（只读） → 逐项判定（可用/只读/缺失/需新建） → 建�
 - `docs/adr/0012-write-by-destination.md` — 写入按目的地分级
 - `docs/adr/0013-sync-conflict-hitl.md` — 同步冲突交人
 - `docs/adr/0014-locate-screen.md` — 定位屏取代全局聚合，未读与水位分离
+- `docs/adr/0015-experience-view-by-invocation.md` — 经验的查看走调用与隐式检索
 - `docs/DIRECTION.md` — 方向对齐：降低多项目开发的认知负担
 - `docs/STREAMING_AND_STREAM_STATES.md` — 流式协议与对话流状态
 - `docs/DEPLOYMENT.md` — 打包、发布与为什么不做容器
