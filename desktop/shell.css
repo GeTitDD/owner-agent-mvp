@@ -2033,6 +2033,46 @@ button.session-name { cursor: pointer; }
 .at-session-clue-kind { margin: 0; color: var(--muted); font-size: 10px; }
 .at-session-clue-kind[data-kind="unusable"] { color: var(--warn); }
 
+/* #126「分享到飞书」的方法卡：目标选择 / 计数 / 未配置提示 / 发送；勾选在流里完成。 */
+.at-share { display: flex; flex-direction: column; gap: 6px; }
+.at-share-targets { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.at-share-label { margin-right: 2px; color: var(--muted); font-size: 10.5px; }
+.at-share-target {
+  padding: 1px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 10.5px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.at-share-target[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.at-share-target.is-disabled {
+  border-style: dashed;
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.6;
+}
+.at-share-count { margin: 0; font-size: 12px; font-weight: 600; }
+.at-share-status { margin: 0; color: var(--warn); font-size: 10.5px; }
+.at-share-actions { display: flex; justify-content: flex-end; }
+.at-share-send {
+  padding: 2px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 11.5px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.at-share-send:disabled { opacity: 0.4; cursor: default; }
+
 .at-hint {
   flex: none;
   margin: 0;
@@ -2541,6 +2581,66 @@ button.session-name { cursor: pointer; }
 .confirm-action.cancel { border-style: dashed; color: var(--muted); }
 
 .confirm-answered {
+  margin: 0;
+  padding: 7px 11px 10px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+/* ── #126 分享回执：结果徽章、会话 / 条数 / 原因、重试按钮（重试仍走外发确认） ── */
+.type-share .block-head {
+  align-items: center;
+}
+
+.share-badge {
+  flex: none;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.share-badge.share-ok { background: var(--ok-soft); color: var(--ok); }
+.share-badge.share-failed { background: var(--danger-soft); color: var(--danger); }
+.share-badge.share-cancelled { background: var(--warn-soft); color: var(--warn); }
+
+.share-rows {
+  padding: 2px 11px 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.share-note {
+  margin: 0;
+  padding: 4px 11px 8px;
+  color: var(--muted);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 11px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.share-retry {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.share-retry:hover { border-color: var(--accent); }
+
+.share-answered {
   margin: 0;
   padding: 7px 11px 10px;
   border-top: 1px solid var(--line-soft);

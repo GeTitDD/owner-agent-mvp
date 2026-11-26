@@ -567,6 +567,68 @@
     return node;
   };
 
+  /**
+   * 分享回执（#126）：结果徽章 → 目标 / 会话 / 条数 / 结果 / 原因 / 时间 → 「重试」。
+   *
+   * 只画模型：能不能重试由 shell-blocks 按状态与草稿 id 算好。重试按钮只声明「用哪份草稿」，
+   * 真正的行为（再出一张外发确认卡）在 shell-stream 的 retryShare 一处。
+   */
+  const renderShare = (model) => {
+    const node = blockNode(model);
+    node.dataset.shareStatus = model.status;
+    node.dataset.shareDraft = model.draftId;
+
+    const META = {
+      sent: { label: '已分享', cls: 'share-ok', result: '已发出（飞书 code 0）' },
+      failed: { label: '失败', cls: 'share-failed', result: '未发出' },
+      cancelled: { label: '已取消', cls: 'share-cancelled', result: '未发出（0 处）' }
+    };
+    const meta = META[model.status] ?? META.failed;
+
+    const head = el('div', 'block-head');
+    head.append(el('h4', '', model.title || '分享回执'));
+    head.append(el('span', join('share-badge', meta.cls), meta.label));
+    node.append(head);
+
+    const rows = el('dl', 'block-kv share-rows');
+    const addRow = (key, value) => {
+      if (!value) return;
+      const item = el('div');
+      item.append(el('dt', '', key), el('dd', '', value));
+      rows.append(item);
+    };
+    addRow('目标', model.target);
+    addRow('会话', model.session);
+    addRow('条数', model.count > 0 ? `${model.count} 条` : '');
+    addRow('结果', meta.result);
+    addRow('原因', model.status === 'failed' ? model.detail : '');
+    addRow('时间', model.at);
+    node.append(rows);
+
+    node.append(el(
+      'p',
+      'share-note',
+      model.status === 'sent'
+        ? '回执留在流里：会话、条数、结果都在，重发要重新勾选。'
+        : '原文与选择都还留着；重试会重新过一次外发确认，不会自动发出。'
+    ));
+
+    // 点过动作就收起按钮，只留记录：与提问块、确认卡同一套口径。
+    if (model.answered) {
+      node.append(el('p', 'share-answered', `已选择：${model.answered}`));
+      return node;
+    }
+    if (model.canRetry !== true) return node;
+
+    const actions = el('div', 'share-actions');
+    const retry = el('button', 'share-retry', '重试');
+    retry.type = 'button';
+    retry.dataset.shareRetry = model.draftId;
+    actions.append(retry);
+    node.append(actions);
+    return node;
+  };
+
   const renderUnknown = (model) => {
     const node = blockNode(model);
     node.append(el('p', 'block-note', model.text));
@@ -588,6 +650,7 @@
     ask: renderAsk,
     risk: renderRisk,
     confirm: renderConfirm,
+    share: renderShare,
     unknown: renderUnknown
   };
 

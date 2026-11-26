@@ -242,6 +242,8 @@
     emptySelection,
     toggleSelection,
     referenceLabels,
+    contextLines,
+    blockquote,
     buildPrompt,
     countText,
     contextOf,
