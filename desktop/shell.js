@@ -16,6 +16,7 @@
   const composeApi = window.OwnerShellCompose;
   const atApi = window.OwnerShellAt;
   const streamApi = window.OwnerShellStream;
+  const configApi = window.OwnerShellConfig;
   if (!headerApi) throw new Error('shell-header.cjs 未加载');
   if (!atApi) throw new Error('shell-at.cjs 未加载');
   if (!window.OwnerShellAtSession) throw new Error('shell-at-session.cjs 未加载');
@@ -29,6 +30,8 @@
   if (!window.OwnerShellBlocksView) throw new Error('shell-blocks-view.js 未加载');
   if (!window.OwnerRiskCard) throw new Error('risk-card.cjs 未加载');
   if (!window.OwnerShellCopy) throw new Error('shell-copy.cjs 未加载');
+  // #127 配置箱：画 DOM 的那一层必须在；分区数据模块晚到，打开时才读。
+  if (!configApi) throw new Error('shell-config.cjs 未加载');
 
   const listApi = window.OwnerShellSessions;
   const store = window.companion?.cardSessions ?? null;
@@ -68,6 +71,8 @@
 
   ui.header = headerApi.create(ctx);
   ui.compose = composeApi.create(ctx);
+  // #127 配置箱：覆盖层挂在装配层，Esc 与保存回执都要用；它自己绑顶栏的 ⚙。
+  ui.config = configApi.create(ctx);
   // #122：`@@` 面板要在输入区之后建（它打开时会收起 `/` 面板），
   // 输入区在运行期才取 ui.at，所以两块不锁构造顺序。
   ui.at = atApi.create(ctx);
@@ -84,10 +89,14 @@
     ui.header.renderScope();
   };
 
-  // Esc 先收最上面的一层：顶栏的确认弹窗 > 项目浮层 > 会话浮层，
+  // Esc 先收最上面的一层：配置箱（全窗口覆盖层）> 顶栏的确认弹窗 > 项目浮层 > 会话浮层，
   // 然后是 `@@` 方法面板（与 `/` 面板不会同时开），最后才是 `/` 面板。
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
+    if (ui.config.dismiss()) {
+      event.preventDefault();
+      return;
+    }
     if (ui.header.dismissOverlay()) {
       event.preventDefault();
       return;

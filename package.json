@@ -51,6 +51,7 @@
     "e2e:desktop:projects": "node scripts/e2e/desktop-projects.mjs",
     "e2e:desktop:card-shell": "node scripts/e2e/desktop-card-shell.mjs",
     "e2e:desktop:card-projects": "node scripts/e2e/desktop-card-projects.mjs",
+    "e2e:desktop:sync-offline": "node scripts/e2e/desktop-sync-offline.mjs",
     "e2e:desktop:blocks": "node scripts/e2e/desktop-blocks.mjs",
     "e2e:desktop:copy-export": "node scripts/e2e/desktop-copy-export.mjs",
     "e2e:desktop:ops-proposals": "node scripts/e2e/desktop-ops-proposals.mjs",
@@ -75,7 +76,8 @@
     "e2e:desktop:at-menu": "node scripts/e2e/desktop-at-menu.mjs",
     "e2e:desktop:at-prompt": "node scripts/e2e/desktop-at-prompt.mjs",
     "e2e:desktop:at-session": "node scripts/e2e/desktop-at-session.mjs",
-    "e2e:desktop:project-write": "node scripts/e2e/desktop-project-write.mjs"
+    "e2e:desktop:project-write": "node scripts/e2e/desktop-project-write.mjs",
+    "e2e:desktop:config-box": "node scripts/e2e/desktop-config-box.mjs"
   },
   "main": "desktop/main.cjs",
   "build": {
