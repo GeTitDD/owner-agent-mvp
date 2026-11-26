@@ -18,7 +18,7 @@
   const composerPlaceholder = ({ open, viewProjectId }) => {
     if (!open) return '没有会话时不能发消息：先在顶栏新建一个会话。';
     return viewProjectId
-      ? '说点什么，/ 技能，@@ 方法。回车发送，Shift+回车换行'
+      ? '说点什么。/ 技能，@@ 方法'
       : '全局：能问，不读项目文件。/ 技能，@@ 方法';
   };
 
@@ -1223,6 +1223,11 @@
       } finally {
         busy = false;
         starting = false;
+        // 本地回执（/risk、/外发 等）不走流式，收尾要把按钮从「停止」还原。
+        if (!activeTurn) {
+          sendButton.textContent = '发送';
+          syncComposer();
+        }
         // abort 插入：停止后把等着的这句接上去，用户不用再按一次发送。
         if (pendingResend) {
           const next = pendingResend;

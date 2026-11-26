@@ -59,7 +59,7 @@ test('同步输入区：全局模式说清只读，项目下只提示发送', ()
   );
   assert.equal(
     compose.composerPlaceholder({ open: true, viewProjectId: 'alpha' }),
-    '说点什么，/ 技能，@@ 方法。回车发送，Shift+回车换行'
+    '说点什么。/ 技能，@@ 方法'
   );
 });
 

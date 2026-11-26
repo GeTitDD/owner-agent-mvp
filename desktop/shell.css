@@ -2004,7 +2004,7 @@ button.session-name { cursor: pointer; }
 
 .slash-num.is-empty {
   background: none;
-  color: var(--muted);
+  color: transparent;
 }
 
 /* ── #122 `@@` 方法菜单与小卡片：贴着输入框浮起，尺寸受控，不铺满窗口 ──

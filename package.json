@@ -131,5 +131,21 @@
     "electron": "^45.2.3",
     "electron-builder": "^26.18.0",
     "jszip": "^3.10.2"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GeTitDD/owner-agent-mvp.git"
+  },
+  "homepage": "https://github.com/GeTitDD/owner-agent-mvp#readme",
+  "bugs": {
+    "url": "https://github.com/GeTitDD/owner-agent-mvp/issues"
+  },
+  "keywords": [
+    "electron",
+    "pi-sdk",
+    "local-first",
+    "project-memory",
+    "read-only-agent",
+    "owner-companion"
+  ]
 }
