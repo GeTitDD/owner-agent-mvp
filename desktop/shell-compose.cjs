@@ -19,7 +19,7 @@
     if (!open) return '没有会话时不能发消息：先在顶栏新建一个会话。';
     return viewProjectId
       ? '说点什么，/ 技能，@@ 方法。回车发送，Shift+回车换行'
-      : '全局只读：选项目后可提问。/ 技能，@@ 方法';
+      : '全局：能问，不读项目文件。/ 技能，@@ 方法';
   };
 
   /**
@@ -906,24 +906,19 @@
     /**
      * 普通消息：交给只读 Pi 会话（read/grep/find/ls）回答。
      *
-     * 三种情况都明确说清，不编答案：
-     * - 没选项目：全局模式没有 cwd 可读，先让用户选项目；
-     * - 没拿到桥：窗口不是主进程起的，重启；
-     * - 没配模型：pi-chat 返回 no-model，原样把原因给用户。
+     * 全局会话也一样——它只是另一条 Pi 会话（工作目录是自有目录），不是「不能问」：
+     * 读不到项目文件，但能答通用问题、也能用 prompt 里的关联线索。
+     * 没有模型时 pi-chat 返回 no-model，原样把原因给用户，不编答案。
      */
     const askModel = async (raw) => {
-      const projectId = ctx.ui.header.viewProjectId();
-      if (!projectId) {
-        return {
-          text: '这条会话还没有选项目：先在顶栏「项目」里选一个，再提问。全局模式只能看记忆摘要，不能读项目文件。',
-          blocks: []
-        };
-      }
       const bridge = window.companion?.chat;
       if (typeof bridge?.ask !== 'function') {
         return { text: '这个窗口没有拿到模型接口（companion.chat.ask）：重启客户端再试。', blocks: [] };
       }
-      const result = await bridge.ask({ projectId, question: String(raw ?? '') });
+      const result = await bridge.ask({
+        projectId: ctx.ui.header.viewProjectId(),
+        question: String(raw ?? '')
+      });
       const text = String(result?.answer ?? '').trim() || '这次没有结论。';
       const cites = Array.isArray(result?.citations) ? result.citations.filter(Boolean) : [];
       const missing = Array.isArray(result?.missingCitations) ? result.missingCitations.filter(Boolean) : [];

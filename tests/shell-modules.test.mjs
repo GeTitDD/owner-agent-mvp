@@ -55,7 +55,7 @@ test('同步输入区：没有会话时锁死并给出去处', () => {
 test('同步输入区：全局模式说清只读，项目下只提示发送', () => {
   assert.equal(
     compose.composerPlaceholder({ open: true, viewProjectId: '' }),
-    '全局只读：选项目后可提问。/ 技能，@@ 方法'
+    '全局：能问，不读项目文件。/ 技能，@@ 方法'
   );
   assert.equal(
     compose.composerPlaceholder({ open: true, viewProjectId: 'alpha' }),
@@ -227,7 +227,8 @@ test('#111 发布回复：草稿要求再确认，发布后给版本与导出', 
 test('普通消息走 companion.chat.ask，主进程有 chat-ask 通道与 PiChatService', () => {
   const composeSrc = fs.readFileSync(path.join(root, 'desktop/shell-compose.cjs'), 'utf8');
   assert.match(composeSrc, /window\.companion\?\.chat/u, '壳必须从主进程桥取模型接口');
-  assert.match(composeSrc, /ask\(\{ projectId, question/u, '提问要带项目与正文');
+  assert.match(composeSrc, /ask\(\{[\s\S]{0,120}projectId: ctx\.ui\.header\.viewProjectId\(\)[\s\S]{0,80}question:/u,
+    '提问要带项目（全局为空串）与正文');
   const mainSrc = fs.readFileSync(path.join(root, 'desktop/main.cjs'), 'utf8');
   assert.match(mainSrc, /companion:chat-ask/u, '主进程要有 chat-ask 通道');
   assert.match(mainSrc, /PiChatService/u, '对话后端必须是只读 Pi 会话');

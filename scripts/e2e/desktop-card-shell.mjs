@@ -172,7 +172,9 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     ownerDb,
     knowledgeDb,
     showPanel: true,
-    page: 'shell.html'
+    page: 'shell.html',
+    // 普通消息会真的去问模型：验收用假回答，避免依赖凭据与网络。
+    env: { OWNER_AGENT_CHAT_FAKE: '1' }
   });
   const { panel } = app;
   const seen = { pinnedId: '', currentId: '', pinnedTitle: '', currentTitle: '' };
@@ -216,10 +218,10 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     await setPopover(panel, false);
     check('a line goes into the current session', await sendLine(panel, '第一条会话的问题', 2));
     const firstThreadAfter = await readThread(panel);
-    // 全局模式没有可读的项目根：回复必须说清「先选项目」，不能假装回答了。
-    check('global mode asks for a project instead of answering',
+    // 全局会话本身也是一条 Pi 会话：能问，只是读不到项目文件（假回答里看得出走了模型桥）。
+    check('a global session answers through the chat bridge',
       firstThreadAfter.placeholders[1] === false
-      && firstThreadAfter.texts[1].includes('先'),
+      && firstThreadAfter.texts[1].includes('假回答'),
       JSON.stringify(firstThreadAfter.texts));
     check('the session auto-titles itself from the first question',
       firstThreadAfter.count === 2);

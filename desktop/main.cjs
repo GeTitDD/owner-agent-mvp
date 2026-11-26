@@ -3176,18 +3176,42 @@ const registerIpc = () => {
 
   // 对话：只读 Pi 会话。会话消息由壳自己落库（见 companion:card-session-append），
   // 这里只回答，不重复写一遍——否则同一条提问会在流里出现两次。
+  //
+  // 全局会话不是「没有项目所以不能问」，而是**它自己的一条 Pi 会话**：
+  // cwd 用 <userData>/global-chat 这个自有工作目录，读不到任何项目文件，
+  // 但能回答通用问题、也能用 prompt 里带进来的关联项目/会话线索。写能力本来就不给。
+  const GLOBAL_CHAT_ID = 'global';
+  const globalChatRoot = () => path.join(app.getPath('userData'), 'global-chat');
+
   ipcMain.handle('companion:chat-ask', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const question = String(input?.question ?? '');
+    // 验收注入：e2e 不调真模型（真实凭据下会慢且不确定），只验证回执落到了流里。
+    if (process.env.OWNER_AGENT_CHAT_FAKE === '1') {
+      return {
+        status: 'ok',
+        ok: true,
+        answer: `（假回答）收到：${question.slice(0, 40)}`,
+        citations: [],
+        missingCitations: []
+      };
+    }
     const service = await getChatService();
     const projectId = String(input?.projectId ?? '').trim();
     const project = projectId
       ? (store?.listProjects() ?? []).find((item) => item.id === projectId) ?? null
       : null;
+    let target = project
+      ? { id: project.id, root: project.root ?? '', domain: project.domain ?? '' }
+      : null;
+    if (!target && !projectId) {
+      const root = globalChatRoot();
+      try { fs.mkdirSync(root, { recursive: true }); } catch { /* 建不出来就交给 service 报错 */ }
+      target = { id: GLOBAL_CHAT_ID, root, domain: '' };
+    }
     return service.ask({
-      project: project
-        ? { id: project.id, root: project.root ?? '', domain: project.domain ?? '' }
-        : null,
-      question: String(input?.question ?? ''),
+      project: target,
+      question,
       model: config.model || ''
     });
   });
