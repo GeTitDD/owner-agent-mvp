@@ -1684,8 +1684,8 @@ button.session-name { cursor: pointer; }
   white-space: normal;
 }
 
-/* ── #107 全局模式：跨项目聚合，只读 ─────────────────────────────── */
-.global-view {
+/* ── #139 定位屏：不选项目时按关注顺序排列的项目行，只读 ─────────── */
+.locate-view {
   margin: 0 0 12px;
   padding: 10px 12px;
   border: 1px dashed var(--line);
@@ -1693,31 +1693,31 @@ button.session-name { cursor: pointer; }
   background: var(--bg);
 }
 
-.global-head {
+.locate-head {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.global-badge {
+.locate-badge {
   padding: 0 6px;
   border-radius: 999px;
-  background: var(--warn-soft);
-  color: var(--warn);
+  background: var(--accent-soft);
+  color: var(--muted);
   font-size: 10px;
 }
 
-.global-title {
+.locate-title {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.global-refresh {
+.locate-refresh {
   flex: none;
   padding: 1px 8px;
   border: 1px solid var(--line);
@@ -1728,61 +1728,110 @@ button.session-name { cursor: pointer; }
   cursor: pointer;
 }
 
-.global-refresh:hover { color: var(--text); border-color: var(--accent); }
+.locate-refresh:hover { color: var(--text); border-color: var(--accent); }
 
-.global-hint,
-.global-counts,
-.global-status,
-.global-empty {
+.locate-hint,
+.locate-status,
+.locate-empty {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 11px;
   white-space: normal;
 }
 
-.global-counts { color: var(--text); }
-
-.global-projects,
-.global-entries {
+.locate-list {
   list-style: none;
-  margin: 6px 0 0;
+  margin: 8px 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
 }
 
-.global-project,
-.global-entry {
+.locate-row {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.locate-row[data-tier="stale"] { opacity: 0.82; }
+.locate-row[data-tier="rest"] { opacity: 0.66; }
+
+.locate-row-head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-  padding: 2px 4px;
-  border-radius: 6px;
+  gap: 6px;
 }
 
-.global-project:hover,
-.global-entry:hover { background: var(--panel); }
-
-.global-project-name,
-.global-entry-title {
-  flex: 0 1 auto;
+.locate-row-name {
+  flex: 1 1 auto;
   min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
+  cursor: pointer;
 }
 
-.global-project-counts,
-.global-entry-meta {
+.locate-row-name:hover { text-decoration: underline; }
+
+.locate-tier {
+  flex: none;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 9.5px;
+  line-height: 17px;
   color: var(--muted);
+  background: var(--line-soft);
+}
+
+.locate-tier[data-tier="pending"] {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: rgba(234, 107, 23, 0.22);
+}
+
+.locate-tier[data-tier="unread"] {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.locate-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 4px 0 0;
   font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* 待确认是排序理由：有候选时用警示色，空着就退回灰色。 */
+.locate-pending[data-known="true"] { color: var(--warn); }
+
+/* 读不到的未读不能和「0」长得一样：加虚线下划提示「未知」。 */
+.locate-unread[data-known="false"] { text-decoration: underline dashed var(--line); }
+
+.locate-meta,
+.locate-decision {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 10px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.locate-decision { border-top: 1px solid var(--line-soft); padding-top: 3px; }
 
 /* ── #107 切项目确认：四条后果 + 两个出口 ────────────────────────── */
 .confirm-backdrop {

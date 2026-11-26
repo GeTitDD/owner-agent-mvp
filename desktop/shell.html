@@ -79,19 +79,20 @@
     </header>
 
     <main class="thread" id="thread">
-      <!-- #107 全局模式：跨项目聚合只读视图。选项目后隐藏，回到对话流本身。 -->
-      <section class="global-view" id="globalView" hidden aria-label="全局只读聚合">
-        <div class="global-head">
-          <span class="global-badge">只读</span>
-          <span class="global-title" id="globalTitle">全局 · 跨项目记忆</span>
-          <button type="button" class="global-refresh" id="globalRefresh">刷新</button>
+      <!-- #139 定位屏：不选项目时的主内容，替换原来的全局聚合数字。
+           每行 = 项目名 + 待确认候选 + 三类未读 + 上次看过 + 最近决策；排序由主进程算好。 -->
+      <section class="locate-view" id="locateView" hidden aria-label="定位屏">
+        <div class="locate-head">
+          <span class="locate-badge">只读</span>
+          <span class="locate-title" id="locateTitle">先看哪个</span>
+          <button type="button" class="locate-refresh" id="locateRefresh">刷新</button>
         </div>
-        <p class="global-hint" id="globalHint"></p>
-        <p class="global-counts" id="globalCounts"></p>
-        <p class="global-status" id="globalStatus" role="status"></p>
-        <ul class="global-projects" id="globalProjects"></ul>
-        <ul class="global-entries" id="globalEntries"></ul>
-        <p class="global-empty" id="globalEmpty" hidden></p>
+        <p class="locate-hint" id="locateHint">
+          排序：待确认候选 &gt; 有未读变化 &gt; 超过 7 天未看 &gt; 其余。切换项目不会清零未读。
+        </p>
+        <p class="locate-status" id="locateStatus" role="status"></p>
+        <ul class="locate-list" id="locateList"></ul>
+        <p class="locate-empty" id="locateEmpty" hidden></p>
       </section>
       <p class="empty" id="emptyState">还没有会话。点顶栏的「会话」新建一个。</p>
       <ol class="messages" id="messages"></ol>

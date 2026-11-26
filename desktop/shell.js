@@ -1,7 +1,7 @@
 // #121 卡片壳的装配层：把顶栏、输入区、对话流三块接起来。
 //
 // 分层（按职责拆开，行为零变化）：
-// - shell-header.cjs：顶栏——会话胶囊与列表、项目胶囊与切换确认、写范围状态位、全局只读区；
+// - shell-header.cjs：顶栏——会话胶囊与列表、项目胶囊与切换确认、写范围状态位、定位屏；
 // - shell-at.cjs：`@@` 方法菜单与方法卡容器——触发判定、方法列表数据、菜单 ↔ 方法卡迁移；
 // - shell-at-session.cjs：「关联会话」——来源切换、最近会话、线索、指针胶囊与发送段；
 // - shell-at-project.cjs：#124 关联项目——项目 → 资料的层级、胶囊与「## 关联项目」段；
@@ -12,7 +12,7 @@
 // shell-blocks-view / shell-copy / risk-card；这里只做装配与事件接线：检查模块、建立共享回执
 // （toast）与刷新路径、按启动顺序读一次库。持久化走主进程的 owner_chat_sessions：
 // 会话、置顶、软删除、当前选择（last_opened_at）、正在看的项目（view_project_id）都在库里，
-// 重启后原样回来。全局模式的聚合由主进程按项目库同一口径算好，这里只画。
+// 重启后原样回来。不选项目时的定位屏由主进程算好（关注顺序、待确认、未读），这里只画。
 (() => {
   const headerApi = window.OwnerShellHeader;
   const composeApi = window.OwnerShellCompose;
@@ -138,8 +138,8 @@
         remember: false
       });
       ui.header.renderScope();
-      // 没有会话时就是全局：直接把跨项目聚合读出来，用户第一眼看到的是「全局 · 只读」。
-      if (!ui.header.viewProjectId()) await ui.header.loadGlobal();
+      // 没有会话时就是全局：直接把定位屏读出来，用户第一眼看到「先看哪个」。
+      if (!ui.header.viewProjectId()) await ui.header.loadLocate();
       ui.compose.focus();
     });
   };

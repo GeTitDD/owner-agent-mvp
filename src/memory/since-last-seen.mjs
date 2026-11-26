@@ -79,6 +79,40 @@ export function computeSinceLastSeen({
   };
 }
 
+/**
+ * 只读预览「自上次看过」：读旧水位 → 用旧水位算差异 → 返回，**不写水位**。
+ *
+ * 定位屏（#139）每行都要显示未读数，但浏览定位屏不是「看过内容」：这里再调
+ * computeSinceLastSeen 就会逐行推进水位，未读全被自己吃掉（ADR-0014）。
+ * 所以预览只要求 store.get，连 put 都不碰；清零点仍只有 `/变化`（computeSinceLastSeen）
+ * 与后续票的「标记已读」。
+ *
+ * @param {object} input
+ * @param {string} input.projectId 项目 id
+ * @param {{get:Function}} input.store 水位存储（只要 get；测试里可以给只读替身）
+ * @param {Array|null} [input.commits] 提交清单；null 表示读不到
+ * @param {Array|null} [input.dirty] 未提交改动清单；null 表示读不到
+ * @param {Array|null} [input.events] 观察员事件；null 表示读不到
+ * @returns {{view:object, previousAt:string, lastReadAt:string}}
+ */
+export function previewSinceLastSeen({ projectId, store, commits, dirty, events } = {}) {
+  const id = String(projectId ?? '').trim();
+  if (!id) throw new Error('缺少项目 id');
+  if (!store || typeof store.get !== 'function') throw new Error('缺少水位存储');
+
+  // 只读：没有水位就是「首次查看」，交给 change-window 标未知，不拿当前时间补一个。
+  const previous = store.get(id);
+  const previousAt = previous?.at ?? '';
+  const view = changeWindowView({
+    projectId: id,
+    since: previousAt || null,
+    commits,
+    dirty,
+    events
+  });
+  return { view, previousAt, lastReadAt: previousAt };
+}
+
 const textOf = (item) => {
   const kind = String(item?.kind ?? '');
   if (kind === 'commit') return [item.shortSha || item.sha, item.title].filter(Boolean).join(' ');
