@@ -199,6 +199,92 @@ const knowledgeDbPath = () =>
   || process.env.DOMAIN_CONTEXT_DB
   || path.join(os.homedir(), '.domain-context', 'index.sqlite');
 
+// #127 配置箱读的三处路径：技能目录与技能扫描共用这一份，别处不要再拼一次。
+const mattSkillsDir = () =>
+  process.env.MATT_SKILLS_DIR || path.join(os.homedir(), '.owner-agent', 'skills', 'matt');
+
+/**
+ * #127 配置箱的只读事实：路径、密钥「配没配 / 从哪读」、以及可写项的来源标注。
+ *
+ * 这里只回答状态，不回传任何密钥的值（值永远不出主进程）；真实环境探测是 #128 的事，
+ * 这一轮只把「配置文件里是不是人写的值」算清楚。
+ *
+ * @returns {Promise<{paths:object, secrets:object, sync:object, sources:object}>}
+ */
+const configBoxFacts = async () => {
+  const envText = (name) => String(process.env[name] ?? '').trim();
+  const envState = (names) => {
+    for (const name of names) {
+      if (envText(name)) return { present: true, origin: '环境变量' };
+    }
+    return { present: false, origin: '' };
+  };
+
+  // 飞书 webhook 的优先级与运行期一致：环境变量 > ~/.owner-agent/feishu.json > 未配置。
+  // 只保留「配没配 / 从哪读」，不把 URL 带出来。
+  let feishu = { present: false, origin: '' };
+  try {
+    feishuConfigModule ??= await importEsm('../src/observer/config.mjs');
+    const resolved = feishuConfigModule.resolveFeishuWebhook();
+    if (resolved.source === 'env') feishu = { present: true, origin: '环境变量' };
+    else if (resolved.source === 'config') feishu = { present: true, origin: 'feishu.json' };
+  } catch {
+    // 读不到就按未配置：配置箱不该因为一个凭据读失败而打不开。
+  }
+
+  // 同步令牌沿用 #130 的口径（GITHUB_TOKEN / GH_TOKEN，只回答命中了哪个变量）。
+  // syncCredential 的字段是 configured；配置箱统一用 present，这里只做一次换名。
+  let sync = { present: false, source: '' };
+  try {
+    const syncRun = await importEsm('../src/memory/sync-run.mjs');
+    const credential = syncRun.syncCredential();
+    sync = { present: credential.configured === true, source: credential.source ?? '' };
+  } catch {
+    // 同上：拿不到就按未配置。
+  }
+
+  // 监控状态库的默认位置由 src/watch/store.mjs 决定（OWNER_AGENT_WATCH_DIR 可改指）。
+  let watchDir = path.join(os.homedir(), '.owner-agent', 'watch');
+  try {
+    const watchStore = await importEsm('../src/watch/store.mjs');
+    watchDir = watchStore.defaultWatchDir();
+  } catch {
+    // 用上面那份默认路径兜底，与 store.mjs 的默认一致。
+  }
+
+  return {
+    paths: {
+      userData: app.getPath('userData'),
+      config: configPath(),
+      knowledge: knowledgeDbPath(),
+      watch: watchDir,
+      skills: mattSkillsDir()
+    },
+    // 密钥只给两件事：配没配、从哪读。名字是键，值是状态。
+    secrets: {
+      OWNER_OBSERVER_FEISHU_WEBHOOK: feishu,
+      OWNER_AGENT_APPROVAL_TOKEN: envState(['OWNER_AGENT_APPROVAL_TOKEN', 'OWNER_AGENT_APPROVAL_TOKEN_FILE']),
+      OWNER_AGENT_SIDECAR_TOKEN: envState(['OWNER_AGENT_SIDECAR_TOKEN', 'OWNER_AGENT_SIDECAR_TOKEN_FILE'])
+    },
+    sync,
+    sources: configSources()
+  };
+};
+
+/** 可写项的来源：值偏离内置默认 = 手改（人写过），还是默认 = 探测（没人动过）。 */
+const configSources = () => {
+  const base = defaults();
+  const sources = {};
+  for (const [key, value] of Object.entries(base)) {
+    // pet 是宠物窗位置，不属于配置箱，也不该出现在来源表里。
+    if (key === 'pet') continue;
+    sources[key] = JSON.stringify(config[key] ?? null) === JSON.stringify(value ?? null)
+      ? 'probe'
+      : 'manual';
+  }
+  return sources;
+};
+
 // #86 会话扫描的本地状态：已扫过的会话键（重复点击不重复提炼），
 // 以及留给下一张票的「库里已有决策的指纹」位（现在是空数组）。
 // 只存这一份 JSON，不进知识库——扫描本身不写任何数据，确认入库是下一张票。
@@ -229,6 +315,56 @@ const saveSessionScanState = ({ sessions = [], fingerprints = [] } = {}) => {
   } catch (error) {
     logError('session-scan-state', error);
   }
+};
+
+// ── #131 同步状态：离线照常读写，只在顶栏标「未同步」，联网后手动补同步 ──
+// 状态存成 userData 下的一个小 JSON：#127 的配置箱还没接进来，同步目标也还没有，
+// 所以这里先把「状态怎么变」与「执行器返回什么」分开——执行器的形状由 runSync 定义，
+// 状态判定由 src/memory/sync-status.mjs 定义，本文件只做落盘与注入。
+const syncStatusPath = () => path.join(app.getPath('userData'), 'sync-status.json');
+let syncStatusModule = null;
+let syncStatusStoreModule = null;
+let syncStatusStore = null;
+const loadSyncStatusModule = async () =>
+  (syncStatusModule ??= await importEsm('../src/memory/sync-status.mjs'));
+const getSyncStatusStore = async () => {
+  if (syncStatusStore) return syncStatusStore;
+  syncStatusStoreModule ??= await importEsm('../src/memory/sync-status-store.mjs');
+  syncStatusStore = new syncStatusStoreModule.SyncStatusStore({ file: syncStatusPath() });
+  return syncStatusStore;
+};
+
+/**
+ * 一次补同步的执行器。
+ *
+ * 真实适配器（读文档清单 → runSync → git 拉推）属于后续票；#127 之前没有同步目标可配，
+ * 所以这里如实返回 unconfigured，不假装成功——「未同步期间不假装成功」也包含这一层。
+ *
+ * `OWNER_AGENT_SYNC_FAKE=1` 时改读 <userData>/sync-fake.json 的 `result`，只给 #131 的
+ * 验收脚本注入失败/成功两种形状；不设这个变量时注入通道整条不存在。
+ */
+const runSyncAttempt = async () => {
+  if (process.env.OWNER_AGENT_SYNC_FAKE === '1') {
+    const file = path.join(app.getPath('userData'), 'sync-fake.json');
+    try {
+      const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/u, '');
+      const fake = JSON.parse(raw);
+      if (fake?.result && typeof fake.result === 'object') return fake.result;
+      return {
+        status: 'error', step: 'fake', code: 'fake-shape', message: '假的同步结果形状认不出。'
+      };
+    } catch (error) {
+      return {
+        status: 'error', step: 'fake', code: 'fake-missing', message: `读不到假的同步结果：${error?.message ?? error}`
+      };
+    }
+  }
+  return {
+    status: 'unconfigured',
+    step: 'target',
+    code: 'sync-target-missing',
+    message: '还没有配置同步目标（配置箱 #127 接入后可用）；本地读写照常。'
+  };
 };
 
 const digestCache = new Map();
@@ -856,8 +992,7 @@ const skillCatalogPayload = async ({ refresh = false } = {}) => {
         domainRoot: path.join(__dirname, '..', 'domains'),
         pluginsDir: path.join(__dirname, '..', 'plugins'),
         pstackSkillsDir: resolvePstackSkillsDir(),
-        mattSkillsDir: process.env.MATT_SKILLS_DIR
-          || path.join(os.homedir(), '.owner-agent', 'skills', 'matt'),
+        mattSkillsDir: mattSkillsDir(),
         pstackSkillIds: registry.PLAYBOOKS.map((item) => ({
           id: item.id,
           playbookLabel: item.label,
@@ -3052,6 +3187,35 @@ const registerIpc = () => {
     };
   });
 
+  // #131 同步状态：get 只读；attempt 是一次显式补同步，执行器返回什么就记什么。
+  // 本地读写不经这条通道，断网时点「补同步」只会更新标记与原因，不会挡住任何本地动作。
+  ipcMain.handle('companion:sync-status-get', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const store = await getSyncStatusStore();
+    return store.read();
+  });
+
+  ipcMain.handle('companion:sync-attempt', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const [mod, store] = await Promise.all([loadSyncStatusModule(), getSyncStatusStore()]);
+    const previous = store.read();
+    let result;
+    try {
+      result = await runSyncAttempt();
+    } catch (error) {
+      // 执行器自己抛错也要落成失败状态：不能因为异常把界面留在「已同步」。
+      result = {
+        status: 'error',
+        step: 'attempt',
+        code: 'attempt-threw',
+        message: error?.message ?? String(error)
+      };
+    }
+    const status = mod.applySyncAttempt(previous, result, new Date());
+    store.save(status);
+    return { status, result };
+  });
+
   ipcMain.handle('companion:chat-session-append', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return requireChatSessions().appendMessage({
@@ -4327,7 +4491,8 @@ const registerIpc = () => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     // 设置页每次打开都重新探测，提供“重新检测”入口。
     serviceCache = { at: 0, value: null };
-    return { ...config, services: await serviceStatus() };
+    // #127 配置箱：configBox 只带路径、密钥状态与来源标注，不带任何密钥值。
+    return { ...config, services: await serviceStatus(), configBox: await configBoxFacts() };
   });
 
   ipcMain.handle('companion:settings:set', async (event, input) => {

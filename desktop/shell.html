@@ -15,7 +15,8 @@
          #107 把「项目」也做成入口（全局 / 已登记项目 + 切换确认），写范围改由 gate 文案回答；
          监控与导出仍是状态位，顶栏不变成第二个菜单。 -->
     <header class="top" id="shellHeader">
-      <div class="session-entry">
+      <div class="top-row" id="topRow">
+        <div class="session-entry">
         <button type="button" class="capsule" id="sessionToggle" data-slot="session"
                 aria-haspopup="dialog" aria-expanded="false" title="会话">
           <span class="slot-key">会话</span>
@@ -62,6 +63,26 @@
         <span class="slot-key">导出</span>
         <span class="slot-value">占位</span>
       </span>
+      <!-- #127 配置入口：顶栏右侧一个齿轮，不占新的状态位，也不是第二个菜单。
+           打开的是全窗口覆盖层（配置箱），七个分区可滚动，密钥只显示来源与状态。
+           放在 span 里而不是顶栏直接子节点，是为了不改变 #106 定的「五个状态位 + 两个胶囊」
+           这套顶栏契约。 -->
+      <span class="config-entry">
+        <button type="button" class="config-entry-btn" id="configToggle"
+                aria-haspopup="dialog" aria-expanded="false" title="配置：七个分区，密钥只看来源"
+                aria-label="配置">⚙</button>
+      </span>
+      </div>
+      <!-- #131 同步这一行：离线/未同步时写「未同步」，并显示最后一次成功同步的时间与失败原因；
+           右侧是补同步入口。它不是 #105 定的五个位置之一，所以单独占第二行，不挤占会话/项目。
+           没同步过就绝不写成「已同步」。 -->
+      <div class="sync-row" id="syncRow" title="同步状态还没读出来。">
+        <span class="sync-entry" id="syncEntry" data-state="unknown">
+          <span class="sync-state" id="syncState" data-tone="unknown" data-state="unknown">未同步</span>
+        </span>
+        <span class="sync-detail" id="syncDetail">从未成功同步过</span>
+        <button type="button" class="sync-retry" id="syncRetry">补同步</button>
+      </div>
     </header>
 
     <main class="thread" id="thread">
@@ -154,6 +175,26 @@
     </div>
   </div>
 
+  <!-- #127 配置箱：全窗口覆盖层，七个分区一个滚动容器；每行「标签 + 值 + 一句后果」，
+       并标注这一项来自「探测」还是「手改」。密钥只显示来源（环境变量名）与状态，
+       不给输入框、不回显值。分区与行由 src/config-box.mjs 提供，这里只搭壳。 -->
+  <div class="config-backdrop" id="configBox" hidden>
+    <div class="config" role="dialog" aria-modal="true" aria-labelledby="configTitle">
+      <div class="config-head">
+        <b class="config-title" id="configTitle">配置</b>
+        <span class="config-sub">保存写回 companion.json；密钥只读环境变量，不写进文件</span>
+        <button type="button" class="config-close" id="configClose" aria-label="关闭配置箱">✕</button>
+      </div>
+      <div class="config-body" id="configBody"></div>
+      <p class="config-status" id="configStatus" role="status" hidden></p>
+      <div class="config-foot">
+        <span class="config-note">探测 = 系统读到或默认值；手改 = 配置文件里是你写的值。</span>
+        <button type="button" class="config-btn" id="configCancel">取消</button>
+        <button type="button" class="config-btn primary" id="configSave">保存</button>
+      </div>
+    </div>
+  </div>
+
   <script src="./shell-thread.cjs"></script>
   <script src="./shell-sessions.cjs"></script>
   <script src="./shell-skills.cjs"></script>
@@ -167,6 +208,9 @@
   <script src="./shell-blocks-view.js"></script>
   <!-- #121 三块界面：顶栏 / 输入区 / 对话流；shell.js 只做装配与事件接线。 -->
   <script src="./shell-header.cjs"></script>
+  <!-- #127 配置箱：分区数据与来源规则在 src/config-box.mjs，经 host 模块挂到 window；
+       这里只加载画 DOM 的那一层，装配层再建实例。 -->
+  <script src="./shell-config.cjs"></script>
   <!-- #122 `@@` 方法菜单：先于输入区加载，输入区要用它的触发判定与面板实例。 -->
   <script src="./shell-at.cjs"></script>
   <!-- #123 「生成 prompt」方法：流内勾选、计数与四段组装；方法卡进入时才 mount。 -->
@@ -182,6 +226,10 @@
   <script type="module" src="./confirm-host.mjs"></script>
   <!-- #115 项目目录同步：判定 / 清单 / 会话授权 / 回执；挂窗口的同样是纯函数的薄壳。 -->
   <script type="module" src="./project-write-host.mjs"></script>
+  <!-- #127 配置箱的数据与来源规则（纯函数）：模块脚本晚于经典脚本，渲染层点了才读。 -->
+  <script type="module" src="./config-box-host.mjs"></script>
+  <!-- #131 同步状态：三态判定与顶栏文案只此一份；壳读不到时退回静态「未同步」。 -->
+  <script type="module" src="./sync-status-host.mjs"></script>
   <script src="./shell.js"></script>
 </body>
 </html>

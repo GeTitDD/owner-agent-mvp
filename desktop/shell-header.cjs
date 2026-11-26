@@ -64,6 +64,12 @@
     const confirmInSession = $('confirmInSession');
     const confirmNewSession = $('confirmNewSession');
     const confirmCancel = $('confirmCancel');
+    // #131 同步这一行：三态（已同步 / 未同步 / 从未成功同步）+ 补同步入口。
+    const syncRow = $('syncRow');
+    const syncEntry = $('syncEntry');
+    const syncStateNode = $('syncState');
+    const syncDetailNode = $('syncDetail');
+    const syncRetry = $('syncRetry');
 
     // 会话（已排序）、归档（已删除）、项目列表、当前选择；query / 归档视图 / 待确认删除都是纯界面状态。
     let sessions = [];
@@ -82,6 +88,9 @@
     let globalBusy = false;
     // 切项目确认弹窗：null = 关着；'' 是合法目标（切回全局），所以不能用假值判断。
     let pendingTarget = null;
+    // #131 同步状态：null = 还没读到（按「从未成功同步」显示）；busy 只挡重复点击。
+    let syncStatus = null;
+    let syncBusy = false;
 
     const el = (tag, className, text) => {
       const node = document.createElement(tag);
@@ -164,6 +173,82 @@
       writeScopeNode.textContent = payload.label;
       writeScopeNode.dataset.scope = payload.scope;
       writeScopeNode.closest('.slot')?.setAttribute('title', payload.hint ?? '');
+    };
+
+    /**
+     * 同步这一行（#131）：标签、语气、说明全部来自 src/memory/sync-status.mjs 的 syncBadge，
+     * 这里只负责改 DOM。判定模块是晚加载的 module 脚本，读不到时先写静态的「未同步」——
+     * 宁可说少了，也不能在没同步时写成「已同步」。
+     * 最后成功时间与失败原因直接写在说明里（不靠悬停），离线也能一眼看到「上次存好是几点」。
+     */
+    const renderSync = () => {
+      const api = window.OwnerSyncStatus ?? null;
+      const badge = api?.syncBadge
+        ? api.syncBadge(syncStatus)
+        : {
+          state: 'unknown',
+          tone: 'unknown',
+          label: '未同步',
+          detail: '从未成功同步过',
+          hint: '同步状态还没读出来。',
+          retry: true
+        };
+      syncStateNode.textContent = badge.label;
+      syncStateNode.dataset.tone = badge.tone;
+      syncStateNode.dataset.state = badge.state;
+      syncEntry.dataset.state = badge.state;
+      syncDetailNode.textContent = badge.detail || '';
+      syncRow.setAttribute('title', badge.hint ?? '');
+      syncEntry.setAttribute('title', badge.hint ?? '');
+      syncRetry.hidden = !badge.retry;
+      syncRetry.disabled = syncBusy;
+      syncRetry.textContent = syncBusy ? '同步中…' : (badge.retryLabel ?? '补同步');
+    };
+
+    /** 读一次同步状态；没有主进程接口时保持「未同步 / 未知」，不写默认已同步。 */
+    const loadSyncStatus = async () => {
+      const syncStore = window.companion?.syncStatus ?? null;
+      if (!syncStore?.get) {
+        renderSync();
+        return;
+      }
+      try {
+        syncStatus = await syncStore.get();
+      } catch (error) {
+        setError(`读取同步状态失败：${error?.message ?? error}`);
+      }
+      renderSync();
+    };
+
+    /**
+     * 手动补同步：触发后按执行器返回的结果更新状态，并把结果说出来（成功给时间、失败给原因）。
+     * 本地读写不经过这里，所以断网时点它只会更新标记，不会挡住任何本地动作。
+     */
+    const attemptSync = async () => {
+      if (syncBusy) return;
+      const syncStore = window.companion?.syncStatus ?? null;
+      if (!syncStore?.attempt) {
+        ctx.notify?.('补同步不可用：这个窗口没有拿到主进程接口。', 'error');
+        return;
+      }
+      syncBusy = true;
+      renderSync();
+      try {
+        const outcome = await syncStore.attempt();
+        syncStatus = outcome?.status ?? syncStatus;
+        const ok = outcome?.result?.status === 'ok';
+        const text = window.OwnerSyncStatus?.syncAttemptText
+          ? window.OwnerSyncStatus.syncAttemptText(outcome)
+          : (ok ? '同步完成。' : '补同步未完成。');
+        ctx.notify?.(text, ok ? 'ok' : 'error');
+      } catch (error) {
+        ctx.notify?.(`补同步失败：${error?.message ?? error}`, 'error');
+        // 连结果都拿不到：重新读盘，别把界面留在「同步中」。
+        await loadSyncStatus();
+      } finally {
+        syncBusy = false;
+        renderSync();
+      }
     };
 
     const renderGlobalProject = (project) => {
@@ -646,6 +731,11 @@
       renderWriteScope();
     });
 
+    // #131：同步状态判定模块同样是晚加载的 module 脚本；挂载后补画这一格。
+    // 「补同步」是显式动作：只有人点了才尝试，轮询与启动都不会自己推。
+    window.addEventListener('owner-sync-status-ready', renderSync);
+    syncRetry.addEventListener('click', () => void attemptSync());
+
     searchInput.addEventListener('input', () => {
       query = searchInput.value;
       renderSessions();
@@ -701,6 +791,9 @@
       setPopover(false);
     });
 
+    // 启动就读一次同步状态：默认是「从未成功同步过」，读到成功记录也不会先亮成已同步。
+    void loadSyncStatus();
+
     return {
       report,
       setError,
@@ -715,6 +808,9 @@
       loadSessions,
       selectSession,
       loadGlobal,
+      loadSyncStatus,
+      attemptSync,
+      syncStatus: () => syncStatus,
       closePopoverIfOpen,
       dismissOverlay
     };

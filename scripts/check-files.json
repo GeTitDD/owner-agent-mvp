@@ -235,5 +235,15 @@
   "tests/sync-run.test.mjs",
   "desktop/shell-at-project.cjs",
   "tests/card-at-project.test.mjs",
-  "scripts/e2e/desktop-at-project.mjs"
+  "scripts/e2e/desktop-at-project.mjs",
+  "src/config-box.mjs",
+  "desktop/config-box-host.mjs",
+  "desktop/shell-config.cjs",
+  "tests/config-box.test.mjs",
+  "scripts/e2e/desktop-config-box.mjs",
+  "src/memory/sync-status.mjs",
+  "src/memory/sync-status-store.mjs",
+  "desktop/sync-status-host.mjs",
+  "tests/sync-status.test.mjs",
+  "scripts/e2e/desktop-sync-offline.mjs"
 ]
