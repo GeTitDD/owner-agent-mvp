@@ -20,9 +20,9 @@ const shotsDir = process.env.SHOTS_DIR
 const tempBase = process.env.TMP_106 ?? path.resolve(shotsDir, '..', 'tmp-106');
 const { check, failures } = createChecker('[CARD-SHELL-#106]');
 
-const SLOTS = ['session', 'project', 'write', 'monitor', 'export'];
+const SLOTS = ['session', 'project', 'write'];
 
-/** 顶栏：五个位都在，但只有会话这一位是入口（按钮 + 浮层）。 */
+/** 顶栏：两个入口 + 一个写范围状态位；监控与导出改由 /监控 与 /发布 承担。 */
 const readHeader = (panel) => panel.evaluate(`(() => {
   const capsule = document.getElementById('sessionToggle');
   const popover = document.getElementById('sessionPopover');
@@ -180,15 +180,15 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
       await waitFor(panel, "document.querySelector('#shellHeader')", 30000));
 
     const header = await readHeader(panel);
-    check('top bar keeps the five status slots',
+    check('top bar keeps two entries and the write-scope slot',
       JSON.stringify(header.slots) === JSON.stringify(SLOTS), JSON.stringify(header.slots));
     check('only the session and project slots are entries',
       header.capsules === 2 && header.otherControls === 0,
       `capsules=${header.capsules} others=${header.otherControls}`);
-    // #111：监控状态位从「占位」改成「配置」（`/监控` 打开配置箱的监控分区）；
-    // 导出仍是占位，写范围由 card-scope 给出「只读·全局」。
-    check('the remaining status slots keep their labels',
-      JSON.stringify(header.placeholders) === JSON.stringify(['只读·全局', '配置', '占位']),
+    // 监控与导出不再占位：它们分别由 `/监控` 与 `/发布` 承担；
+    // 状态行里只有写范围这一行文字（由 card-scope 给出「只读·全局」）。
+    check('the write-scope slot keeps its label',
+      JSON.stringify(header.placeholders) === JSON.stringify(['只读·全局']),
       JSON.stringify(header.placeholders));
     check('the capsule says there is no session yet', header.label === '还没有会话', header.label);
 

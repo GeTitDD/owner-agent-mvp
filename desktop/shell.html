@@ -50,32 +50,19 @@
           <ul class="projects-list" id="projectList"></ul>
         </div>
       </div>
-      <span class="slot" data-slot="write">
-        <span class="slot-key">写范围</span>
-        <span class="slot-value" id="writeScope" data-scope="global">只读·全局</span>
-      </span>
-      <span class="slot" data-slot="monitor" title="监控：心跳、水位与变更队列只写自有目录；输入 /监控 打开配置箱的监控分区">
-        <span class="slot-key">监控</span>
-        <span class="slot-value">配置</span>
-      </span>
-      <span class="slot" data-slot="export">
-        <span class="slot-key">导出</span>
-        <span class="slot-value">占位</span>
-      </span>
-      <!-- #127 配置入口：顶栏右侧一个齿轮，不占新的状态位，也不是第二个菜单。
-           打开的是全窗口覆盖层（配置箱），七个分区可滚动，密钥只显示来源与状态。
-           放在 span 里而不是顶栏直接子节点，是为了不改变 #106 定的「五个状态位 + 两个胶囊」
-           这套顶栏契约。 -->
       <span class="config-entry">
         <button type="button" class="config-entry-btn" id="configToggle"
                 aria-haspopup="dialog" aria-expanded="false" title="配置：七个分区，密钥只看来源"
                 aria-label="配置">⚙</button>
       </span>
       </div>
-      <!-- #131 同步这一行：离线/未同步时写「未同步」，并显示最后一次成功同步的时间与失败原因；
-           右侧是补同步入口。它不是 #105 定的五个位置之一，所以单独占第二行，不挤占会话/项目。
-           没同步过就绝不写成「已同步」。 -->
-      <div class="sync-row" id="syncRow" title="同步状态还没读出来。">
+      <!-- 第二行只放状态：写范围 + 同步。440px 的窗口塞不下五枚胶囊，
+           监控与导出本来也只是「占位」——它们现在分别由 /监控 与 /发布 承担，
+           留在这里只会把会话标题挤成「重启后还在的会话（已…」。 -->
+      <div class="status-row" id="syncRow">
+        <span class="slot" data-slot="write">
+          <span class="slot-value" id="writeScope" data-scope="global">只读·全局</span>
+        </span>
         <span class="sync-entry" id="syncEntry" data-state="unknown">
           <span class="sync-state" id="syncState" data-tone="unknown" data-state="unknown">未同步</span>
         </span>

@@ -128,13 +128,12 @@ button, textarea { font: inherit; color: inherit; }
 }
 /* 五个位都只是状态：不做 hover、不做 focus，读起来就是状态而不是入口。
    唯一的例外是 #106 的会话胶囊——顶栏只放开这一个入口。 */
-.slot[data-slot="export"] { margin-left: auto; }
 
-/* ── #131 同步标记：离线也要一眼看出来，且不能冒充「已同步」 ──
+/* ── 状态行：写范围 + 同步。离线也要一眼看出来，且不能冒充「已同步」 ──
    三态只由 src/memory/sync-status.mjs 判定：已同步（绿）/ 未同步（橙）/ 从未成功同步（灰）。
    这里不写第三套判定，只把 data-tone 翻成颜色。
-   它单独占顶栏第二行：440px 的窗口里再塞第六个胶囊会把会话/项目挤得读不出来。 */
-.sync-row {
+   同步单独占第二行，和写范围并排：440px 的窗口里再塞第五个位置会把会话标题挤没。 */
+.status-row {
   display: flex;
   flex: none;
   align-items: center;
@@ -203,9 +202,13 @@ button, textarea { font: inherit; color: inherit; }
 .session-entry {
   position: relative;
   display: inline-flex;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
 }
+
+/* 会话标题是这一行里最长的东西：让它自己占满剩余宽度并省略，
+   而不是把项目胶囊和状态位一起挤成「只…」「占」。 */
+.session-entry .capsule { max-width: 100%; }
 
 .capsule {
   display: inline-flex;
@@ -231,6 +234,7 @@ button, textarea { font: inherit; color: inherit; }
 }
 
 .capsule .slot-value { max-width: 150px; }
+.session-entry .capsule .slot-value { max-width: none; }
 
 .caret {
   flex: none;
@@ -1268,8 +1272,17 @@ button.session-name { cursor: pointer; }
 .project-entry {
   position: relative;
   display: inline-flex;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
+}
+
+/* 项目名不需要和会话标题抢宽度；长名字在胶囊内省略。 */
+.project-entry .capsule { max-width: 124px; }
+
+/* 写范围只是状态，放在状态行里不占入口的宽度。 */
+.status-row .slot {
+  flex: none;
+  padding: 1px 8px;
 }
 
 .capsule[data-scope="global"] {

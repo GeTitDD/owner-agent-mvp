@@ -133,13 +133,13 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     check('卡片壳启动后有配置入口',
       await waitFor(panel, "document.querySelector('#configToggle')", 30000));
 
-    // 入口不能把顶栏变成第二个菜单：#106 的「五个状态位 + 两个胶囊」原样保留。
+    // 入口不能把顶栏变成第二个菜单：#106 的「两个入口 + 写范围状态位」原样保留。
     let ui = await readUi(panel);
     check('配置入口是齿轮按钮，默认收起',
       ui.toggleExists === true && ui.toggleExpanded === 'false' && ui.boxHidden === true,
       `expanded=${ui.toggleExpanded} hidden=${ui.boxHidden}`);
-    check('顶栏契约不变：五个状态位 + 两个胶囊 + 没有新的顶栏直系控件',
-      ui.headerSlots.join(',') === 'session,project,write,monitor,export'
+    check('顶栏契约不变：两个入口 + 写范围状态位 + 没有新的顶栏直系控件',
+      ui.headerSlots.join(',') === 'session,project,write'
       && ui.headerCapsules === 2 && ui.headerOtherControls === 0,
       `${ui.headerSlots.join(',')} capsules=${ui.headerCapsules} others=${ui.headerOtherControls}`);
 
