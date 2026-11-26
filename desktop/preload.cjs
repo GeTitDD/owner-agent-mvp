@@ -80,7 +80,9 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     capture: (input) => invoke('companion:idea-capture', input),
     status: (input) => invoke('companion:idea-status', input),
     sort: (input) => invoke('companion:idea-sort', input),
-    promote: (input) => invoke('companion:idea-promote', input)
+    promote: (input) => invoke('companion:idea-promote', input),
+    // #137：灵感回执上的「提升为 Lesson」。只写经验，不写知识库。
+    toLesson: (input) => invoke('companion:idea-lesson', input)
   }),
   // #114 自有目录写入：判定与回执在渲染层（src/own-write.mjs），这里只提供真正写库的一步。
   // 走这条路的动作不弹确认卡；删除 / 项目目录 / 外发不从这里走（#115 / #116）。

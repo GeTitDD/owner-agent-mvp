@@ -232,7 +232,15 @@
     // 两种写法都收：[键, 值] 与 { key, value }。
     rows: list(data.rows).map((row) => (Array.isArray(row)
       ? { key: str(row[0]), value: str(row[1]) }
-      : { key: str(row?.key), value: str(row?.value) }))
+      : { key: str(row?.key), value: str(row?.value) })),
+    // #137 灵感回执上的动作：块内只声明「选了什么」，真正调用提升接口在对话流那一处。
+    // 其他键值块通常没有动作；空数组保持原样，渲染层据此决定要不要画按钮。
+    actions: list(data.actions)
+      .map((action) => ({ id: str(action?.id), label: str(action?.label) }))
+      .filter((action) => action.id && action.label)
+      .slice(0, 2),
+    // 动作要能找回那条灵感：id 写在块上，点击时不必从「结果」文案里解析。
+    ideaId: str(data.ideaId)
   });
 
   const normalizeCode = (data) => {
@@ -463,9 +471,10 @@
     const blocks = list(reply.blocks).map((block, index) => {
       const model = normalizeBlock(block, index);
       const answer = answers[index];
-      // 提问块、确认卡与分享回执都靠 answers 收起按钮：同一套「点过就留记录」的机制，不另开字段。
+      // 提问块、确认卡、分享回执与带动作的灵感回执都靠 answers 收起按钮：
+      // 同一套「点过就留记录」的机制，不另开字段。
       if ((model.type === 'ask' || model.type === 'risk' || model.type === 'confirm'
-        || model.type === 'share' || model.type === 'review')
+        || model.type === 'share' || model.type === 'review' || model.type === 'kv')
         && answer !== undefined) {
         model.answered = str(answer);
       }
