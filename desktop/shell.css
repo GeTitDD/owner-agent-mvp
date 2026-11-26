@@ -96,6 +96,17 @@ button, textarea { font: inherit; color: inherit; }
   white-space: nowrap;
   /* 浮层要从这一行往下探，所以这里不能裁切；横向溢出由 .shell 兜底。 */
   overflow: visible;
+  /* 无边框窗口：顶栏是拖动区，按钮与输入必须显式退出拖动区，否则点不动。 */
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.top button,
+.top input,
+.top select,
+.top a,
+.top [role="button"] {
+  -webkit-app-region: no-drag;
 }
 
 /* #131 第一行仍是 #105 的五个位置；同步行在下面单独一行，不跟它们抢宽度。 */
@@ -2683,6 +2694,38 @@ button.session-name { cursor: pointer; }
 .config-entry-btn[aria-expanded="true"] {
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+/* 窗口按钮：无边框窗口的唯一出口，放在最右，视觉上比配置轻。 */
+.window-controls {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+}
+
+.win-btn {
+  width: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.win-btn:hover {
+  border-color: var(--line);
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* 退出是唯一不可逆的动作：悬停时给红，别和收起混在一起。 */
+#windowQuit:hover {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .config-backdrop {

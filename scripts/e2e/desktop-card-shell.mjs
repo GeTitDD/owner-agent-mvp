@@ -31,6 +31,7 @@ const readHeader = (panel) => panel.evaluate(`(() => {
     placeholders: [...document.querySelectorAll('#shellHeader .slot .slot-value')]
       .map((node) => node.textContent.trim()),
     capsules: document.querySelectorAll('#shellHeader .capsule').length,
+    windowControls: document.querySelectorAll('#shellHeader .win-btn').length,
     otherControls: document.querySelectorAll(
       '#shellHeader > button, #shellHeader > input, #shellHeader > select, #shellHeader > a'
     ).length,
@@ -185,6 +186,8 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     check('only the session and project slots are entries',
       header.capsules === 2 && header.otherControls === 0,
       `capsules=${header.capsules} others=${header.otherControls}`);
+    check('the frameless window has its own hide and quit buttons',
+      header.windowControls === 2, `windowControls=${header.windowControls}`);
     // 监控与导出不再占位：它们分别由 `/监控` 与 `/发布` 承担；
     // 状态行里只有写范围这一行文字（由 card-scope 给出「只读·全局」）。
     check('the write-scope slot keeps its label',

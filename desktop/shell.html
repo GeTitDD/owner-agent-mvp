@@ -55,6 +55,12 @@
                 aria-haspopup="dialog" aria-expanded="false" title="配置：七个分区，密钥只看来源"
                 aria-label="配置">⚙</button>
       </span>
+      <!-- 无边框窗口必须自己给出口：以前旧面板有 ×，撤壳时丢了，窗口既关不掉也拖不动。
+           — 收起到托盘（程序继续跑，托盘里有「退出」）；× 直接退出。 -->
+      <span class="window-controls">
+        <button type="button" class="win-btn" id="windowHide" title="收起到托盘" aria-label="收起">—</button>
+        <button type="button" class="win-btn" id="windowQuit" title="退出 Owner Companion" aria-label="退出">×</button>
+      </span>
       </div>
       <!-- 第二行只放状态：写范围 + 同步。440px 的窗口塞不下五枚胶囊，
            监控与导出本来也只是「占位」——它们现在分别由 /监控 与 /发布 承担，

@@ -701,6 +701,10 @@
 
     // ── 事件 ──────────────────────────────────────────────────────────
 
+    // 无边框窗口的两个出口。收起留着托盘与后台同步；退出是真正结束进程。
+    $('windowHide')?.addEventListener('click', () => window.companion?.hidePanel?.());
+    $('windowQuit')?.addEventListener('click', () => window.companion?.quit?.());
+
     capsule.addEventListener('click', () => setPopover(popover.hidden));
 
     // #107 项目胶囊：一个浮层装「全局 + 已登记项目」；选择本身不直接改范围，先走确认。
