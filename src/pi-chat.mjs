@@ -393,6 +393,11 @@ export function createChatSessionFactory({ loadSdk = null, skills = null } = {})
               ? (listener) => session.subscribe(listener)
               : () => () => {},
             activeTools: () => [...active],
+            // 撤回：Pi 自带会话树。取用户消息节点，导航回去即把这一轮从上下文里去掉。
+            forkPoints: () => (typeof session.getUserMessagesForForking === 'function'
+              ? session.getUserMessagesForForking()
+              : []),
+            navigateTree: (entryId, options) => session.navigateTree?.(entryId, options),
             lastMessage: () => readLastMessage(session),
             getLastText: () => String(session.getLastAssistantText?.() ?? ''),
             get model() {
@@ -563,6 +568,24 @@ export class PiChatService {
   }
 
   /**
+   * 撤回上一轮：用 Pi 自带的会话树导航回上一条用户消息。
+   * 返回被撤回的那句原文（调用方把它放回输入框）；会话不在或正忙时如实返回 false。
+   */
+  async rewindLast({ project = null, sessionId = '', model = this.model } = {}) {
+    const key = this.sessionKey({ project, sessionId, model });
+    const entry = this.sessions.get(key);
+    if (!entry?.session) return { rewound: false, reason: 'no-session' };
+    if (entry.busy) return { rewound: false, reason: 'busy' };
+    if (typeof entry.session.navigateTree !== 'function') return { rewound: false, reason: 'unsupported' };
+    const points = entry.session.forkPoints?.() ?? [];
+    const last = points[points.length - 1];
+    if (!last?.entryId) return { rewound: false, reason: 'empty' };
+    const result = await entry.session.navigateTree(last.entryId, { summarize: false });
+    if (result?.cancelled) return { rewound: false, reason: 'cancelled' };
+    return { rewound: true, text: String(result?.editorText ?? last.text ?? ''), entryId: last.entryId };
+  }
+
+  /**
    * 引导（steer）：把一句话插进正在跑的那一轮，不中止。
    * 只对「正在跑」的会话生效；找不到或已结束就返回 steered:false，不假装成功。
    */
@@ -718,7 +741,7 @@ export class PiChatService {
 
     try {
       if (!session) {
-        const creating = this.sessionFactory.create({ cwd: root, model: resolvedModel });
+        const creating = this.sessionFactory.create({ cwd: root, model: resolvedModel, signal });
         this.pending.set(key, creating);
         let created;
         try {

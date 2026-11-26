@@ -524,10 +524,65 @@ button.session-name { cursor: pointer; }
   margin: 0;
   padding: 8px 11px;
   border-radius: var(--radius-sm);
-  white-space: pre-wrap;
+  white-space: normal;
   word-break: break-word;
   -webkit-user-select: text;
   user-select: text;
+}
+
+/* Markdown：段落、标题、列表、代码、引用都不靠外层留白撑开。 */
+.bubble > :first-child { margin-top: 0; }
+.bubble > :last-child { margin-bottom: 0; }
+.bubble p { margin: 0 0 8px; }
+.bubble h2,
+.bubble h3,
+.bubble h4 {
+  margin: 10px 0 5px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.bubble h2 { font-size: 13.5px; }
+.bubble ul,
+.bubble ol {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+.bubble li { margin: 2px 0; }
+.bubble pre {
+  margin: 8px 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  white-space: pre;
+}
+.bubble code {
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--line-soft);
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 10.5px;
+}
+.bubble pre code {
+  padding: 0;
+  background: none;
+  font-size: 10.5px;
+}
+.bubble blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+}
+.bubble a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.bubble hr {
+  margin: 10px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
 }
 
 .msg.user .bubble {
@@ -587,6 +642,30 @@ button.session-name { cursor: pointer; }
   margin: 0;
   color: var(--muted);
   font-size: 10.5px;
+}
+
+/* 撤回：只出现在最后一条助手消息上，悬停显形，别抢正文注意力。 */
+.rewind-affordance {
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 16px;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.12s ease;
+}
+
+.msg:hover .rewind-affordance,
+.rewind-affordance:focus-visible {
+  opacity: 1;
+}
+
+.rewind-affordance:hover {
+  border-color: var(--accent);
+  color: var(--text);
 }
 
 .who {

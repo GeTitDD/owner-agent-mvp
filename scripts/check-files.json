@@ -253,5 +253,7 @@
   "tests/sync-status.test.mjs",
   "scripts/e2e/desktop-sync-offline.mjs",
   "src/model-catalog.mjs",
-  "tests/model-catalog.test.mjs"
+  "tests/model-catalog.test.mjs",
+  "desktop/shell-markdown.cjs",
+  "tests/markdown.test.mjs"
 ]

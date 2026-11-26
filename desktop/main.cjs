@@ -3322,6 +3322,44 @@ const registerIpc = () => {
     });
   });
 
+  // 撤回上一轮：Pi 会话树导航 + 本机会话表删掉这一问一答。
+  // Pi 侧失败（会话已经丢弃 / 重启过）不阻塞本地撤回：至少把界面上的这一轮拿掉。
+  ipcMain.handle('companion:chat-rewind', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const sessionId = String(input?.sessionId ?? '').trim();
+    const projectId = String(input?.projectId ?? '').trim();
+    const project = projectId
+      ? (store?.listProjects() ?? []).find((item) => item.id === projectId) ?? null
+      : null;
+    let target = project
+      ? { id: project.id, root: project.root ?? '', domain: project.domain ?? '' }
+      : null;
+    if (!target && !projectId) {
+      const root = globalChatRoot();
+      try { fs.mkdirSync(root, { recursive: true }); } catch { /* 建不出来就交给 service */ }
+      target = { id: GLOBAL_CHAT_ID, root, domain: '' };
+    }
+    let fromPi = { rewound: false, reason: '' };
+    try {
+      const service = await getChatService();
+      fromPi = await service.rewindLast({ project: target, sessionId, model: config.model || '' });
+    } catch {
+      fromPi = { rewound: false, reason: 'error' };
+    }
+    let local = null;
+    try {
+      local = requireChatSessions().removeLastTurn({ sessionId });
+    } catch {
+      local = null;
+    }
+    return {
+      rewound: Boolean(fromPi?.rewound || local),
+      text: String(local?.text ?? fromPi?.text ?? ''),
+      pi: Boolean(fromPi?.rewound),
+      reason: String(fromPi?.reason ?? '')
+    };
+  });
+
   // 回答提问块：只写那一条消息的 answers（哪一块被答成了什么）。
   ipcMain.handle('companion:card-session-answer', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');

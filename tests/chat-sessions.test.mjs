@@ -183,3 +183,21 @@ test('旧库平滑升级：只新增会话表，旧表与旧数据保持原样',
   );
   assert.equal(db.prepare('SELECT title FROM owner_tasks WHERE id=?').get('task-1').title, '旧任务');
 });
+
+test('撤回上一轮：只删最后一条用户消息及其回复，返回原文', () => {
+  const db = makeDb();
+  const store = new ChatSessionStore({ db, now: () => new Date().toISOString() });
+  const session = store.createSession({ projectId: '' });
+  store.appendMessage({ sessionId: session.id, role: 'user', text: '第一问' });
+  store.appendMessage({ sessionId: session.id, role: 'assistant', text: '第一答' });
+  store.appendMessage({ sessionId: session.id, role: 'user', text: '第二问' });
+  store.appendMessage({ sessionId: session.id, role: 'assistant', text: '第二答' });
+
+  const removed = store.removeLastTurn({ sessionId: session.id });
+  assert.equal(removed.text, '第二问');
+  const rest = store.getSession(session.id).messages.map((message) => message.text);
+  assert.deepEqual(rest, ['第一问', '第一答']);
+  // 再撤一次退掉第一轮；其后没有用户消息就返回 null，不误删助手消息。
+  assert.equal(store.removeLastTurn({ sessionId: session.id }).text, '第一问');
+  assert.equal(store.removeLastTurn({ sessionId: session.id }), null);
+});

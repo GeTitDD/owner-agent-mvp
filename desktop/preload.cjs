@@ -105,6 +105,7 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     steer: (turnId, text) => invoke('companion:chat-steer', {
       turnId: String(turnId ?? ''), text: String(text ?? '')
     }),
+    rewind: (input) => invoke('companion:chat-rewind', input),
     // 流式事件：只转给订阅者，返回取消订阅函数。
     onEvent: (callback) => {
       const listener = (_event, payload) => callback(payload);

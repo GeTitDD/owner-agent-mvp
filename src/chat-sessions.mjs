@@ -469,6 +469,24 @@ export class ChatSessionStore {
   }
 
   /**
+   * 撤回最后一条用户消息及其之后的回复（一问一答）。
+   * 返回被删掉的那条用户消息，界面把它放回输入框；没有用户消息就返回 null。
+   * 只动本机会话表，不碰项目库与知识。
+   */
+  removeLastTurn({ sessionId } = {}) {
+    const key = String(sessionId ?? '').trim();
+    if (!key) fail('缺少会话 ID');
+    const lastUser = this.db.prepare(
+      "SELECT seq, text FROM owner_chat_messages WHERE session_id=? AND role='user' ORDER BY seq DESC LIMIT 1"
+    ).get(key);
+    if (!lastUser) return null;
+    this.db.prepare('DELETE FROM owner_chat_messages WHERE session_id=? AND seq>=?')
+      .run(key, lastUser.seq);
+    this.db.prepare('UPDATE owner_chat_sessions SET updated_at=? WHERE id=?').run(this.now(), key);
+    return { seq: Number(lastUser.seq), text: String(lastUser.text ?? '') };
+  }
+
+  /**
    * 记下某个提问块被怎么回答的：只写那一条消息的 answers。
    * 回答本身（我问的一句 + 一条回复）走 appendMessage，两条路径互不混。
    */

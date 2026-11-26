@@ -283,6 +283,10 @@
     // 流式中再发一句的两种方式：steer 插入当前回答 / abort 先停再发。
     let insertMode = 'steer';
     let pendingResend = null;
+    // 在一轮还没真正开始（例如正在刷新对话流）时点了停止：等 ask 起来后立刻中止。
+    let pendingAbort = false;
+    // 「已按下发送、ask 还没起来」的短窗口：这期间停止按钮也必须可点。
+    let starting = false;
 
     /** 本地只存覆盖项；读失败就当没改过，不阻塞面板。 */
     const readAliases = () => {
@@ -663,7 +667,8 @@
       // 全局模式不是「不能说话」，而是「不写项目」：消息仍落本机自有库，所以输入框不锁；
       // 提示里说清落点为空，要写项目先选项目。
       input.placeholder = composerPlaceholder({ open, viewProjectId: ctx.ui.header.viewProjectId() });
-      sendButton.disabled = !open || !threadApi.canSend(input.value);
+      // 流式中按钮是「停止」：输入框已经清空，但按钮必须可点。
+      sendButton.disabled = (activeTurn || starting) ? false : (!open || !threadApi.canSend(input.value));
     };
 
     /**
@@ -989,13 +994,20 @@
         : () => {};
       activeTurn = { turnId, stop: () => { void bridge.abort?.(turnId); } };
       setStreamingUi(true);
+      let result;
       try {
-        const result = await bridge.ask({
+        // 先把请求发出去，再处理「准备阶段点过停止」——顺序反了会找不到这一轮。
+        const request = bridge.ask({
           turnId,
           sessionId: currentId(),
           projectId: ctx.ui.header.viewProjectId(),
           question: String(raw ?? '')
         });
+        if (pendingAbort) {
+          pendingAbort = false;
+          activeTurn.stop();
+        }
+        result = await request;
         // 停止：保留已产出的部分，标「已停止」，不伪装成完整回答。
         if (result?.status === 'aborted') {
           const partial = String(result.answer ?? '').trim();
@@ -1031,7 +1043,12 @@
         await insertWhileStreaming(draft);
         return;
       }
-      if (busy || !listApi.canCompose(currentId())) return;
+      // 这一轮还在准备（刷新流 / 建入口）：先记下「要停」，等 ask 起来立刻中止。
+      if (busy) {
+        pendingAbort = true;
+        return;
+      }
+      if (!listApi.canCompose(currentId())) return;
       // 会话在发起时固定：流式跑着时切走会话，回答也要落在它自己的会话里。
       const sessionId = currentId();
       const raw = input.value;
@@ -1073,6 +1090,10 @@
       const sessionPoints = ctx.ui.sessionPoints;
       const sentText = sessionPoints ? sessionPoints.withPointers(text) : text;
       busy = true;
+      starting = true;
+      // 从按下的那一刻起就是「停止」，别让人在准备阶段点到一个灰掉的按钮。
+      sendButton.textContent = '停止';
+      sendButton.disabled = false;
       try {
         await store.append({ id: sessionId, role: 'user', text: sentText });
         // 输入框立刻清空：模型要跑一阵，不能让旧文字留在框里让人以为没发出去。
@@ -1094,6 +1115,7 @@
         input.focus();
       } finally {
         busy = false;
+        starting = false;
         // abort 插入：停止后把等着的这句接上去，用户不用再按一次发送。
         if (pendingResend) {
           const next = pendingResend;
@@ -1251,6 +1273,34 @@
       panelAt()?.close();
       void send();
     });
+
+    // 撤回：只退最后一条用户消息与它的回复；撤回的原文放回输入框，方便改了再发。
+    const rewindLast = async () => {
+      if (activeTurn) {
+        ctx.notify?.('等这一轮结束再撤回', 'warn');
+        return;
+      }
+      const bridge = window.companion?.chat;
+      if (typeof bridge?.rewind !== 'function') return;
+      const result = await bridge.rewind({
+        sessionId: currentId(),
+        projectId: ctx.ui.header.viewProjectId()
+      });
+      if (!result?.rewound) {
+        ctx.notify?.('没有可撤回的一轮', 'warn');
+        return;
+      }
+      await ctx.refreshThread();
+      if (!input.value.trim()) {
+        input.value = String(result.text ?? '');
+        resizeInput();
+      } else {
+        ctx.notify?.('已撤回；输入框里已有内容，没有覆盖');
+      }
+      input.focus();
+    };
+    // 对话流只负责画按钮，撤回动作由输入区持有（它知道当前会话与输入框）。
+    ctx.rewindLast = rewindLast;
 
     return {
       resize: resizeInput,

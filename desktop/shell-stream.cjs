@@ -70,6 +70,14 @@
       return node;
     };
 
+    // Markdown 渲染统一从这里走：模块没加载时退回纯文本，不丢内容。
+    const markdownApi = window.OwnerShellMarkdown ?? null;
+    const renderMarkdown = (node, text) => {
+      if (markdownApi?.renderInto) markdownApi.renderInto(node, text);
+      else node.textContent = String(text ?? '');
+      return node;
+    };
+
     const setCopyActive = (node) => {
       if (copyActive === node) return;
       copyActive?.removeAttribute('data-copy-active');
@@ -157,8 +165,21 @@
       copy.dataset.copyMessage = '1';
       copy.setAttribute('aria-label', '复制这条消息为 Markdown');
       who.append(copy);
+      // 撤回只给最后一条助手消息：一次只退一轮，避免把更早的对话误删。
+      if (message.role === 'agent' && index === messages.length - 1) {
+        const rewind = el('button', 'rewind-affordance', '撤回');
+        rewind.type = 'button';
+        rewind.dataset.rewind = '1';
+        rewind.setAttribute('aria-label', '撤回上一轮对话');
+        rewind.addEventListener('click', () => { void ctx.rewindLast?.(); });
+        who.append(rewind);
+      }
       item.append(who);
-      if (message.text) item.append(el('p', 'bubble', message.text));
+      if (message.text) {
+        const bubble = el('div', 'bubble');
+        renderMarkdown(bubble, message.text);
+        item.append(bubble);
+      }
       item.append(blocksView.renderReply(message));
       return item;
     };
@@ -240,7 +261,7 @@
       const who = el('div', 'who');
       who.append(el('span', 'who-name', 'Companion'), el('span', 'badge', '生成中'));
       item.append(who);
-      streamBubble = el('p', 'bubble', '思考中…');
+      streamBubble = el('div', 'bubble', '思考中…');
       item.append(streamBubble);
       streamThinking = el('details', 'stream-thinking');
       streamThinking.hidden = true;
@@ -262,10 +283,21 @@
       const chunk = String(text ?? '');
       if (!chunk) return;
       if (!streamNode) beginStream();
-      const pinned = pinnedToBottom();
       streamText += chunk;
-      streamBubble.textContent = streamText;
-      if (pinned) threadNode.scrollTop = threadNode.scrollHeight;
+      scheduleStreamRender();
+    };
+
+    /** 流式中每 100ms 重画一次 Markdown，避免每个 token 都重排。 */
+    let streamRenderTimer = null;
+    const scheduleStreamRender = () => {
+      if (streamRenderTimer) return;
+      streamRenderTimer = setTimeout(() => {
+        streamRenderTimer = null;
+        if (!streamBubble) return;
+        const pinned = pinnedToBottom();
+        renderMarkdown(streamBubble, streamText);
+        if (pinned) threadNode.scrollTop = threadNode.scrollHeight;
+      }, 100);
     };
 
     const appendThinking = (text) => {
@@ -289,6 +321,7 @@
 
     const endStream = () => {
       if (streamTimer) { clearInterval(streamTimer); streamTimer = null; }
+      if (streamRenderTimer) { clearTimeout(streamRenderTimer); streamRenderTimer = null; }
       streamNode?.remove();
       streamNode = null;
       streamBubble = null;
@@ -315,7 +348,8 @@
     /** steer 会打断当前回答：把已经流出来的旧文字清掉，新的从空开始。 */
     const resetStreamText = () => {
       streamText = '';
-      if (streamBubble) streamBubble.textContent = '';
+      if (streamRenderTimer) { clearTimeout(streamRenderTimer); streamRenderTimer = null; }
+      if (streamBubble) renderMarkdown(streamBubble, '');
     };
 
     /**
