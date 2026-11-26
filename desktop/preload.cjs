@@ -161,6 +161,10 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     set: (input) => invoke('companion:settings:set', input),
     addProject: () => invoke('companion:add-project')
   }),
+  // #126 分享到飞书：只发一条文本；webhook 配置在主进程读，值不回渲染层。
+  share: Object.freeze({
+    feishu: (input) => invoke('companion:share-feishu', input)
+  }),
   mobile: Object.freeze({
     info: () => invoke('companion:mobile-info'),
     refresh: () => invoke('companion:mobile-refresh')
