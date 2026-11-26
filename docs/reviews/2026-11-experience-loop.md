@@ -85,3 +85,5 @@ tests/locate-screen.test.mjs（部分可读）
 2. 单独开 `integration/experience-loop → main` 的 PR，并关闭 / 取代 #134。
 
 选择前先确认 #104、#98、#134 的合并顺序，避免把三批未合并的工作混成一个 PR。
+
+**2026-11-26 更新**：已按方案 1 fast-forward 到 `feat/card-shell`，PR #134（base 仍是 `feat/memory-library-inbox`）现在包含这批提交。下一步仍是等 #98 合并后把 #134 的 base 改回 `main`。
