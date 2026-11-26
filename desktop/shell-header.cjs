@@ -480,7 +480,12 @@
       }
       const result = await projectStore.list({});
       projects = (Array.isArray(result?.items) ? result.items : [])
-        .map((project) => ({ id: String(project?.id ?? ''), name: String(project?.name ?? '') }))
+        .map((project) => ({
+          id: String(project?.id ?? ''),
+          name: String(project?.name ?? ''),
+          // #124：关联项目的 prompt 段要写「项目名（来源 · 路径）」，路径随项目一起读。
+          root: String(project?.root ?? '')
+        }))
         .filter((project) => project.id);
     };
 

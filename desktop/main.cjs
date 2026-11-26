@@ -2998,11 +2998,14 @@ const registerIpc = () => {
     });
   });
 
-  // #107 项目胶囊的下拉项：只给壳需要的 id / 名字，不把项目整行递到渲染层。
+  // #107 项目胶囊的下拉项：只给壳需要的 id / 名字 / 路径，不把项目整行递到渲染层。
+  // #124 起多一个 root：关联项目的 prompt 段要写「项目名（来源 · 路径）」。
   ipcMain.handle('companion:card-projects', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return {
-      items: (store?.listProjects() ?? []).map((project) => ({ id: project.id, name: project.name }))
+      items: (store?.listProjects() ?? []).map((project) => ({
+        id: project.id, name: project.name, root: project.root ?? ''
+      }))
     };
   });
 
@@ -3021,6 +3024,32 @@ const registerIpc = () => {
   ipcMain.handle('companion:card-global-library', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     return globalLibraryFor({ limit: Number(input?.limit ?? 5) });
+  });
+
+  // #124 关联项目：只读一个项目的库视图摘要，给方法卡就地展开四类资料。
+  // 口径与项目库同一份（libraryForProject → project-library.mjs），这里只裁掉正文，
+  // 只留计数、条目种类与图谱 / 画像是否可用；分类与文案在渲染层（shell-at-project.cjs）。
+  ipcMain.handle('companion:card-project-library', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const projectId = String(input?.projectId ?? '');
+    const project = projectId ? store?.getProject(projectId) : null;
+    if (!project) throw new Error(`项目不存在：${projectId || '(空)'}`);
+    const library = await libraryForProject(project, { limit: 200, full: true });
+    return {
+      project: { id: project.id, name: project.name, root: project.root ?? '' },
+      counts: library?.counts ?? {},
+      groups: (library?.groups ?? []).map((group) => ({
+        key: group.key,
+        count: group.count,
+        kinds: (group.items ?? []).map((item) => item?.kind ?? '')
+      })),
+      assets: {
+        profile: { available: library?.assets?.profile?.available === true },
+        diagrams: (library?.assets?.diagrams ?? []).map((diagram) => ({
+          kind: diagram.kind, label: diagram.label, available: diagram.available === true
+        }))
+      }
+    };
   });
 
   ipcMain.handle('companion:chat-session-append', async (event, input) => {

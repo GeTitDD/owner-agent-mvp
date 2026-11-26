@@ -76,13 +76,17 @@
    *
    *   # 指令                      ← 指令原文（trim 后为空就不出现）
    *   # 上下文                    ← 项目 / 会话 / 时间（三行都空就不出现）
+   *   ## 关联项目                  ← #124 输入框上方胶囊对应的关联项（没有就不出现）
    *   ## 引用对话（原文）          ← 勾选的消息，逐条「标签 + 引用」，顺序按消息序列
    *   # 我需要你                  ← 收尾复述同一句指令（指令为空就不出现）
+   *
+   * 「关联项目」段由 shell-at-project.cjs 组装好传进来（同一份胶囊读模型），
+   * 这里只负责按位置插入，不自己再拼一遍。
    *
    * 「我需要你」只复述、不扩写：这一票只有一个指令输入，票面又要求填了指令后四段都在；
    * 复述同一句话既满足结构，也不替用户编造意图。引用一律原文，不改写、不摘要。
    */
-  const buildPrompt = ({ instruction, context, messages, selected } = {}) => {
+  const buildPrompt = ({ instruction, context, messages, selected, projectSection } = {}) => {
     const ask = str(instruction).trim();
     const rows = list(messages);
     const labels = referenceLabels(rows);
@@ -97,6 +101,9 @@
 
     const contextRows = contextLines(context);
     if (contextRows.length) sections.push(`# 上下文\n\n${contextRows.join('\n')}`);
+
+    const links = str(projectSection).trim();
+    if (links) sections.push(links);
 
     const quotes = picked.map((index) => (
       `**${labels[index]}**\n\n${blockquote(rows[index].text)}`
@@ -175,7 +182,9 @@
         instruction: field.value,
         context: contextOf(ctx, ctx.ui.header.currentSession()),
         messages,
-        selected: new Set(stream.selectedIndexes())
+        selected: new Set(stream.selectedIndexes()),
+        // #124：输入框上方的关联胶囊与「生成 prompt」共用同一份「## 关联项目」段。
+        projectSection: ctx.ui.atProject?.sectionText?.() ?? ''
       });
     };
 

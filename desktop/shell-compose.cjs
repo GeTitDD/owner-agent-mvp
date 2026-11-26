@@ -81,6 +81,8 @@
     const store = ctx.store;
     // #122：`@@` 面板的实例由装配层建，输入区只在运行期取（两块互相引用，不锁构造顺序）。
     const panelAt = () => ctx.ui.at ?? null;
+    // #124：输入框上方的关联胶囊由 shell-at-project.cjs 持有；发送时只读一次。
+    const projectLinks = () => ctx.ui.atProject ?? null;
     // #114：自有目录写入的判定与回执由 src/own-write.mjs 提供，经 own-write-host.mjs
     // 挂到窗口。模块脚本晚于经典脚本，所以不在加载时断言存在，而是在发送时读。
     const ownWrites = () => window.OwnerOwnWrite ?? null;
@@ -607,9 +609,13 @@
           : confirmCommand
             ? await window.OwnerConfirm.buildReply(confirmCommand)
             : { text: threadApi.placeholderText(raw), blocks: [] };
+      // #124：关联信息进入这次发送的 prompt 的「## 关联项目」段；没有关联就原样发送。
+      const text = projectLinks()?.withLinks?.(raw) ?? raw;
       busy = true;
       try {
-        await store.append({ id: currentId(), role: 'user', text: raw });
+        await store.append({ id: currentId(), role: 'user', text });
+        // 关联只服务这一次发送：正文已经落库，胶囊随即清空，避免下一条悄悄带上。
+        projectLinks()?.clear?.();
         await store.append({
           id: currentId(),
           role: 'assistant',

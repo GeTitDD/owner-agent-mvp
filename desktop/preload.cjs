@@ -32,7 +32,9 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     list: () => invoke('companion:card-projects')
   }),
   cardScope: Object.freeze({
-    globalLibrary: (input) => invoke('companion:card-global-library', input)
+    globalLibrary: (input) => invoke('companion:card-global-library', input),
+    // #124 关联项目：按项目读一份只读库摘要（四类资料计数），用于方法卡就地展开。
+    projectLibrary: (input) => invoke('companion:card-project-library', input)
   }),
   cardSessions: Object.freeze({
     list: (input) => invoke('companion:card-sessions', input),

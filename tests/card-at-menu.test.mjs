@@ -34,8 +34,8 @@ test('末尾连续两个 @ 触发，允许跟一点查询字', () => {
 
 test('方法列表的形状：key / title / desc，键唯一且有对应内容', () => {
   const methods = at.atMethods();
-  assert.equal(methods.length, 2);
-  assert.deepEqual(methods.map((method) => method.key), ['prompt', 'session']);
+  assert.equal(methods.length, 3);
+  assert.deepEqual(methods.map((method) => method.key), ['prompt', 'project', 'session']);
   for (const method of methods) {
     assert.equal(typeof method.key, 'string');
     assert.ok(method.key.length > 0);
@@ -56,7 +56,7 @@ test('atMethods 返回副本：调用方改返回值不会污染菜单数据', (
   const methods = at.atMethods();
   methods[0].title = '改坏了';
   methods.push({ key: 'extra', title: '多出来的', desc: '' });
-  assert.equal(at.atMethods().length, 2);
+  assert.equal(at.atMethods().length, 3);
   assert.equal(at.atMethods()[0].title, '生成 prompt');
 });
 

@@ -83,6 +83,13 @@
       <ol class="messages" id="messages"></ol>
     </main>
 
+    <!-- #124 关联项目：胶囊显示在输入框上方，可逐个移除；发送时进入 prompt 的
+         「## 关联项目」段。跨项目只读那一句写在胶囊旁边，不靠用户猜。 -->
+    <div class="link-bar" id="projectLinks" hidden aria-label="关联项目">
+      <div class="link-capsules" id="projectLinkList"></div>
+      <p class="link-hint" id="projectLinksHint"></p>
+    </div>
+
     <form class="composer" id="composer" autocomplete="off">
       <label class="sr-only" for="input">输入消息</label>
       <textarea id="input" rows="1" placeholder="说点什么。回车发送，Shift+回车换行"></textarea>
@@ -164,6 +171,8 @@
   <script src="./shell-at.cjs"></script>
   <!-- #123 「生成 prompt」方法：流内勾选、计数与四段组装；方法卡进入时才 mount。 -->
   <script src="./shell-at-prompt.cjs"></script>
+  <!-- #124 「关联项目」方法：项目 → 资料的层级与输入框上方的胶囊；发送时拼 prompt 段。 -->
+  <script src="./shell-at-project.cjs"></script>
   <script src="./shell-compose.cjs"></script>
   <script src="./shell-stream.cjs"></script>
   <script type="module" src="./card-scope-host.mjs"></script>

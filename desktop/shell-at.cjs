@@ -30,13 +30,18 @@
   /**
    * 方法列表是数据：菜单按这份数据逐行画，容器不写死任何分支。
    * 形状：{ key, title, desc }；key 同时是内容注册表 AT_CONTENT 的键。
-   * 这一轮只放两条（生成 prompt / 关联会话），其余方法随后续票接入。
+   * 现在有三条（生成 prompt / 关联项目 / 关联会话），分享随后续票接入。
    */
   const AT_METHODS = Object.freeze([
     Object.freeze({
       key: 'prompt',
       title: '生成 prompt',
       desc: '勾选对话内容 + 一句指令，生成一版可复制的 prompt'
+    }),
+    Object.freeze({
+      key: 'project',
+      title: '关联项目',
+      desc: '选别的项目与资料，发送时带进「## 关联项目」段'
     }),
     Object.freeze({
       key: 'session',
@@ -63,6 +68,18 @@
         const api = typeof globalThis === 'undefined' ? null : globalThis.OwnerShellAtPrompt;
         if (!api?.mount) {
           wrap.append(document.createTextNode('生成 prompt 模块还没加载好，稍等一下再试。'));
+          return null;
+        }
+        return api.mount(tools.ctx)(wrap, tools);
+      }
+    }),
+    project: Object.freeze({
+      lead: '选一个项目，再为它选资料；关联只读，发送时进入「## 关联项目」段。',
+      // #124：项目 → 资料的层级与输入框上方的胶囊由 shell-at-project.cjs 注册。
+      mount: (wrap, tools) => {
+        const api = typeof globalThis === 'undefined' ? null : globalThis.OwnerShellAtProject;
+        if (!api?.mount) {
+          wrap.append(document.createTextNode('关联项目模块还没加载好，稍等一下再试。'));
           return null;
         }
         return api.mount(tools.ctx)(wrap, tools);

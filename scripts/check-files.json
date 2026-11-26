@@ -232,5 +232,8 @@
   "tests/project-write.test.mjs",
   "scripts/e2e/desktop-project-write.mjs",
   "src/memory/sync-run.mjs",
-  "tests/sync-run.test.mjs"
+  "tests/sync-run.test.mjs",
+  "desktop/shell-at-project.cjs",
+  "tests/card-at-project.test.mjs",
+  "scripts/e2e/desktop-at-project.mjs"
 ]

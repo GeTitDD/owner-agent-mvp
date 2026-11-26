@@ -3,6 +3,7 @@
 // 分层（按职责拆开，行为零变化）：
 // - shell-header.cjs：顶栏——会话胶囊与列表、项目胶囊与切换确认、写范围状态位、全局只读区；
 // - shell-at.cjs：`@@` 方法菜单与方法卡容器——触发判定、方法列表数据、菜单 ↔ 方法卡迁移；
+// - shell-at-project.cjs：#124 关联项目——项目 → 资料的层级、胶囊与「## 关联项目」段；
 // - shell-compose.cjs：输入区——输入框与发送、`/` 技能面板、`@@` 面板开合、占位文案与锁定；
 // - shell-stream.cjs：对话流——消息渲染、块挂载、悬停复制、提问 / 确认卡动作、导出。
 // 规则模块仍是 shell-thread / shell-sessions / shell-projects / shell-skills / shell-blocks /
@@ -14,9 +15,11 @@
   const headerApi = window.OwnerShellHeader;
   const composeApi = window.OwnerShellCompose;
   const atApi = window.OwnerShellAt;
+  const atProjectApi = window.OwnerShellAtProject;
   const streamApi = window.OwnerShellStream;
   if (!headerApi) throw new Error('shell-header.cjs 未加载');
   if (!atApi) throw new Error('shell-at.cjs 未加载');
+  if (!atProjectApi) throw new Error('shell-at-project.cjs 未加载');
   if (!composeApi) throw new Error('shell-compose.cjs 未加载');
   if (!streamApi) throw new Error('shell-stream.cjs 未加载');
   if (!window.OwnerShellThread) throw new Error('shell-thread.cjs 未加载');
@@ -69,6 +72,8 @@
   // #122：`@@` 面板要在输入区之后建（它打开时会收起 `/` 面板），
   // 输入区在运行期才取 ui.at，所以两块不锁构造顺序。
   ui.at = atApi.create(ctx);
+  // #124：关联胶囊栏独立于 `@@` 面板：面板收起后胶囊仍留在输入框上方。
+  ui.atProject = atProjectApi.create(ctx);
   ui.stream = streamApi.create(ctx);
 
   /** 发完一条消息之后要刷的几件事：列表（标题/轮数/排序）、当前流、顶栏与输入框。 */
