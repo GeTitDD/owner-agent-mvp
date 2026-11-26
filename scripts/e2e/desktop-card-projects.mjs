@@ -1,13 +1,13 @@
-// #107 验收：项目与全局模式。
+// #107 验收：项目与全局模式；#139 起不选项目时的主内容是定位屏（不再是聚合数字）。
 //
 // 面板层没有单测先例，这里用离屏 Electron + CDP 走真实路径；纯函数与存储层在
-// tests/card-projects.test.mjs。全程用本 worktree 专属临时 userData + 临时 owner / 知识库，
-// 不碰真实 %APPDATA%。
-//   第一次：空态（全局、只读聚合）→ 选项目（无会话时直接开一条绑定它的会话）
+// tests/card-projects.test.mjs 与 tests/locate-screen.test.mjs。全程用本 worktree 专属临时
+// userData + 临时 owner / 知识库，不碰真实 %APPDATA%。
+//   第一次：空态（定位屏，只读）→ 选项目（无会话时直接开一条绑定它的会话）
 //           → 切项目出确认四条 → 取消不改任何状态 → 在本会话切换（跨项目标 + 说明）
-//           → 切回全局（写入被拦）→ 新开会话并切换（无跨项目标）；
+//           → 切回全局（定位屏回来、写入被拦）→ 新开会话并切换（无跨项目标）；
 //   第二次（同一 userData / 同一库）：当前会话的范围还在；切回跨项目会话仍带标。
-// 截图：全局只读、确认弹窗、跨项目标记、新开会话。
+// 截图：定位屏、确认弹窗、跨项目标记、新开会话。
 import fs from 'node:fs';
 import path from 'node:path';
 import { OwnerStore } from '../../src/owner-store.mjs';
@@ -22,7 +22,7 @@ const shotsDir = process.env.SHOTS_DIR
 const tempBase = process.env.TMP_107 ?? path.resolve(shotsDir, '..', 'tmp-107');
 const { check, failures } = createChecker('[CARD-PROJECTS-#107]');
 
-/** 界面上所有可断言的形状：顶栏、全局区、确认弹窗、对话流、会话列表。 */
+/** 界面上所有可断言的形状：顶栏、定位屏、确认弹窗、对话流、会话列表。 */
 const readUi = (panel) => panel.evaluate(`(() => {
   const text = (id) => document.getElementById(id)?.textContent?.trim() ?? '';
   return {
@@ -41,17 +41,22 @@ const readUi = (panel) => panel.evaluate(`(() => {
       label: row.querySelector('.project-title')?.textContent?.trim() ?? '',
       current: row.dataset.current === 'true'
     })),
-    globalHidden: document.getElementById('globalView')?.hidden !== false,
-    globalBadge: document.querySelector('#globalView .global-badge')?.textContent?.trim() ?? '',
-    globalTitle: text('globalTitle'),
-    globalHint: text('globalHint'),
-    globalCounts: text('globalCounts'),
-    globalStatus: text('globalStatus'),
-    globalProjects: [...document.querySelectorAll('#globalProjects .global-project')]
-      .map((row) => row.dataset.project),
-    globalEntries: [...document.querySelectorAll('#globalEntries .global-entry')]
-      .map((row) => row.querySelector('.global-entry-title')?.textContent?.trim() ?? ''),
-    globalEmpty: document.getElementById('globalEmpty')?.hidden === false ? text('globalEmpty') : '',
+    locateHidden: document.getElementById('locateView')?.hidden !== false,
+    locateBadge: document.querySelector('#locateView .locate-badge')?.textContent?.trim() ?? '',
+    locateTitle: text('locateTitle'),
+    locateHint: text('locateHint'),
+    locateStatus: text('locateStatus'),
+    locateRows: [...document.querySelectorAll('#locateList .locate-row')].map((row) => ({
+      project: row.dataset.project,
+      tier: row.dataset.tier,
+      name: row.querySelector('.locate-row-name')?.textContent?.trim() ?? '',
+      pending: row.querySelector('.locate-pending')?.textContent?.trim() ?? '',
+      unread: row.querySelector('.locate-unread')?.textContent?.trim() ?? '',
+      unreadKnown: row.querySelector('.locate-unread')?.dataset.known ?? '',
+      meta: row.querySelector('.locate-meta')?.textContent?.trim() ?? '',
+      decision: row.querySelector('.locate-decision')?.textContent?.trim() ?? ''
+    })),
+    locateEmpty: document.getElementById('locateEmpty')?.hidden === false ? text('locateEmpty') : '',
     confirmHidden: document.getElementById('projectConfirm')?.hidden !== false,
     confirmTarget: text('confirmTarget'),
     confirmKeys: [...document.querySelectorAll('#confirmItems .confirm-item')]
@@ -138,7 +143,7 @@ const seedData = ({ root, ownerDb, knowledgeDb }) => {
   }
   const personal = new PersonalKnowledgeStore(knowledgeDb);
   try {
-    // 同领域知识：两个项目的库视图都会读到它，全局聚合必须只算一次。
+    // 同领域知识：两个项目的库视图都会读到它（项目胶囊 / 关联项目仍用这份口径）。
     personal.create({
       title: 'Retry loop bound',
       content: 'Use i < attempts so the final retry executes.',
@@ -181,28 +186,36 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     check('卡片壳在项目模式下仍能启动',
       await waitFor(panel, "document.querySelector('#projectToggle')", 30000));
 
-    // ① 空态 = 全局：顶栏明说全局，写范围只读，中部是跨项目聚合。
-    await waitFor(panel, "document.getElementById('globalCounts').textContent.includes('条目')", 30000);
+    // ① 空态 = 全局：顶栏明说全局，写范围只读，中部是定位屏（不是聚合数字）。
+    await waitFor(panel, "document.querySelectorAll('#locateList .locate-row').length === 2", 30000);
     let ui = await readUi(panel);
     check('没有会话时默认是全局', ui.projectLabel === '全局' && ui.projectScope === 'global',
       `${ui.projectLabel}/${ui.projectScope}`);
     check('全局模式明确标「只读」', ui.writeLabel === '只读·全局'
       && ui.writeScope === 'global'
       && /只读/u.test(ui.writeHint), `${ui.writeLabel} | ${ui.writeHint}`);
-    check('全局区常驻「只读」徽章并写明聚合口径',
-      ui.globalHidden === false && ui.globalBadge === '只读' && /所有项目/u.test(ui.globalHint),
-      `${ui.globalBadge} | ${ui.globalHint}`);
-    // 两项目各 2 条，共享知识只算一次 → 3 条。
-    check('全局计数按去重口径：项目 2 / 条目 3 / 已验证 1 / 观察中 2 / 共用 1',
-      ui.globalCounts === '项目 2 · 条目 3 · 已验证 1 · 观察中 2 · 跨项目共用 1',
-      ui.globalCounts);
-    check('全局区列出两个项目',
-      ui.globalProjects.slice().sort().join(',') === 'alpha,beta', ui.globalProjects.join(','));
-    check('全局区列出合并后的条目（共享条目只出现一次）',
-      ui.globalEntries.length === 3
-      && ui.globalEntries.filter((title) => title === 'Retry loop bound').length === 1,
-      ui.globalEntries.join(' | '));
-    await capture(panel, path.join(shotsDir, 'projects-global.png'));
+    check('不选项目时是定位屏，不再显示聚合数字',
+      ui.locateHidden === false && ui.locateBadge === '只读' && /待确认候选/u.test(ui.locateHint),
+      `${ui.locateBadge} | ${ui.locateHint}`);
+    check('定位屏为每个项目给一行',
+      ui.locateRows.map((row) => row.project).sort().join(',') === 'alpha,beta',
+      ui.locateRows.map((row) => row.project).join(','));
+    check('每行显示待确认 / 三类未读 / 上次看过 / 最近决策',
+      ui.locateRows.every((row) => row.name
+        && row.pending.length > 0
+        && /未读/u.test(row.unread)
+        && row.meta.length > 0
+        && row.decision.length > 0),
+      ui.locateRows.map((row) => `${row.name}|${row.pending}|${row.unread}|${row.meta}|${row.decision}`).join(' / '));
+    // 两个项目都没有仓库 / 水位：未读必须标「未知」，不能被压成 0；没有待确认就排在陈旧档。
+    check('读不到变化的项目标「未知」，不写成 0',
+      ui.locateRows.every((row) => row.unreadKnown === 'false' && /未知/u.test(row.unread)
+        && !/\b0 提交/u.test(row.unread)),
+      ui.locateRows.map((row) => row.unread).join(' | '));
+    check('没有待确认也没有水位的项目排在陈旧档，列表不折叠',
+      ui.locateRows.length === 2 && ui.locateRows.every((row) => row.tier === 'stale'),
+      ui.locateRows.map((row) => row.tier).join(','));
+    await capture(panel, path.join(shotsDir, 'projects-locate.png'));
 
     // 项目胶囊：全局第一项，当前项是全局。
     await setProjectPopover(panel, true);
@@ -215,9 +228,9 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
 
     // ② 没有会话时选项目：直接开一条绑定它的会话（没有历史需要交代）。
     check('无会话时选项目能开新会话', await chooseProject(panel, 'alpha'));
-    check('新会话与项目一致：全局区收起、写范围回到自有',
+    check('新会话与项目一致：定位屏收起、写范围回到自有',
       await waitFor(panel, "document.getElementById('projectLabel').textContent.trim() === 'Alpha Repo'"
-        + " && document.getElementById('globalView').hidden === true", 10000));
+        + " && document.getElementById('locateView').hidden === true", 10000));
     ui = await readUi(panel);
     check('绑项目的新会话不打跨项目标', ui.crossHidden === true, ui.crossText);
     check('绑项目后写范围不再是「只读·全局」', ui.writeLabel === '写·自有' && ui.writeScope === 'own',
@@ -270,13 +283,13 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
       ui.messages.join(' | '));
     check('说明带结构化归属块（历史 / 读取 / 写入 / 记号）',
       ui.blockRows >= 4, String(ui.blockRows));
-    check('切到项目后全局区收起', ui.globalHidden === true);
+    check('切到项目后定位屏收起', ui.locateHidden === true);
     seen.crossSessionId = await panel.evaluate(
       "document.querySelector('#sessionList .session-row')?.dataset.id ?? ''"
     );
     await capture(panel, path.join(shotsDir, 'projects-cross.png'));
 
-    // ⑥ 切回全局：仍打标（绑定还在 Alpha），写入被拦，全局区重新出现。
+    // ⑥ 切回全局：仍打标（绑定还在 Alpha），写入被拦，定位屏重新出现。
     ui = await openConfirmFor(panel, '');
     check('切回全局也要确认', Boolean(ui) && ui.confirmKeys.length === 4
       && /全局/u.test(ui.confirmTarget), ui?.confirmTarget);
@@ -286,7 +299,7 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     ui = await readUi(panel);
     check('全局模式仍标「只读·全局」', ui.writeLabel === '只读·全局' && ui.writeScope === 'global');
     check('全局模式下仍保留跨项目标（绑定 Alpha ≠ 全局）', ui.crossHidden === false, ui.crossText);
-    check('全局只读聚合重新出现', ui.globalHidden === false && ui.globalBadge === '只读');
+    check('全局模式下定位屏重新出现', ui.locateHidden === false && ui.locateBadge === '只读');
     const gate = await panel.evaluate(`(async () => {
       const api = window.OwnerCardScope;
       if (!api) return null;
@@ -305,7 +318,7 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     check('选了项目后回到 ADR-0012 的分级（未授权→确认）', gate?.scoped?.outcome === 'confirm',
       gate?.scoped?.reason);
     check('写范围文案与判定同源', gate?.scope?.label === '只读·全局', gate?.scope?.label);
-    await capture(panel, path.join(shotsDir, 'projects-global-session.png'));
+    await capture(panel, path.join(shotsDir, 'projects-locate-session.png'));
 
     // ⑦ 新开会话并切换：会话与项目一致，没有跨项目标。
     ui = await openConfirmFor(panel, 'beta');
@@ -362,7 +375,7 @@ const secondRun = async ({ userData, ownerDb, knowledgeDb }, seen) => {
       await waitFor(panel, "document.getElementById('projectLabel').textContent.trim() === '全局'", 10000));
     ui = await readUi(panel);
     check('跨项目标跨重启保留', ui.crossHidden === false && ui.crossText === '跨项目', ui.crossText);
-    check('全局只读区也跟着会话回来', ui.globalHidden === false && ui.globalBadge === '只读');
+    check('定位屏也跟着会话回来', ui.locateHidden === false && ui.locateBadge === '只读');
     check('切换说明跨重启保留',
       ui.messages.some((text) => /历史属于「Alpha Repo」/u.test(text)), ui.messages.join(' | '));
     check('两次切换各留一条说明（历史归属从未被改写）',

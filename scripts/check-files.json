@@ -264,5 +264,7 @@
   "src/memory/decision-scan-store.mjs",
   "tests/decision-scan.test.mjs",
   "src/knowledge/lessons-view.mjs",
-  "tests/workbench-lessons.test.mjs"
+  "tests/workbench-lessons.test.mjs",
+  "src/memory/locate-screen.mjs",
+  "tests/locate-screen.test.mjs"
 ]

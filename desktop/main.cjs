@@ -116,8 +116,8 @@ let chatService = null;
 let modelCatalogModule = null;
 // #89：项目库视图与快照存储。视图复用 src/project-library.mjs，快照落 owner 库的同一连接。
 let projectLibraryModule = null;
-// #107：全局模式的跨项目聚合（复用库视图口径，只读）。
-let globalLibraryModule = null;
+// #139：定位屏的计数 / 归因 / 排序（纯函数，只在进入定位屏或点「刷新」时按需加载）。
+let locateScreenModule = null;
 let snapshotModule = null;
 let snapshotStore = null;
 // #90：把已发布的快照导出到 <userData>/exports/<projectId>/vN/（只读快照，不重新聚合）。
@@ -1554,10 +1554,9 @@ const knowledgeDetail = ({ id } = {}) => {
   const loadProjectLibrary = async () =>
     (projectLibraryModule ??= await importEsm('../src/project-library.mjs'));
 
-  // #107 全局模式的跨项目聚合：口径就是 projectLibraryView（每个项目先算一份库视图），
-  // 聚合只做去重与分节，所以按需加载，不在启动时增加加载项。
-  const loadGlobalLibrary = async () =>
-    (globalLibraryModule ??= await importEsm('../src/global-library.mjs'));
+  // #139 定位屏的纯函数（计数 / 归因 / 排序）：按需加载，不在启动时增加加载项。
+  const loadLocateScreen = async () =>
+    (locateScreenModule ??= await importEsm('../src/memory/locate-screen.mjs'));
 
   // #92：版本 diff 是纯函数；按需加载，和库视图一样不在启动时增加加载项。
   const loadVersionDiff = async () =>
@@ -1698,22 +1697,90 @@ const knowledgeDetail = ({ id } = {}) => {
   };
 
   /**
-   * #107 全局模式：跨项目只读聚合。
-   * 先对每个已登记项目算一份与项目库完全相同的视图（libraryForProject），再交给
-   * src/global-library.mjs 去重、分节、按时间排序；不另写一套取数口径。
-   * 只在进入全局模式或点「刷新」时调用，不参与轮询。
+   * #139 定位屏：不选项目时的项目行。只读取数，不推进任何水位、不触发扫描。
+   *
+   * - 待确认：知识候选（pending proposals）按 payload 项目或来源经验归因；决策候选读
+   *   #135 的 pendingSummary。动作级确认不在这两处，不会进排序。
+   * - 未读：previewSinceLastSeen 用旧水位算差异，只读不写；读不到 git / 观察员事件的项目
+   *   那几类计数是 null，界面显示「未知」。
+   * - 一个项目读不到不能拖垮整屏：逐项兜底，项目行照常保留。
    */
-  const globalLibraryFor = async ({ limit = 5 } = {}) => {
-    if (!store) return null;
-    const cap = Number.isSafeInteger(Number(limit)) && Number(limit) > 0 ? Number(limit) : 5;
-    const libraries = [];
-    for (const project of store.listProjects()) {
-      // full: true 保留 groups（全量条目）：聚合要去重分节，读的是条目而不是截断后的 sections。
-      const library = await libraryForProject(project, { limit: cap, full: true });
-      if (library) libraries.push({ project: { id: project.id, name: project.name }, library });
+  const locateAttentionFor = async () => {
+    const projects = (store?.listProjects() ?? [])
+      .map((project) => ({
+        id: String(project.id ?? ''),
+        name: String(project.name ?? ''),
+        root: String(project.root ?? '')
+      }))
+      .filter((project) => project.id);
+    const locate = await loadLocateScreen();
+    const sinceModule = await loadSinceLastSeen();
+    const probe = await loadObserverProbe();
+
+    const readOr = (label, action, fallback) => {
+      try { return action(); } catch (error) {
+        logError(label, error);
+        return fallback;
+      }
+    };
+    // 待确认归因：只读两张表，不跑扫描。
+    const proposals = readOr('locate.proposals', () => personalStore?.proposals('pending') ?? [], []);
+    const lessons = readOr('locate.lessons', () => personalStore?.listLessons({ limit: 1000 }) ?? [], []);
+    const decisions = readOr('locate.decisions',
+      () => personalStore?.listDecisions({ includeEnded: false, limit: 500 }) ?? [], []);
+    let decisionSummary = { total: 0, projects: [] };
+    try {
+      decisionScanModule = decisionScanModule ?? await importEsm('../src/memory/decision-scan.mjs');
+      const scanStore = await getDecisionScanStore();
+      decisionSummary = decisionScanModule.pendingSummary(scanStore.read(), projects);
+    } catch (error) {
+      // 待办文件读不出时只让「决策候选」这一项缺失，不让整屏空掉。
+      logError('locate.decision-pending', error);
     }
-    const mod = await loadGlobalLibrary();
-    return mod.globalLibraryView({ libraries, limit: Math.max(cap, 8) });
+    const pending = locate.pendingCountsOf({ proposals, lessons, decisionSummary }).byProject;
+    const latestDecisions = locate.latestDecisionsOf({ decisions, projects });
+
+    const attention = {};
+    for (const project of projects) {
+      let commits = null;
+      let dirty = null;
+      if (project.root) {
+        try {
+          commits = probe.readCommitList({ root: project.root, limit: 50 });
+          const working = probe.readWorkingTreeChanges({ root: project.root });
+          dirty = working === null ? null : working.filter((item) => !isNoisePath(item.path));
+        } catch (error) {
+          // 不是仓库 / git 读失败：提交与改动都按「未知」，不压成 0。
+          logError('locate.project', error);
+          commits = null;
+          dirty = null;
+        }
+      }
+      let unread = locate.unreadCountsOf({});
+      let lastReadAt = '';
+      if (memoryWatermarks) {
+        try {
+          const preview = sinceModule.previewSinceLastSeen({
+            projectId: project.id,
+            store: memoryWatermarks,
+            commits,
+            dirty,
+            events: observerEventsFor(project.id)
+          });
+          unread = locate.unreadCountsOf(preview.view);
+          lastReadAt = preview.lastReadAt;
+        } catch (error) {
+          logError('locate.preview', error);
+        }
+      }
+      attention[project.id] = {
+        unread,
+        lastReadAt,
+        latestDecision: latestDecisions[project.id] ?? null
+      };
+    }
+
+    return locate.locateScreenView({ projects, pending, attention });
   };
 
 
@@ -3393,11 +3460,11 @@ const registerIpc = () => {
     );
   });
 
-  // #107 全局模式的只读聚合：所有项目的库视图 → 去重分节后的一份视图。
-  // 口径复用 project-library.mjs（与进项目看到的同一套），这里只负责跨项目合并。
-  ipcMain.handle('companion:card-global-library', async (event, input) => {
+  // #139 定位屏（只读）：不选项目时的项目行。
+  // 读水位、git 与观察员事件，但不推进水位、不扫描、不写任何项目；切换项目走原有的会话视图通道。
+  ipcMain.handle('companion:locate-attention', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    return globalLibraryFor({ limit: Number(input?.limit ?? 5) });
+    return locateAttentionFor();
   });
 
   // #124 关联项目：只读一个项目的库视图摘要，给方法卡就地展开四类资料。

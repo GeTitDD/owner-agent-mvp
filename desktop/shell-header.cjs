@@ -1,8 +1,8 @@
-// #121 卡片壳的顶栏：会话胶囊与列表、项目胶囊与切换确认、写范围状态位、全局只读区。
+// #121 卡片壳的顶栏：会话胶囊与列表、项目胶囊与切换确认、写范围状态位、定位屏。
 //
 // 边界：这一块只画顶栏与挂在顶栏胶囊上的浮层 / 确认弹窗；对话流在 shell-stream.cjs，
 // 输入区在 shell-compose.cjs。跨块刷新通过 ctx.ui 调它们的 render / sync，不在这里重写。
-// 会话、项目、全局聚合仍全部走主进程那几张表；本文件不自己存一份。
+// 会话、项目、定位屏数据仍全部走主进程那几张表；本文件不自己存一份。
 // 双份导出：浏览器当普通脚本加载（挂到 window.OwnerShellHeader），Node 测试用 require 读纯函数。
 (function attach(root, factory) {
   const api = factory();
@@ -26,9 +26,10 @@
     const listApi = ctx.listApi;
     const projectsApi = ctx.projectsApi;
     const store = ctx.store;
-    // #107：项目列表与全局聚合是两个只读通道；拿不到就当没有登记项目（顶栏只剩「全局」）。
+    // #107：项目列表是只读通道；拿不到就当没有登记项目（顶栏只剩「全局」）。
     const projectStore = window.companion?.cardProjects ?? null;
-    const scopeStore = window.companion?.cardScope ?? null;
+    // #139：定位屏只读取数；切换项目仍走会话的 view 通道，不经过这里。
+    const locateStore = window.companion?.locate ?? null;
     // 写范围判定来自 card-scope-host.mjs（模块脚本晚于本脚本），挂载前用静态兜底文案。
     let scopeApi = window.OwnerCardScope ?? null;
 
@@ -49,15 +50,13 @@
     const projectList = $('projectList');
     const projectHint = $('projectHint');
     const writeScopeNode = $('writeScope');
-    const globalView = $('globalView');
-    const globalTitle = $('globalTitle');
-    const globalHint = $('globalHint');
-    const globalCounts = $('globalCounts');
-    const globalStatus = $('globalStatus');
-    const globalProjectsNode = $('globalProjects');
-    const globalEntriesNode = $('globalEntries');
-    const globalEmpty = $('globalEmpty');
-    const globalRefresh = $('globalRefresh');
+    const locateView = $('locateView');
+    const locateTitle = $('locateTitle');
+    const locateHint = $('locateHint');
+    const locateStatus = $('locateStatus');
+    const locateList = $('locateList');
+    const locateEmpty = $('locateEmpty');
+    const locateRefresh = $('locateRefresh');
     const confirmBackdrop = $('projectConfirm');
     const confirmTarget = $('confirmTarget');
     const confirmItems = $('confirmItems');
@@ -83,9 +82,9 @@
     // #107：正在看的项目（空串 = 全局）。它跟着当前会话的 view_project_id 走，
     // 与 session.projectId（历史归属）分开；两者不一致就是跨项目会话。
     let viewProjectId = '';
-    // 全局聚合：进入全局模式时读一次，点「刷新」再读；不参与轮询。
-    let globalData = null;
-    let globalBusy = false;
+    // #139 定位屏：进入全局（不选项目）时读一次，点「刷新」再读；不参与轮询，也不推进水位。
+    let locateData = null;
+    let locateBusy = false;
     // 切项目确认弹窗：null = 关着；'' 是合法目标（切回全局），所以不能用假值判断。
     let pendingTarget = null;
     // #131 同步状态：null = 还没读到（按「从未成功同步」显示）；busy 只挡重复点击。
@@ -251,102 +250,106 @@
       }
     };
 
-    const renderGlobalProject = (project) => {
-      const counts = project.counts ?? {};
-      const row = el('li', 'global-project');
-      row.dataset.project = project.id;
-      row.append(
-        el('span', 'global-project-name', project.name),
-        el('span', 'global-project-counts',
-          `条目 ${Number(counts.total) || 0} · 已验证 ${Number(counts.verified) || 0} · 观察中 ${Number(counts.observing) || 0}`)
-      );
-      return row;
-    };
+    /**
+     * 定位屏的一行：项目名、待确认、三类未读、上次看过、最近决策。
+     * 排序、档位与文案全部来自 src/memory/locate-screen.mjs，这里只把字段写成 DOM。
+     * 读不到的未读带 `data-known="false"`：样式上按「未知」处理，不混成 0。
+     */
+    const renderLocateRow = (row) => {
+      const item = el('li', 'locate-row');
+      item.dataset.project = row.projectId;
+      item.dataset.tier = row.tier;
 
-    const renderGlobalEntry = (entry) => {
-      const row = el('li', 'global-entry');
-      row.dataset.section = entry.section ?? '';
-      row.dataset.kind = entry.kind ?? '';
-      row.append(
-        el('span', 'global-entry-title', entry.title ?? '未命名条目'),
-        el('span', 'global-entry-meta',
-          [entry.badge, entry.projectLabel].filter(Boolean).join(' · '))
-      );
-      return row;
+      const head = el('div', 'locate-row-head');
+      const name = el('button', 'locate-row-name', row.name);
+      name.type = 'button';
+      name.dataset.project = row.projectId;
+      name.title = `切到「${row.name}」`;
+      head.append(name);
+      if (row.tierLabel) {
+        const tag = el('span', 'locate-tier', row.tierLabel);
+        tag.dataset.tier = row.tier;
+        head.append(tag);
+      }
+
+      const counts = el('p', 'locate-counts');
+      const pending = el('span', 'locate-pending', row.pendingLabel);
+      pending.dataset.known = row.pending.total > 0 ? 'true' : 'false';
+      const unread = el('span', 'locate-unread', row.unreadLabel);
+      unread.dataset.known = row.unread.known ? 'true' : 'false';
+      unread.title = row.unread.known ? '' : (row.unread.unknownText ?? '');
+      counts.append(pending, unread);
+
+      const meta = el('p', 'locate-meta', row.lastReadLabel);
+      const decision = el('p', 'locate-decision', row.decisionLabel);
+      item.append(head, counts, meta, decision);
+      return item;
     };
 
     /**
-     * 全局聚合区：只在没有选项目时出现，并且永远带「只读」。
-     * 数据由主进程按项目库同一口径算好（src/global-library.mjs），这里不自己拼计数。
+     * 定位屏：只在没有选项目时出现。它替换了原来的全局聚合数字（ADR-0014），
+     * 数据由主进程算好（src/memory/locate-screen.mjs），这里不自己拼计数、不排序。
      */
-    const renderGlobal = () => {
+    const renderLocate = () => {
       const global = !viewProjectId;
-      globalView.hidden = !global;
+      locateView.hidden = !global;
       if (!global) return;
-      globalTitle.textContent = globalData?.title ?? '全局 · 跨项目记忆';
-      globalHint.textContent = globalData?.hint
-        ?? '读所有项目的记忆（跨项目聚合，只读），不写入任何项目。';
-      globalStatus.textContent = globalBusy
-        ? '正在读取跨项目聚合…'
-        : (globalData ? '' : '还没有读到聚合数据，点「刷新」重试。');
-      if (!globalData) {
-        globalCounts.textContent = '';
-        globalProjectsNode.replaceChildren();
-        globalEntriesNode.replaceChildren();
-        globalEmpty.hidden = true;
+      locateTitle.textContent = locateData?.title ?? '先看哪个';
+      locateHint.textContent = locateData?.hint
+        ?? '排序：待确认候选 > 有未读变化 > 超过 7 天未看 > 其余。切换项目不会清零未读。';
+      locateStatus.textContent = locateBusy
+        ? '正在读取各项目的关注顺序…'
+        : (locateData ? '' : '还没有读到定位屏数据，点「刷新」重试。');
+      if (!locateData) {
+        locateList.replaceChildren();
+        locateEmpty.hidden = true;
         return;
       }
-      const counts = globalData.counts ?? {};
-      globalCounts.textContent = [
-        `项目 ${Number(counts.projects) || 0}`,
-        `条目 ${Number(counts.total) || 0}`,
-        `已验证 ${Number(counts.verified) || 0}`,
-        `观察中 ${Number(counts.observing) || 0}`,
-        Number(counts.shared) > 0 ? `跨项目共用 ${counts.shared}` : ''
-      ].filter(Boolean).join(' · ');
-      globalProjectsNode.replaceChildren(...(globalData.projects ?? []).map(renderGlobalProject));
-      globalEntriesNode.replaceChildren(...(globalData.entries ?? []).map(renderGlobalEntry));
-      const empty = globalData.empty;
-      globalEmpty.hidden = !empty;
-      globalEmpty.textContent = empty ? `${empty.title}：${empty.detail}` : '';
+      locateList.replaceChildren(...(locateData.projects ?? []).map(renderLocateRow));
+      const empty = locateData.empty;
+      locateEmpty.hidden = !empty;
+      locateEmpty.textContent = empty ? `${empty.title}：${empty.detail}` : '';
     };
 
-    /** 读一次跨项目聚合。只在进入全局模式或点「刷新」时调用，不轮询。 */
-    const loadGlobal = async () => {
-      if (globalBusy) return;
-      if (!scopeStore?.globalLibrary) {
-        globalStatus.textContent = '全局聚合不可用：这个窗口没有拿到主进程接口。';
+    /**
+     * 读一次定位屏。只在进入全局模式或点「刷新」时调用，不轮询。
+     * 这条通道是只读的：不推进水位、不扫描，所以在这里来回切换项目不会清零任何未读。
+     */
+    const loadLocate = async () => {
+      if (locateBusy) return;
+      if (!locateStore?.attention) {
+        locateStatus.textContent = '定位屏不可用：这个窗口没有拿到主进程接口。';
         return;
       }
-      globalBusy = true;
-      renderGlobal();
+      locateBusy = true;
+      renderLocate();
       try {
-        globalData = await scopeStore.globalLibrary({ limit: 6 }) ?? null;
+        locateData = await locateStore.attention() ?? null;
       } catch (error) {
-        setError(`读取全局聚合失败：${error?.message ?? error}`);
+        setError(`读取定位屏失败：${error?.message ?? error}`);
       } finally {
-        globalBusy = false;
+        locateBusy = false;
       }
-      renderGlobal();
+      renderLocate();
     };
 
-    /** 顶栏与全局区一起重画：凡是改「正在看的项目」的地方都只调这一个。 */
+    /** 顶栏与定位屏一起重画：凡是改「正在看的项目」的地方都只调这一个。 */
     const renderScope = () => {
       renderProject();
       renderCapsule();
       renderWriteScope();
-      renderGlobal();
+      renderLocate();
       ctx.ui.compose.sync();
     };
 
-    /** 范围变了：全局要读聚合，项目下直接收起全局区。 */
+    /** 范围变了：回到全局要读定位屏，项目下直接收起定位屏。 */
     const applyScopeChange = () => {
       applySessionScope();
       renderScope();
       if (!viewProjectId) {
-        // 全局区在流的最上面：进全局先把它露出来，而不是停在最后一条消息上。
+        // 定位屏在流的最上面：进全局先把它露出来，而不是停在最后一条消息上。
         ctx.ui.stream.resetScroll();
-        void loadGlobal();
+        void loadLocate();
       }
     };
 
@@ -715,6 +718,14 @@
       void chooseScope(button.dataset.project ?? '');
     });
 
+    // 定位屏的一行就是切换入口：走与项目胶囊同一个确认流程，不清零未读（ADR-0014）。
+    // 「标记已读」属于 #140，这里不做行内动作。
+    locateList.addEventListener('click', (event) => {
+      const button = event.target.closest?.('button[data-project]');
+      if (!button) return;
+      void chooseScope(button.dataset.project ?? '');
+    });
+
     confirmInSession.addEventListener('click', () => void runSwitch(projectsApi.EXITS.inSession));
     confirmNewSession.addEventListener('click', () => void runSwitch(projectsApi.EXITS.newSession));
     confirmCancel.addEventListener('click', closeConfirm);
@@ -723,9 +734,9 @@
       if (event.target === confirmBackdrop) closeConfirm();
     });
 
-    globalRefresh.addEventListener('click', () => {
-      globalData = null;
-      void loadGlobal();
+    locateRefresh.addEventListener('click', () => {
+      locateData = null;
+      void loadLocate();
     });
 
     // 判定模块晚于本脚本：挂载后补画写范围这一格（与旧面板读 write-gate 同一套时序，钩子仍叫 card-scope）。
@@ -810,7 +821,7 @@
       loadProjects,
       loadSessions,
       selectSession,
-      loadGlobal,
+      loadLocate,
       loadSyncStatus,
       attemptSync,
       syncStatus: () => syncStatus,
