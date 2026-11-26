@@ -257,5 +257,8 @@
   "desktop/shell-markdown.cjs",
   "tests/markdown.test.mjs",
   "src/knowledge-loop/distill-extractor.mjs",
-  "tests/distill-extractor.test.mjs"
+  "tests/distill-extractor.test.mjs",
+  "src/memory/decision-scan.mjs",
+  "src/memory/decision-scan-store.mjs",
+  "tests/decision-scan.test.mjs"
 ]

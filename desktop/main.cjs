@@ -103,6 +103,9 @@ let sessionPointerIndexModule = null;
 // #87 决策确认：候选确认入库与状态流转；同样按需加载。
 let decisionConfirmModule = null;
 let decisionRetrievalModule = null;
+// #135 `/提炼决策`：项目内的扫描回合与待办存储；显式命令触发，不在启动或轮询里加载。
+let decisionScanModule = null;
+let decisionScanStore = null;
 let chatSessionStore = null;
 // 对话的模型后端（只读 Pi 会话）：按需创建，换模型时释放，退出时释放。
 let chatModule = null;
@@ -414,31 +417,28 @@ const computeSetupProbe = async () => {
 
 // #86 会话扫描的本地状态：已扫过的会话键（重复点击不重复提炼），
 // 以及留给下一张票的「库里已有决策的指纹」位（现在是空数组）。
-// 只存这一份 JSON，不进知识库——扫描本身不写任何数据，确认入库是下一张票。
+// #135 起同一份 JSON 还存 `/提炼决策` 的待办（pending）与拒绝指纹（rejected）。
+// 只存这一份 JSON，不进知识库——扫描本身不写任何数据，确认入库是 #87 的事。
 // 上限只为防无限增长：一年也到不了 5000 条，真到了丢最旧的会话键也不会重扫出重复候选
 // （重复问答还有指纹兜底）。
 const sessionScanStatePath = () => path.join(app.getPath('userData'), 'memory-scan.json');
 const SESSION_SCAN_STATE_LIMIT = 5000;
-const loadSessionScanState = () => {
-  try {
-    const raw = fs.readFileSync(sessionScanStatePath(), 'utf8').replace(/^\uFEFF/u, '');
-    const parsed = JSON.parse(raw);
-    return {
-      sessions: Array.isArray(parsed.sessions) ? parsed.sessions.filter((key) => typeof key === 'string') : [],
-      fingerprints: Array.isArray(parsed.fingerprints) ? parsed.fingerprints.filter((key) => typeof key === 'string') : []
-    };
-  } catch {
-    return { sessions: [], fingerprints: [] };
-  }
+const getDecisionScanStore = async () => {
+  if (decisionScanStore) return decisionScanStore;
+  const mod = await importEsm('../src/memory/decision-scan-store.mjs');
+  decisionScanStore = new mod.DecisionScanStore({
+    file: sessionScanStatePath(),
+    limits: { sessions: SESSION_SCAN_STATE_LIMIT, fingerprints: SESSION_SCAN_STATE_LIMIT }
+  });
+  return decisionScanStore;
 };
-const saveSessionScanState = ({ sessions = [], fingerprints = [] } = {}) => {
+// 老的 #86 入口沿用这两个名字；它们现在读写同一份状态，所以不会覆盖 pending / rejected。
+const loadSessionScanState = async () => (await getDecisionScanStore()).read();
+const saveSessionScanState = async ({ sessions = [], fingerprints = [] } = {}) => {
   try {
-    const state = {
-      sessions: [...new Set(sessions)].slice(-SESSION_SCAN_STATE_LIMIT),
-      fingerprints: [...new Set(fingerprints)].slice(-SESSION_SCAN_STATE_LIMIT)
-    };
-    fs.mkdirSync(path.dirname(sessionScanStatePath()), { recursive: true });
-    fs.writeFileSync(sessionScanStatePath(), JSON.stringify(state, null, 2), 'utf8');
+    const store = await getDecisionScanStore();
+    const current = store.read();
+    store.write({ ...current, sessions, fingerprints });
   } catch (error) {
     logError('session-scan-state', error);
   }
@@ -4180,7 +4180,7 @@ const registerIpc = () => {
       name: project.name ?? '',
       root: project.root ?? ''
     }));
-    const state = loadSessionScanState();
+    const state = await loadSessionScanState();
     // 已确认入库的决策指纹从库里读（#87）：同一句话已经被确认过，就不该再作为候选出现。
     const confirmed = (() => {
       try { return personalStore?.decisionFingerprints?.() ?? []; } catch { return []; }
@@ -4191,7 +4191,7 @@ const registerIpc = () => {
       seenSessions: state.sessions,
       fingerprints: [...state.fingerprints, ...confirmed]
     });
-    saveSessionScanState({
+    await saveSessionScanState({
       sessions: [...state.sessions, ...result.scannedKeys],
       // 只记「哪些会话扫过」，不把未确认候选的指纹写进去：本轮提过的候选还没入库，
       // 占住指纹会让它以后再也没机会被提出来。跨轮的同内容去重靠会话键；
@@ -4261,6 +4261,83 @@ const registerIpc = () => {
       projectId: String(input?.projectId ?? '') || config.projectId || '',
       query: String(input?.query ?? ''),
       limit: input?.limit
+    });
+  });
+
+  // #135 `/提炼决策`：只扫当前项目的会话，候选先落进 memory-scan.json 的待办。
+  // 有未处理候选时直接回待办，不再扫描；扫描失败 / 会话读不出来由回执说清，不伪造空成功。
+  ipcMain.handle('companion:decision-scan', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const projectId = String(input?.projectId ?? '');
+    const project = (store?.listProjects() ?? []).find((item) => item.id === projectId) ?? null;
+    if (!project) {
+      return {
+        ok: false, mode: 'no-project', reason: '先选一个项目，再提炼决策。',
+        pending: [], added: [], receipt: { mode: 'no-project', status: 'no-project', added: 0, pending: 0 }
+      };
+    }
+    decisionScanModule = decisionScanModule ?? await importEsm('../src/memory/decision-scan.mjs');
+    sessionScanModule = sessionScanModule ?? await importEsm('../src/memory/session-scan.mjs');
+    const scanStore = await getDecisionScanStore();
+    // 已确认入库的决策指纹从库里读（#87）：同一句话已经被确认过，就不该再作为候选出现。
+    const confirmed = (() => {
+      try { return personalStore?.decisionFingerprints?.() ?? []; } catch { return []; }
+    })();
+    const result = await decisionScanModule.runDecisionScan({
+      state: scanStore.read(),
+      project: { id: project.id, name: project.name ?? '', root: project.root ?? '' },
+      roots: sessionScanModule.sessionRootsFrom({ home: os.homedir(), env: process.env }),
+      scan: sessionScanModule.scanSessions,
+      confirmedFingerprints: confirmed
+    });
+    // 只有「扫描过」才写状态：待办模式原样返回；失败时连已扫记录都不推进，下次还能重试。
+    if (result.mode === 'scanned' && result.state) scanStore.write(result.state);
+    // 会话文件路径与整份状态留在主进程：渲染层只要回执、待办与计数。
+    const visible = { ...result };
+    delete visible.state;
+    delete visible.scan;
+    return visible;
+  });
+
+  // #135 待办摘要（只读）：定位屏以后按项目显示「待确认 N 条」，这里先给数据。
+  // 不扫描、不写库、不动已读；已删除项目留下的待办也照实列出，计数才和 total 对得上。
+  ipcMain.handle('companion:decision-pending', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    decisionScanModule = decisionScanModule ?? await importEsm('../src/memory/decision-scan.mjs');
+    const scanStore = await getDecisionScanStore();
+    const projects = (store?.listProjects() ?? []).map((project) => ({
+      id: project.id,
+      name: project.name ?? ''
+    }));
+    const summary = decisionScanModule.pendingSummary(scanStore.read(), projects);
+    const projectId = String(input?.projectId ?? '');
+    return projectId ? { ...summary, projectId } : summary;
+  });
+
+  // #135 接受：按待办里的记录确认一条决策（写知识库），再把候选从待办移除。
+  // 理由可以补；没补就保持「缺理由」，不编占位词。
+  ipcMain.handle('companion:decision-accept', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    decisionScanModule = decisionScanModule ?? await importEsm('../src/memory/decision-scan.mjs');
+    const scanStore = await getDecisionScanStore();
+    return decisionScanModule.acceptPendingCandidate({
+      scanStore,
+      personalStore,
+      projectId: String(input?.projectId ?? ''),
+      fingerprint: String(input?.fingerprint ?? ''),
+      reason: String(input?.reason ?? '')
+    });
+  });
+
+  // #135 拒绝：只记指纹并移除候选；同一内容以后不再出现在扫描结果里。
+  ipcMain.handle('companion:decision-reject', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    decisionScanModule = decisionScanModule ?? await importEsm('../src/memory/decision-scan.mjs');
+    const scanStore = await getDecisionScanStore();
+    return decisionScanModule.rejectPending({
+      scanStore,
+      projectId: String(input?.projectId ?? ''),
+      fingerprint: String(input?.fingerprint ?? '')
     });
   });
 
