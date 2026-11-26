@@ -115,8 +115,7 @@
 
     <!-- #122：输入 `@@` 打开方法菜单（小卡片，贴着输入框，不铺满窗口）。
          容器只提供外壳：标题 + 返回 + 关闭；菜单项由 shell-at.cjs 的方法数据逐行画，
-         方法卡的内容由方法自己注册。这一轮只有「生成 prompt / 关联会话」两条，
-         且内容都是占位，随后续票接入。 -->
+         方法卡的内容由方法自己注册（#123 的「生成 prompt」已接上控件，其余仍是占位）。 -->
     <div class="at-panel" id="atPanel" role="dialog" aria-label="@@ 方法" hidden>
       <div class="at-head">
         <button type="button" class="at-back" id="atBack" aria-label="返回方法菜单" hidden>←</button>
@@ -195,6 +194,8 @@
   <script src="./shell-config.cjs"></script>
   <!-- #122 `@@` 方法菜单：先于输入区加载，输入区要用它的触发判定与面板实例。 -->
   <script src="./shell-at.cjs"></script>
+  <!-- #123 「生成 prompt」方法：流内勾选、计数与四段组装；方法卡进入时才 mount。 -->
+  <script src="./shell-at-prompt.cjs"></script>
   <script src="./shell-compose.cjs"></script>
   <script src="./shell-stream.cjs"></script>
   <script type="module" src="./card-scope-host.mjs"></script>
