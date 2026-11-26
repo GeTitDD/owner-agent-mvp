@@ -2382,6 +2382,7 @@ button.session-name { cursor: pointer; }
 .slash-src.src-pstack { background: rgba(47, 109, 246, 0.14); color: #2f6df6; }
 .slash-src.src-matt { background: var(--ok-soft); color: var(--ok); }
 .slash-src.src-plugin { background: var(--warn-soft); color: var(--warn); }
+.slash-src.src-command { background: var(--line-soft); color: var(--muted); }
 .slash-src.is-missing { background: var(--danger-soft); color: var(--danger); }
 
 .slash-hint,

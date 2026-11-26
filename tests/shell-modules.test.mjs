@@ -137,6 +137,23 @@ test('#111 旧能力命令：项目库 / 变化 / 发布分两步 / 监控', () 
   assert.equal(compose.parseCapabilityCommand('发布'), null);
 });
 
+test('斜杠面板的内置命令：能单独执行，能被打字同一条命令分派接住', () => {
+  const commands = compose.BUILTIN_COMMANDS;
+  assert.ok(commands.length >= 6, String(commands.length));
+  const ids = commands.map((command) => command.id);
+  assert.equal(new Set(ids).size, ids.length, '内置命令 id 不能重复');
+  for (const command of commands) {
+    assert.ok(command.text.startsWith('/'), command.text);
+    assert.ok(command.description.length >= 6, `${command.id} 缺说明`);
+  }
+  // 这几条必须真的能被命令分派认出来，否则点一行只会发出半句。
+  assert.equal(compose.parseCapabilityCommand('/项目库').kind, 'library');
+  assert.equal(compose.parseCapabilityCommand('/变化').kind, 'since');
+  assert.equal(compose.parseCapabilityCommand('/监控').kind, 'monitor');
+  assert.equal(compose.parseCapabilityCommand('/发布').confirm, false);
+  assert.equal(compose.parseCapabilityCommand('/发布 确认').confirm, true);
+});
+
 test('#111 项目库回复：计数与三个来源分组都在块里', () => {
   const reply = compose.libraryReply({
     project: { id: 'alpha', name: 'Alpha' },

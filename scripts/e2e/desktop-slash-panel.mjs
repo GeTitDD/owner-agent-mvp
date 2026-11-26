@@ -92,6 +92,7 @@ const readPanel = (panel) => panel.evaluate(`(() => {
     count: document.getElementById('skillCount').textContent.trim(),
     groups: headers,
     quick: rows.filter((row) => row.kind === 'command'),
+    builtin: rows.filter((row) => row.kind === 'builtin'),
     rest: rows.filter((row) => row.kind === 'skill'),
     rows,
     empty: list.querySelector('.slash-empty')?.textContent.trim() ?? '',
@@ -200,10 +201,14 @@ const run = async () => {
     let model = await readPanel(panel);
     check('panel is visible', model.hidden === false);
     check('catalog loads without an error', model.error === '', model.error);
-    check('two sections are rendered',
-      model.groups.some((group) => group.text.includes('数字快捷'))
+    check('three sections are rendered: built-in commands, number slots, all skills',
+      model.groups.some((group) => group.text.includes('命令'))
+      && model.groups.some((group) => group.text.includes('数字快捷'))
       && model.groups.some((group) => group.text.includes('全部技能')),
       model.groups.map((group) => group.text).join(' | '));
+    check('the built-in section lists /setup with a 内置 badge',
+      model.builtin.some((row) => row.cmd === '/setup' && row.src === '内置'),
+      JSON.stringify(model.builtin.map((row) => row.cmd)));
     // #132：原判据要求两段标题「不滚动就能同时看到」，字体度量稍宽就必红。
     // 改成「两段都在，且各自都能滚进视野」——仍然要求两条标题都存在、都能看到，
     // 只是不再把「同一屏放得下」这种排版巧合当验收条件。
@@ -224,8 +229,9 @@ const run = async () => {
         all: groups.every(canShow)
       };
     })()`);
-    check('both section headers are present and can be scrolled into view',
-      headersReachable.count === 2
+    check('all three section headers are present and can be scrolled into view',
+      headersReachable.count === 3
+      && headersReachable.texts.some((text) => text.includes('命令'))
       && headersReachable.texts.some((text) => text.includes('数字快捷'))
       && headersReachable.texts.some((text) => text.includes('全部技能'))
       && headersReachable.all === true,
@@ -319,7 +325,11 @@ const run = async () => {
     check('reopening / shows the panel again', await openSlash(panel));
     model = await readPanel(panel);
     const secondQuickId = model.quick[1]?.id ?? 'alpha-01';
+    // 内置命令排在最前：从第一行走到「第二个数字行」要跨过内置命令。
     check('ArrowDown is consumed by the panel', await pressKey(panel, 'ArrowDown'));
+    for (let step = 0; step < model.builtin.length; step += 1) {
+      await pressKey(panel, 'ArrowDown');
+    }
     check('Enter invokes the selected quick row', await pressKey(panel, 'Enter'));
     await waitFor(panel, "document.querySelectorAll('#messages .msg').length === 4", 8000);
     thread = await readThread(panel);

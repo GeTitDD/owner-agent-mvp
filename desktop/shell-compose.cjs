@@ -83,6 +83,21 @@
   });
 
   /**
+   * 内置命令：不是技能，也不扫描目录，输入 `/` 就应该能被找到。
+   * 只列「单独执行就有意义」的：需要接参数的（`/记灵感 <内容>`）不列，避免点一下就发半句。
+   * 文本是最终发出去的那一句，执行仍走普通消息的同一条路（命令分派在下面）。
+   */
+  const BUILTIN_COMMANDS = Object.freeze([
+    Object.freeze({ id: 'setup', text: '/setup', description: '探测本机：逐项判定，一次确认写盘' }),
+    Object.freeze({ id: '项目库', text: '/项目库', description: '当前项目的记忆计数与来源分组' }),
+    Object.freeze({ id: '变化', text: '/变化', description: '自上次看过之后的变化（首次只记水位）' }),
+    Object.freeze({ id: '发布', text: '/发布', description: '生成发布草稿：下一版、草稿条目数' }),
+    Object.freeze({ id: '发布确认', text: '/发布 确认', description: '确认发布：写版本、导出、投递；不可回收' }),
+    Object.freeze({ id: '监控', text: '/监控', description: '打开配置箱的监控分区' }),
+    Object.freeze({ id: '同步到项目', text: '/同步到项目', description: '把文档同步进项目目录：需确认，一次一问' })
+  ]);
+
+  /**
    * 把输入框里的一句话解析成 #111 的旧能力命令；认不出返回 null（照常当普通消息）。
    * `/发布` 只生成草稿，`/发布 确认` 才发布：版本号发布后不能回收，所以确认必须
    * 在命令里再写一次，不靠一次误触。
@@ -391,6 +406,26 @@
       return row;
     };
 
+    /**
+     * 一行内置命令：和技能行长得一样，但没有数字、没有来源目录。
+     * 点它等于把那句话打进输入框再发送，走的是普通消息的同一条路。
+     */
+    const builtinRow = (command, index) => {
+      const row = el('div', 'slash-item');
+      row.dataset.kind = 'builtin';
+      row.dataset.skillRow = command.id;
+      row.dataset.index = String(index);
+      if (index === slashSelection) row.classList.add('is-on');
+      row.append(el('span', 'slash-num is-empty', '·'));
+      const cmd = el('span', 'slash-cmd', command.text);
+      cmd.title = command.text;
+      row.append(cmd);
+      const text = el('span', 'slash-text');
+      text.append(el('span', 'slash-desc', command.description));
+      row.append(text, el('span', 'slash-src src-command', '内置'));
+      return row;
+    };
+
     const renderSlash = () => {
       if (!slashOpen) return;
       const model = aliasModel();
@@ -409,7 +444,14 @@
         slashQuery
       );
       const conflictIds = new Set(model.conflicts.ids);
+      // 内置命令排在最前：打 `/` 先看到「能做什么」，再看到「装了哪些技能」。
+      const query = skillsApi.normalizeQuery(slashQuery);
+      const builtin = BUILTIN_COMMANDS.filter((command) =>
+        !query || command.id.includes(query) || command.text.includes(query)
+        || command.description.includes(query));
+      const builtinRows = builtin.map((command) => ({ id: command.id, kind: 'builtin', text: command.text }));
       slashFlat = [
+        ...builtinRows,
         ...quick.map((slot) => ({ id: slot.id, kind: 'command' })),
         ...rest.map((skill) => ({ id: skill.id, kind: 'skill' }))
       ];
@@ -417,15 +459,23 @@
 
       slashList.replaceChildren();
       slashList.append(el('div', 'slash-group',
+        `命令 · ${builtin.length}${query ? '（已过滤）' : ''}`));
+      builtin.forEach((command, index) => {
+        slashList.append(builtinRow(command, index));
+      });
+      slashList.append(el('div', 'slash-group',
         `数字快捷 · ${quick.length}${slashCustomizing ? '（改数字 1-9，空着回默认）' : ''}`));
       quick.forEach((slot, index) => {
-        slashList.append(slashRow(slot.skill, { kind: 'command', index, slot, conflictIds }));
+        slashList.append(slashRow(slot.skill, {
+          kind: 'command', index: builtin.length + index, slot, conflictIds
+        }));
       });
-      const filtered = Boolean(skillsApi.normalizeQuery(slashQuery));
-      slashList.append(el('div', 'slash-group', `全部技能 · ${rest.length}${filtered ? '（已过滤）' : ''}`));
+      const filtered = Boolean(query);
+      slashList.append(el('div', 'slash-group',
+        `全部技能 · ${rest.length}${filtered ? '（已过滤）' : ''}`));
       rest.forEach((skill, offset) => {
         slashList.append(slashRow(skill, {
-          kind: 'skill', index: quick.length + offset, slot: null, conflictIds
+          kind: 'skill', index: builtin.length + quick.length + offset, slot: null, conflictIds
         }));
       });
 
@@ -586,6 +636,14 @@
     const invokeSlashSelection = () => {
       const chosen = slashFlat[slashSelection];
       if (!chosen) return;
+      // 内置命令：收起面板，把整句放进输入框，走与手打完全相同的发送路径。
+      if (chosen.kind === 'builtin') {
+        setSlashOpen(false);
+        input.value = chosen.text;
+        resizeInput();
+        void send();
+        return;
+      }
       void invokeSkill(chosen.id, chosen.kind);
     };
 
@@ -1054,5 +1112,5 @@
     };
   };
 
-  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, create };
+  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, BUILTIN_COMMANDS, create };
 });
