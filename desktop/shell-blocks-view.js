@@ -657,8 +657,68 @@
   };
 
   /**
+   * 决策卡里的一格表单字段（#138）：候选改写时现象只读，记决策时四个字段都可写。
+   * 只画控件、不收集值：点按钮时由对话流从 data-decision-field 读一次。
+   */
+  const renderDecisionField = (label, field, value, { readonly = false, multiline = false } = {}) => {
+    const row = el('label', 'review-field');
+    row.append(el('span', 'review-field-label', label));
+    if (readonly) {
+      const box = el('span', 'review-readonly', value || '（没有原话）');
+      box.dataset.decisionField = field;
+      row.append(box);
+      row.append(el('span', 'review-field-hint', '只读'));
+      return row;
+    }
+    const input = multiline ? el('textarea', 'review-input') : el('input', 'review-input');
+    input.value = value;
+    input.dataset.decisionField = field;
+    if (multiline) input.rows = 2;
+    else input.type = 'text';
+    row.append(input);
+    return row;
+  };
+
+  /**
+   * 决策表单（#138）：候选改写与 `/记决策` 共用的同一张卡。
+   * 候选卡默认收起（点「改写」展开），记决策卡默认展开；现象在候选卡里只读。
+   * 表单底部动作来自 formActions（候选是保存并接受 / 取消改写）。
+   */
+  const renderDecisionForm = (model) => {
+    const card = el('div', 'review-form');
+    card.dataset.decisionForm = '1';
+    card.hidden = model.mode !== 'compose';
+    card.append(renderDecisionField('现象', 'phenomenon', model.phenomenon, {
+      readonly: model.mode !== 'compose'
+    }));
+    card.append(renderDecisionField('选择', 'intent', model.values.intent));
+    card.append(renderDecisionField('放弃的方案', 'abandoned', model.values.abandoned));
+    card.append(renderDecisionField('理由', 'reason', model.values.reason, { multiline: true }));
+    card.append(el(
+      'p',
+      'block-note',
+      model.mode === 'compose'
+        ? '理由留空会标为「缺理由」，不填占位词。'
+        : '只改选择、放弃的方案与理由；现象只读。取消改写不写任何东西。'
+    ));
+    const formActions = model.formActions ?? [];
+    if (formActions.length) {
+      const actions = el('div', 'review-form-actions');
+      for (const action of formActions) {
+        const button = el('button', 'review-action', action.label);
+        button.type = 'button';
+        button.dataset.reviewAction = action.id;
+        actions.append(button);
+      }
+      card.append(actions);
+    }
+    return card;
+  };
+
+  /**
    * 经验 / 候选审核卡：标题 + 行 + 动作；点过的卡只留记录。
-   * 动作的语义由调用方处理（提升为候选 / 接受 / 拒绝），这里只画。
+   * 动作的语义由调用方处理（提升为候选 / 接受 / 改写 / 拒绝），这里只画。
+   * 决策卡（#138）多一张内嵌表单：候选从「改写」展开，记决策直接展开。
    */
   const renderReview = (model) => {
     const node = blockNode(model);
@@ -669,10 +729,14 @@
     if (model.projectId) node.dataset.projectId = model.projectId;
     if (model.fingerprint) node.dataset.fingerprint = model.fingerprint;
     if (model.missingReason) node.dataset.missingReason = '1';
+    if (model.mode === 'compose') node.dataset.decisionMode = 'compose';
+    if (model.editable) node.dataset.decisionEditable = '1';
 
     const kindLabel = model.kind === 'candidate'
       ? '待审核'
-      : (model.kind === 'decision' ? '决策候选' : '经验');
+      : (model.kind === 'decision'
+        ? (model.mode === 'compose' ? '记决策' : '决策候选')
+        : '经验');
     const head = el('div', 'block-head');
     head.append(el('h4', '', model.title));
     head.append(el('span', `review-kind kind-${model.kind}`, kindLabel));
@@ -692,6 +756,11 @@
     if (model.answered) {
       node.append(el('p', 'review-answered', `已选择：${model.answered}`));
       return node;
+    }
+
+    // 决策表单：候选与记决策是同一张卡，只有 mode 决定现象能不能改、默认是否展开。
+    if (model.kind === 'decision' && model.editable) {
+      node.append(renderDecisionForm(model));
     }
 
     const actions = el('div', 'review-actions');

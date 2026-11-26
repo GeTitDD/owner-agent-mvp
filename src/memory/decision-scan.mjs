@@ -271,9 +271,40 @@ export function rejectPending({ scanStore, projectId = '', fingerprint = '', now
 }
 
 /**
+ * 把「改写」落到候选上（#138）：只换选择、放弃的方案与理由三项，其余原样保留。
+ *
+ * 现象必须只读：人只能改写当时怎么选、放弃了什么、为什么，不能改写「当时发生了什么」——
+ * 现象也是去重指纹的来源，跟着改会让同一件事变成第二条决策。所以这里不读 edits.phenomenon，
+ * 指纹、项目、来源与证据都沿用候选本身。
+ * 理由空着就是缺理由，missingReason 在这里重算，界面与入库看到的是同一个判断。
+ *
+ * @param {object} candidate 待办里的候选记录
+ * @param {object|null} edits 三个可编辑字段 { intent, abandoned, reason }；null 表示没有改写
+ * @returns {object} 合并后的候选（没有改写时原样返回）
+ */
+export function applyDecisionEdits(candidate = {}, edits = null) {
+  if (!edits || typeof edits !== 'object' || Array.isArray(edits)) return candidate;
+  const pick = (key, max) => (
+    edits[key] === undefined
+      ? asText(candidate?.[key], max)
+      : asText(edits[key], max)
+  );
+  const reason = pick('reason', TEXT.reason);
+  return {
+    ...candidate,
+    intent: pick('intent', TEXT.intent),
+    abandoned: pick('abandoned', TEXT.abandoned),
+    reason,
+    missingReason: reason === ''
+  };
+}
+
+/**
  * 接受一条待办：确认写一条决策，再把候选从待办移除。
  * 确认走 decision-confirm 的幂等路径：同一指纹已入库时 created=false，也不会写第二条。
  * 理由为空就是「缺理由」；调用方在缺理由时负责先问一句，跳过的理由仍保持空。
+ * #138：edits 是改写后的三个字段；带了就按改后的内容入库，但指纹仍取原候选——
+ * 改写只改内容，不产生第二条决策。
  */
 export function acceptPendingCandidate({
   scanStore,
@@ -281,6 +312,7 @@ export function acceptPendingCandidate({
   projectId = '',
   fingerprint = '',
   reason = '',
+  edits = null,
   now = ''
 } = {}) {
   const fail = (text) => ({
@@ -298,11 +330,13 @@ export function acceptPendingCandidate({
   const candidate = current.pending.find((item) => item.projectId === owner && item.fingerprint === key);
   if (!candidate) return fail('这条候选已经不在待办了，可能已经处理过。');
 
+  const edited = applyDecisionEdits(candidate, edits);
   const result = confirmDecisionCandidate({
     personalStore,
-    candidate,
-    // 人补的理由优先；没补时沿用候选里已有的（通常为空，保持「缺理由」）。
-    reason: asText(reason, TEXT.reason) || candidate.reason,
+    candidate: edited,
+    // 人补的理由优先；没补时沿用候选（可能刚被改写）里的理由——
+    // 改写把理由清空时这里仍是空串，保持「缺理由」，不拿旧理由顶替。
+    reason: asText(reason, TEXT.reason) || edited.reason,
     actor: 'local-user'
   });
   if (!result.ok) return result;

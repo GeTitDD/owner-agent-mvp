@@ -309,29 +309,63 @@
   /**
    * 经验 / 候选 / 决策候选的审核卡：只画行与动作，判定交给调用方。
    * kind=lesson 时动作是「提升为候选」；kind=candidate 时是「接受 / 拒绝」；
-   * kind=decision（#135）是会话扫描出的决策候选，动作是「接受 / 拒绝」，
+   * kind=decision（#135）是会话扫描出的决策候选，动作是「接受 / 改写 / 拒绝」，
    * 并带上项目与指纹，好让主进程按待办里的记录确认，不信任渲染层传的字段。
+   * #138：决策卡带一张内嵌表单（mode + editable + values + formActions）——
+   * 候选改写与 `/记决策` 是同一张卡，不另建第二套表单。
    */
   const normalizeReview = (data) => {
     const kind = data.kind === 'candidate' || data.kind === 'decision' ? data.kind : 'lesson';
+    const rows = list(data.rows)
+      .map((row) => list(row).map(str).filter(Boolean))
+      .filter((row) => row.length > 0)
+      .slice(0, 8);
+    const rowValue = (label) => {
+      const row = rows.find((item) => item[0] === label);
+      const value = row && row.length > 1 ? row[1] : '';
+      // 旧卡的「理由」行可能写着缺理由提示；那是提示，不是理由，不能当成可编辑的初值。
+      return value.startsWith('缺理由') ? '' : value;
+    };
+    // 新卡直接带 values；#135 存下来的旧卡只有行，改写时就按行反推初值，避免一打开就空。
+    const values = isObject(data.values) ? data.values : {
+      phenomenon: rowValue('现象'),
+      intent: rowValue('选择'),
+      abandoned: rowValue('放弃的方案'),
+      reason: rowValue('理由')
+    };
     return {
       type: 'review',
       kind,
       title: str(data.title) || (kind === 'candidate' ? '待审核候选' : (kind === 'decision' ? '待确认决策' : '经验')),
-      rows: list(data.rows)
-        .map((row) => list(row).map(str).filter(Boolean))
-        .filter((row) => row.length > 0)
-        .slice(0, 8),
+      rows,
       actions: list(data.actions)
         .map((action) => ({ id: str(action?.id), label: str(action?.label) }))
         .filter((action) => action.id && action.label)
         .slice(0, 3),
+      // 表单底部的动作与卡片顶部的动作分开：候选是「保存并接受 / 取消改写」，
+      // 记决策把确认 / 取消放在卡片底部，两者都从这一份模型来。
+      formActions: list(data.formActions)
+        .map((action) => ({ id: str(action?.id), label: str(action?.label) }))
+        .filter((action) => action.id && action.label)
+        .slice(0, 2),
       lessonId: str(data.lessonId),
       proposalId: str(data.proposalId),
       // 决策候选：项目 + 指纹是回主进程找待办记录的键；缺理由单独带出去，界面要显式标注。
       projectId: str(data.projectId),
       fingerprint: str(data.fingerprint),
       missingReason: data.missingReason === true,
+      // #138 决策表单：mode 决定现象是否可改（候选只读 / 记决策可写），
+      // values 是三个可编辑字段的初值，editable 决定渲染层要不要画表单。
+      mode: data.mode === 'compose' ? 'compose' : 'candidate',
+      editable: data.editable === true,
+      phenomenon: str(data.phenomenon),
+      values: {
+        phenomenon: str(values.phenomenon),
+        intent: str(values.intent),
+        abandoned: str(values.abandoned),
+        reason: str(values.reason)
+      },
+      projectName: str(data.projectName),
       note: str(data.note)
     };
   };

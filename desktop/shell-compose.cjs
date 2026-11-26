@@ -11,6 +11,12 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.OwnerShellCompose = api;
 })(typeof globalThis === 'undefined' ? null : globalThis, () => {
+  // #138 决策改写与 `/记决策` 共用的一张表单：卡片模型与动作分发只在 decision-form.cjs 里。
+  // 浏览器里它先于本文件加载；Node 测试直接 require——与 risk-card.cjs 同一套双份导出。
+  const decisionFormApi = (typeof module === 'object' && module.exports)
+    ? require('./decision-form.cjs')
+    : (typeof globalThis === 'undefined' ? null : globalThis.OwnerDecisionForm);
+
   /**
    * 输入框的占位文案：没有会话时锁死；全局模式「能问不能写」；项目下只提示发送。
    * 纯状态迁移：只看「能不能发 + 正在看的项目」，测试不必起窗口。
@@ -94,6 +100,7 @@
     Object.freeze({ id: 'setup', text: '/setup', description: '探测本机：逐项判定，一次确认写盘' }),
     Object.freeze({ id: '提炼经验', text: '/提炼经验', description: '把当前项目里未提炼的执行记录提炼成经验' }),
     Object.freeze({ id: '提炼决策', text: '/提炼决策', description: '扫描当前项目的会话，产出决策候选并在流内确认' }),
+    Object.freeze({ id: '记决策', text: '/记决策', description: '手写一条决策：现象、选择、放弃的方案与理由，确认后入库' }),
     Object.freeze({ id: '经验', text: '/经验', description: '查看当前项目的经验与待审候选' }),
     Object.freeze({ id: '项目库', text: '/项目库', description: '当前项目的记忆计数与来源分组' }),
     Object.freeze({ id: '变化', text: '/变化', description: '自上次看过之后的变化（首次只记水位）' }),
@@ -324,36 +331,29 @@
 
   /**
    * `/提炼决策` 的候选卡：复用既有 review 块（kind=decision），不新建页面。
-   * 只画「现象 / 选择 / 放弃的方案 / 理由」四个字段与两个动作；
+   * 卡片模型由 decision-form.cjs 统一出（#138）：现象只读，选择 / 放弃 / 理由可在本卡内改写；
    * 缺理由显式标注，接受时再问一句，跳过也保持「缺理由」。
    */
   const decisionCandidateBlocks = (pending = []) => (Array.isArray(pending) ? pending : [])
     .slice(0, 5)
-    .map((item) => {
-      const missingReason = item?.missingReason === true || !String(item?.reason ?? '').trim();
-      const source = [String(item?.source ?? ''), String(item?.sessionId ?? '')]
-        .filter(Boolean)
-        .join(' · ');
+    .map((item) => decisionFormApi.candidateCard(item));
+
+  /**
+   * `/记决策` 的入口卡：与候选卡同一张表单，从空白开始填。
+   * 没有选项目时当场说明为什么不能记：项目级决策必须落在项目下面，不在全局里凭空写。
+   */
+  const decisionComposeReply = ({ projectId = '', projectName = '' } = {}) => {
+    if (!String(projectId ?? '').trim()) {
       return {
-        type: 'review',
-        kind: 'decision',
-        fingerprint: String(item?.fingerprint ?? ''),
-        projectId: String(item?.projectId ?? ''),
-        missingReason,
-        title: String(item?.phenomenon ?? '') || '待确认决策',
-        rows: [
-          ['现象', String(item?.phenomenon ?? '') || '（没有原话）'],
-          ['选择', String(item?.intent ?? '') || '（未记录）'],
-          ['放弃的方案', String(item?.abandoned ?? '') || '（未记录）'],
-          ['理由', missingReason ? '缺理由（接受时可补一句）' : String(item?.reason ?? '')],
-          ['来源', source || '会话扫描']
-        ],
-        actions: [{ id: 'accept', label: '接受' }, { id: 'reject', label: '拒绝' }],
-        note: missingReason
-          ? '缺理由：接受时会问一句，可跳过；跳过就保持「缺理由」。'
-          : '接受会写入知识库；拒绝只记指纹，以后不再提。'
+        text: '先选一个项目，再记决策：决策要落在项目下面，全局模式不写项目记忆。',
+        blocks: []
       };
-    });
+    }
+    return {
+      text: '填这张卡：现象、选择、放弃的方案、理由；确认后写入当前项目，取消不写任何东西。理由留空会标为「缺理由」。',
+      blocks: [decisionFormApi.composeCard({ projectId, projectName })]
+    };
+  };
 
   /**
    * `/提炼决策` 的回执：待办优先、空结果要说「没有新的决策」、失败不伪装成功。
@@ -1190,6 +1190,36 @@
       }
     };
 
+    /**
+     * `/记决策`（#138）：不扫描、不调模型，只在流里放一张与候选卡同一张形状的表单。
+     * 确认 / 取消都由审核卡那一个动作落点处理；这里只负责把卡画出来。
+     */
+    const runComposeDecisionTurn = async (raw) => {
+      const sessionId = currentId();
+      busy = true;
+      try {
+        await store.append({ id: sessionId, role: 'user', text: raw });
+        input.value = threadApi.draftAfterSend();
+        resizeInput();
+        const projectId = ctx.ui.header.viewProjectId();
+        const project = (ctx.ui.header.projects?.() ?? []).find((item) => item.id === projectId) ?? null;
+        const reply = decisionComposeReply({
+          projectId,
+          projectName: project?.name ?? ''
+        });
+        await store.append({
+          id: sessionId,
+          role: 'assistant',
+          text: reply.text,
+          blocks: Array.isArray(reply.blocks) ? reply.blocks : []
+        });
+        await ctx.refreshThread();
+        input.focus();
+      } finally {
+        busy = false;
+      }
+    };
+
     const runSetupTurn = async (raw, { appendCommand = true } = {}) => {
       if (!setupProbes()) {
         ctx.ui.header.setError('探测模块还没加载好，稍等一下再试。');
@@ -1477,6 +1507,12 @@
         input.focus();
         return;
       }
+      // /记决策：手动写一条决策，卡片与候选改写共用同一张表单（不扫描、不调模型）。
+      const composeDecision = /^\/记决策$/u.exec(raw.trim());
+      if (composeDecision) {
+        await runComposeDecisionTurn(raw);
+        return;
+      }
       // /提炼决策：只扫当前项目的会话，产决策候选并留在待办（不调模型）。
       const decisionScan = /^\/提炼决策$/u.exec(raw.trim());
       if (decisionScan) {
@@ -1760,5 +1796,5 @@
     };
   };
 
-  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, distillReply, lessonsReply, decisionCandidateBlocks, decisionReply, isExactBuiltinCommand, BUILTIN_COMMANDS, skillNameOf, create };
+  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, distillReply, lessonsReply, decisionCandidateBlocks, decisionComposeReply, decisionReply, isExactBuiltinCommand, BUILTIN_COMMANDS, skillNameOf, create };
 });

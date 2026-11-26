@@ -4340,6 +4340,8 @@ const registerIpc = () => {
 
   // #135 接受：按待办里的记录确认一条决策（写知识库），再把候选从待办移除。
   // 理由可以补；没补就保持「缺理由」，不编占位词。
+  // #138 改写：edits 只带选择 / 放弃的方案 / 理由三项；现象与指纹仍取待办里的记录，
+  // 所以改写只改内容，不会写成第二条决策。
   ipcMain.handle('companion:decision-accept', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     decisionScanModule = decisionScanModule ?? await importEsm('../src/memory/decision-scan.mjs');
@@ -4349,7 +4351,10 @@ const registerIpc = () => {
       personalStore,
       projectId: String(input?.projectId ?? ''),
       fingerprint: String(input?.fingerprint ?? ''),
-      reason: String(input?.reason ?? '')
+      reason: String(input?.reason ?? ''),
+      edits: input?.edits && typeof input.edits === 'object' && !Array.isArray(input.edits)
+        ? input.edits
+        : null
     });
   });
 
