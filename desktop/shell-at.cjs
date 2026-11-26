@@ -52,13 +52,21 @@
   const atMethod = (key) => AT_METHODS.find((method) => method.key === String(key ?? '')) ?? null;
 
   /**
-   * 方法卡的内容由方法自己给。这一轮两条都只有占位，内容随后续票接入：
-   * 容器只负责画 lead / todo 两段，不碰具体字段与按钮。
+   * 方法卡的内容由方法自己给：容器只画 lead，然后交给方法自己 mount 控件。
+   * 没有 mount 的方法退回 todo 占位；有 mount 的方法不再画占位文案。
    */
   const AT_CONTENT = Object.freeze({
     prompt: Object.freeze({
       lead: '在对话流里勾选要引用的内容，再写一句指令。',
-      todo: '占位：勾选计数、指令框与生成按钮随后续票接入。'
+      // #123：控件与勾选态由 shell-at-prompt.cjs 注册；脚本未加载时给出可见说明，不画空卡。
+      mount: (wrap, tools) => {
+        const api = typeof globalThis === 'undefined' ? null : globalThis.OwnerShellAtPrompt;
+        if (!api?.mount) {
+          wrap.append(document.createTextNode('生成 prompt 模块还没加载好，稍等一下再试。'));
+          return null;
+        }
+        return api.mount(tools.ctx)(wrap, tools);
+      }
     }),
     session: Object.freeze({
       lead: '指向别的 Agent 的会话；这里只存指针，不导入正文。',
@@ -117,6 +125,22 @@
     const input = $('input');
 
     let state = atInitialState();
+    // 方法自己 mount 的控件可能带监听（#123 的勾选计数）；关 / 返回 / 换方法前统一拆掉。
+    let mountCleanup = null;
+
+    const teardownMount = () => {
+      if (typeof mountCleanup !== 'function') {
+        mountCleanup = null;
+        return;
+      }
+      const cleanup = mountCleanup;
+      mountCleanup = null;
+      try {
+        cleanup();
+      } catch {
+        // 清理失败不该把面板卡在半开状态；后面的状态迁移照常走。
+      }
+    };
 
     const el = (tag, className, text) => {
       const node = document.createElement(tag);
@@ -153,7 +177,7 @@
       });
     };
 
-    /** 方法卡：容器只画内容提供者给的两段，不加任何方法专属字段。 */
+    /** 方法卡：容器只画 lead，其余控件由方法自己 mount；没有 mount 才画 todo 占位。 */
     const renderMethod = (key) => {
       bodyNode.replaceChildren();
       const content = atContent(key);
@@ -163,12 +187,19 @@
         wrap.append(el('p', 'at-lead', '这个方法还没有内容。'));
       } else {
         wrap.append(el('p', 'at-lead', content.lead));
-        wrap.append(el('p', 'at-todo', content.todo));
+        if (typeof content.mount === 'function') {
+          const cleanup = content.mount(wrap, { close, ctx });
+          if (typeof cleanup === 'function') mountCleanup = cleanup;
+        } else if (content.todo) {
+          wrap.append(el('p', 'at-todo', content.todo));
+        }
       }
       bodyNode.append(wrap);
     };
 
     const render = () => {
+      // 每次状态迁移都先把上一个方法的控件拆掉，避免旧的计数监听挂在新卡片上。
+      teardownMount();
       const view = atView(state);
       panel.hidden = !view.open;
       if (!view.open) return;
@@ -177,7 +208,7 @@
       subNode.textContent = view.step === 'menu' ? '方法菜单' : '方法卡片';
       hintNode.textContent = view.step === 'menu'
         ? '点一个方法进入；Esc 关闭，正文不会变。'
-        : '内容随后续票接入；返回菜单或关闭。';
+        : '卡片里的动作只影响这一次；返回菜单或关闭，正文不会变。';
       if (view.step === 'menu') renderMenu();
       else renderMethod(view.methodKey);
     };
