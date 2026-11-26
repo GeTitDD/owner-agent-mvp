@@ -44,6 +44,15 @@ git push origin v1.0.0
 
 工作流会构建 portable、生成 SHA256、创建 GitHub Release 并上传两个文件。
 
+发布说明放在 `docs/release-notes/<tag>.md`（例如 `v1.0.0.md`）。工作流优先用它；没有对应文件时回退到一段简短说明。
+
+发布前检查：
+
+1. 目标分支已合并到 `main`，`npm test` 与 `npm run check` 通过；
+2. `package.json` 的 `version` 与 tag 一致（tag 写 `v1.0.0`，version 写 `1.0.0`）；
+3. 发布说明里的截图地址用的是该 tag 的 raw 链接；
+4. 没有把 `companion.json`、`owner.sqlite` 或密钥带进仓库。
+
 ### 升级与迁移
 
 - 覆盖 exe 即可；数据在 `%APPDATA%`，不随 exe 走。
