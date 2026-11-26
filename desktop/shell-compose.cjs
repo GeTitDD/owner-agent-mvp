@@ -507,7 +507,7 @@
       slashToggle.setAttribute('aria-pressed', slashCustomizing ? 'true' : 'false');
       slashHint.textContent = slashCustomizing
         ? '数字只认 1-9；改成默认数字或清空即回到默认。改完点「完成」。'
-        : '↑↓ 选择 · Enter 调用 · 没有匹配时 Enter 直接发送 · 点任意一行即调用 · Esc 关闭';
+        : '↑↓ 选择 · Enter 填入技能（命令直接发送）· 没有匹配时 Enter 直接发送 · Esc 关闭';
       syncConflictText(model.conflicts);
       // 键盘移动后把选中行带进视野；初始选中第一行时等于不滚动。
       slashList.querySelector('.slash-item.is-on')?.scrollIntoView({ block: 'nearest' });
@@ -582,6 +582,12 @@
         || Boolean(window.OwnerConfirm?.isCommand(value))
         || Boolean(window.OwnerSetupProbe?.isCommand?.(value));
       if (!value.startsWith('/') || legacySample) {
+        if (slashOpen) setSlashOpen(false);
+        return;
+      }
+      // 技能后面一旦写进空格（`/matt:… 问题`），这一条就是消息而不是搜索：
+      // 再匹配技能只会把面板一直顶在对话上。
+      if (/\s/u.test(value.slice(1))) {
         if (slashOpen) setSlashOpen(false);
         return;
       }

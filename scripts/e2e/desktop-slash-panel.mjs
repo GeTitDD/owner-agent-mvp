@@ -320,6 +320,11 @@ const run = async () => {
       (await inputValue(panel)) === `/${mattId} `, await inputValue(panel));
     check('clicking a skill does not send a scripted card',
       (await readThread(panel)).count === 0, String((await readThread(panel)).count));
+    // 选完技能接着写问题：不能又被当成分组搜索重新弹出。
+    await typeInput(panel, `${await inputValue(panel)}这个问题怎么答`);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    check('typing the question after a skill keeps the panel closed',
+      await panel.evaluate("document.getElementById('skillPanel').hidden === true"));
 
     // ⑤ 键盘：↑↓ 选、Enter 把数字行填进输入框（同样不发送）。
     check('reopening / shows the panel again', await openSlash(panel));
