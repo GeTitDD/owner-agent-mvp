@@ -9,7 +9,7 @@ import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { PersonalKnowledgeStore } from '../src/personal-store.mjs';
 import { createWorkbenchServer } from '../src/workbench-server.mjs';
-import { buildLessonsView, EVIDENCE_EMPTY_NOTE } from '../src/knowledge/lessons-view.mjs';
+import { buildLessonsView, renderLessonsPage, EVIDENCE_EMPTY_NOTE } from '../src/knowledge/lessons-view.mjs';
 import { request, requestJson } from './helpers/observer-http.mjs';
 
 /** 一条项目级经验的最小原料；各用例只改自己关心的字段。 */
@@ -211,4 +211,25 @@ test('来源台账里的项目也能命中它自己的筛选条件', () => {
   });
   assert.deepEqual(view.lessons.map((x) => x.id), ['lesson-1']);
   assert.deepEqual(view.lessons[0].projectIds, ['alpha', 'beta']);
+});
+
+test('跨项目经验的来源项目全部列出：页面写 alpha · beta，不只第一个', () => {
+  const view = buildLessonsView({
+    lessons: [{
+      id: 'lesson-2',
+      projectId: 'alpha',
+      phenomenon: '同一现象在两个项目复现',
+      mechanism: '同一条去重键',
+      countermeasure: '同一条对策',
+      scope: { layer: 'project', projectId: 'alpha' },
+      sources: [{ projectId: 'alpha' }, { projectId: 'beta' }],
+      verificationStatus: 'inferred',
+      evidence: []
+    }]
+  });
+  assert.equal(view.lessons[0].projectLabel, 'alpha · beta');
+  const html = renderLessonsPage(view);
+  assert.match(html, /来源项目 <code>alpha · beta<\/code>/u);
+  // 只显示第一个项目的旧写法不再出现。
+  assert.doesNotMatch(html, /来源项目 <code>alpha<\/code>/u);
 });

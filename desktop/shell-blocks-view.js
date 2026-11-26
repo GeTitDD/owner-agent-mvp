@@ -340,7 +340,7 @@
   const renderAsk = (model) => {
     const node = blockNode(model);
     node.dataset.askQuestion = model.question;
-    // #135：缺理由的决策追问带着待办键，回答时据此确认；普通提问块没有这两个字段。
+    // #135：缺理由的决策追问带着未处理候选键，回答时据此确认；普通提问块没有这两个字段。
     if (model.decision?.projectId) node.dataset.decisionProjectId = model.decision.projectId;
     if (model.decision?.fingerprint) node.dataset.decisionFingerprint = model.decision.fingerprint;
     node.append(headNode(model.question, model.answered ? '已记录' : '待你确认', 'block-badge-ask'));
@@ -725,7 +725,7 @@
     node.dataset.reviewKind = model.kind;
     if (model.lessonId) node.dataset.lessonId = model.lessonId;
     if (model.proposalId) node.dataset.proposalId = model.proposalId;
-    // #135 决策候选：项目 + 指纹是回到主进程待办的键；缺理由直接标出来。
+    // #135 决策候选：项目 + 指纹是回到主进程未处理候选的键；缺理由直接标出来。
     if (model.projectId) node.dataset.projectId = model.projectId;
     if (model.fingerprint) node.dataset.fingerprint = model.fingerprint;
     if (model.missingReason) node.dataset.missingReason = '1';

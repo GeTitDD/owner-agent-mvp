@@ -20,8 +20,9 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.OwnerDecisionForm = api;
 })(typeof globalThis === 'undefined' ? null : globalThis, () => {
-  // 与 src/memory/decision-scan.mjs / decision-confirm.mjs 的上限保持一致：
-  // 界面先截一次，入库时服务端还会按同一组上限再截一次。
+  // 服务端真源是 src/memory/decision-scan.mjs 的 TEXT（现象 500，选择 / 放弃 / 理由 2000）；
+  // 浏览器侧是普通脚本，不能 import ESM，所以这里留一份副本。
+  // tests/decision-form-limits.test.mjs 直接读两个源文件比对数字——漂移会让 CI 失败。
   const LIMITS = Object.freeze({
     phenomenon: 500,
     intent: 2000,
@@ -60,6 +61,14 @@
     const values = formValues(item);
     const missingReason = item?.missingReason === true || reasonMissingOf(values);
     const source = [str(item?.source), str(item?.sessionId)].filter(Boolean).join(' · ');
+    // 自动扫描只带出现象：其余三项空着就直说「待补」，并指向唯一能补的地方（改写）。
+    const needsFill = !values.intent || !values.abandoned || missingReason;
+    const note = [
+      missingReason
+        ? '缺理由：接受时会问一句，可跳过；跳过就保持「缺理由」。改写后保存并接受，写入的是改后的内容。'
+        : '接受会写入知识库；改写后保存并接受，写入的是改后的内容。拒绝只记指纹，以后不再提。',
+      needsFill ? '自动扫描只带出现象；选择、放弃的方案与理由可以在「改写」里补。' : ''
+    ].filter(Boolean).join(' ');
     return {
       type: 'review',
       kind: 'decision',
@@ -74,8 +83,8 @@
       title: values.phenomenon || '待确认决策',
       rows: [
         ['现象', values.phenomenon || '（没有原话）'],
-        ['选择', values.intent || '（未记录）'],
-        ['放弃的方案', values.abandoned || '（未记录）'],
+        ['选择', values.intent || '（待补）'],
+        ['放弃的方案', values.abandoned || '（待补）'],
         ['理由', missingReason ? '缺理由（接受时可补一句）' : values.reason],
         ['来源', source || '会话扫描']
       ],
@@ -88,9 +97,7 @@
         { id: 'save-accept', label: '保存并接受' },
         { id: 'cancel-edit', label: '取消改写' }
       ],
-      note: missingReason
-        ? '缺理由：接受时会问一句，可跳过；跳过就保持「缺理由」。改写后保存并接受，写入的是改后的内容。'
-        : '接受会写入知识库；改写后保存并接受，写入的是改后的内容。拒绝只记指纹，以后不再提。'
+      note
     };
   };
 

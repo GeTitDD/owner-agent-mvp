@@ -105,7 +105,7 @@ let sessionPointerIndexModule = null;
 // #87 决策确认：候选确认入库与状态流转；同样按需加载。
 let decisionConfirmModule = null;
 let decisionRetrievalModule = null;
-// #135 `/提炼决策`：项目内的扫描回合与待办存储；显式命令触发，不在启动或轮询里加载。
+// #135 `/提炼决策`：项目内的扫描回合与未处理候选存储；显式命令触发，不在启动或轮询里加载。
 let decisionScanModule = null;
 let decisionScanStore = null;
 let chatSessionStore = null;
@@ -419,7 +419,7 @@ const computeSetupProbe = async () => {
 
 // #86 会话扫描的本地状态：已扫过的会话键（重复点击不重复提炼），
 // 以及留给下一张票的「库里已有决策的指纹」位（现在是空数组）。
-// #135 起同一份 JSON 还存 `/提炼决策` 的待办（pending）与拒绝指纹（rejected）。
+// #135 起同一份 JSON 还存 `/提炼决策` 的未处理候选（pending）与拒绝指纹（rejected）。
 // 只存这一份 JSON，不进知识库——扫描本身不写任何数据，确认入库是 #87 的事。
 // 上限只为防无限增长：一年也到不了 5000 条，真到了丢最旧的会话键也不会重扫出重复候选
 // （重复问答还有指纹兜底）。
@@ -1773,7 +1773,7 @@ const knowledgeDetail = ({ id } = {}) => {
       const scanStore = await getDecisionScanStore();
       decisionSummary = decisionScanModule.pendingSummary(scanStore.read(), projects);
     } catch (error) {
-      // 待办文件读不出时只让「决策候选」这一项缺失，不让整屏空掉。
+      // 候选文件读不出时只让「决策候选」这一项缺失，不让整屏空掉。
       logError('locate.decision-pending', error);
     }
     const pending = locate.pendingCountsOf({ proposals, lessons, decisionSummary }).byProject;
@@ -4409,8 +4409,8 @@ const registerIpc = () => {
     });
   });
 
-  // #135 `/提炼决策`：只扫当前项目的会话，候选先落进 memory-scan.json 的待办。
-  // 有未处理候选时直接回待办，不再扫描；扫描失败 / 会话读不出来由回执说清，不伪造空成功。
+  // #135 `/提炼决策`：只扫当前项目的会话，候选先落进 memory-scan.json 的未处理列表。
+  // 有未处理候选时直接回候选列表，不再扫描；扫描失败 / 会话读不出来由回执说清，不伪造空成功。
   ipcMain.handle('companion:decision-scan', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const projectId = String(input?.projectId ?? '');
@@ -4435,17 +4435,17 @@ const registerIpc = () => {
       scan: sessionScanModule.scanSessions,
       confirmedFingerprints: confirmed
     });
-    // 只有「扫描过」才写状态：待办模式原样返回；失败时连已扫记录都不推进，下次还能重试。
+    // 只有「扫描过」才写状态：候选模式原样返回；失败时连已扫记录都不推进，下次还能重试。
     if (result.mode === 'scanned' && result.state) scanStore.write(result.state);
-    // 会话文件路径与整份状态留在主进程：渲染层只要回执、待办与计数。
+    // 会话文件路径与整份状态留在主进程：渲染层只要回执、未处理候选与计数。
     const visible = { ...result };
     delete visible.state;
     delete visible.scan;
     return visible;
   });
 
-  // #135 待办摘要（只读）：定位屏以后按项目显示「待确认 N 条」，这里先给数据。
-  // 不扫描、不写库、不动已读；已删除项目留下的待办也照实列出，计数才和 total 对得上。
+  // #135 未处理候选摘要（只读）：定位屏以后按项目显示「待确认 N 条」，这里先给数据。
+  // 不扫描、不写库、不动已读；已删除项目留下的未处理候选也照实列出，计数才和 total 对得上。
   ipcMain.handle('companion:decision-pending', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     decisionScanModule = decisionScanModule ?? await importEsm('../src/memory/decision-scan.mjs');
@@ -4459,9 +4459,9 @@ const registerIpc = () => {
     return projectId ? { ...summary, projectId } : summary;
   });
 
-  // #135 接受：按待办里的记录确认一条决策（写知识库），再把候选从待办移除。
+  // #135 接受：按未处理候选里的记录确认一条决策（写知识库），再把候选从列表移除。
   // 理由可以补；没补就保持「缺理由」，不编占位词。
-  // #138 改写：edits 只带选择 / 放弃的方案 / 理由三项；现象与指纹仍取待办里的记录，
+  // #138 改写：edits 只带选择 / 放弃的方案 / 理由三项；现象与指纹仍取未处理候选里的记录，
   // 所以改写只改内容，不会写成第二条决策。
   ipcMain.handle('companion:decision-accept', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');

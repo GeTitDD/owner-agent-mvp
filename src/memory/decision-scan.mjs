@@ -1,4 +1,4 @@
-// #135 `/提炼决策`：项目内的决策扫描回合与待办状态。
+// #135 `/提炼决策`：项目内的决策扫描回合与未处理候选状态。
 //
 // 复用 #86 / #85 / #87 的既有管道，不另写一套提炼：
 // - 扫描：session-scan.mjs 的 scanSessions（读 Codex / Claude Code 会话、按 cwd 匹配项目）；
@@ -7,7 +7,7 @@
 //
 // 本文件补的是「一次命令的回合」：
 // 1. 只把当前项目传给 scanSessions，别的项目的会话匹配不上，也不会被记成已扫过；
-// 2. 有未处理候选时先给待办，不扫描；待办清空后才继续扫；
+// 2. 有未处理候选时先给候选列表，不扫描；处理完才继续扫；
 // 3. 候选落进 memory-scan.json 的 pending，人接受 / 拒绝之前不进知识库；
 // 4. 拒绝记指纹；之后的扫描与合并都跳过它，同一内容不再出现；
 // 5. 扫描抛错、会话读不出来、结果被截断都生成 partial / failed 回执，不伪造空成功。
@@ -35,11 +35,14 @@ const DEFAULTS = {
   rejected: 2000,
   sessions: 5000,
   fingerprints: 5000,
-  // 扫描结果默认只回 60 条样本；待办要全量，所以这里把样本上限抬高。
+  // 扫描结果默认只回 60 条样本；未处理候选要全量，所以这里把样本上限抬高。
   maxCandidateSample: 500
 };
 
 const asText = (value, max = 0) => flatText(value, max);
+
+/** 候选键：项目 id + 指纹。判「是不是同一条候选」只用这一处，别在现场手拼。 */
+const pendingKey = (projectId, fingerprint) => `${projectId}\u0000${fingerprint}`;
 
 /** 证据引用：只留能回查的四个字段，超长截断；不认识的条目丢掉。 */
 const normalizeEvidence = (value) => {
@@ -61,7 +64,7 @@ const normalizeEvidence = (value) => {
   return refs;
 };
 
-/** 候选 → 待办记录：项目 id、指纹、四个字段、来源与会话出处缺一不可。 */
+/** 候选 → 未处理候选记录：项目 id、指纹、四个字段、来源与会话出处缺一不可。 */
 export function pendingRecordOf(candidate = {}, { projectId = '', projectName = '', now = '' } = {}) {
   const evidence = normalizeEvidence(candidate?.evidence);
   const owner = asText(projectId || candidate?.projectId, TEXT.project);
@@ -105,7 +108,10 @@ const normalizePending = (value, limits) => {
       now: raw?.foundAt
     });
     if (!record) continue;
-    const key = `${record.projectId}\u0000${record.fingerprint}`;
+    // 只有用户一方原话、助手没确认的候选不列入待确认：它不是一个已被确认的取舍。
+    // 扫描回执用 unpaired 单独计数；旧文件里的残留也在这里被挡下，不再出现在列表上。
+    if (record.partial) continue;
+    const key = pendingKey(record.projectId, record.fingerprint);
     if (seen.has(key)) continue;
     seen.add(key);
     records.push(record);
@@ -120,7 +126,7 @@ const normalizeRejected = (value, limits) => {
     const projectId = asText(raw?.projectId, TEXT.project);
     const fingerprint = asText(raw?.fingerprint, TEXT.fingerprint);
     if (!projectId || !fingerprint) continue;
-    const key = `${projectId}\u0000${fingerprint}`;
+    const key = pendingKey(projectId, fingerprint);
     if (seen.has(key)) continue;
     seen.add(key);
     records.push({ projectId, fingerprint, at: asText(raw?.at, TEXT.at) });
@@ -160,7 +166,7 @@ export function rejectedFingerprintsOf(state, projectId) {
     .map((item) => item.fingerprint);
 }
 
-/** 待办摘要（只读）：定位屏要的「每个项目几条 + 条目」。不建界面、不扫描。 */
+/** 未处理候选摘要（只读）：定位屏要的「每个项目几条 + 条目」。不建界面、不扫描。 */
 export function pendingSummary(state, projects = []) {
   const current = normalizeDecisionScanState(state);
   const groups = new Map();
@@ -202,7 +208,7 @@ export function pendingSummary(state, projects = []) {
     });
   const known = new Set(listed.map((project) => project.projectId));
   for (const [id, group] of groups) {
-    // 已删除项目留下的待办也列出来，计数才和 total 对得上；不假装它还有项目。
+    // 已删除项目留下的未处理候选也列出来，计数才和 total 对得上；不假装它还有项目。
     if (known.has(id)) continue;
     listed.push({ ...group, projectName: group.projectName || '（已删除的项目）' });
   }
@@ -210,28 +216,38 @@ export function pendingSummary(state, projects = []) {
 }
 
 /**
- * 把本轮扫描出的候选并进待办。
- * - 只收当前项目的候选：别的项目即使漏进来也不入待办；
+ * 把本轮扫描出的候选并进未处理候选列表。
+ * - 只有用户一方原话、助手没确认的（partial）不入列表，只计 unpaired 供回执说明；
+ * - 只收当前项目的候选：别的项目即使漏进来也不入列表；
  * - 拒绝过的指纹直接挡掉（扫描层已挡一次，这里是第二层）；
- * - 已在待办里的不重复添加，返回计数供回执说明。
+ * - 已在列表里的不重复添加，返回计数供回执说明。
  */
-export function mergeCandidates(state, candidates, { projectId = '', projectName = '', now = '' } = {}) {
-  const current = normalizeDecisionScanState(state);
+export function mergeCandidates(state, candidates, {
+  projectId = '', projectName = '', now = '', limits = {}
+} = {}) {
+  const caps = { ...DEFAULTS, ...limits };
+  const current = normalizeDecisionScanState(state, limits);
   const owner = asText(projectId, TEXT.project);
   const added = [];
   let duplicates = 0;
   let suppressed = 0;
-  if (!owner) return { state: current, added, duplicates, suppressed };
-  const pendingKeys = new Set(current.pending.map((item) => `${item.projectId}\u0000${item.fingerprint}`));
-  const rejectedKeys = new Set(current.rejected.map((item) => `${item.projectId}\u0000${item.fingerprint}`));
+  let unpaired = 0;
+  if (!owner) return { state: current, added, duplicates, suppressed, unpaired };
+  const pendingKeys = new Set(current.pending.map((item) => pendingKey(item.projectId, item.fingerprint)));
+  const rejectedKeys = new Set(current.rejected.map((item) => pendingKey(item.projectId, item.fingerprint)));
   const stamp = now || new Date().toISOString();
   for (const candidate of Array.isArray(candidates) ? candidates : []) {
+    // 没有助手确认的那一句不是一个可以接受的取舍：不列进候选，只在回执里计数。
+    if (candidate?.partial === true) {
+      unpaired++;
+      continue;
+    }
     const record = pendingRecordOf(candidate, { projectId: owner, projectName, now: stamp });
     if (!record || record.projectId !== owner) {
       suppressed++;
       continue;
     }
-    const key = `${record.projectId}\u0000${record.fingerprint}`;
+    const key = pendingKey(record.projectId, record.fingerprint);
     if (rejectedKeys.has(key)) {
       suppressed++;
       continue;
@@ -243,22 +259,23 @@ export function mergeCandidates(state, candidates, { projectId = '', projectName
     pendingKeys.add(key);
     added.push(record);
   }
-  const pending = [...current.pending, ...added].slice(-DEFAULTS.pending);
-  return { state: { ...current, pending }, added, duplicates, suppressed };
+  // 上限取调用方（已归一的 limits），不在这一层再写一套数字。
+  const pending = [...current.pending, ...added].slice(-Math.max(1, caps.pending));
+  return { state: { ...current, pending }, added, duplicates, suppressed, unpaired };
 }
 
-/** 拒绝一条待办：移除候选并记指纹；同一条重复拒绝是幂等空操作。 */
+/** 拒绝一条未处理候选：移除候选并记指纹；同一条重复拒绝是幂等空操作。 */
 export function rejectPending({ scanStore, projectId = '', fingerprint = '', now = '' } = {}) {
   const owner = asText(projectId, TEXT.project);
   const key = asText(fingerprint, TEXT.fingerprint);
   if (!scanStore || typeof scanStore.read !== 'function' || typeof scanStore.write !== 'function') {
-    return { ok: false, removed: false, reason: '本地待办存储不可用，暂时不能拒绝。' };
+    return { ok: false, removed: false, reason: '本地候选存储不可用，暂时不能拒绝。' };
   }
   if (!owner || !key) return { ok: false, removed: false, reason: '这条候选缺少项目或指纹。' };
   const current = scanStore.read();
   const index = current.pending.findIndex((item) => item.projectId === owner && item.fingerprint === key);
   if (index < 0) {
-    return { ok: false, removed: false, reason: '这条候选已经不在待办了，可能已经处理过。' };
+    return { ok: false, removed: false, reason: '这条候选已经不在未处理列表里了，可能已经处理过。' };
   }
   const pending = current.pending.filter((_, at) => at !== index);
   const exists = current.rejected.some((item) => item.projectId === owner && item.fingerprint === key);
@@ -278,7 +295,7 @@ export function rejectPending({ scanStore, projectId = '', fingerprint = '', now
  * 指纹、项目、来源与证据都沿用候选本身。
  * 理由空着就是缺理由，missingReason 在这里重算，界面与入库看到的是同一个判断。
  *
- * @param {object} candidate 待办里的候选记录
+ * @param {object} candidate 未处理候选里的记录
  * @param {object|null} edits 三个可编辑字段 { intent, abandoned, reason }；null 表示没有改写
  * @returns {object} 合并后的候选（没有改写时原样返回）
  */
@@ -300,7 +317,7 @@ export function applyDecisionEdits(candidate = {}, edits = null) {
 }
 
 /**
- * 接受一条待办：确认写一条决策，再把候选从待办移除。
+ * 接受一条未处理候选：确认写一条决策，再把候选从列表移除。
  * 确认走 decision-confirm 的幂等路径：同一指纹已入库时 created=false，也不会写第二条。
  * 理由为空就是「缺理由」；调用方在缺理由时负责先问一句，跳过的理由仍保持空。
  * #138：edits 是改写后的三个字段；带了就按改后的内容入库，但指纹仍取原候选——
@@ -320,7 +337,7 @@ export function acceptPendingCandidate({
     missingReason: true, reason: text
   });
   if (!scanStore || typeof scanStore.read !== 'function' || typeof scanStore.write !== 'function') {
-    return fail('本地待办存储不可用，暂时不能接受。');
+    return fail('本地候选存储不可用，暂时不能接受。');
   }
   if (!personalStore) return fail('知识库尚未初始化，暂时不能接受决策。');
   const owner = asText(projectId, TEXT.project);
@@ -328,7 +345,7 @@ export function acceptPendingCandidate({
   if (!owner || !key) return fail('这条候选缺少项目或指纹。');
   const current = scanStore.read();
   const candidate = current.pending.find((item) => item.projectId === owner && item.fingerprint === key);
-  if (!candidate) return fail('这条候选已经不在待办了，可能已经处理过。');
+  if (!candidate) return fail('这条候选已经不在未处理列表里了，可能已经处理过。');
 
   const edited = applyDecisionEdits(candidate, edits);
   const result = confirmDecisionCandidate({
@@ -355,6 +372,33 @@ export function acceptPendingCandidate({
 }
 
 /**
+ * 失败 / 未选项目的统一回执（纯数据）。四份差不多的字面量收在这里，
+ * 字段一次写全；mode 既是顶层也是 receipt.status（都是终态，不是成功）。
+ */
+const failureResultOf = ({
+  mode, reason, projectId = '', projectName = '', state, receiptReason = ''
+}) => ({
+  ok: false,
+  mode,
+  reason,
+  projectId,
+  projectName,
+  pending: [],
+  added: [],
+  scan: null,
+  state,
+  receipt: {
+    mode,
+    status: mode,
+    projectId,
+    projectName,
+    added: 0,
+    pending: 0,
+    reason: receiptReason || reason
+  }
+});
+
+/**
  * 一次 `/提炼决策` 回合。
  *
  * @param {object} input
@@ -365,7 +409,7 @@ export function acceptPendingCandidate({
  * @param {(pair: object) => object|null} [input.extract] 注入的提炼器
  * @param {Iterable<string>} [input.confirmedFingerprints] 知识库里已有决策的指纹
  * @param {object} [input.scanOptions] 扫描上限等，透传给 scanSessions
- * @returns {Promise<object>} 回执 + 待办 + 归一后的新状态
+ * @returns {Promise<object>} 回执 + 未处理候选 + 归一后的新状态
  */
 export async function runDecisionScan({
   state,
@@ -381,20 +425,14 @@ export async function runDecisionScan({
   const projectId = asText(project?.id, TEXT.project);
   const projectName = asText(project?.name, TEXT.name);
   if (!projectId) {
-    return {
-      ok: false,
+    return failureResultOf({
       mode: 'no-project',
       reason: '先选一个项目，再提炼决策。',
-      projectId: '',
-      pending: [],
-      added: [],
-      scan: null,
-      state: current,
-      receipt: { mode: 'no-project', status: 'no-project', added: 0, pending: 0 }
-    };
+      state: current
+    });
   }
 
-  // 有未处理候选：先给待办，不扫描。人处理完再执行一次才会继续扫。
+  // 有未处理候选：先给候选列表，不扫描。人处理完再执行一次才会继续扫。
   const waiting = pendingOf(current, projectId);
   if (waiting.length) {
     return {
@@ -418,18 +456,14 @@ export async function runDecisionScan({
   }
 
   if (typeof scan !== 'function') {
-    return {
-      ok: false,
+    return failureResultOf({
       mode: 'failed',
       reason: '扫描接口没有接上，暂时不能提炼决策。',
       projectId,
       projectName,
-      pending: [],
-      added: [],
-      scan: null,
       state: current,
-      receipt: { mode: 'failed', status: 'failed', added: 0, pending: 0, reason: '扫描接口没有接上' }
-    };
+      receiptReason: '扫描接口没有接上'
+    });
   }
 
   const fingerprints = [...new Set([
@@ -456,32 +490,18 @@ export async function runDecisionScan({
     });
   } catch (error) {
     const reason = String(error?.message ?? error ?? '未知原因');
-    return {
-      ok: false,
-      mode: 'failed',
-      reason,
-      projectId,
-      projectName,
-      pending: [],
-      added: [],
-      scan: null,
-      state: current,
-      receipt: { mode: 'failed', status: 'failed', projectId, projectName, added: 0, pending: 0, reason }
-    };
+    return failureResultOf({
+      mode: 'failed', reason, projectId, projectName, state: current
+    });
   }
   if (!scanned || typeof scanned !== 'object') {
-    return {
-      ok: false,
+    return failureResultOf({
       mode: 'failed',
       reason: '扫描没有返回可读的结果。',
       projectId,
       projectName,
-      pending: [],
-      added: [],
-      scan: null,
-      state: current,
-      receipt: { mode: 'failed', status: 'failed', projectId, projectName, added: 0, pending: 0, reason: '扫描没有返回可读的结果' }
-    };
+      state: current
+    });
   }
 
   const stamp = asText(now) || new Date().toISOString();
@@ -500,7 +520,7 @@ export async function runDecisionScan({
   const truncated = Number(counts.truncated) || Number(scanned.truncated) || 0;
   const status = unreadable > 0 || truncated > 0
     ? 'partial'
-    : (merged.added.length === 0 ? 'empty' : 'ok');
+    : (merged.added.length === 0 && merged.unpaired === 0 ? 'empty' : 'ok');
   const waitingAfter = pendingOf(nextState, projectId);
   const receipt = {
     mode: 'scanned',
@@ -510,6 +530,8 @@ export async function runDecisionScan({
     added: merged.added.length,
     duplicates: merged.duplicates,
     suppressed: merged.suppressed,
+    // 只有用户一方原话、助手没有确认的条目：没有列进候选，回执单独说清。
+    unpaired: merged.unpaired,
     pending: waitingAfter.length,
     counts,
     dropped,

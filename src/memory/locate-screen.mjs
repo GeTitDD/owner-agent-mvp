@@ -94,7 +94,7 @@ const emptyPending = () => ({ knowledge: 0, decisions: 0, total: 0 });
  *
  * - 知识候选：personal_proposals 里 status=pending 且 meta.contract=knowledge-candidate/v1 的记录。
  *   payload.projectId 有值就记那个项目；没有（域级 / 应用层候选）就沿 meta.sourceLessonIds
- *   找来源经验的项目，每个项目各记一条——一条候选可能同时是多个项目的待办。
+ *   找来源经验的项目，每个项目各记一条——一条候选可能同时是多个项目的未处理候选。
  *   域级候选没有来源经验时不归到任何项目：不能为了凑数把它算到第一个项目头上。
  * - 决策候选：#135 的 pendingSummary 已经按项目分好组，这里只取计数，不触发扫描。
  * - 动作级确认（写入 / 外发 / 删除）不是记忆候选，合同对不上，自然不计入。
@@ -220,14 +220,21 @@ const pendingLabelOf = (pending) => {
   return `待确认 ${pending.total}（知识 ${pending.knowledge} · 决策 ${pending.decisions}）`;
 };
 
+/** 已知未读之和：null（读不到）不参与相加，但只要有一类读到 > 0 就足以判断「确实有未读」。 */
+const knownUnreadOf = (unread) => [unread?.commits, unread?.dirty, unread?.events]
+  .reduce((sum, value) => (
+    value === null || value === undefined ? sum : sum + Math.max(0, Number(value) || 0)
+  ), 0);
+
 /**
  * 一行的关注档位与理由。
- * - 有已知未读才算「有未读」；读不到未读时不能替用户断言「有」，只能按上次看过时间排。
+ * - 已知的任一类未读 > 0 就算「有未读」：另一类读不到（total null）不能把它压回陈旧。
+ * - 三类都读不到时不能替用户断言「有」，只能按上次看过时间排。
  * - 没有水位（从未看过）按陈旧处理：它比超过 7 天更久没被看过。
  */
 const tierOf = ({ pending, unread, lastReadMs, nowMs }) => {
   if (pending.total > 0) return 'pending';
-  if (unread.total !== null && unread.total > 0) return 'unread';
+  if (knownUnreadOf(unread) > 0) return 'unread';
   if (isStaleAt(lastReadMs, nowMs)) return 'stale';
   return 'rest';
 };
@@ -241,8 +248,9 @@ const compareRows = (a, b) => {
     if (byPending !== 0) return byPending;
   }
   if (a.tier === 'pending' || a.tier === 'unread') {
-    const aUnread = a.unread.total ?? -1;
-    const bUnread = b.unread.total ?? -1;
+    // 未读数按「已知三类之和」比：total 为 null 的项目也有可比的数字。
+    const aUnread = knownUnreadOf(a.unread);
+    const bUnread = knownUnreadOf(b.unread);
     if (aUnread !== bUnread) return bUnread - aUnread;
   }
   if (a.tier === 'stale') {

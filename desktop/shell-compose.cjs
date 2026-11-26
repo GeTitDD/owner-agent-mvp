@@ -356,7 +356,7 @@
   };
 
   /**
-   * `/提炼决策` 的回执：待办优先、空结果要说「没有新的决策」、失败不伪装成功。
+   * `/提炼决策` 的回执：未处理候选优先、空结果要说「没有新的决策」、失败不伪装成功。
    * 新候选直接出卡，人不用再执行一次命令才看到内容。
    */
   const decisionReply = (result = {}) => {
@@ -379,9 +379,13 @@
     }
     const status = String(receipt.status ?? '');
     const added = Number(receipt.added) || 0;
+    const unpaired = Number(receipt.unpaired) || 0;
+    const unpairedNote = unpaired > 0
+      ? `另有 ${unpaired} 条只有一方说法：助手没有确认，未列入候选。`
+      : '';
     if (status === 'empty') {
       // 空就是空：说清扫过、没有新取舍，不给空白回复，也不拿假的候选顶上。
-      return { text: '没有新的决策：当前项目的会话里没有出现新的取舍。', blocks: [] };
+      return { text: `没有新的决策：当前项目的会话里没有出现新的取舍。${unpairedNote}`, blocks: [] };
     }
     const unreadable = Number(receipt.unreadable) || 0;
     const truncated = Number(receipt.truncated) || 0;
@@ -393,11 +397,13 @@
     ];
     if (truncated > 0) rows.push(['未扫到', `${truncated} 段（超过本次上限）`]);
     if (unreadable > 0) rows.push(['读不出来', `${unreadable} 段`]);
+    if (unpaired > 0) rows.push(['未配对', `${unpaired} 条（助手没有确认，未列入候选）`]);
     if (receipt.redactions > 0) rows.push(['脱敏', `${receipt.redactions} 处`]);
     const partial = status === 'partial';
-    const text = partial
+    const base = partial
       ? `扫描完成，但部分会话没读成：新增 ${added} 条候选，共 ${pending.length} 条未处理。`
       : `扫描完成：新增 ${added} 条决策候选，共 ${pending.length} 条未处理。`;
+    const text = `${base}${unpairedNote}`;
     return {
       text,
       blocks: added > 0 || pending.length > 0
@@ -1149,8 +1155,8 @@
 
     /**
      * `/提炼决策`（#135）：显式扫描当前项目的会话，产决策候选；
-     * 没有候选、扫描失败、还有待办都各给一条明确回执，不调模型、不留后台任务。
-     * 待办与拒绝名单由主进程存进 memory-scan.json，壳只显示结果。
+     * 没有候选、扫描失败、还有未处理候选都各给一条明确回执，不调模型、不留后台任务。
+     * 未处理候选与拒绝名单由主进程存进 memory-scan.json，壳只显示结果。
      */
     const runDecisionTurn = async (raw) => {
       const bridge = window.companion?.memory;
@@ -1513,7 +1519,7 @@
         await runComposeDecisionTurn(raw);
         return;
       }
-      // /提炼决策：只扫当前项目的会话，产决策候选并留在待办（不调模型）。
+      // /提炼决策：只扫当前项目的会话，产决策候选并留在未处理列表（不调模型）。
       const decisionScan = /^\/提炼决策$/u.exec(raw.trim());
       if (decisionScan) {
         await runDecisionTurn(raw);

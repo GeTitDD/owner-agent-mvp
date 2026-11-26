@@ -11,7 +11,7 @@
 })(typeof globalThis === 'undefined' ? null : globalThis, () => {
   // 不选项目时的名字。顶栏、确认弹窗、说明条共用同一个词，避免「全局 / 全部 / 无项目」三种叫法。
   const GLOBAL_LABEL = '全局';
-  const GLOBAL_READ = '读所有项目的记忆（跨项目聚合，只读）';
+  const GLOBAL_READ = '不选项目时按关注顺序列出全部项目（有待确认候选 > 有未读变化 > 超过 7 天未看 > 其余），只读';
   const GLOBAL_WRITE = '无——全局模式只读：任何写项目目录都会被拦下，要求先选项目';
   // 两个出口的固定标识：界面按钮与状态迁移共用，别在 DOM 里另写字符串。
   const EXITS = Object.freeze({ inSession: 'in-session', newSession: 'new-session' });
@@ -105,7 +105,7 @@
         label: '读取来源',
         text: target
           ? `之后读取「${targetLabel}」的项目记忆（本项目视角，不再是跨项目聚合）。`
-          : `之后读取所有项目的记忆：${GLOBAL_READ}。`
+          : `之后${GLOBAL_READ}。`
       },
       {
         key: 'write',
@@ -167,7 +167,7 @@
     const history = historyLabelOf(session, projects);
     const after = target
       ? `从现在起按「${targetLabel}」读、按「${targetLabel}」写`
-      : '从现在起按全局算：读所有项目的记忆，不写入任何项目';
+      : '从现在起按全局算：不选项目时按关注顺序列出全部项目，只读，不写入任何项目';
     return `（切换项目）这条会话的历史属于「${history}」；${after}。`;
   };
 

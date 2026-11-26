@@ -301,7 +301,7 @@
         note: str(skip.note) || '跳过之后，结论会标成「推断」，不算已验证。'
       },
       // #135：缺理由的决策候选点「接受」后追问一句；带上项目与指纹，
-      // 回答时由主进程按待办记录确认，回答本身不直接写库。
+      // 回答时由主进程按未处理候选记录确认，回答本身不直接写库。
       decision: decision?.projectId && decision?.fingerprint ? decision : null
     };
   };
@@ -310,7 +310,7 @@
    * 经验 / 候选 / 决策候选的审核卡：只画行与动作，判定交给调用方。
    * kind=lesson 时动作是「提升为候选」；kind=candidate 时是「接受 / 拒绝」；
    * kind=decision（#135）是会话扫描出的决策候选，动作是「接受 / 改写 / 拒绝」，
-   * 并带上项目与指纹，好让主进程按待办里的记录确认，不信任渲染层传的字段。
+   * 并带上项目与指纹，好让主进程按未处理候选里的记录确认，不信任渲染层传的字段。
    * #138：决策卡带一张内嵌表单（mode + editable + values + formActions）——
    * 候选改写与 `/记决策` 是同一张卡，不另建第二套表单。
    */
@@ -350,7 +350,7 @@
         .slice(0, 2),
       lessonId: str(data.lessonId),
       proposalId: str(data.proposalId),
-      // 决策候选：项目 + 指纹是回主进程找待办记录的键；缺理由单独带出去，界面要显式标注。
+      // 决策候选：项目 + 指纹是回主进程找未处理候选记录的键；缺理由单独带出去，界面要显式标注。
       projectId: str(data.projectId),
       fingerprint: str(data.fingerprint),
       missingReason: data.missingReason === true,

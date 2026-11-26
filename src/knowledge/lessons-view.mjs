@@ -64,6 +64,8 @@ const toItem = (lesson) => {
     id: String(lesson.id ?? ''),
     projectIds,
     projectId: projectIds[0] ?? null,
+    // 跨项目复现的经验有多个来源项目：页面要把它们都列出来，不能只留第一个。
+    projectLabel: projectIds.length ? projectIds.join(' · ') : '未记录',
     phenomenon: oneLine(lesson.phenomenon, 400) || '未命名经验',
     mechanism: oneLine(lesson.mechanism),
     countermeasure: oneLine(lesson.countermeasure),
@@ -184,7 +186,7 @@ const renderLesson = (item) => `<article class="lesson" id="lesson-${escapeHtml(
       <p class="lesson-meta">
         <span class="badge status-${escapeHtml(item.status)}">${escapeHtml(item.statusLabel)}</span>
         ${item.reproduced ? '<span class="badge badge-reproduced">已复现</span>' : ''}
-        <span>来源项目 <code>${escapeHtml(item.projectId ?? '未记录')}</code></span>
+        <span>来源项目 <code>${escapeHtml(item.projectLabel)}</code></span>
         ${item.createdAt ? `<span>创建于 ${escapeHtml(String(item.createdAt).replace('T', ' ').slice(0, 19))}</span>` : ''}
       </p>
     </header>
