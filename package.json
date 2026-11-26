@@ -78,7 +78,8 @@
     "e2e:desktop:at-session": "node scripts/e2e/desktop-at-session.mjs",
     "e2e:desktop:at-project": "node scripts/e2e/desktop-at-project.mjs",
     "e2e:desktop:project-write": "node scripts/e2e/desktop-project-write.mjs",
-    "e2e:desktop:config-box": "node scripts/e2e/desktop-config-box.mjs"
+    "e2e:desktop:config-box": "node scripts/e2e/desktop-config-box.mjs",
+    "e2e:desktop:setup-probe": "node scripts/e2e/desktop-setup-probe.mjs"
   },
   "main": "desktop/main.cjs",
   "build": {

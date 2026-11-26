@@ -104,6 +104,12 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     plan: (input) => invoke('companion:project-sync-plan', input),
     write: (input) => invoke('companion:project-sync-write', input)
   }),
+  // #128 /setup：probe 只读（逐项判定 + 建议写入清单）；apply 必须带 allow=true，
+  // 且只按最近一次探测的清单写。取消不调用 apply，所以不会留下任何文件。
+  setup: Object.freeze({
+    probe: () => invoke('companion:setup-probe'),
+    apply: (input) => invoke('companion:setup-apply', input)
+  }),
   diagrams: Object.freeze({
     dependency: (input) => invoke('companion:diagram-dependency', input),
     generate: (input) => invoke('companion:diagram-generate', input)

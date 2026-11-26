@@ -188,10 +188,34 @@
         <span class="config-sub">保存写回 companion.json；密钥只读环境变量，不写进文件</span>
         <button type="button" class="config-close" id="configClose" aria-label="关闭配置箱">✕</button>
       </div>
+      <!-- #128 /setup 的探测态：逐项判定 + 建议写入清单 + 一次确认 + 回执。
+           这里只搭壳，数据由主进程算好（src/setup-probe.mjs），判定文案不在渲染层另写一份。
+           放在 configBody 外面，是因为 configBody 每次重画都会 replaceChildren。 -->
+      <section class="cfg-probe" id="configProbePanel" aria-label="探测本机" hidden>
+        <div class="cfg-probe-head">
+          <b class="cfg-probe-title">探测本机</b>
+          <span class="cfg-probe-summary" id="configProbeSummary"></span>
+        </div>
+        <ul class="cfg-probe-items" id="configProbeItems"></ul>
+        <div class="cfg-probe-writes">
+          <h4 class="cfg-probe-writes-title">建议写入清单（只列会写盘的项）</h4>
+          <ul class="cfg-probe-write-list" id="configProbeWrites"></ul>
+          <p class="cfg-probe-note">清单里所有项共用下面这一次确认；取消则一项都不写。</p>
+        </div>
+        <ul class="cfg-probe-skips" id="configProbeSkips" hidden></ul>
+        <p class="cfg-probe-receipt" id="configProbeReceipt" role="status" hidden></p>
+        <ul class="cfg-probe-receipt-rows" id="configProbeReceiptRows" hidden></ul>
+        <div class="cfg-probe-actions">
+          <button type="button" class="config-btn" id="configProbeRecheck">重新探测</button>
+          <button type="button" class="config-btn" id="configProbeCancel">取消</button>
+          <button type="button" class="config-btn primary" id="configProbeApply">按清单写入</button>
+        </div>
+      </section>
       <div class="config-body" id="configBody"></div>
       <p class="config-status" id="configStatus" role="status" hidden></p>
       <div class="config-foot">
         <span class="config-note">探测 = 系统读到或默认值；手改 = 配置文件里是你写的值。</span>
+        <button type="button" class="config-btn" id="configProbeEntry">探测本机</button>
         <button type="button" class="config-btn" id="configCancel">取消</button>
         <button type="button" class="config-btn primary" id="configSave">保存</button>
       </div>
@@ -233,6 +257,8 @@
   <script type="module" src="./project-write-host.mjs"></script>
   <!-- #127 配置箱的数据与来源规则（纯函数）：模块脚本晚于经典脚本，渲染层点了才读。 -->
   <script type="module" src="./config-box-host.mjs"></script>
+  <!-- #128 /setup 探测：命令解析、判定文案与取消回执（纯函数）；探测本身在主进程。 -->
+  <script type="module" src="./setup-probe-host.mjs"></script>
   <!-- #131 同步状态：三态判定与顶栏文案只此一份；壳读不到时退回静态「未同步」。 -->
   <script type="module" src="./sync-status-host.mjs"></script>
   <script src="./shell.js"></script>

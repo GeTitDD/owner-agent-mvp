@@ -2801,6 +2801,161 @@ button.session-name { cursor: pointer; }
 .config-btn:hover { border-color: var(--accent); }
 .config-btn.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
 .config-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* #128 /setup 探测态：逐项判定 + 建议写入清单 + 一次确认 + 回执。
+   判定用四档色：可用（ok）/ 只读（中性）/ 缺失（danger）/ 需新建（warn）。
+   「存在但为空」与「缺失」是两件事：0 个技能仍按可用或只读上色，另挂一枚空态标记。 */
+.cfg-probe {
+  flex: none;
+  max-height: 52%;
+  overflow-y: auto;
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.cfg-probe-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.cfg-probe-title { font-size: 11.5px; }
+.cfg-probe-summary {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: normal;
+}
+
+.cfg-probe-items,
+.cfg-probe-write-list,
+.cfg-probe-skips,
+.cfg-probe-receipt-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cfg-probe-item {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 3px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.cfg-probe-label { color: var(--muted); font-size: 10.5px; }
+.cfg-probe-value {
+  min-width: 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.cfg-probe-badge {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  color: var(--muted);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.cfg-probe-badge[data-verdict="ok"] { background: var(--ok-soft); color: var(--ok); }
+.cfg-probe-badge[data-verdict="readonly"] { background: var(--line-soft); color: var(--text); }
+.cfg-probe-badge[data-verdict="missing"] { background: var(--warn-soft); color: var(--danger); }
+.cfg-probe-badge[data-verdict="create"] { background: var(--warn-soft); color: var(--warn); }
+
+.cfg-probe-source {
+  color: var(--muted);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.cfg-probe-source[data-source="manual"] { color: var(--warn); }
+
+.cfg-probe-empty {
+  grid-column: 2 / -1;
+  color: var(--warn);
+  font-size: 9.5px;
+}
+
+.cfg-probe-detail {
+  grid-column: 2 / -1;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.cfg-probe-writes { margin-top: 6px; }
+
+.cfg-probe-writes-title {
+  margin: 0 0 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.cfg-probe-write {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  padding: 3px 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: 10px;
+}
+
+.cfg-probe-write-label { color: var(--muted); }
+.cfg-probe-write-line {
+  color: var(--text);
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.cfg-probe-write-to { color: var(--muted); }
+.cfg-probe-skip { color: var(--warn); font-size: 10px; padding: 2px 0; }
+.cfg-probe-skips { margin: 4px 0 0; }
+.cfg-probe-nowrite { color: var(--muted); font-size: 10px; padding: 3px 0; }
+
+.cfg-probe-note {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 9.5px;
+  white-space: normal;
+}
+
+.cfg-probe-receipt {
+  margin: 6px 0 2px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.cfg-probe-receipt[data-tone="ok"] { color: var(--ok); }
+.cfg-probe-receipt[data-tone="error"] { color: var(--danger); }
+
+.cfg-probe-receipt-rows li {
+  display: flex;
+  gap: 6px;
+  padding: 1px 0;
+  font-size: 9.5px;
+  color: var(--muted);
+}
+
+.cfg-probe-receipt-rows b { color: var(--text); font-weight: 600; }
+
+.cfg-probe-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
 /* #124 关联项目：胶囊栏在输入框上方，可逐个移除；跨项目只读那一句跟着胶囊走。 */
 .link-bar {
   flex: none;
