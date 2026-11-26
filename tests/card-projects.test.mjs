@@ -262,7 +262,7 @@ test('切换说明：点名历史归属与之后的算法，全局目标写明�
     session: boundSession('alpha', 'beta'), projects, targetId: ''
   });
   assert.match(globalNote, /历史属于「Alpha Repo」/u);
-  assert.match(globalNote, /读所有项目的记忆，不写入任何项目/u);
+  assert.match(globalNote, /按关注顺序列出全部项目，只读/u);
 
   const block = scope.switchNoteBlock({
     session: boundSession('alpha', 'alpha'), projects, targetId: 'beta'

@@ -10,6 +10,7 @@
 // 截图：定位屏、确认弹窗、跨项目标记、新开会话。
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { OwnerStore } from '../../src/owner-store.mjs';
 import { PersonalKnowledgeStore } from '../../src/personal-store.mjs';
 import {
@@ -117,6 +118,25 @@ const safeRemove = (target) => {
   }
 };
 
+/**
+ * 项目根各自包一层干净的 git 仓库。
+ *
+ * 临时目录常落在开发仓库内部；不隔离的话 `git status` 会一路找到外层仓库，
+ * 把几千个无关改动算进「未提交」。那样 #139 的定位屏会如实把这些已知未读排进
+ * 「有未读」档，用来验「没有未读 → 陈旧」的夹具就失真了。
+ * git 不可用时保持原样：探测会返回未知，陈旧档的断言同样成立。
+ */
+const initCleanRepo = (dir) => {
+  const run = (args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+  if (run(['init', '-q']).status !== 0) return false;
+  run(['add', '-A']);
+  const commit = run([
+    '-c', 'user.name=e2e', '-c', 'user.email=e2e@example.invalid',
+    'commit', '-q', '-m', 'seed'
+  ]);
+  return commit.status === 0;
+};
+
 /** 造两个项目 + 一份共享的领域知识 + 各一条项目经验。 */
 const seedData = ({ root, ownerDb, knowledgeDb }) => {
   const alphaRoot = path.join(root, 'alpha');
@@ -127,6 +147,7 @@ const seedData = ({ root, ownerDb, knowledgeDb }) => {
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: path.basename(dir), private: true, type: 'module', scripts: { test: 'node --test' }
     }, null, 2), 'utf8');
+    initCleanRepo(dir);
   }
   const owner = new OwnerStore(ownerDb);
   try {
@@ -207,7 +228,7 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
         && row.meta.length > 0
         && row.decision.length > 0),
       ui.locateRows.map((row) => `${row.name}|${row.pending}|${row.unread}|${row.meta}|${row.decision}`).join(' / '));
-    // 两个项目都没有仓库 / 水位：未读必须标「未知」，不能被压成 0；没有待确认就排在陈旧档。
+    // 两个项目都没有水位、工作树干净（各自独立仓库）：没有已知未读 → 陈旧档；列表不折叠。
     check('读不到变化的项目标「未知」，不写成 0',
       ui.locateRows.every((row) => row.unreadKnown === 'false' && /未知/u.test(row.unread)
         && !/\b0 提交/u.test(row.unread)),

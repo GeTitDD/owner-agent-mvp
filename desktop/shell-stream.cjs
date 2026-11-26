@@ -473,7 +473,7 @@
       // 同一个提问块只回答一次：旧节点若被重复点到，不再追加第二轮。
       if (!target || target.answers?.[blockIndex] !== undefined) return;
       // #135：缺理由的决策追问。跳过 = 仍缺理由；自由回答 = 补一句再确认。
-      // 走主进程的 acceptDecision：按待办记录写库，不把候选字段放在消息里。
+      // 走主进程的 acceptDecision：按未处理候选记录写库，不把候选字段放在消息里。
       const decisionProjectId = askNode.dataset.decisionProjectId ?? '';
       const decisionFingerprint = askNode.dataset.decisionFingerprint ?? '';
       if (decisionProjectId && decisionFingerprint) {
@@ -513,7 +513,7 @@
           role: 'assistant',
           text: result?.ok
             ? `已接受这条决策${reason ? `，理由：${reason}` : '，理由保持「缺理由」'}。${result.created ? '写入一条决策' : '库里已有同一指纹的决策，没有重复写'}，来源可回查。`
-            : `没接受成：${result?.reason || '原因未知'}。待办还在，可以稍后再试。`,
+            : `没接受成：${result?.reason || '原因未知'}。候选还在，可以稍后再试。`,
           blocks: []
         });
         await ctx.refreshThread();
@@ -715,7 +715,7 @@
         || action === 'save-accept' || action === 'cancel-edit' || action === 'confirm' || action === 'cancel')) {
         // #135 / #138：决策候选与 `/记决策` 共用一张卡。
         // 动作先由纯函数 reviewIntent 分发；改写只把本卡表单展开 / 收起，不写任何东西。
-        // 接受仍走主进程的待办（按项目 + 指纹找记录），改写字段只作为 edits 附过去。
+        // 接受仍走主进程的未处理候选（按项目 + 指纹找记录），改写字段只作为 edits 附过去。
         const memory = window.companion?.memory;
         if (!decisionForms) {
           notify('决策表单还没加载好，稍等一下再试。', 'error');
@@ -741,7 +741,7 @@
           return;
         }
         if (intent.type === 'cancel') {
-          // `/记决策` 的取消：只回一条回执，知识库与待办都不动。
+          // `/记决策` 的取消：只回一条回执，知识库与未处理候选都不动。
           answerLabel = '取消';
           reply = { text: '已取消：没有写入任何决策。', blocks: [] };
         } else if (intent.type === 'reject') {
@@ -783,12 +783,12 @@
             projectId,
             fingerprint,
             reason: intent.reason,
-            // 未改写时 edits 是 null：主进程按待办里的原内容确认，与 #135 完全一致。
+            // 未改写时 edits 是 null：主进程按未处理候选里的原内容确认，与 #135 完全一致。
             edits: intent.edits
           });
           if (!result?.ok) {
             answerLabel = '接受失败';
-            reply = { text: `没接受成：${result?.reason || '原因未知'}。待办还在，可以稍后再试。`, blocks: [] };
+            reply = { text: `没接受成：${result?.reason || '原因未知'}。候选还在，可以稍后再试。`, blocks: [] };
           } else {
             answerLabel = intent.edits ? '保存并接受' : '接受';
             const trace = [result.source, result.sessionId].filter(Boolean).join(' · ');

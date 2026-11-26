@@ -268,5 +268,7 @@
   "src/knowledge/lessons-view.mjs",
   "tests/workbench-lessons.test.mjs",
   "src/memory/locate-screen.mjs",
-  "tests/locate-screen.test.mjs"
+  "tests/locate-screen.test.mjs",
+  "tests/locate-mark-read.test.mjs",
+  "tests/decision-form-limits.test.mjs"
 ]

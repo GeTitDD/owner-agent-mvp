@@ -5,7 +5,7 @@
 // - rejected：人拒绝过的指纹（同内容不再提）。
 //
 // 这里只管读写与容错，状态怎么变由 decision-scan.mjs 的纯函数决定。
-// 文件坏了 / 不存在一律按空状态处理：丢的是本地待办，不伪造候选，也不碰知识库。
+// 文件坏了 / 不存在一律按空状态处理：丢的是本地未处理候选，不伪造候选，也不碰知识库。
 // 本文件不联网、不写项目目录、不调模型。
 
 import fs from 'node:fs';
@@ -13,7 +13,7 @@ import path from 'node:path';
 import { normalizeDecisionScanState } from './decision-scan.mjs';
 
 const DEFAULTS = {
-  // 待办与拒绝名单都要有上限，防止一份 JSON 无限长；超了丢最旧的。
+  // 未处理候选与拒绝名单都要有上限，防止一份 JSON 无限长；超了丢最旧的。
   sessions: 5000,
   fingerprints: 5000,
   pending: 500,

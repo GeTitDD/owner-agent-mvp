@@ -380,6 +380,88 @@ test('已有未处理候选：先给待办，不再扫描；回执说明还有 N
   }
 });
 
+test('#135 只有用户一方说法、助手没确认的候选不列入：回执记 unpaired 并说明原因', async () => {
+  const project = { id: 'alpha', name: 'Alpha 项目', root: 'D:\\demo\\alpha' };
+  const candidate = (fingerprint, overrides = {}) => ({
+    fingerprint,
+    projectId: 'alpha',
+    phenomenon: '构建太慢，统一改成 esbuild 打包',
+    intent: '换成 esbuild',
+    abandoned: '',
+    reason: '',
+    missingReason: true,
+    quote: { user: '构建太慢，统一改成 esbuild 打包', assistant: '好' },
+    evidence: [],
+    source: 'codex',
+    ...overrides
+  });
+  const scanOf = (candidates) => async () => ({
+    candidates, scannedKeys: [], counts: {}, dropped: {}
+  });
+
+  // 成对的一条留下，单方的一条不列入。
+  const mixed = await runDecisionScan({
+    state: normalizeDecisionScanState({}),
+    project,
+    scan: scanOf([
+      candidate('fp-paired', { partial: false }),
+      candidate('fp-lone', { partial: true, quote: { user: '构建太慢，统一改成 esbuild 打包', assistant: '' } })
+    ])
+  });
+  assert.equal(mixed.pending.length, 1, '只有助手确认过的那条才是候选');
+  assert.equal(mixed.pending[0].fingerprint, 'fp-paired');
+  assert.equal(mixed.receipt.unpaired, 1);
+  const mixedReply = compose.decisionReply(mixed);
+  assert.match(mixedReply.text, /另有 1 条只有一方说法：助手没有确认，未列入候选/u);
+  assert.ok(mixedReply.blocks[0].rows.some((row) => row[0] === '未配对' && /1 条/u.test(row[1])));
+
+  // 整轮只有单方说法：仍然不提供可接受的候选，回执把这件事说清。
+  const lone = await runDecisionScan({
+    state: normalizeDecisionScanState({}),
+    project,
+    scan: scanOf([candidate('fp-lone-2', { partial: true })])
+  });
+  assert.equal(lone.pending.length, 0);
+  assert.equal(lone.added.length, 0);
+  assert.equal(lone.receipt.unpaired, 1);
+  assert.equal(pendingOf(lone.state, 'alpha').length, 0);
+  const loneReply = compose.decisionReply(lone);
+  assert.match(loneReply.text, /助手没有确认/u);
+  assert.match(loneReply.text, /新增 0 条决策候选/u);
+  assert.deepEqual(loneReply.blocks, []);
+
+  // 旧文件里残留的 partial 记录也不会再出现在摘要里。
+  const legacy = normalizeDecisionScanState({
+    pending: [{ projectId: 'alpha', fingerprint: 'fp-old', partial: true, phenomenon: '旧的单方说法' }]
+  });
+  assert.equal(legacy.pending.length, 0);
+  assert.equal(pendingSummary(legacy).total, 0);
+});
+
+test('mergeCandidates 用调用方给的上限截断，不写死 DEFAULTS.pending', () => {
+  const candidate = (fingerprint) => ({
+    fingerprint,
+    projectId: 'alpha',
+    phenomenon: `现象 ${fingerprint}`,
+    intent: '',
+    abandoned: '',
+    reason: '',
+    missingReason: true,
+    evidence: [],
+    source: 'codex'
+  });
+  const first = mergeCandidates(normalizeDecisionScanState({}), [
+    candidate('fp-1'), candidate('fp-2')
+  ], { projectId: 'alpha' });
+  assert.equal(first.state.pending.length, 2);
+
+  const capped = mergeCandidates(first.state, [candidate('fp-3')], {
+    projectId: 'alpha', limits: { pending: 2 }
+  });
+  assert.equal(capped.state.pending.length, 2, '上限 2 由调用方给，不退回 500');
+  assert.deepEqual(capped.state.pending.map((item) => item.fingerprint), ['fp-2', 'fp-3']);
+});
+
 test('候选卡：四个字段都在，缺理由显式标注，动作只有接受 / 拒绝', () => {
   const candidate = {
     fingerprint: 'fp-card',
@@ -413,6 +495,15 @@ test('候选卡：四个字段都在，缺理由显式标注，动作只有接�
   assert.match(card.note, /可跳过/u);
   const [filled] = compose.decisionCandidateBlocks([{ ...candidate, reason: '反馈更快', missingReason: false }]);
   assert.equal(filled.note.includes('可跳过'), false);
+  assert.doesNotMatch(filled.note, /自动扫描只带出现象/u, '字段齐了就不再提示去改写里补');
+
+  // 自动扫描只带出现象：选择 / 放弃 / 理由空着就写「待补」，并说明去哪补，不写占位词。
+  const [blank] = compose.decisionCandidateBlocks([{
+    ...candidate, intent: '', abandoned: '', reason: '', missingReason: true
+  }]);
+  assert.equal(blank.rows.find((row) => row[0] === '选择')[1], '（待补）');
+  assert.equal(blank.rows.find((row) => row[0] === '放弃的方案')[1], '（待补）');
+  assert.match(blank.note, /自动扫描只带出现象；选择、放弃的方案与理由可以在「改写」里补/u);
 
   // 审核卡归一化要把决策候选的字段带进渲染层。
   const model = blocks.normalizeBlock(card);

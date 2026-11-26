@@ -165,7 +165,7 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     confirmDecision: (input) => invoke('companion:decision-confirm', input),
     setDecisionStatus: (input) => invoke('companion:decision-status', input),
     decisions: (input) => invoke('companion:decision-retrieve', input),
-    // #135 `/提炼决策`：只扫当前项目，候选先进待办；接受才写库，拒绝只记指纹。
+    // #135 `/提炼决策`：只扫当前项目，候选先进未处理列表；接受才写库，拒绝只记指纹。
     scanDecisions: (input) => invoke('companion:decision-scan', input),
     pendingDecisions: (input) => invoke('companion:decision-pending', input),
     acceptDecision: (input) => invoke('companion:decision-accept', input),

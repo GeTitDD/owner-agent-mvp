@@ -8,7 +8,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { MemoryWatermarkStore } from '../src/memory/watermark.mjs';
+import { ChatSessionStore } from '../src/chat-sessions.mjs';
 import {
   computeSinceLastSeen,
   markProjectRead,
@@ -31,6 +33,28 @@ const LATER = '2026-11-26T12:05:00.000Z';
 const FUTURE = '2027-01-01T00:00:00.000Z';
 
 const project = (id, name = id) => ({ id, name });
+
+/** 建一个只含项目表的最小库：会话存储只依赖 owner_projects，水位可以复用同一条连接。 */
+const makeProjectDb = (file) => {
+  const db = new DatabaseSync(file);
+  db.exec(`PRAGMA foreign_keys=ON;
+    CREATE TABLE IF NOT EXISTS owner_projects(
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, root TEXT NOT NULL UNIQUE,
+      primary_domain TEXT NOT NULL, domains TEXT NOT NULL, imports TEXT NOT NULL,
+      goal TEXT NOT NULL, status TEXT NOT NULL, owner_note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_event_at TEXT
+    );`);
+  const insert = (id, name = id) => {
+    db.prepare(`INSERT INTO owner_projects(
+      id,name,root,primary_domain,domains,imports,goal,status,owner_note,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(
+      id, name, `D:\\demo\\${id}`, 'software-engineering', '[]', '[]', '', 'active', '', OLD, OLD
+    );
+  };
+  insert('alpha', 'Alpha 项目');
+  insert('beta', 'Beta 项目');
+  return db;
+};
 
 const commits = [
   { sha: 'old', subject: '看过了', at: '2026-10-20T00:00:00.000Z' },
@@ -161,6 +185,50 @@ test('#140 浏览定位屏 / 切换 / 刷新都不推进水位，排序在依次
     assert.deepEqual(store.list().map((row) => row.at), [OLD, OLD, OLD], '刷新与切换不清零未读');
   } finally { store.close(); }
 }));
+
+test('#140 切换视图项目不清零：经 ChatSessionStore 切 A→B 后，定位预览不动两边水位', () => {
+  const dir = makeTempDir();
+  const db = makeProjectDb(path.join(dir, 'owner.sqlite'));
+  try {
+    const watermarks = new MemoryWatermarkStore({ db });
+    watermarks.put('alpha', OLD);
+    watermarks.put('beta', OLD);
+    const sessions = new ChatSessionStore({ db, now: () => LATER });
+
+    // 打开一条绑定 alpha、正在看 alpha 的会话。
+    const opened = sessions.createSession({ projectId: 'alpha', title: '定位屏切换' });
+    assert.equal(opened.viewProjectId, 'alpha');
+    const before = locateViewOf(watermarks, ['alpha', 'beta']);
+    assert.equal(rowOf(before, 'alpha').unread.total, 1);
+    assert.equal(rowOf(before, 'beta').unread.total, 1);
+
+    // A→B：只改「正在看」，历史归属仍是 alpha；这就是顶栏胶囊走的同一个入口。
+    const switched = sessions.setViewProject(opened.id, 'beta');
+    assert.equal(switched.viewProjectId, 'beta');
+    assert.equal(switched.projectId, 'alpha', '切换不改历史归属');
+    assert.equal(sessions.getSession(opened.id).viewProjectId, 'beta');
+
+    // 切完再取定位预览：两边的未读与水位都必须原样。
+    const after = locateViewOf(watermarks, ['alpha', 'beta']);
+    assert.deepEqual(after.projects, before.projects, '切换视图项目不改定位屏的任何一行');
+    assert.equal(rowOf(after, 'alpha').unread.total, 1);
+    assert.equal(rowOf(after, 'beta').unread.total, 1);
+    assert.deepEqual(
+      watermarks.list().map((row) => [row.projectId, row.at]),
+      [['alpha', OLD], ['beta', OLD]],
+      '两个项目的水位一个都没动'
+    );
+
+    // 切回 A 同样不清零：两个方向都不碰水位。
+    sessions.setViewProject(opened.id, 'alpha');
+    const back = locateViewOf(watermarks, ['alpha', 'beta']);
+    assert.deepEqual(back.projects, before.projects);
+    assert.deepEqual(watermarks.list().map((row) => row.at), [OLD, OLD]);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
 
 test('#140 `/变化` 仍然先算差异、再推水位：看完后同一批变化不会被自己吃掉', () => withDb(async (dbPath) => {
   const store = new MemoryWatermarkStore({ dbPath });

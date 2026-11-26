@@ -246,6 +246,39 @@ test('读不到变化的项目标「未知」，不写成 0，也不拖垮整屏
   assert.equal(rowOf(view, 'quiet').unreadLabel, '没有未读变化');
 });
 
+test('#139 部分可读也算未读：已知一类 > 0、另一类未知时进「有未读」档', () => {
+  // 提交读得到 2 条，知识（观察员事件）读不到：total 仍是 null，但已经有确定的未读。
+  const partial = unreadCountsOf({
+    probes: { commits: { ok: true }, dirty: { ok: true }, events: { ok: false } },
+    counts: { commits: 2, dirty: 0, events: 0 },
+    watermark: { known: true, at: '2026-11-01T00:00:00.000Z' }
+  });
+  assert.equal(partial.total, null);
+  assert.equal(partial.commits, 2);
+  assert.equal(partial.events, null);
+
+  const view = locateScreenView({
+    projects: [project('partial'), project('quiet'), project('few')],
+    attention: {
+      partial: { unread: partial, lastReadAt: '2026-11-25T12:00:00.000Z' },
+      quiet: { unread: unread(0, 0, 0), lastReadAt: '2026-11-25T12:00:00.000Z' },
+      // 三类都读得到、共 3 条：与 partial 同级，按「已知三类之和」比大小。
+      few: { unread: unread(1, 1, 1), lastReadAt: '2026-11-25T12:00:00.000Z' }
+    },
+    now: NOW
+  });
+  const partialRow = rowOf(view, 'partial');
+  assert.equal(partialRow.tier, 'unread', '已知提交 > 0 就足以算有未读，不能被未知的知识压回陈旧');
+  assert.match(partialRow.unreadLabel, /2 提交/u);
+  assert.match(partialRow.unreadLabel, /未知 知识/u);
+  assert.equal(rowOf(view, 'quiet').tier, 'rest');
+  // 同级排序用已知计数之和：2 > 3 不成立，所以 few（3）在前，partial（2，未知部分不计）在后。
+  assert.deepEqual(
+    view.projects.filter((row) => row.tier === 'unread').map((row) => row.projectId),
+    ['few', 'partial']
+  );
+});
+
 test('切换项目不清零：重复取同一次注意力数据，未读与水位都不变', () => withDb(async (dbPath) => {
   const store = new MemoryWatermarkStore({ dbPath });
   try {
