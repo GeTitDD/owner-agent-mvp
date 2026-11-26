@@ -1,6 +1,8 @@
+> 历史说明：以下内容描述 v1.0 及更早的形态（三档 / 两区面板），当前产品见根目录 README。图片与文档路径已按 docs/ 目录调整。
+
 # Owner Agent × Domain Knowledge Workbench — v1.0
 
-> **v1.0 Patch–Test–Repair** 与 v0.6–v0.9 全部能力均已合并到 main。真实 Pi + 真实 Docker 的全链路已通过首轮 L3 验收（见 [v1.1 验收报告](docs/ACCEPTANCE_REPORT_V1.1.md)）；更大范围的真实仓库与多轮可靠性验收见 [#14](https://github.com/GeTitDD/owner-agent-mvp/issues/14)。
+> **v1.0 Patch–Test–Repair** 与 v0.6–v0.9 全部能力均已合并到 main。真实 Pi + 真实 Docker 的全链路已通过首轮 L3 验收（见 [v1.1 验收报告](ACCEPTANCE_REPORT_V1.1.md)）；更大范围的真实仓库与多轮可靠性验收见 [#14](https://github.com/GeTitDD/owner-agent-mvp/issues/14)。
 
 **以 Owner 为中心的多项目管理 Agent + 个人领域知识资产工作台 + 可选桌面宠物。** 它继承 v0.4 的分层领域知识管理、版本快照、Pi Context Adapter 与人工审核能力，新增本地常驻 Owner Runtime（事件驱动、默认不持续调用 LLM）。
 
@@ -59,7 +61,7 @@
 
 ## 桌面宠物 Owner Companion（v1.0）
 
-![Owner Companion](docs/assets/companion/shell-panel.png)
+![Owner Companion](assets/companion/shell-panel.png)
 
 桌宠是产品入口：自然语言交办、处理决策、异常恢复、查看成果。它启动进程内 Owner Runtime（sidecar + Worker），审批令牌只留在主进程；L1 不依赖 OpenClaw，L2 完整工作台才连接 OpenClaw Control UI。
 
@@ -72,23 +74,23 @@
 - 用户语义层：首页只暴露「理解项目 / 整理知识 / 复盘沉淀 / 验收 / 修复 / 交付」，并给出一个「下一步建议」；一键理解先本地快速扫描，深度理解可选，画像按 commit 判断过期
 - 双层工作区：上半部分围绕当前项目（画像、图谱、想法、知识、Playbook），下半部分跨项目管理（决定、运行、结果）；「想法」是改进意见收件箱，对话里提到的建议自动采集，只收集不执行
 - 输入框只保留项目选择 + 一句话 + 发送；分析与讨论都在同一处继续，不再显示沙箱/范围/模型等额外组件
-- 手机端：直接用 Cindy 的手机 App，插件声明 mobile 投影即可（同一账号、同一台电脑）；不再维护独立 Expo 客户端。详见 [docs/MOBILE.md](docs/MOBILE.md)
+- 手机端：直接用 Cindy 的手机 App，插件声明 mobile 投影即可（同一账号、同一台电脑）；不再维护独立 Expo 客户端。详见 [docs/MOBILE.md](MOBILE.md)
 - Cindy 插件：`plugins/owner-companion/` 是自包含插件（项目、画像、想法、知识、依赖图都在插件自己的 Node worker 里），已在 Cindy 0.1.124 实测；安装后从左侧导航打开 Owner，手机端复用 Cindy 手机 App；打包产物 `plugins/dist/owner-companion-0.3.1.cindy`（`npm run cindy:pack`）
 - 知识流：经验 → 候选 → 人工接受 → 未验证 → 标记已验证；整理只报告重复/过短/未验证，不自动合并
 - GitHub / 补丁：只读仓库、Issues、PR；Draft PR 创建与补丁应用仅 UI 且需勾选确认；测试运行只允许 npm/node/pytest/dotnet/cargo/go 白名单命令
 - 项目图谱：依赖图本地扫描，控制流/数据流/状态/时序走 pstack 只读分析；模型只产出结构化图数据，Mermaid 由代码生成，可复制/导出 SVG；生成中显示已用时间，失败可重试，设置里可指定「图谱备用模型」自动回退
 - 知识闭环：`npm run knowledge:demo`；自动采集 `npm run knowledge:auto -- --once`；CLI `npm run knowledge -- --help`
 - A→B 实验：`npm run knowledge:eval:ab -- --root <dir> --allow-model`；Oracle Control 用 `knowledge:eval:hard`
-- 知识报告：[docs/KNOWLEDGE_LOOP_V1_DELIVERY.md](docs/KNOWLEDGE_LOOP_V1_DELIVERY.md)
-- 桌宠皮肤：Cindy 静态皮肤 + Codex Pet `pet.json` / spritesheet 动画包；悬停 `↻` 一键换肤、右键打开皮肤选择、设置页可导入动画包，见 [docs/MASCOT_PACK.md](docs/MASCOT_PACK.md)
+- 知识报告：[docs/KNOWLEDGE_LOOP_V1_DELIVERY.md](KNOWLEDGE_LOOP_V1_DELIVERY.md)
+- 桌宠皮肤：Cindy 静态皮肤 + Codex Pet `pet.json` / spritesheet 动画包；悬停 `↻` 一键换肤、右键打开皮肤选择、设置页可导入动画包，见 [docs/MASCOT_PACK.md](MASCOT_PACK.md)
 - 主界面：Cindy 式活动流 + 会话时间线 + Composer（Enter 发送 / Shift+Enter 列表接续）；页脚「诊断」可导出运行快照
-- UI 方向：任务驾驶舱（需要你 → 最近任务 → Composer 作用域）+ 任务详情 + 知识详情「内容/修订/来源/使用/冲突」；见 [docs/UI_GUIDE.md](docs/UI_GUIDE.md)
+- UI 方向：任务驾驶舱（需要你 → 最近任务 → Composer 作用域）+ 任务详情 + 知识详情「内容/修订/来源/使用/冲突」；见 [docs/UI_GUIDE.md](UI_GUIDE.md)
 - 沙箱策略：`auto` 按生态与一层子目录选择 profile（node-smoke / godot-headless / python-pytest），可按项目覆盖；缺失方案可「让 Agent 识别」后由你采用
-- 受控写入：交办先只读分诊；需要改文件时自动生成 HITL 写请求 → 你批准 → 隔离 worktree 子 Agent（own_python/Monty、无 bash/网络）→ 补丁审批 → 沙箱，见 [docs/WRITE_SUBAGENT.md](docs/WRITE_SUBAGENT.md)
+- 受控写入：交办先只读分诊；需要改文件时自动生成 HITL 写请求 → 你批准 → 隔离 worktree 子 Agent（own_python/Monty、无 bash/网络）→ 补丁审批 → 沙箱，见 [docs/WRITE_SUBAGENT.md](WRITE_SUBAGENT.md)
 - 只读 Python：Playbook 分析也可用 `own_python`（仓库以只读方式挂载 `/workspace`）；打包自检 `npm run e2e:packaged:monty`
-- 第三方声明：[docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)
-- 交付报告：[docs/COMPANION_V1_DELIVERY.md](docs/COMPANION_V1_DELIVERY.md)
-- Release Notes：[docs/RELEASE_NOTES_V1.0.md](docs/RELEASE_NOTES_V1.0.md)
+- 第三方声明：[docs/THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+- 交付报告：[docs/COMPANION_V1_DELIVERY.md](COMPANION_V1_DELIVERY.md)
+- Release Notes：[docs/RELEASE_NOTES_V1.0.md](RELEASE_NOTES_V1.0.md)
 
 ## v1.0（已合并）：Patch–Test–Repair
 
@@ -106,11 +108,11 @@
 npm run demo:repair   # Fake patch + Fake sandbox 端到端演示（零真实模型/Docker 调用）
 ```
 
-完整 schema、哈希链、审批断点、CLI 与测试矩阵见 **[Patch–Test–Repair 文档](docs/PATCH_TEST_REPAIR.md)**。
+完整 schema、哈希链、审批断点、CLI 与测试矩阵见 **[Patch–Test–Repair 文档](PATCH_TEST_REPAIR.md)**。
 
 ## v1.1 方向：OpenClaw-first 客户端复用（设计评审中）
 
-v1.1 改为复用 OpenClaw 的 Gateway、Control UI、会话、通知与桌面壳，Owner 只保留任务执行与审批权威。方案、模块级复用清单、许可证/依赖分析与两套集成方案的工作量比较见 **[OpenClaw-first 设计评审稿](docs/V1.1_OPENCLAW_FIRST.md)**。该方案**待 Owner 批准，尚未实施**。
+v1.1 改为复用 OpenClaw 的 Gateway、Control UI、会话、通知与桌面壳，Owner 只保留任务执行与审批权威。方案、模块级复用清单、许可证/依赖分析与两套集成方案的工作量比较见 **[OpenClaw-first 设计评审稿](V1.1_OPENCLAW_FIRST.md)**。该方案**待 Owner 批准，尚未实施**。
 
 ## 真实项目端到端验收（v1.1 / #14）
 
@@ -122,7 +124,7 @@ npm run acceptance:repair -- --level 2   # 真实 Pi 提案 + Fake provider，�
 npm run acceptance:repair -- --level 3   # 真实 Pi 修复 + 真实 Docker，验证 fail -> pass
 ```
 
-验收 fixture 的 bug 与失败测试都提交在 base，repair scope 排除 `tests/`，复测时额外校验测试文件 hash 未变，避免"改弱测试"得到 `tested_pass`。完整步骤、判据与限制见 **[端到端验收手册](docs/ACCEPTANCE_E2E.md)**；首轮 L1/L2/L3 实测结果见 **[v1.1 验收报告](docs/ACCEPTANCE_REPORT_V1.1.md)**。
+验收 fixture 的 bug 与失败测试都提交在 base，repair scope 排除 `tests/`，复测时额外校验测试文件 hash 未变，避免"改弱测试"得到 `tested_pass`。完整步骤、判据与限制见 **[端到端验收手册](ACCEPTANCE_E2E.md)**；首轮 L1/L2/L3 实测结果见 **[v1.1 验收报告](ACCEPTANCE_REPORT_V1.1.md)**。
 
 ## v0.9（已合并）：Sandboxed Test Runner
 
@@ -140,7 +142,7 @@ npm run demo:sandbox       # Fake provider 端到端演示（零 Docker/模型�
 npm run test:sandbox:real  # 需要 Linux Docker + OWNER_AGENT_SANDBOX_IMAGE_DIGEST，opt-in
 ```
 
-完整 SandboxProvider 接口、TestProfile、状态机、证据协议与安全边界见 **[Sandboxed Test Runner 设计文档](docs/SANDBOX_TEST_RUNNER.md)**。
+完整 SandboxProvider 接口、TestProfile、状态机、证据协议与安全边界见 **[Sandboxed Test Runner 设计文档](SANDBOX_TEST_RUNNER.md)**。
 
 ## v0.8（已合并）：Patch-first Coding Worker
 
@@ -158,7 +160,7 @@ npm run test:sandbox:real  # 需要 Linux Docker + OWNER_AGENT_SANDBOX_IMAGE_DIG
 npm run demo:patch     # fake agent 端到端：worktree → proposal → approve → apply → cleanup
 ```
 
-完整工作区边界、补丁协议、三条状态机与崩溃恢复见 **[Patch Coding Worker 设计文档](docs/PATCH_CODING_WORKER.md)**。
+完整工作区边界、补丁协议、三条状态机与崩溃恢复见 **[Patch Coding Worker 设计文档](PATCH_CODING_WORKER.md)**。
 
 ## v0.7（已合并）：Pi Analysis Worker
 
@@ -173,7 +175,7 @@ npm run demo:pi      # fake session 端到端演示（零 API 成本）
 OWNER_AGENT_REAL_PI_TEST=1 npm test   # 可选真实 Pi 冒烟（需凭据；跳过不失败）
 ```
 
-完整生命周期、隔离边界、取消/心跳策略与手动真实冒烟指南见 **[Pi Worker 设计文档](docs/PI_WORKER.md)**。
+完整生命周期、隔离边界、取消/心跳策略与手动真实冒烟指南见 **[Pi Worker 设计文档](PI_WORKER.md)**。
 
 ## v0.6（已合并）：Durable Task Coordinator
 
@@ -187,7 +189,7 @@ OWNER_AGENT_REAL_PI_TEST=1 npm test   # 可选真实 Pi 冒烟（需凭据；跳
 npm run demo:jobs   # 临时库 + fake clock 的端到端演示（审批/并发/崩溃恢复/取消/幂等）
 ```
 
-完整状态机、不变量、存储约束、Worker 契约与可复制命令见 **[Task Coordinator 设计文档](docs/TASK_COORDINATOR.md)**。
+完整状态机、不变量、存储约束、Worker 契约与可复制命令见 **[Task Coordinator 设计文档](TASK_COORDINATOR.md)**。
 
 ## 最快试用
 
@@ -201,7 +203,7 @@ npm run demo:jobs   # 临时库 + fake clock 的端到端演示（审批/并发/
 - `OWNER_AGENT_CAPTURE=1 pi -e /absolute/path/to/owner-agent-mvp-v0.5/adapters/pi/owner-extension.mjs` — 在**已登记且受信任**项目中显式开启 Pi 元数据采集。
 - 桌面宠物可选：`npm install --save-dev electron` 后执行 `npm run desktop`（本环境无法启动 Electron GUI，未做原生端到端验收）。
 
-详见 **[Owner Agent 架构与操作指南](docs/OWNER_AGENT.md)**。
+详见 **[Owner Agent 架构与操作指南](OWNER_AGENT.md)**。
 
 ### 本版交付边界
 
@@ -241,7 +243,7 @@ DOMAIN_CONTEXT_DB=/absolute/path/knowledge.sqlite DOMAIN_WORKBENCH_PORT=4321 npm
 - **数据只在本机**：默认存于 `~/.domain-context/index.sqlite`；支持界面导出 JSON，但**尚不支持 JSON 导入**，请定期备份原始数据库。
 - **安全边界**：仅绑定回环地址，无用户认证，不能直接暴露到互联网。当前浏览器预览仅覆盖仓库自带示例项目。
 
-完整 UI、知识数据与审核 API 文档见 **[Personal Knowledge Workbench 指南](docs/PERSONAL_WORKBENCH.md)**。
+完整 UI、知识数据与审核 API 文档见 **[Personal Knowledge Workbench 指南](PERSONAL_WORKBENCH.md)**。
 
 ## v0.3：从共享知识升级为分层可组合知识
 
@@ -252,7 +254,7 @@ DOMAIN_CONTEXT_DB=/absolute/path/knowledge.sqlite DOMAIN_WORKBENCH_PORT=4321 npm
 - **适用性：** 显式区分 applicable / needs_verification / not_applicable / conflict；与知识是否已验证分开。
 - **锁定上下文：** sharedSnapshotId / projectSnapshotId 分别锁定跨项目与项目特有知识，可以导出不可变的 Context Lock。
 
-完整模型、配置字段、示例与边界见 **[分层知识工程指南](docs/LAYERED_KNOWLEDGE.md)**。
+完整模型、配置字段、示例与边界见 **[分层知识工程指南](LAYERED_KNOWLEDGE.md)**。
 
 ### 第一条端到端路径（无需模型 API）
 
@@ -365,7 +367,7 @@ SDK 示例基于官方 `createAgentSession`、`DefaultResourceLoader`、`Session
 
 ## P2：运行轨迹到知识的可审核演化
 
-P2 的实操、命令、JSON 示例和权限边界见 **[P2_KNOWLEDGE_EVOLUTION.md](docs/P2_KNOWLEDGE_EVOLUTION.md)**。无需真实模型，可运行：
+P2 的实操、命令、JSON 示例和权限边界见 **[P2_KNOWLEDGE_EVOLUTION.md](P2_KNOWLEDGE_EVOLUTION.md)**。无需真实模型，可运行：
 
 ```bash
 npm run demo:evolution
