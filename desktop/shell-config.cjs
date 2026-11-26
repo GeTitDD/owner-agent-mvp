@@ -529,7 +529,13 @@
     });
     saveButton?.addEventListener('click', () => void save());
     // #128 探测入口：齿轮打开后点「探测本机」进入探测态；结果仍留在同一个配置箱里。
-    probeEntry?.addEventListener('click', () => void openProbe());
+    // 「探测本机」不是另一套探测：和 `/setup` 走同一个方法（同样的判定、同样的回执）。
+    // 有会话时回执落进流；没有会话时只留在箱子里。
+    probeEntry?.addEventListener('click', () => {
+      const runSetup = ctx.ui.compose?.runSetupFromUi;
+      if (typeof runSetup === 'function') void runSetup();
+      else void openProbe();
+    });
     probeRecheck?.addEventListener('click', () => void runProbe());
     probeApply?.addEventListener('click', () => void applyProbe());
     probeCancel?.addEventListener('click', () => cancelProbe());

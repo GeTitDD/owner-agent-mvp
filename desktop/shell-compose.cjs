@@ -730,7 +730,7 @@
      * 回执通过 onReceipt 回调回来，作为一条普通回复落库（键值块），与 #114 / #115 同形。
      * 取消 / 直接关闭配置箱也走这条回调，回执会写明「0 处写入」。
      */
-    const runSetupTurn = async (raw) => {
+    const runSetupTurn = async (raw, { appendCommand = true } = {}) => {
       if (!setupProbes()) {
         ctx.ui.header.setError('探测模块还没加载好，稍等一下再试。');
         return;
@@ -742,17 +742,22 @@
       busy = true;
       try {
         const sessionId = currentId();
-        await store.append({ id: sessionId, role: 'user', text: raw });
+        // 命令入口记一条用户消息；配置箱里的「探测本机」是同一个方法，但用户没打字，
+        // 所以不伪造一条 /setup，只把回执落进流。
+        if (appendCommand) await store.append({ id: sessionId, role: 'user', text: raw });
         const opened = await ctx.ui.config.openProbe({
           onReceipt: async (receipt, meta = {}) => {
             if (!receipt) return;
-            await store.append({
-              id: sessionId,
-              role: 'assistant',
-              text: receipt.text ?? '',
-              blocks: Array.isArray(receipt.blocks) ? receipt.blocks : []
-            });
-            await ctx.refreshThread();
+            // 没有会话时（从配置箱点进来）只把回执留在箱子里，不硬塞进一个不存在的会话。
+            if (sessionId) {
+              await store.append({
+                id: sessionId,
+                role: 'assistant',
+                text: receipt.text ?? '',
+                blocks: Array.isArray(receipt.blocks) ? receipt.blocks : []
+              });
+              await ctx.refreshThread();
+            }
             // 取消也刷新：流里要能看到「0 处写入」的回执，而不是静默收起。
             if (meta.cancelled === true) input.focus();
           }
@@ -761,8 +766,10 @@
           ctx.ui.header.setError('探测没有完成，配置与目录都没有变化。');
           return;
         }
-        input.value = threadApi.draftAfterSend();
-        resizeInput();
+        if (appendCommand) {
+          input.value = threadApi.draftAfterSend();
+          resizeInput();
+        }
       } finally {
         busy = false;
       }
@@ -1041,7 +1048,9 @@
       sync: syncComposer,
       focus: () => input.focus(),
       dismissSlash,
-      dismissAt
+      dismissAt,
+      // 配置箱里的「探测本机」走与 `/setup` 同一条路，只是不伪造一条用户消息。
+      runSetupFromUi: () => runSetupTurn('/setup', { appendCommand: false })
     };
   };
 

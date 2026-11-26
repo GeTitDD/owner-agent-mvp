@@ -56,10 +56,11 @@
                 aria-label="配置">⚙</button>
       </span>
       <!-- 无边框窗口必须自己给出口：以前旧面板有 ×，撤壳时丢了，窗口既关不掉也拖不动。
-           — 收起到托盘（程序继续跑，托盘里有「退出」）；× 直接退出。 -->
+           × 只收起窗口（后台继续跑）；真正退出在托盘菜单里，避免误点一下就把
+           正在跑的心跳和同步一起带走。 -->
       <span class="window-controls">
-        <button type="button" class="win-btn" id="windowHide" title="收起到托盘" aria-label="收起">—</button>
-        <button type="button" class="win-btn" id="windowQuit" title="退出 Owner Companion" aria-label="退出">×</button>
+        <button type="button" class="win-btn" id="windowHide"
+                title="收起到托盘（退出在托盘菜单里）" aria-label="收起">×</button>
       </span>
       </div>
       <!-- 第二行只放状态：写范围 + 同步。440px 的窗口塞不下五枚胶囊，

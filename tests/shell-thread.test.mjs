@@ -119,9 +119,9 @@ test('顶栏只有两个入口与一个写范围状态位，监控与导出不�
   assert.match(configEntry[0], /<button[^>]*id="configToggle"/u, '配置入口应是一个按钮');
   // 配置箱本体在全窗口覆盖层，不进 header。
   assert.doesNotMatch(header, /id="configBox"/u, '配置箱不应在顶栏里');
-  // 无边框窗口必须自带出口：收起 + 退出。
+  // 无边框窗口必须自带出口：× 只收起，不退出（退出在托盘菜单）。
   assert.match(header, /id="windowHide"/u, '缺「收起到托盘」按钮');
-  assert.match(header, /id="windowQuit"/u, '缺「退出」按钮');
+  assert.doesNotMatch(header, /id="windowQuit"/u, '顶栏不该有直接退出按钮');
   // 第二行是状态行：写范围 + 同步 + 补同步，没有别的按钮。
   const statusRow = header.slice(header.indexOf('class="status-row"'));
   assert.match(statusRow, /id="writeScope"/u);

@@ -186,8 +186,8 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     check('only the session and project slots are entries',
       header.capsules === 2 && header.otherControls === 0,
       `capsules=${header.capsules} others=${header.otherControls}`);
-    check('the frameless window has its own hide and quit buttons',
-      header.windowControls === 2, `windowControls=${header.windowControls}`);
+    check('the frameless window has a single hide button, not a quit button',
+      header.windowControls === 1, `windowControls=${header.windowControls}`);
     // 监控与导出不再占位：它们分别由 `/监控` 与 `/发布` 承担；
     // 状态行里只有写范围这一行文字（由 card-scope 给出「只读·全局」）。
     check('the write-scope slot keeps its label',

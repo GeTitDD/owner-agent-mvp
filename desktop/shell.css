@@ -2721,13 +2721,6 @@ button.session-name { cursor: pointer; }
   color: var(--text);
 }
 
-/* 退出是唯一不可逆的动作：悬停时给红，别和收起混在一起。 */
-#windowQuit:hover {
-  border-color: var(--danger);
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
 .config-backdrop {
   position: fixed;
   inset: 0;
