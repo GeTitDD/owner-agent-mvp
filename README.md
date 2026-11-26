@@ -164,6 +164,8 @@ src/
 docs/adr/                 0011 单入口卡片 · 0012 写入按目的地 · 0013 同步冲突交人
 ```
 
+完整说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：运行时拓扑、IPC 边界、四条关键链路、数据布局与已知缺口。
+
 ## 安全边界
 
 - 工具面只读；写入必须过 `write-gate` 与确认卡；
