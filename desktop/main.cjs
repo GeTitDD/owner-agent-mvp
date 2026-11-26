@@ -4416,6 +4416,24 @@ const registerIpc = () => {
     return githubActivityFor(project.root);
   });
 
+  // #126 分享到飞书：渲染层把组装好的「原文 + 出处」交过来，主进程只做一次投递。
+  // webhook 值与 #91 同一条通道（env → ~/.owner-agent/feishu.json），永不回传渲染层；
+  // 未配置时返回 skipped 与原因，界面据此给「未配置 + 去哪配」，不静默失败、不自动重试。
+  ipcMain.handle('companion:share-feishu', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const text = String(input?.text ?? '');
+    if (!text.trim()) return { status: 'failed', detail: '分享内容为空' };
+    const webhookUrl = await loadFeishuWebhook();
+    if (!webhookUrl) return { status: 'skipped', detail: 'feishu webhook not configured' };
+    try {
+      const feishu = await importEsm('../src/observer/feishu.mjs');
+      const result = await feishu.deliverFeishu({ webhookUrl, text });
+      return { status: result.status, detail: result.detail };
+    } catch (error) {
+      return { status: 'failed', detail: `feishu delivery error: ${error?.message ?? error}` };
+    }
+  });
+
   // 只允许打开 GitHub 仓库链接，避免渲染进程打开任意网址。
   ipcMain.handle('companion:open-external', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');

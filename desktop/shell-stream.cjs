@@ -404,14 +404,11 @@
     /**
      * 外发 / 删除确认卡（#116）的唯一落点：与风险卡同一套「我的 + 回复」两条消息。
      * 取消只留回执，不生成新卡；删除一项则给回执，并把剩余项做成下一张卡。
+     * #126：分享到飞书的外发卡由 ui.atShare 投递（真正发飞书的那一步在它里面），
+     * 本函数只负责把动作交出去、把回执与「已选择」标记落进流。
      */
     const actConfirm = (button) => ctx.report('确认卡', async () => {
       if (!listApi.canCompose(currentId())) return;
-      const api = window.OwnerConfirmCards ?? window.OwnerConfirm;
-      if (!api?.confirmAction) {
-        notify('确认卡模块还没加载好，稍等一下再试。', 'error');
-        return;
-      }
       const cardNode = button.closest('[data-block="confirm"]');
       const item = button.closest('.msg');
       if (!cardNode || !item) return;
@@ -423,15 +420,29 @@
       // 同一张确认卡只选一次：旧节点若被重复点到，不再追加第二轮。
       if (target.answers?.[blockIndex] !== undefined) return;
 
+      const share = ctx.ui.atShare;
+      const api = window.OwnerConfirmCards ?? window.OwnerConfirm;
+      const shareCard = share?.knowsCard?.(card.id) === true;
+      if (!shareCard && !api?.confirmAction) {
+        notify('确认卡模块还没加载好，稍等一下再试。', 'error');
+        return;
+      }
+
       const index = button.dataset.confirmIndex === undefined
         ? -1
         : Number(button.dataset.confirmIndex);
-      const action = api.confirmAction({
-        card,
-        action: button.dataset.confirmAction,
-        index,
-        at: new Date().toISOString()
-      });
+      const action = shareCard
+        ? await share.act({
+          cardId: card.id,
+          action: button.dataset.confirmAction,
+          at: new Date().toISOString()
+        })
+        : api.confirmAction({
+          card,
+          action: button.dataset.confirmAction,
+          index,
+          at: new Date().toISOString()
+        });
       // 不在动作表里的点击（伪造参数 / 存储里的旧动作）：不改流，也不假装收到。
       if (!action) return;
 
@@ -447,6 +458,44 @@
         role: 'assistant',
         text: action.reply?.text ?? '',
         blocks: Array.isArray(action.reply?.blocks) ? action.reply.blocks : []
+      });
+      await ctx.refreshThread();
+      ctx.ui.compose.focus();
+    });
+
+    /**
+     * 分享回执上的「重试」（#126）：不直接发送，只用同一份草稿再出一张外发确认卡。
+     * 旧回执按「点过就留记录」的口径收起按钮，重试也只能由人再点一次。
+     */
+    const retryShare = (button) => ctx.report('重试分享', async () => {
+      if (!listApi.canCompose(currentId())) return;
+      const share = ctx.ui.atShare;
+      if (typeof share?.retry !== 'function') {
+        notify('分享模块还没加载好，稍等一下再试。', 'error');
+        return;
+      }
+      const cardNode = button.closest('[data-block="share"]');
+      const item = button.closest('.msg');
+      if (!cardNode || !item) return;
+      const blockIndex = Number(cardNode.dataset.blockIndex ?? -1);
+      const messageIndex = Number(item.dataset.index);
+      const target = messages[messageIndex];
+      if (!target || target.answers?.[blockIndex] !== undefined) return;
+
+      const reply = share.retry({ draftId: button.dataset.shareRetry ?? '' });
+      if (!reply) return;
+
+      const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, '重试');
+      const answers = answered[messageIndex]?.answers ?? {};
+      if (Number.isInteger(target.seq)) {
+        await store.answers({ id: currentId(), seq: target.seq, answers });
+      }
+      await store.append({ id: currentId(), role: 'user', text: '重试分享到飞书' });
+      await store.append({
+        id: currentId(),
+        role: 'assistant',
+        text: reply.text ?? '',
+        blocks: Array.isArray(reply.blocks) ? reply.blocks : []
       });
       await ctx.refreshThread();
       ctx.ui.compose.focus();
@@ -476,6 +525,12 @@
       const confirmButton = event.target.closest?.('[data-confirm-action]');
       if (confirmButton) {
         void actConfirm(confirmButton);
+        return;
+      }
+      // #126 分享回执的「重试」：只再出一次外发确认，不绕过确认直接发。
+      const shareRetry = event.target.closest?.('[data-share-retry]');
+      if (shareRetry) {
+        void retryShare(shareRetry);
         return;
       }
       const riskButton = event.target.closest?.(

@@ -141,9 +141,13 @@ test('选中的下标按消息顺序输出；越界与无文字的条目被忽�
 
 // ── 与 #122 容器的接缝：prompt 与 session 都带 mount ────────────────
 
-test('方法卡注册表：三个方法都带 mount，菜单顺序按父 spec', () => {
-  ['prompt', 'project', 'session'].forEach((key) => {
+test('方法卡注册表：四个方法都带 mount，菜单顺序按父 spec', () => {
+  // #126 加第四条「分享到飞书」：共享模块自己提供 mount，容器仍不认识具体方法。
+  ['prompt', 'project', 'session', 'share'].forEach((key) => {
     assert.equal(typeof at.atContent(key).mount, 'function', `${key} 缺 mount`);
   });
-  assert.deepEqual(at.atMethods().map((method) => method.key), ['prompt', 'project', 'session']);
+  assert.deepEqual(
+    at.atMethods().map((method) => method.key),
+    ['prompt', 'project', 'session', 'share']
+  );
 });

@@ -30,7 +30,7 @@
   /**
    * 方法列表是数据：菜单按这份数据逐行画，容器不写死任何分支。
    * 形状：{ key, title, desc }；key 同时是内容注册表 AT_CONTENT 的键。
-   * 现在有三条（生成 prompt / 关联项目 / 关联会话），分享随后续票接入。
+   * 现在有四条（生成 prompt / 关联项目 / 关联会话 / 分享到飞书），顺序按父 spec。
    */
   const AT_METHODS = Object.freeze([
     Object.freeze({
@@ -47,6 +47,11 @@
       key: 'session',
       title: '关联会话',
       desc: '指向别的 Agent 的会话，让 Agent 需要时去那段里检索'
+    }),
+    Object.freeze({
+      key: 'share',
+      title: '分享到飞书',
+      desc: '勾选的原文加出处发到飞书；发出前先确认，只支持飞书'
     })
   ]);
 
@@ -94,6 +99,19 @@
         const instance = tools?.ctx?.ui?.sessionPoints;
         if (!api || typeof instance?.mount !== 'function') {
           wrap.append(document.createTextNode('关联会话模块还没加载好，稍等一下再试。'));
+          return null;
+        }
+        return instance.mount(wrap, tools);
+      }
+    }),
+    share: Object.freeze({
+      lead: '在对话流里勾选要分享的原文，再选目标；发送前会先出一次外发确认。',
+      // #126：目标选择与发送由 shell-at-share.cjs 注册；勾选沿用 #123 的流内勾选。
+      // 草稿与确认卡映射挂在装配层的 ui.atShare 上，卡片关掉以后回执上的「重试」仍能找回内容。
+      mount: (wrap, tools) => {
+        const instance = tools?.ctx?.ui?.atShare;
+        if (typeof instance?.mount !== 'function') {
+          wrap.append(document.createTextNode('分享模块还没加载好，稍等一下再试。'));
           return null;
         }
         return instance.mount(wrap, tools);

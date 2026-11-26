@@ -12,6 +12,7 @@
   // 十二种生成式 UI 块。#109 的清单，也是样本回复里的顺序，e2e 按这个顺序断言。
   // #113 的确认卡（type=risk）是另一种块：它只在需要写入确认时出现，不进 /blocks 样本，
   // 所以不塞进这份「全览清单」，否则十二种与样本顺序的验收会被一张业务卡搅乱。
+  // #126 的分享回执（type=share）同理：业务块，不进全览清单。
   const BLOCK_TYPES = [
     'card', 'table', 'kpi', 'line', 'donut', 'timeline',
     'kv', 'code', 'diff', 'tool', 'badges', 'ask'
@@ -324,6 +325,32 @@
     };
   };
 
+  /**
+   * 分享回执（#126）：结果、目标、会话、条数、失败原因、能不能重试。
+   * 能不能重试按「状态 + 草稿 id」重算，不信任存储里的 canRetry：
+   * 成功没有重试，失败 / 取消才给，而且草稿 id 必须真的在。
+   */
+  const SHARE_STATUSES = new Set(['sent', 'failed', 'cancelled']);
+  const normalizeShare = (data) => {
+    const status = str(data.status).toLowerCase();
+    const state = SHARE_STATUSES.has(status) ? status : 'failed';
+    const count = num(data.count);
+    const draftId = str(data.draftId);
+    return {
+      type: 'share',
+      status: state,
+      title: str(data.title) || '分享回执 · 飞书',
+      target: str(data.target) || '飞书',
+      session: str(data.session),
+      count: count !== null && count > 0 ? Math.floor(count) : 0,
+      detail: str(data.detail),
+      at: str(data.at),
+      draftId,
+      canRetry: state !== 'sent' && Boolean(draftId),
+      answered: ''
+    };
+  };
+
   const NORMALIZERS = {
     card: normalizeCard,
     table: normalizeTable,
@@ -338,6 +365,8 @@
     badges: normalizeBadges,
     ask: normalizeAsk,
     risk: normalizeRiskBlock,
+    // #126：分享回执。失败 / 取消带草稿 id，渲染层据此给「重试」。
+    share: normalizeShare,
     // #116：外发 / 删除确认卡。动作表由 confirm-cards.cjs 重算，存储里的「免问」不会复活。
     confirm: (data) => (confirmApi?.normalizeConfirmCard
       ? confirmApi.normalizeConfirmCard(data)
@@ -396,8 +425,9 @@
     const blocks = list(reply.blocks).map((block, index) => {
       const model = normalizeBlock(block, index);
       const answer = answers[index];
-      // 提问块与确认卡都靠 answers 收起按钮：同一套「点过就留记录」的机制，不另开字段。
-      if ((model.type === 'ask' || model.type === 'risk' || model.type === 'confirm')
+      // 提问块、确认卡与分享回执都靠 answers 收起按钮：同一套「点过就留记录」的机制，不另开字段。
+      if ((model.type === 'ask' || model.type === 'risk' || model.type === 'confirm'
+        || model.type === 'share')
         && answer !== undefined) {
         model.answered = str(answer);
       }
