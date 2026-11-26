@@ -28,6 +28,19 @@ const SYNC_TOKEN = 'gh-127-token';
 const SECTION_IDS = ['model', 'paths', 'share', 'skills', 'write', 'watch', 'sync'];
 const SECTION_LABELS = ['模型接口', '目录', '分享', '技能', '写入范围', '监控', '同步'];
 
+// 假的 Pi 家目录：模型下拉的可选项来自它，测试不依赖开发机上装过什么。
+const PI_HOME = path.join(tempBase, 'pi-home');
+const seedPiHome = () => {
+  fs.mkdirSync(path.join(PI_HOME, 'agent'), { recursive: true });
+  fs.writeFileSync(path.join(PI_HOME, 'agent', 'models.json'), JSON.stringify({
+    providers: { 'fixture-provider': { models: [{ id: 'fixture-model' }] } }
+  }), 'utf8');
+  fs.writeFileSync(path.join(PI_HOME, 'agent', 'auth.json'), JSON.stringify({
+    'fixture-provider': { token: 'not-a-real-token' }
+  }), 'utf8');
+};
+seedPiHome();
+
 /** 界面上能断言的形状：入口、覆盖层、七段、每行的值与来源、密钥行。 */
 const readUi = (panel) => panel.evaluate(`(() => {
   const box = document.getElementById('configBox');
@@ -123,7 +136,9 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
       OWNER_AGENT_APPROVAL_TOKEN: APPROVAL_TOKEN,
       GITHUB_TOKEN: SYNC_TOKEN,
       OWNER_AGENT_SIDECAR_TOKEN: '',
-      OWNER_AGENT_SIDECAR_TOKEN_FILE: ''
+      OWNER_AGENT_SIDECAR_TOKEN_FILE: '',
+      // 模型下拉只认这份假目录，不读开发机的 ~/.pi。
+      OWNER_AGENT_PI_HOME: PI_HOME
     },
     showPanel: true,
     page: 'shell.html'
@@ -168,7 +183,7 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
       rows.filter((row) => !row.hasInput && !row.display).map((row) => row.id).join(','));
     check('空值项给占位文案（留空 = 默认）',
       rows.filter((row) => row.hasInput && !row.display)
-        .every((row) => row.kind === 'text' || row.kind === 'list'),
+        .every((row) => row.kind === 'text' || row.kind === 'list' || row.kind === 'model'),
       rows.filter((row) => row.hasInput && !row.display).map((row) => row.id).join(','));
     check('每行都标了来源（探测 / 手改）',
       rows.every((row) => ['探测', '手改'].includes(row.sourceText))
@@ -179,6 +194,33 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
         === 'model,diagramModel,gatewayUrl,includePaths,chatSkills'
       && rows.filter((row) => row.kind === 'readonly').every((row) => row.hasInput === false),
       rows.filter((row) => row.hasInput).map((row) => row.id).join(','));
+
+    // 模型行：可以手填，也可以从「已装模型」下拉里选；选完输入框跟着变。
+    const picker = await panel.evaluate(`(() => {
+      const pick = document.querySelector('[data-pick-for="model"]');
+      return {
+        exists: Boolean(pick),
+        disabled: pick ? pick.disabled : true,
+        options: pick ? [...pick.options].map((option) => option.value).filter(Boolean) : []
+      };
+    })()`);
+    check('模型行有「已装模型」下拉，选项来自模型目录',
+      picker.exists && picker.disabled === false
+      && picker.options.includes('fixture-provider/fixture-model'),
+      JSON.stringify(picker));
+    await panel.evaluate(`(() => {
+      const pick = document.querySelector('[data-pick-for="model"]');
+      pick.value = 'fixture-provider/fixture-model';
+      pick.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    const picked = await panel.evaluate("document.getElementById('cfg-model').value");
+    check('从下拉选一项会写进输入框', picked === 'fixture-provider/fixture-model', picked);
+    // 还原初始值，后面的保存 / 取消断言仍按种子配置走。
+    await panel.evaluate(`(() => {
+      const input = document.getElementById('cfg-model');
+      input.value = 'seed-model-127';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
 
     // 来源标注：种子配置里只有 model 偏离默认，其它可写项还是默认值。
     check('来源按「文件里的值 vs 内置默认」判：model 手改、其余探测',

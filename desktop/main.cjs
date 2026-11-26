@@ -107,6 +107,8 @@ let chatSessionStore = null;
 // 对话的模型后端（只读 Pi 会话）：按需创建，换模型时释放，退出时释放。
 let chatModule = null;
 let chatService = null;
+// 模型目录：读 Pi 的 provider/model 清单，给配置箱做「已装模型」下拉。
+let modelCatalogModule = null;
 // #89：项目库视图与快照存储。视图复用 src/project-library.mjs，快照落 owner 库的同一连接。
 let projectLibraryModule = null;
 // #107：全局模式的跨项目聚合（复用库视图口径，只读）。
@@ -3172,6 +3174,29 @@ const registerIpc = () => {
       // #109 的块原样带过去：存储层不解释块结构。
       blocks: Array.isArray(input?.blocks) ? input.blocks : []
     });
+  });
+
+  // 模型目录：配置箱的「主模型 / 图谱模型」用它列出已装模型。
+  // 只读 provider/model 与「有没有凭据」；不读、不回传任何密钥值。
+  // OWNER_AGENT_PI_HOME 只给验收用：指向假的 Pi 家目录，测试不依赖真机。
+  ipcMain.handle('companion:model-catalog', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const mod = modelCatalogModule ??= await importEsm('../src/model-catalog.mjs');
+    const home = process.env.OWNER_AGENT_PI_HOME || path.join(os.homedir(), '.pi');
+    const agentDir = path.join(home, 'agent');
+    const readJson = (file) => {
+      try {
+        return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/u, ''));
+      } catch {
+        return null;
+      }
+    };
+    const stores = ['models-store.json', 'models.json']
+      .map((name) => ({ file: name, data: readJson(path.join(agentDir, name)) }))
+      .filter((store) => store.data);
+    const auth = readJson(path.join(agentDir, 'auth.json')) ?? {};
+    const catalog = mod.buildModelCatalog({ stores, auth, env: process.env });
+    return { ...catalog, current: config.model || '', diagram: config.diagramModel || '' };
   });
 
   // 对话：只读 Pi 会话。会话消息由壳自己落库（见 companion:card-session-append），

@@ -251,5 +251,7 @@
   "src/memory/sync-status-store.mjs",
   "desktop/sync-status-host.mjs",
   "tests/sync-status.test.mjs",
-  "scripts/e2e/desktop-sync-offline.mjs"
+  "scripts/e2e/desktop-sync-offline.mjs",
+  "src/model-catalog.mjs",
+  "tests/model-catalog.test.mjs"
 ]

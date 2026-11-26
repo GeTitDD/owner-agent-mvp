@@ -1317,12 +1317,15 @@ button.session-name { cursor: pointer; }
 .projects {
   position: absolute;
   top: calc(100% + 6px);
-  left: 0;
+  /* 项目胶囊在窗口右侧：浮层必须向左展开，否则会被窗口边缘裁掉。 */
+  right: 0;
+  left: auto;
   z-index: 20;
   display: flex;
   flex-direction: column;
   gap: 6px;
   width: 300px;
+  max-width: calc(100vw - 16px);
   max-height: 360px;
   padding: 8px;
   border: 1px solid var(--line);
@@ -2851,6 +2854,25 @@ button.session-name { cursor: pointer; }
   border-color: var(--accent);
   outline: none;
 }
+
+/* 模型行：输入框可手填，右侧下拉从已装模型里挑。窄窗口下输入框先让位。 */
+.cfg-model-pick {
+  flex: 0 0 auto;
+  max-width: 44%;
+  padding: 3px 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 10.5px;
+}
+
+.cfg-model-pick:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.cfg-model-pick:disabled { color: var(--muted); }
 
 .cfg-value {
   min-width: 0;

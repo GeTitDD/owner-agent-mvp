@@ -102,6 +102,10 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   chat: Object.freeze({
     ask: (input) => invoke('companion:chat-ask', input)
   }),
+  // 模型目录：配置箱用来列「已装模型」，只返回 provider/model 与有无凭据。
+  models: Object.freeze({
+    catalog: () => invoke('companion:model-catalog')
+  }),
   diagrams: Object.freeze({
     dependency: (input) => invoke('companion:diagram-dependency', input),
     generate: (input) => invoke('companion:diagram-generate', input)

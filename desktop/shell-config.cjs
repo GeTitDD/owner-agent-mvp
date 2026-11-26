@@ -38,6 +38,9 @@
     const probeCancel = $('configProbeCancel');
 
     const settings = window.companion?.settings ?? null;
+    // 模型目录：打开配置箱时读一次，用来给「主模型 / 图谱模型」做可选项。
+    // 读不到就只剩手填，不影响保存。
+    let modelCatalog = null;
     // #128 探测与写入走单独的 IPC：探测只读，写入必须一次确认（allow=true）。
     const setupBridge = window.companion?.setup ?? null;
     // 数据与规则模块是 ESM，晚于本脚本执行；打开那一刻再取，读不到就明说。
@@ -105,6 +108,39 @@
         field.append(input);
         return field;
       }
+      // 模型行：输入框照旧可手填，旁边给一个「已装模型」下拉——不用背 provider/model。
+      if (row.kind === 'model') {
+        const input = el('input', 'cfg-input');
+        input.type = 'text';
+        input.id = `cfg-${row.id}`;
+        input.dataset.cfg = row.id;
+        input.value = row.display;
+        input.placeholder = row.placeholder;
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+        input.setAttribute('aria-label', row.label);
+        const options = Array.isArray(modelCatalog?.items) ? modelCatalog.items : [];
+        const pick = el('select', 'cfg-model-pick');
+        pick.id = `cfg-pick-${row.id}`;
+        pick.dataset.pickFor = row.id;
+        pick.setAttribute('aria-label', `${row.label}：从已装模型里选`);
+        pick.append(new Option(options.length ? '选已装模型…' : '没有读到模型目录', ''));
+        for (const item of options) {
+          const label = item.ready ? `${item.id}` : `${item.id}（未配置凭据）`;
+          const option = new Option(label, item.id);
+          if (item.id === row.display) option.selected = true;
+          pick.append(option);
+        }
+        pick.disabled = options.length === 0;
+        pick.addEventListener('change', () => {
+          if (!pick.value) return;
+          input.value = pick.value;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.focus();
+        });
+        field.append(input, pick);
+        return field;
+      }
       const valueNode = el('span', row.kind === 'secret' ? 'cfg-value cfg-secret' : 'cfg-value', row.display);
       valueNode.dataset.cfg = row.id;
       field.append(valueNode);
@@ -169,6 +205,13 @@
       try {
         if (!settings?.get) throw new Error('这个窗口没有拿到主进程接口（companion.settings）');
         const payload = await settings.get() ?? {};
+        // 模型目录只是「能选什么」，读不到不影响配置本体：失败就退回纯手填。
+        try {
+          const catalog = await window.companion?.models?.catalog?.();
+          modelCatalog = catalog && Array.isArray(catalog.items) ? catalog : null;
+        } catch {
+          modelCatalog = null;
+        }
         if (token !== loadToken) return false;
         values = payload;
         facts = payload.configBox && typeof payload.configBox === 'object' ? payload.configBox : {};

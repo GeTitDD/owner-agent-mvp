@@ -38,15 +38,15 @@ export const SECTIONS = Object.freeze([
       Object.freeze({
         id: 'model',
         label: '主模型',
-        kind: 'text',
+        kind: 'model',
         key: 'model',
         placeholder: '留空 = Pi 默认模型',
-        effect: '对话、补丁、Playbook 都改用它；留空退回 Pi 默认。'
+        effect: '对话、补丁、Playbook 都改用它；可从已装模型里选，也可手填 provider/model。'
       }),
       Object.freeze({
         id: 'diagramModel',
         label: '图谱模型',
-        kind: 'text',
+        kind: 'model',
         key: 'diagramModel',
         placeholder: '留空 = 跟主模型',
         effect: '只在生成依赖图时用；留空不单独计费。'
@@ -285,7 +285,7 @@ export const listText = (value) => (Array.isArray(value) ? value.map(textOf).fil
 export function displayOf(row, values = {}, facts = {}) {
   if (!row) return '';
   if (row.kind === 'list') return listText(values[row.key]);
-  if (row.kind === 'text') return textOf(values[row.key]);
+  if (row.kind === 'text' || row.kind === 'model') return textOf(values[row.key]);
   if (row.kind === 'readonly') {
     const bag = row.from ? facts[row.from.bag] : null;
     const picked = bag ? textOf(bag[row.from.key]) : '';
@@ -349,7 +349,7 @@ export function buildRows({ values = {}, facts = {} } = {}) {
       kind: row.kind,
       key: row.key ?? '',
       effect: row.effect,
-      input: row.kind === 'text' || row.kind === 'list',
+      input: row.kind === 'text' || row.kind === 'list' || row.kind === 'model',
       placeholder: row.placeholder ?? '',
       source,
       sourceLabel: SOURCE_LABELS[source]
