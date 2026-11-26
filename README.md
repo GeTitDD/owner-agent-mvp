@@ -3,6 +3,7 @@
 **多项目、非侵入式的本地 AI 观察员。** 只读地理解你的仓库，把结论沉淀成项目记忆；所有写操作按目的地分级，跨出本机一律先问人。
 
 <p>
+  <img alt="CI" src="https://github.com/GeTitDD/owner-agent-mvp/actions/workflows/ci.yml/badge.svg">
   <img alt="license" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue">
   <img alt="node" src="https://img.shields.io/badge/node-%E2%89%A522.13-brightgreen">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20Electron-6f42c1">
@@ -84,12 +85,31 @@ turn-start → delta*（50ms 合并）→ turn-done（权威全文）
 
 **要求**：Windows、Node.js ≥ 22.13、可用的模型凭据（Pi 登录态或 provider 环境变量）。
 
+### 用发布的便携版
+
+从 [Releases](https://github.com/GeTitDD/owner-agent-mvp/releases) 下载 `OwnerCompanion-<version>-portable.exe`，双击即用；数据写在 `%APPDATA%\owner-agent-mvp`。
+发布前没有代码签名，SmartScreen 可能提示「未知发布者」；校验 `SHA256SUMS.txt` 后再运行。
+
+### 从源码运行
+
 ```powershell
 git clone https://github.com/GeTitDD/owner-agent-mvp.git
 cd owner-agent-mvp
 npm install
 npm run desktop
 ```
+
+### 自己打包
+
+```powershell
+npm run desktop:pack     # dist-companion/OwnerCompanion-<version>-portable.exe
+```
+
+完整说明（备份、升级、为什么桌面客户端不做容器化）见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
+
+> 不提供 Docker 镜像：客户端依赖真实桌面会话、本机绝对路径与宿主机的 Pi 登录态；
+> 容器化会同时失去窗口/托盘、写入目的地边界与密钥隔离。要做「一台机器常驻、多端访问」，
+> 正确形态是拆出无 GUI 的 sidecar 服务，而不是给 Electron 套 Dockerfile。
 
 首次启动：
 
@@ -164,6 +184,7 @@ npm run e2e:desktop:card-shell
 端到端测试用离屏 Electron + CDP；对话相关用例走 `OWNER_AGENT_CHAT_FAKE=1` 的假流，不依赖凭据与网络。
 
 设计文档：`docs/STREAMING_AND_STREAM_STATES.md`、`docs/adr/`、`GLOSSARY.md`。
+贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题见 [SECURITY.md](SECURITY.md)。
 
 ## 已知未完成
 

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞（私密）
+    url: https://github.com/GeTitDD/owner-agent-mvp/security/advisories/new
+    about: 不要用公开 issue 报告安全漏洞。
+  - name: 贡献与测试约定
+    url: https://github.com/GeTitDD/owner-agent-mvp/blob/main/CONTRIBUTING.md
+    about: 提交前必须通过的检查与代码约定。
