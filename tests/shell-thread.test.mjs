@@ -109,11 +109,15 @@ test('顶栏只放开三个入口：#106 的会话、#107 的项目、#127 的�
   assert.ok(entriesStart > 0 && entriesEnd > entriesStart, '入口与状态位的顺序变了');
   const outsideEntries = header.slice(0, entriesStart) + header.slice(entriesEnd);
   const configEntry = /<span class="config-entry">[\s\S]*?<\/span>/u.exec(outsideEntries);
-  assert.ok(configEntry, '缺少配置入口（#127 的齿轮）');
+  assert.ok(configEntry, '缺配置入口');
   assert.equal((outsideEntries.match(/<span class="config-entry">/gu) ?? []).length, 1, '配置入口只能有一个');
   assert.match(configEntry[0], /<button[^>]*id="configToggle"/u, '配置入口应是一个按钮');
-  // 配置箱本体挂在顶栏之外（全窗口覆盖层），别塞进 header。
-  assert.doesNotMatch(header, /id="configBox"/u, '配置箱不应塞进顶栏');
-  const withoutConfig = outsideEntries.replace(configEntry[0], '');
-  assert.doesNotMatch(withoutConfig, /<button|<select|<input|<a /u, '顶栏入口之外只放这一个齿轮');
+  // 配置箱本体在全窗口覆盖层，不进 header。
+  assert.doesNotMatch(header, /id="configBox"/u, '配置箱不应在顶栏里');
+  // 入口之外只允许两个控件：配置入口与 #131 的补同步按钮。
+  assert.match(outsideEntries, /id="syncRetry"/, '补同步按钮要在顶栏');
+  const withoutEntries = outsideEntries
+    .replace(configEntry[0], '')
+    .replace(/<button[^>]*id="syncRetry"[^>]*>[^<]*<\/button>/u, '');
+  assert.doesNotMatch(withoutEntries, /<button|<select|<input|<a /u, '入口之外只有配置与补同步两个控件');
 });

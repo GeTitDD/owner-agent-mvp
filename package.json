@@ -51,6 +51,7 @@
     "e2e:desktop:projects": "node scripts/e2e/desktop-projects.mjs",
     "e2e:desktop:card-shell": "node scripts/e2e/desktop-card-shell.mjs",
     "e2e:desktop:card-projects": "node scripts/e2e/desktop-card-projects.mjs",
+    "e2e:desktop:sync-offline": "node scripts/e2e/desktop-sync-offline.mjs",
     "e2e:desktop:blocks": "node scripts/e2e/desktop-blocks.mjs",
     "e2e:desktop:copy-export": "node scripts/e2e/desktop-copy-export.mjs",
     "e2e:desktop:ops-proposals": "node scripts/e2e/desktop-ops-proposals.mjs",
