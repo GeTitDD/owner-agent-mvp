@@ -94,6 +94,8 @@ let knowledgeTidyModule = null;
 let diagramModule = null;
 let executionStatusModule = null;
 let ideaCaptureModule = null;
+// #137 灵感 → Lesson：模块按需加载；提升只写经验表，候选仍由人在经验卡上再点一次。
+let ideaLessonModule = null;
 // #96 整理要访问外网：验收机用假的抓取器，真实环境才走网络（见 ideaFetchForAcceptance）。
 let ideaSortModule = null;
 // #86 会话扫描：模块按需加载；扫描是显式动作，不在启动或轮询里调用。
@@ -3516,12 +3518,34 @@ const registerIpc = () => {
     const text = String(input?.text ?? '');
     const result = await api('/owner/v1/ideas', { method: 'POST', body: { text } });
     const item = result?.item ?? {};
+    const ideaId = String(item.id ?? '') || '';
     return {
       ok: true,
       // 去重命中时如实说「没有新增」，回执里的「写了什么」才准确。
       wrote: result?.duplicate ? 'ideas 表 · 已有条目，未新增' : 'ideas 表 · 1 条',
-      result: String(item.id ?? '') || '已记录'
+      result: ideaId || '已记录',
+      // #137 回执上的「提升为 Lesson」靠这个 id 找回灵感；拿不到 id 时渲染层不给动作。
+      ideaId
     };
+  });
+
+  // #137 灵感回执上的「提升为 Lesson」：原文作为现象，绑定当前项目，来源与证据指回这条灵感。
+  // 只写经验表；知识候选要人在经验卡上再点一次（HITL 2），这里不自动入库。
+  ipcMain.handle('companion:idea-lesson', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) throw new Error('知识库未初始化，暂时不能把灵感提升为 Lesson。');
+    const projectId = String(input?.projectId ?? '').trim();
+    if (!projectId) throw new Error('提升为 Lesson 要先在顶栏选一个项目：这次什么都没写。');
+    if (!store?.getProject?.(projectId)) throw new Error(`项目不存在：${projectId}`);
+    ideaLessonModule = ideaLessonModule ?? await importEsm('../src/idea-lesson.mjs');
+    const result = ideaLessonModule.promoteIdeaToLesson({
+      store,
+      personalStore,
+      id: String(input?.ideaId ?? ''),
+      projectId
+    });
+    if (!result.ok) throw new Error(result.reason);
+    return result;
   });
 
   // #115 项目目录同步：两段式，先算清单再写。

@@ -237,6 +237,8 @@
 
   const renderKv = (model) => {
     const node = blockNode(model);
+    // #137 灵感回执上的动作要找回那条灵感：id 挂在块节点上，点击时直接读。
+    if (model.ideaId) node.dataset.ideaId = model.ideaId;
     if (model.title) node.append(headNode(model.title));
     if (model.rows.length === 0) {
       node.append(el('p', 'block-note', '这里没有要列出的字段。'));
@@ -249,6 +251,22 @@
       rows.append(item);
     });
     node.append(rows);
+
+    // 点过动作就收起按钮，只留记录：与提问块、确认卡同一套口径。
+    if (model.answered) {
+      node.append(el('p', 'review-answered', `已选择：${model.answered}`));
+      return node;
+    }
+    if (!model.actions?.length) return node;
+    // 复用审核卡的按钮样式；动作仍只声明「点了什么」，行为在对话流的点击代理里。
+    const actions = el('div', 'review-actions kv-actions');
+    for (const action of model.actions) {
+      const button = el('button', 'review-action', action.label);
+      button.type = 'button';
+      button.dataset.receiptAction = action.id;
+      actions.append(button);
+    }
+    node.append(actions);
     return node;
   };
 

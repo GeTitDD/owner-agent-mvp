@@ -32,6 +32,25 @@
     };
   };
 
+  /**
+   * 灵感提升后的经验卡（#137）：与 /经验 的经验卡同一形状，动作只有「提升为候选」。
+   * 现象来自灵感原文，机制 / 对策为空时照实写「未记录」；这张卡只声明动作，
+   * 真正的提升仍走 actReview（HITL 2），不会自动写知识库。
+   */
+  const ideaLessonReview = (lesson) => ({
+    type: 'review',
+    kind: 'lesson',
+    lessonId: String(lesson?.id ?? ''),
+    title: String(lesson?.phenomenon ?? ''),
+    rows: [
+      ['机制', String(lesson?.mechanism ?? '') || '（未记录）'],
+      ['对策', String(lesson?.countermeasure ?? '') || '（未记录）'],
+      ['状态', String(lesson?.verificationStatus ?? '')]
+    ],
+    actions: [{ id: 'promote', label: '提升为候选' }],
+    note: '提升只生成候选；接受后才会写进知识库。'
+  });
+
   /** 建立对话流这一块：查 DOM、绑事件，返回给装配层用的入口。 */
   const create = (ctx) => {
     const threadApi = ctx.threadApi;
@@ -646,6 +665,75 @@
     });
 
     /**
+     * 灵感回执上的「提升为 Lesson」（#137）：把这条灵感提升成当前项目的一条经验，
+     * 随后把普通的经验卡追加进流里，人可以继续「提升为候选」。
+     *
+     * 没有选项目时当场拒绝、一个字都不写；同一条灵感点第二次返回已有经验，
+     * 不新建第二条。动作只执行一次：点过之后按 answers 收起按钮。
+     */
+    const actReceiptAction = (button) => ctx.report('提升为 Lesson', async () => {
+      if (!listApi.canCompose(currentId())) return;
+      const cardNode = button.closest('[data-block="kv"]');
+      const item = button.closest('.msg');
+      if (!cardNode || !item) return;
+      const blockIndex = Number(cardNode.dataset.blockIndex ?? -1);
+      const messageIndex = Number(item.dataset.index);
+      const target = messages[messageIndex];
+      const block = target?.blocks?.[blockIndex];
+      const ideaId = String(cardNode.dataset.ideaId || block?.ideaId || '');
+      if (!target || !block || !ideaId) return;
+      if (target.answers?.[blockIndex] !== undefined) return;
+      if ((button.dataset.receiptAction ?? '') !== 'promote-lesson') return;
+
+      let answerLabel = '';
+      let reply = { text: '', blocks: [] };
+      const projectId = String(ctx.ui.header.viewProjectId?.() ?? '');
+      if (!projectId) {
+        // 没有当前项目：明确说先选项目，不拿灵感自己的项目偷偷兜底。
+        answerLabel = '未选项目';
+        reply = { text: '提升为 Lesson 要先在顶栏选一个项目：这次什么都没写。', blocks: [] };
+      } else {
+        const ideas = window.companion?.ideas;
+        if (typeof ideas?.toLesson !== 'function') {
+          notify('提升接口还没加载好，稍等一下再试。', 'error');
+          return;
+        }
+        const result = await ideas.toLesson({ ideaId, projectId });
+        if (!result?.ok) {
+          answerLabel = '提升失败';
+          reply = { text: `没提升成：${result?.reason || '原因未知'}`, blocks: [] };
+        } else if (result.created === false) {
+          answerLabel = '已有经验';
+          reply = {
+            text: `没有新建经验：这条灵感已经提升过（已有 ${result.lesson?.id ?? '这条经验'}）。`,
+            blocks: [ideaLessonReview(result.lesson)]
+          };
+        } else {
+          answerLabel = '已提升为 Lesson';
+          reply = {
+            text: '已生成经验：现象是灵感原文，来源与证据都指回这条灵感。提升为候选要再点一次，不会自动入库。',
+            blocks: [ideaLessonReview(result.lesson)]
+          };
+        }
+      }
+
+      const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, answerLabel);
+      const answers = answered[messageIndex]?.answers ?? {};
+      if (Number.isInteger(target.seq)) {
+        await store.answers({ id: currentId(), seq: target.seq, answers });
+      }
+      await store.append({ id: currentId(), role: 'user', text: answerLabel });
+      await store.append({
+        id: currentId(),
+        role: 'assistant',
+        text: reply.text,
+        blocks: Array.isArray(reply.blocks) ? reply.blocks : []
+      });
+      await ctx.refreshThread();
+      ctx.ui.compose.focus();
+    });
+
+    /**
      * 外发 / 删除确认卡（#116）的唯一落点：与风险卡同一套「我的 + 回复」两条消息。
      * 取消只留回执，不生成新卡；删除一项则给回执，并把剩余项做成下一张卡。
      * #126：分享到飞书的外发卡由 ui.atShare 投递（真正发飞书的那一步在它里面），
@@ -796,6 +884,12 @@
         void answerAsk(button);
         return;
       }
+      // #137 灵感回执上的「提升为 Lesson」：块内按钮只声明动作，提升在 actReceiptAction 一处。
+      const receiptButton = event.target.closest?.('[data-receipt-action]');
+      if (receiptButton) {
+        void actReceiptAction(receiptButton);
+        return;
+      }
       // 经验 / 候选审核：提升、接受、拒绝都走这一条，动作只执行一次。
       const reviewButton = event.target.closest?.('[data-review-action]');
       if (reviewButton) {
@@ -861,5 +955,5 @@
     };
   };
 
-  return { emptyHint, sessionContext, create };
+  return { emptyHint, sessionContext, ideaLessonReview, create };
 });

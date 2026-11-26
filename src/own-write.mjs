@@ -34,6 +34,12 @@ export const OWN_WRITE_KINDS = Object.freeze(Object.keys(OWN_WRITE_ACTIONS));
 
 /** 记灵感的命令前缀；/idea 是同一件事的英文别名，方便输入法外的人。 */
 export const OWN_WRITE_COMMAND = '/记灵感';
+
+/**
+ * 灵感回执上唯一的动作（#137）：把这条灵感提升为 Lesson。
+ * 只有记灵感的成功回执带它；其他写入动作的回执不带动作，界面上也就不会多出按钮。
+ */
+export const IDEA_LESSON_ACTION = Object.freeze({ id: 'promote-lesson', label: '提升为 Lesson' });
 const COMMAND_PATTERN = /^\/(?:记灵感|idea)(?:\s+([\s\S]*))?$/u;
 
 const stamp = () => new Date().toISOString();
@@ -98,11 +104,13 @@ export function ownWriteDecision({ kind, deletes = false, granted = {} } = {}) {
  * @param {string} [input.wrote] 写了什么（例如「ideas 表 · 1 条」）
  * @param {string} [input.result] 结果 / 版本号 / 条目 id
  * @param {string} [input.reason] 失败原因（成功时忽略）
+ * @param {string} [input.ideaId] 记灵感写成的条目 id；成功且拿到 id 时才写进回执
+ * @param {object[]} [input.actions] 回执块上的动作（#137：只有灵感回执带「提升为 Lesson」）
  * @param {string} [input.at] 时间；缺省取当前时间（测试可固定）
  * @returns {{text: string, blocks: object[]}}
  */
 export function ownWriteReceipt({
-  action, ok, wrote = '', result = '', reason = '', at = stamp()
+  action, ok, wrote = '', result = '', reason = '', ideaId = '', actions = [], at = stamp()
 } = {}) {
   const label = action?.label ?? '写入';
   const target = action?.writeTo ?? '自有目录';
@@ -113,17 +121,25 @@ export function ownWriteReceipt({
     ['写入', ok ? (wrote || target) : '未写入（0 处）'],
     ['结果', ok ? (result || '成功') : '失败']
   ];
+  // #137 灵感 id 单独一行：回执上的动作靠它找到要提升的那条灵感，不用从「结果」里猜。
+  if (ok && ideaId) rows.push(['灵感', String(ideaId)]);
   if (!ok) rows.push(['原因', String(reason ?? '').trim() || '没有给出原因']);
   rows.push(['时间', String(at)]);
+  const block = {
+    type: 'kv',
+    title: ok ? `写入回执 · ${label}` : `写入回执 · ${label}（失败）`,
+    rows
+  };
+  // 动作只在调用方明确给出时挂上；其他写入动作保持原来的纯键值回执。
+  if (Array.isArray(actions) && actions.length > 0) {
+    block.actions = actions.map((item) => ({ id: item.id, label: item.label }));
+    if (ideaId) block.ideaId = String(ideaId);
+  }
   return {
     text: ok
       ? `写入回执（自有目录）：${label}已写入 ${wrote || target}${result ? `，${result}` : ''}。`
       : `写入回执（自有目录）：${label}没有写成：${String(reason ?? '').trim() || '没有给出原因'}`,
-    blocks: [{
-      type: 'kv',
-      title: ok ? `写入回执 · ${label}` : `写入回执 · ${label}（失败）`,
-      rows
-    }]
+    blocks: [block]
   };
 }
 
@@ -177,6 +193,10 @@ export async function runOwnWrite({
 
   try {
     const outcome = await execute(payload);
+    // #137 灵感回执带 id + 一个「提升为 Lesson」动作；id 必须像一条真实 id，
+    // 否则（例如主进程只回了「已记录」）宁可不给动作，也不造一个点不通的按钮。
+    const rawId = action.key === 'idea' ? String(outcome?.ideaId ?? outcome?.result ?? '').trim() : '';
+    const ideaId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(rawId) ? rawId : '';
     return {
       ...base,
       ok: true,
@@ -185,6 +205,8 @@ export async function runOwnWrite({
         ok: true,
         wrote: String(outcome?.wrote ?? '').trim(),
         result: String(outcome?.result ?? '').trim(),
+        ideaId,
+        actions: ideaId ? [IDEA_LESSON_ACTION] : [],
         at
       })
     };

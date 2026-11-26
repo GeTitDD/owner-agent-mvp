@@ -165,6 +165,8 @@
   "scripts/e2e/desktop-idea-sort.mjs",
   "src/idea-promote.mjs",
   "scripts/e2e/desktop-idea-promote.mjs",
+  "src/idea-lesson.mjs",
+  "tests/idea-lesson.test.mjs",
   "src/project-deletion.mjs",
   "scripts/e2e/desktop-project-delete.mjs",
   "scripts/e2e/real-library-smoke.mjs",
