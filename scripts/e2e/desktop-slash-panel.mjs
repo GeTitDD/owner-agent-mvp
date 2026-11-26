@@ -176,6 +176,8 @@ const inputValue = (panel) => panel.evaluate("document.getElementById('input').v
 const chipText = (panel) => panel.evaluate(
   "document.getElementById('skillChip').hidden ? '' : document.getElementById('skillChipLabel').textContent.trim()"
 );
+// 面板与消息只显示技能名（去来源前缀）；断言也按这个名字写。
+const skillName = (id) => String(id ?? '').split(/[:/]/u).filter(Boolean).pop() ?? '';
 
 const run = async () => {
   fs.mkdirSync(tempBase, { recursive: true });
@@ -248,7 +250,7 @@ const run = async () => {
       model.quick.map((row) => `${row.number}:${row.id}`).join(' '));
     const quickId = firstQuickId(model);
     check('quick rows come from the scan (not hardcoded)',
-      Boolean(quickId) && model.quick.every((row) => row.cmd === `/${row.id}`),
+      Boolean(quickId) && model.quick.every((row) => row.cmd === `/${skillName(row.id)}`),
       quickId);
     check('every row shows a source badge',
       model.rows.every((row) => row.src.length > 0),
@@ -320,7 +322,7 @@ const run = async () => {
       await click(panel, `.slash-item[data-skill-row=${JSON.stringify(mattId)}]`));
     await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000);
     check('clicking a skill shows it as a chip',
-      (await chipText(panel)) === `/${mattId}`, await chipText(panel));
+      (await chipText(panel)) === `/${skillName(mattId)}`, await chipText(panel));
     check('the composer holds only the question',
       (await inputValue(panel)) === '', await inputValue(panel));
     check('clicking a skill does not send a scripted card',
@@ -343,7 +345,7 @@ const run = async () => {
     check('Enter is handled by the panel', await pressKey(panel, 'Enter'));
     await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000);
     check('the numeric row shows the skill as a chip',
-      (await chipText(panel)) === `/${secondQuickId}`, await chipText(panel));
+      (await chipText(panel)) === `/${skillName(secondQuickId)}`, await chipText(panel));
     check('the numeric row leaves the composer empty',
       (await inputValue(panel)) === '', await inputValue(panel));
     check('the numeric row does not send anything',
@@ -398,7 +400,7 @@ const run = async () => {
       await click(panel, `.slash-item[data-skill-row="${idA}"]`));
     await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000);
     check('the renumbered row shows the skill as a chip',
-      (await chipText(panel)) === `/${idA}`, await chipText(panel));
+      (await chipText(panel)) === `/${skillName(idA)}`, await chipText(panel));
 
     // ⑦ 刷新：数字别名仍在（localStorage 持久化 + 合并）。
     await panel.send('Page.reload');

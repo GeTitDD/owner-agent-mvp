@@ -137,6 +137,13 @@ test('#111 旧能力命令：项目库 / 变化 / 发布分两步 / 监控', () 
   assert.equal(compose.parseCapabilityCommand('发布'), null);
 });
 
+test('技能显示名去掉来源前缀，只留最后一段', () => {
+  assert.equal(compose.skillNameOf('pstack:arena'), 'arena');
+  assert.equal(compose.skillNameOf('matt:engineering/ask-matt'), 'ask-matt');
+  assert.equal(compose.skillNameOf('domain:software-engineering@1.0.0:skills/reliable-retries'), 'reliable-retries');
+  assert.equal(compose.skillNameOf(''), '');
+});
+
 test('斜杠面板的内置命令：能单独执行，能被打字同一条命令分派接住', () => {
   const commands = compose.BUILTIN_COMMANDS;
   assert.ok(commands.length >= 6, String(commands.length));

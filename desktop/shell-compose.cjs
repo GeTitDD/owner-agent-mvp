@@ -98,6 +98,12 @@
   ]);
 
   /**
+   * 面板与消息里只显示技能名：去掉来源前缀（pstack: / matt:分类/ / domain:…@版本:skills/），
+   * 取最后一段。来源由徽章表达，不靠 id 前缀。
+   */
+  const skillNameOf = (id) => String(id ?? '').split(/[:/]/u).filter(Boolean).pop() ?? '';
+
+  /**
    * 把输入框里的一句话解析成 #111 的旧能力命令；认不出返回 null（照常当普通消息）。
    * `/发布` 只生成草稿，`/发布 确认` 才发布：版本号发布后不能回收，所以确认必须
    * 在命令里再写一次，不靠一次误触。
@@ -410,8 +416,9 @@
         // 全部技能这一段的行没有数字：留一个空位对齐，不用假数字。
         row.append(el('span', 'slash-num is-empty', '·'));
       }
-      const cmd = el('span', 'slash-cmd', `/${skill.id}`);
-      // 长 id（域包带版本）在行内会截断；悬停仍能看到完整 id。
+      // 只显示技能名：来源前缀（pstack: / matt:分类/ / domain:…）不占宽度，
+      // 来源由右侧徽章说明；完整 id 留在 title 与 data-skill-row 上。
+      const cmd = el('span', 'slash-cmd', `/${skillNameOf(skill.id)}`);
       cmd.title = skill.id;
       row.append(cmd);
       const text = el('span', 'slash-text');
@@ -638,7 +645,9 @@
     const renderSkillChip = () => {
       if (!skillChipBar) return;
       skillChipBar.hidden = !pickedSkill;
-      if (skillChipLabel) skillChipLabel.textContent = pickedSkill ? `/${pickedSkill}` : '';
+      if (skillChipLabel) {
+        skillChipLabel.textContent = pickedSkill ? `/${skillNameOf(pickedSkill)}` : '';
+      }
       if (!pickedSkill) return;
       input.placeholder = '问这个技能要做什么…';
     };
@@ -667,16 +676,25 @@
     /** 面板里的技能 id 带来源前缀（pstack: / matt:分类/ / domain:…），pi-chat 只认目录名。 */
     const chatSkillIdOf = (id) => String(id ?? '').split(/[:/]/u).filter(Boolean).pop() ?? '';
 
-    /** 输入框里是不是「/某个已扫描技能 + 问题」；最长匹配，避免前缀互吃。 */
+    /** 输入框里是不是「/某个已扫描技能 + 问题」；全名与短名都认，最长匹配防前缀互吃。 */
     const skillCommandOf = (raw) => {
       const text = String(raw ?? '').trim();
       if (!text.startsWith('/')) return null;
-      const id = skillRows
-        .map((skill) => skill.id)
-        .filter((candidate) => text === `/${candidate}` || text.startsWith(`/${candidate} `))
-        .sort((a, b) => b.length - a.length)[0];
-      if (!id) return null;
-      return { id, question: text.slice(id.length + 1).trim() };
+      let best = null;
+      for (const skill of skillRows) {
+        for (const token of new Set([String(skill.id), skillNameOf(skill.id)])) {
+          if (!token) continue;
+          if (text !== `/${token}` && !text.startsWith(`/${token} `)) continue;
+          if (!best || token.length > best.token.length) {
+            best = { skill, token };
+          }
+        }
+      }
+      if (!best) return null;
+      return {
+        id: best.skill.id,
+        question: text.slice(best.token.length + 1).trim()
+      };
     };
 
     const invokeSlashSelection = () => {
@@ -1093,7 +1111,10 @@
       const sessionId = currentId();
       const draftText = input.value;
       // 选中的技能拼成消息原文（显示与落库都用这一句），输入框本身只放问题。
-      const raw = pickedSkill ? `/${pickedSkill} ${draftText.trim()}` : draftText;
+      // 消息里只写技能名，不带来源前缀。
+      const raw = pickedSkill
+        ? `/${skillNameOf(pickedSkill)} ${draftText.trim()}`
+        : draftText;
       if (!threadApi.canSend(raw)) return;
       // #111 旧能力的最小入口：/项目库、/变化、/发布、/监控 先于普通消息处理。
       const capability = parseCapabilityCommand(raw);
@@ -1377,5 +1398,5 @@
     };
   };
 
-  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, BUILTIN_COMMANDS, create };
+  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, BUILTIN_COMMANDS, skillNameOf, create };
 });
