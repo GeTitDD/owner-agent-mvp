@@ -55,7 +55,7 @@ test('同步输入区：没有会话时锁死并给出去处', () => {
 test('同步输入区：全局模式说清只读，项目下只提示发送', () => {
   assert.equal(
     compose.composerPlaceholder({ open: true, viewProjectId: '' }),
-    '全局模式：可以问所有项目的记忆（只读），先选项目再写。回车发送，/ 技能，@@ 方法'
+    '全局只读：能问不能写。/ 技能，@@ 方法'
   );
   assert.equal(
     compose.composerPlaceholder({ open: true, viewProjectId: 'alpha' }),
