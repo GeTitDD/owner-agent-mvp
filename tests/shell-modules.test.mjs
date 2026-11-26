@@ -181,7 +181,47 @@ test('/提炼经验：回执按结果分型，命令出现在内置命令里', (
   });
   assert.match(done.text, /提炼了 1 条经验/u);
   assert.deepEqual(done.blocks[0].rows[3], ['失败', '1 条']);
-  assert.deepEqual(done.blocks[1].rows[0][0], '重试上限没有写进配置');
+  assert.deepEqual(done.blocks[1].rows[0][0], '机制');
+  assert.equal(done.blocks[1].title, '重试上限没有写进配置');
+  assert.deepEqual(done.blocks[1].actions.map((action) => action.id), ['promote']);
+});
+
+test('/经验：候选在前、经验在后，空库时给下一步', () => {
+  const withData = compose.lessonsReply({
+    pending: [{ id: 'p1', title: '重试上限', claim: '重试要有上限' }],
+    lessons: [{ id: 'l1', phenomenon: '重试没上限', mechanism: 'm', countermeasure: 'c', verificationStatus: 'unverified' }]
+  });
+  assert.match(withData.text, /经验 1 条/u);
+  assert.match(withData.text, /待审核候选 1 条/u);
+  assert.equal(withData.blocks[0].kind, 'candidate');
+  assert.equal(withData.blocks[1].kind, 'lesson');
+  assert.deepEqual(withData.blocks[0].actions.map((action) => action.id), ['approve', 'reject']);
+  assert.deepEqual(withData.blocks[1].actions.map((action) => action.id), ['promote']);
+
+  const empty = compose.lessonsReply({});
+  assert.match(empty.text, /还没有经验/u);
+  assert.deepEqual(empty.blocks, []);
+
+  const missing = compose.lessonsReply({ keyword: '缓存' });
+  assert.match(missing.text, /没有匹配「缓存」/u);
+});
+
+test('/经验 出现在内置命令里', () => {
+  assert.ok(compose.BUILTIN_COMMANDS.some((command) => command.text === '/经验'));
+});
+
+test('打完整条内置命令后回车：执行这一条，不被面板默认选中项抢走', () => {
+  assert.equal(compose.isExactBuiltinCommand('/经验'), true);
+  assert.equal(compose.isExactBuiltinCommand('  /发布 确认 '), true);
+  assert.equal(compose.isExactBuiltinCommand('/经验 缓存'), false);
+  assert.equal(compose.isExactBuiltinCommand('/不存在'), false);
+  assert.equal(compose.isExactBuiltinCommand(''), false);
+
+  const open = { slashOpen: true, slashCustomizing: false, itemCount: 2, atOpen: false, key: 'Enter' };
+  assert.deepEqual(compose.composerKeyAction({ ...open, exactCommand: true }),
+    { action: 'close-and-send', preventDefault: true });
+  assert.deepEqual(compose.composerKeyAction({ ...open, exactCommand: false }),
+    { action: 'invoke', preventDefault: true });
 });
 
 test('#111 项目库回复：计数与三个来源分组都在块里', () => {

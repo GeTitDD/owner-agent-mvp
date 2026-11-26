@@ -30,7 +30,8 @@ test('十二种块都能写成 Markdown：每种都保留自己的形状', () =>
     diff: /```diff\n function renderMessage/u,
     tool: /\*\*调用 knowledge\.search\("retry 上限"\)\*\*/u,
     badges: /- 提问（warn）/u,
-    ask: /### 这条经验要归到哪个项目？/u
+    ask: /### 这条经验要归到哪个项目？/u,
+    review: /### 重试等待上限要写成显式配置/u
   };
   sample.blocks.forEach((block, index) => {
     const markdown = copy.blockToMarkdown(block);
@@ -38,8 +39,11 @@ test('十二种块都能写成 Markdown：每种都保留自己的形状', () =>
     const pattern = expected[block.type];
     assert.ok(pattern, `没有为 ${block.type} 写断言`);
     assert.match(markdown, pattern);
-    // 每种块都只写自己：别的块的标题不该串进来。
-    if (index !== sample.blocks.length - 1) assert.doesNotMatch(markdown, /这条经验要归到哪个项目/u);
+    // 每种块都只写自己：别的块的标题不该串进来（问句会被它自己的问题块用到）。
+    const ownText = block.type === 'ask' || block.type === 'review';
+    if (!ownText && index !== sample.blocks.length - 1) {
+      assert.doesNotMatch(markdown, /这条经验要归到哪个项目/u);
+    }
   });
 });
 

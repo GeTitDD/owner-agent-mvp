@@ -644,6 +644,65 @@ button.session-name { cursor: pointer; }
   font-size: 10.5px;
 }
 
+/* 经验 / 候选审核卡：标题、几行事实、一个主操作。 */
+.review-kind {
+  flex: none;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 18px;
+}
+
+.review-kind.kind-candidate {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.review-rows {
+  margin: 8px 0 0;
+  display: grid;
+  gap: 5px;
+}
+
+.review-row {
+  display: grid;
+  grid-template-columns: 4.5em 1fr;
+  gap: 8px;
+  font-size: 10.5px;
+}
+
+.review-row dt { color: var(--muted); }
+.review-row dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+
+.review-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.review-action {
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.review-action:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.review-answered {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
 /* 撤回：只出现在最后一条助手消息上，悬停显形，别抢正文注意力。 */
 .rewind-affordance {
   padding: 0 6px;

@@ -61,6 +61,34 @@ test('不是对象、缺类型、类型大小写：都落到可读的降级文�
   assert.equal(model.blocks[3].type, 'kpi', '类型大小写不该决定认不认识');
 });
 
+test('审核卡：kind 只认 lesson / candidate，行与动作都有上限且不吞空动作', () => {
+  const lesson = blocks.normalizeBlock({
+    type: 'review',
+    lessonId: 'l1',
+    title: '重试没有上限',
+    rows: [['机制', 'm'], ['对策', 'c']],
+    actions: [{ id: 'promote', label: '提升为候选' }, { id: '', label: '空' }]
+  });
+  assert.equal(lesson.kind, 'lesson');
+  assert.equal(lesson.lessonId, 'l1');
+  assert.deepEqual(lesson.actions, [{ id: 'promote', label: '提升为候选' }]);
+
+  const candidate = blocks.normalizeBlock({
+    type: 'review',
+    kind: 'candidate',
+    proposalId: 'p1',
+    rows: Array.from({ length: 12 }, (_, index) => [`k${index}`, `v${index}`]),
+    actions: [{ id: 'approve', label: '接受' }, { id: 'reject', label: '拒绝' }, { id: 'x', label: 'X' }, { id: 'y', label: 'Y' }]
+  });
+  assert.equal(candidate.kind, 'candidate');
+  assert.equal(candidate.rows.length, 8);
+  assert.equal(candidate.actions.length, 3);
+
+  // 缺标题时给一个能读的默认值，不出现空标题。
+  const bare = blocks.normalizeBlock({ type: 'review' });
+  assert.equal(bare.title, '经验');
+});
+
 test('缺字段的默认值：卡片没有分组、表格没有行、键值没有字段都不会报错', () => {
   const card = blocks.normalizeBlock({ type: 'card', title: '空卡片' });
   assert.deepEqual(card.sections, []);

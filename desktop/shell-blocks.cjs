@@ -9,13 +9,15 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.OwnerShellBlocks = api;
 })(typeof globalThis === 'undefined' ? null : globalThis, () => {
-  // 十二种生成式 UI 块。#109 的清单，也是样本回复里的顺序，e2e 按这个顺序断言。
+  // 十三种生成式 UI 块。#109 的清单，也是样本回复里的顺序，e2e 按这个顺序断言。
   // #113 的确认卡（type=risk）是另一种块：它只在需要写入确认时出现，不进 /blocks 样本，
-  // 所以不塞进这份「全览清单」，否则十二种与样本顺序的验收会被一张业务卡搅乱。
+  // 所以不塞进这份「全览清单」，否则十三种与样本顺序的验收会被一张业务卡搅乱。
   // #126 的分享回执（type=share）同理：业务块，不进全览清单。
   const BLOCK_TYPES = [
     'card', 'table', 'kpi', 'line', 'donut', 'timeline',
-    'kv', 'code', 'diff', 'tool', 'badges', 'ask'
+    'kv', 'code', 'diff', 'tool', 'badges', 'ask',
+    // #2 经验 / 候选审核卡：与提问块同形，只多一个动作；不进 /blocks 的生成范围。
+    'review'
   ];
 
   // 风险确认卡是 #113 的纯函数模块（desktop/risk-card.cjs）。浏览器里它先于本文件加载，
@@ -291,7 +293,27 @@
   };
 
   /**
-   * 写入确认卡（#113）：等级、三轴、逐条路径、可折叠判据、四个动作。
+   * 经验 / 候选的审核卡（#2）：只画行与动作，判定交给调用方。
+   * kind=lesson 时动作是「提升为候选」；kind=candidate 时是「接受 / 拒绝」。
+   */
+  const normalizeReview = (data) => ({
+    type: 'review',
+    kind: data.kind === 'candidate' ? 'candidate' : 'lesson',
+    title: str(data.title) || (data.kind === 'candidate' ? '待审核候选' : '经验'),
+    rows: list(data.rows)
+      .map((row) => list(row).map(str).filter(Boolean))
+      .filter((row) => row.length > 0)
+      .slice(0, 8),
+    actions: list(data.actions)
+      .map((action) => ({ id: str(action?.id), label: str(action?.label) }))
+      .filter((action) => action.id && action.label)
+      .slice(0, 3),
+    lessonId: str(data.lessonId),
+    proposalId: str(data.proposalId),
+    note: str(data.note)
+  });
+
+  /** 写入确认卡（#113）：等级、三轴、逐条路径、可折叠判据、四个动作。
    * 结构归一化交给 risk-card.cjs：它会把缺等级 / 缺轴 / 空判据的存储数据降为高风险，
    * 并重建动作的可用状态。这里只负责把 type 补回去，不另判一遍风险。
    */
@@ -364,6 +386,7 @@
     tool: normalizeTool,
     badges: normalizeBadges,
     ask: normalizeAsk,
+    review: normalizeReview,
     risk: normalizeRiskBlock,
     // #126：分享回执。失败 / 取消带草稿 id，渲染层据此给「重试」。
     share: normalizeShare,
@@ -427,7 +450,7 @@
       const answer = answers[index];
       // 提问块、确认卡与分享回执都靠 answers 收起按钮：同一套「点过就留记录」的机制，不另开字段。
       if ((model.type === 'ask' || model.type === 'risk' || model.type === 'confirm'
-        || model.type === 'share')
+        || model.type === 'share' || model.type === 'review')
         && answer !== undefined) {
         model.answered = str(answer);
       }
@@ -477,12 +500,12 @@
     return null;
   };
 
-  /** 块全览的临时入口：输入 /blocks 时替代占位回复，用来看十二种块长什么样。 */
+  /** 块全览的临时入口：输入 /blocks 时替代占位回复，用来看十三种块长什么样。 */
   const isSampleCommand = (input) => str(input) === SAMPLE_COMMAND;
 
-  /** 十二种块各一条的脚本化样本。数据写死，不连模型、不发请求。 */
+  /** 十三种块各一条的脚本化样本。数据写死，不连模型、不发请求。 */
   const sampleReply = () => ({
-    text: '这是块全览的脚本化样本：十二种块各一条，数据写死，不连模型。',
+    text: '这是块全览的脚本化样本：十三种块各一条，数据写死，不连模型。',
     blocks: [
       {
         type: 'card',
@@ -597,7 +620,7 @@
       },
       {
         type: 'badges',
-        title: '十二种块的状态',
+        title: '十三种块的状态',
         items: [
           { text: '卡片', tone: 'ok' },
           { text: '表格', tone: 'ok' },
@@ -610,7 +633,8 @@
           { text: 'diff', tone: 'ok' },
           { text: '工具调用', tone: 'ok' },
           { text: '状态徽章墙', tone: 'ok' },
-          { text: '提问', tone: 'warn' }
+          { text: '提问', tone: 'warn' },
+          { text: '审核', tone: 'warn' }
         ]
       },
       {
@@ -621,6 +645,18 @@
         options: ['Companion Demo', 'cultivation-agent', '先不归属'],
         free: { label: '自由回答', placeholder: '也可以直接写别的项目名' },
         skip: { label: '跳过，按你的判断来', note: '跳过之后，结论会标成「推断」，不算已验证。' }
+      },
+      {
+        type: 'review',
+        kind: 'candidate',
+        title: '重试等待上限要写成显式配置',
+        rows: [
+          ['来源', '经验提升'],
+          ['状态', '待审核'],
+          ['主张', '同一现象重复三次才升为领域知识；单条只作项目经验。']
+        ],
+        actions: [{ id: 'approve', label: '接受' }, { id: 'reject', label: '拒绝' }],
+        note: '接受会写入知识库；拒绝只留记录。'
       }
     ]
   });

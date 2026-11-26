@@ -552,6 +552,100 @@
     });
 
     /**
+     * 经验 / 候选审核卡（第 2 张票）：提升为候选、接受、拒绝。
+     * 与确认卡同一套「点过留 answers」：动作只执行一次，回执落成普通消息。
+     */
+    const actReview = (button) => ctx.report('审核经验', async () => {
+      if (!listApi.canCompose(currentId())) return;
+      const cardNode = button.closest('[data-block="review"]');
+      const item = button.closest('.msg');
+      if (!cardNode || !item) return;
+      const blockIndex = Number(cardNode.dataset.blockIndex ?? -1);
+      const messageIndex = Number(item.dataset.index);
+      const target = messages[messageIndex];
+      const card = target?.blocks?.[blockIndex];
+      if (!target || !card) return;
+      if (target.answers?.[blockIndex] !== undefined) return;
+      const knowledge = window.companion?.knowledge;
+      const action = button.dataset.reviewAction ?? '';
+      let answerLabel = '';
+      let reply = null;
+
+      if (card.kind === 'lesson' && action === 'promote') {
+        if (typeof knowledge?.promoteLesson !== 'function') {
+          notify('提升接口还没加载好，稍等一下再试。', 'error');
+          return;
+        }
+        const result = await knowledge.promoteLesson({
+          lessonId: cardNode.dataset.lessonId || card.lessonId
+        });
+        if (!result?.ok) {
+          answerLabel = '提升失败';
+          reply = { text: `没提升成：${result?.reason || '原因未知'}`, blocks: [] };
+        } else if (!result.created) {
+          answerLabel = '已有候选';
+          const why = result.reason === 'approved'
+            ? '这条经验已经被接受过，不会重复提交。'
+            : '这条经验已经有一条待审候选，直接在上面审就行。';
+          reply = { text: `没有新建候选：${why}`, blocks: [] };
+        } else {
+          answerLabel = '已提升为候选';
+          reply = {
+            text: '已生成候选：接受后才会写进知识库。',
+            blocks: [{
+              type: 'review',
+              kind: 'candidate',
+              proposalId: result.proposalId,
+              title: card.title,
+              rows: [['来源', '经验提升'], ['状态', '待审核']],
+              actions: [{ id: 'approve', label: '接受' }, { id: 'reject', label: '拒绝' }],
+              note: '接受会写入知识库；拒绝只留记录。'
+            }]
+          };
+        }
+      } else if (card.kind === 'candidate' && (action === 'approve' || action === 'reject')) {
+        if (typeof knowledge?.review !== 'function') {
+          notify('审核接口还没加载好，稍等一下再试。', 'error');
+          return;
+        }
+        const decision = action === 'approve' ? 'approved' : 'rejected';
+        const result = await knowledge.review({
+          id: cardNode.dataset.proposalId || card.proposalId,
+          decision
+        });
+        if (!result?.ok) {
+          answerLabel = action === 'approve' ? '接受失败' : '拒绝失败';
+          reply = { text: `没审核成：${result?.reason || '原因未知'}`, blocks: [] };
+        } else {
+          answerLabel = action === 'approve' ? '接受' : '拒绝';
+          reply = {
+            text: action === 'approve'
+              ? `已接受：${card.title}。这条候选已写入知识库。`
+              : `已拒绝：${card.title}。只留记录，没有写入知识库。`,
+            blocks: []
+          };
+        }
+      } else {
+        return;
+      }
+
+      const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, answerLabel);
+      const answers = answered[messageIndex]?.answers ?? {};
+      if (Number.isInteger(target.seq)) {
+        await store.answers({ id: currentId(), seq: target.seq, answers });
+      }
+      await store.append({ id: currentId(), role: 'user', text: answerLabel });
+      await store.append({
+        id: currentId(),
+        role: 'assistant',
+        text: reply.text,
+        blocks: Array.isArray(reply.blocks) ? reply.blocks : []
+      });
+      await ctx.refreshThread();
+      ctx.ui.compose.focus();
+    });
+
+    /**
      * 外发 / 删除确认卡（#116）的唯一落点：与风险卡同一套「我的 + 回复」两条消息。
      * 取消只留回执，不生成新卡；删除一项则给回执，并把剩余项做成下一张卡。
      * #126：分享到飞书的外发卡由 ui.atShare 投递（真正发飞书的那一步在它里面），
@@ -700,6 +794,12 @@
       );
       if (button) {
         void answerAsk(button);
+        return;
+      }
+      // 经验 / 候选审核：提升、接受、拒绝都走这一条，动作只执行一次。
+      const reviewButton = event.target.closest?.('[data-review-action]');
+      if (reviewButton) {
+        void actReview(reviewButton);
         return;
       }
       // #123 勾选：先让块内按钮 / 输入框拿到点击，其余位置（气泡、块正文）才算「选这条」。

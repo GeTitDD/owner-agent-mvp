@@ -140,6 +140,7 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     // 显式提炼：执行记录 → Lesson（会调用模型；失败逐条返回原因）。
     distill: (input) => invoke('companion:distill-lessons', input),
     lessonList: (input) => invoke('companion:lesson-list', input),
+    pendingProposals: () => invoke('companion:pending-proposals'),
     promoteLesson: (input) => invoke('companion:lesson-promote', input),
     detail: (input) => invoke('companion:knowledge-detail', input),
     open: () => invoke('companion:knowledge-open')

@@ -252,6 +252,18 @@
   };
 
   /**
+   * 审核卡（经验 / 候选）：标题、几行事实、说明；动作按钮不进 Markdown，
+   * 但「已选择」要留下。
+   */
+  const reviewMarkdown = (model) => {
+    const lines = [heading(model.title || (model.kind === 'candidate' ? '待审核候选' : '经验'))];
+    model.rows.forEach((row) => lines.push(`- ${row[0]}：${row.slice(1).join(' ')}`));
+    if (model.answered) lines.push('', `已记录：${model.answered}`);
+    if (model.note) lines.push('', `_${model.note}_`);
+    return finish(lines);
+  };
+
+  /**
    * 外发 / 删除确认卡（#116）：硬约束、逐条对象、说明、已选项一个都不省。
    * 动作按钮不进 Markdown（它只是交互入口），但「已选择」要留下。
    */
@@ -287,6 +299,7 @@
     tool: toolMarkdown,
     badges: badgesMarkdown,
     ask: askMarkdown,
+    review: reviewMarkdown,
     confirm: confirmMarkdown
   };
 

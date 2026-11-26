@@ -4117,6 +4117,22 @@ const registerIpc = () => {
     }
   });
 
+  // 待审候选：/经验 打开时把还没审的候选一起带出来，重启后也能接着审。
+  ipcMain.handle('companion:pending-proposals', async (event) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    if (!personalStore) return { items: [] };
+    const rows = personalStore.proposals('pending') ?? [];
+    return {
+      items: rows.slice(0, 20).map((row) => ({
+        id: row.id,
+        title: String(row.payload?.title ?? row.payload?.claim ?? '').slice(0, 200),
+        claim: String(row.payload?.claim ?? '').slice(0, 600),
+        createdAt: String(row.created_at ?? ''),
+        lessonIds: Array.isArray(row.meta?.sourceLessonIds) ? row.meta.sourceLessonIds : []
+      }))
+    };
+  });
+
   // #61 经验列表（按项目）：项目级只看本项目，域级只列与项目主域相关的那些。
   ipcMain.handle('companion:lesson-list', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');

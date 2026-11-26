@@ -635,6 +635,50 @@
     return node;
   };
 
+  /**
+   * 经验 / 候选审核卡：标题 + 行 + 动作；点过的卡只留记录。
+   * 动作的语义由调用方处理（提升为候选 / 接受 / 拒绝），这里只画。
+   */
+  const renderReview = (model) => {
+    const node = blockNode(model);
+    node.dataset.reviewKind = model.kind;
+    if (model.lessonId) node.dataset.lessonId = model.lessonId;
+    if (model.proposalId) node.dataset.proposalId = model.proposalId;
+
+    const head = el('div', 'block-head');
+    head.append(el('h4', '', model.title));
+    head.append(el('span', `review-kind kind-${model.kind}`,
+      model.kind === 'candidate' ? '待审核' : '经验'));
+    node.append(head);
+
+    if (model.rows.length) {
+      const rows = el('dl', 'review-rows');
+      for (const row of model.rows) {
+        const item = el('div', 'review-row');
+        item.append(el('dt', '', row[0]));
+        item.append(el('dd', '', row.slice(1).join(' ')));
+        rows.append(item);
+      }
+      node.append(rows);
+    }
+
+    if (model.answered) {
+      node.append(el('p', 'review-answered', `已选择：${model.answered}`));
+      return node;
+    }
+
+    const actions = el('div', 'review-actions');
+    for (const action of model.actions) {
+      const button = el('button', 'review-action', action.label);
+      button.type = 'button';
+      button.dataset.reviewAction = action.id;
+      actions.append(button);
+    }
+    node.append(actions);
+    if (model.note) node.append(el('p', 'block-note', model.note));
+    return node;
+  };
+
   const RENDERERS = {
     card: renderCard,
     table: renderTable,
@@ -648,6 +692,7 @@
     tool: renderTool,
     badges: renderBadges,
     ask: renderAsk,
+    review: renderReview,
     risk: renderRisk,
     confirm: renderConfirm,
     share: renderShare,

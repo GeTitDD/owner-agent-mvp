@@ -42,7 +42,7 @@
    * 返回 preventDefault=false 的只有 Shift+Enter（交给浏览器换行）和无关按键。
    */
   const composerKeyAction = ({
-    slashOpen, slashCustomizing, itemCount, atOpen = false, key, shiftKey
+    slashOpen, slashCustomizing, itemCount, atOpen = false, key, shiftKey, exactCommand = false
   }) => {
     if (slashOpen && slashCustomizing && (key === 'Enter' || key === 'Escape')) {
       return { action: 'finish-customize', preventDefault: true };
@@ -54,6 +54,9 @@
       if (key === 'Enter') {
         // Shift+回车在面板开着时仍然换行，不发送也不调用。
         if (shiftKey) return { action: 'none', preventDefault: false };
+        // 已经打完整条内置命令时，回车就是执行这一条：不能让面板默认选中
+        // 另一条「描述里也含这几个字」的命令（例如 /经验 被 /提炼经验 抢走）。
+        if (exactCommand) return { action: 'close-and-send', preventDefault: true };
         if (itemCount > 0) return { action: 'invoke', preventDefault: true };
         return { action: 'close-and-send', preventDefault: true };
       }
@@ -90,6 +93,7 @@
   const BUILTIN_COMMANDS = Object.freeze([
     Object.freeze({ id: 'setup', text: '/setup', description: '探测本机：逐项判定，一次确认写盘' }),
     Object.freeze({ id: '提炼经验', text: '/提炼经验', description: '把当前项目里未提炼的执行记录提炼成经验' }),
+    Object.freeze({ id: '经验', text: '/经验', description: '查看当前项目的经验与待审候选' }),
     Object.freeze({ id: '项目库', text: '/项目库', description: '当前项目的记忆计数与来源分组' }),
     Object.freeze({ id: '变化', text: '/变化', description: '自上次看过之后的变化（首次只记水位）' }),
     Object.freeze({ id: '发布', text: '/发布', description: '生成发布草稿：下一版、草稿条目数' }),
@@ -97,6 +101,12 @@
     Object.freeze({ id: '监控', text: '/监控', description: '打开配置箱的监控分区' }),
     Object.freeze({ id: '同步到项目', text: '/同步到项目', description: '把文档同步进项目目录：需确认，一次一问' })
   ]);
+
+  /** 输入框里是否已经是一条完整的内置命令；回车时据此跳过面板默认选中项。 */
+  const isExactBuiltinCommand = (value) => {
+    const text = String(value ?? '').trim();
+    return Boolean(text) && BUILTIN_COMMANDS.some((command) => command.text === text);
+  };
 
   /**
    * 面板与消息里只显示技能名：去掉来源前缀（pstack: / matt:分类/ / domain:…@版本:skills/），
@@ -251,19 +261,64 @@
         .map((item) => `${item.recordId}: ${item.reason}`).join('；')]);
     }
     const table = Array.isArray(result.lessons) && result.lessons.length
-      ? [{
-        type: 'table',
-        title: '本次写入的经验',
-        head: ['现象', '状态'],
-        rows: result.lessons.slice(0, 5).map((lesson) => [
-          String(lesson.phenomenon ?? ''), String(lesson.verificationStatus ?? '')
-        ])
-      }]
+      ? result.lessons.slice(0, 5).map((lesson) => ({
+        type: 'review',
+        kind: 'lesson',
+        lessonId: String(lesson.id ?? ''),
+        title: String(lesson.phenomenon ?? ''),
+        rows: [
+          ['机制', String(lesson.mechanism ?? '') || '（未记录）'],
+          ['对策', String(lesson.countermeasure ?? '') || '（未记录）'],
+          ['状态', String(lesson.verificationStatus ?? '')]
+        ],
+        actions: [{ id: 'promote', label: '提升为候选' }],
+        note: '提升只生成候选；接受后才会写进知识库。'
+      }))
       : [];
     return {
       text: `提炼了 ${result.created} 条经验（尝试 ${result.attempted}，失败 ${result.failed?.length ?? 0}）。`,
       blocks: [{ type: 'kv', title: '提炼回执', rows }, ...table]
     };
+  };
+
+  /**
+   * `/经验 [关键词]` 的回复：待审候选在前，经验在后；
+   * 每张卡只带一个主操作，查看不跳页。
+   */
+  const lessonsReply = ({ lessons = [], pending = [], keyword = '' } = {}) => {
+    const candidates = (Array.isArray(pending) ? pending : []).slice(0, 5).map((item) => ({
+      type: 'review',
+      kind: 'candidate',
+      proposalId: String(item.id ?? ''),
+      title: String(item.title ?? '待审核候选'),
+      rows: [
+        ['来源', '经验提升'],
+        ['状态', '待审核'],
+        ['主张', String(item.claim ?? '') || '（无）']
+      ],
+      actions: [{ id: 'approve', label: '接受' }, { id: 'reject', label: '拒绝' }],
+      note: '接受会写入知识库；拒绝只留记录。'
+    }));
+    const cards = (Array.isArray(lessons) ? lessons : []).slice(0, 5).map((lesson) => ({
+      type: 'review',
+      kind: 'lesson',
+      lessonId: String(lesson.id ?? ''),
+      title: String(lesson.phenomenon ?? ''),
+      rows: [
+        ['机制', String(lesson.mechanism ?? '') || '（未记录）'],
+        ['对策', String(lesson.countermeasure ?? '') || '（未记录）'],
+        ['状态', String(lesson.verificationStatus ?? '')]
+      ],
+      actions: [{ id: 'promote', label: '提升为候选' }],
+      note: '提升只生成候选；接受后才会写进知识库。'
+    }));
+    const empty = !candidates.length && !cards.length;
+    const text = empty
+      ? (keyword
+        ? `没有匹配「${keyword}」的经验。`
+        : '还没有经验：先在项目里用 /提炼经验 从执行记录提炼。')
+      : `经验 ${cards.length} 条，待审核候选 ${candidates.length} 条。`;
+    return { text, blocks: [...candidates, ...cards] };
   };
 
   const create = (ctx) => {
@@ -507,7 +562,15 @@
       const query = skillsApi.normalizeQuery(slashQuery);
       const builtin = BUILTIN_COMMANDS.filter((command) =>
         !query || command.id.includes(query) || command.text.includes(query)
-        || command.description.includes(query));
+        || command.description.includes(query))
+        // 名字前缀命中排在「只是描述里带这几个字」前面：
+        // 打 /经验 时，/经验 不能排在 /提炼经验 后面。
+        .sort((a, b) => {
+          if (!query) return 0;
+          const rank = (command) => (command.text.startsWith(`/${query}`) ? 0
+            : (command.id.startsWith(query) ? 1 : 2));
+          return rank(a) - rank(b);
+        });
       const builtinRows = builtin.map((command) => ({ id: command.id, kind: 'builtin', text: command.text }));
 
       slashList.replaceChildren();
@@ -957,6 +1020,48 @@
       }
     };
 
+    /**
+     * `/经验 [关键词]`：显式查看经验。待审候选在前，经验在后；
+     * 只出卡片，不跳页；没有经验时给下一步（/提炼经验）。
+     */
+    const runLessonsTurn = async (raw, keyword) => {
+      const bridge = window.companion?.knowledge;
+      if (typeof bridge?.lessonList !== 'function') {
+        ctx.ui.header.setError('这个窗口没有拿到经验接口（companion.knowledge.lessonList）。');
+        return;
+      }
+      const sessionId = currentId();
+      busy = true;
+      try {
+        await store.append({ id: sessionId, role: 'user', text: raw });
+        input.value = threadApi.draftAfterSend();
+        resizeInput();
+        const projectId = ctx.ui.header.viewProjectId();
+        const [list, pending] = await Promise.all([
+          bridge.lessonList({ projectId, limit: 50 }),
+          typeof bridge.pendingProposals === 'function'
+            ? bridge.pendingProposals()
+            : Promise.resolve({ items: [] })
+        ]);
+        const wanted = String(keyword ?? '').trim().toLowerCase();
+        const lessons = (Array.isArray(list?.lessons) ? list.lessons : []).filter((lesson) => (
+          !wanted || [lesson.phenomenon, lesson.mechanism, lesson.countermeasure]
+            .some((value) => String(value ?? '').toLowerCase().includes(wanted))
+        ));
+        const reply = lessonsReply({ lessons, pending: pending?.items ?? [], keyword: wanted });
+        await store.append({
+          id: sessionId,
+          role: 'assistant',
+          text: reply.text,
+          blocks: Array.isArray(reply.blocks) ? reply.blocks : []
+        });
+        await ctx.refreshThread();
+        input.focus();
+      } finally {
+        busy = false;
+      }
+    };
+
     const runSetupTurn = async (raw, { appendCommand = true } = {}) => {
       if (!setupProbes()) {
         ctx.ui.header.setError('探测模块还没加载好，稍等一下再试。');
@@ -1250,6 +1355,12 @@
         await runDistillTurn(raw, Number(distill[1]) || 5);
         return;
       }
+      // /经验 [关键词]：查看当前项目的经验与待审候选（只读，不调模型）。
+      const lessons = /^\/经验(?:\s+(.+))?$/u.exec(raw.trim());
+      if (lessons) {
+        await runLessonsTurn(raw, lessons[1] ?? '');
+        return;
+      }
       // /setup：进配置箱的探测态；一次确认后写入，取消一项都不写。
       const setupCommand = setupProbes()?.parseCommand?.(raw) ?? null;
       if (setupCommand) {
@@ -1357,6 +1468,7 @@
         slashCustomizing,
         itemCount: slashFlat.length,
         atOpen: Boolean(panelAt()?.isOpen()),
+        exactCommand: isExactBuiltinCommand(input.value),
         key: event.key,
         shiftKey: event.shiftKey
       });
@@ -1456,6 +1568,12 @@
         return;
       }
       if (slashOpen) {
+        // 已经打完整条内置命令：与 Enter 一致，直接执行这一条，不取默认选中项。
+        if (isExactBuiltinCommand(input.value)) {
+          setSlashOpen(false);
+          void send();
+          return;
+        }
         // 与 Enter 同一套规则：有可选项执行，没有匹配就关面板照常发送。
         if (slashFlat.length) invokeSlashSelection();
         else {
@@ -1508,5 +1626,5 @@
     };
   };
 
-  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, distillReply, BUILTIN_COMMANDS, skillNameOf, create };
+  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, distillReply, lessonsReply, isExactBuiltinCommand, BUILTIN_COMMANDS, skillNameOf, create };
 });
