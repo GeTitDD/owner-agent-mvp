@@ -1,0 +1,20 @@
+{
+  "rank": 33,
+  "id": "petdex-33-savage-codex-hacker",
+  "slug": "savage-codex-hacker",
+  "displayName": "Savage Codex Hacker",
+  "source": "https://petdex.dev/pets/savage-codex-hacker",
+  "zipUrl": "https://assets.petdex.dev/pets/savage-codex-hacker-21162d863d8a/zip.zip",
+  "author": "Meet L.",
+  "metrics": {
+    "installCount": 1584,
+    "likeCount": 19,
+    "zipDownloadCount": 37
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "1f646d2bb470ead937b5b0631560edbbcda664316bbb146843e30343ded8921d",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

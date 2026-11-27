@@ -187,7 +187,7 @@ const dirtyItem = (raw) => {
     id: path,
     path,
     status,
-    title: [status, path].filter(Boolean).join(' ') || '无法识别的改动条目',
+    title: [status, path, raw.previousPath ? `（原路径：${raw.previousPath}）` : ''].filter(Boolean).join(' ') || '无法识别的改动条目',
     projectId: projectIdOf(raw),
     valid: Boolean(path)
   };

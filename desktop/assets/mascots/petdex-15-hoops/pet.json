@@ -1,0 +1,12 @@
+{
+  "id": "petdex-15-hoops",
+  "displayName": "Hoops",
+  "description": "A compact chibi basketball pet based on the provided character.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 15
+}

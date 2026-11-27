@@ -1,0 +1,105 @@
+{
+  "date": "2026-11-27",
+  "platform": "darwin",
+  "unit": {
+    "total": 1272,
+    "passed": 1267,
+    "skipped": 5,
+    "failed": 0
+  },
+  "focusedFinal": {
+    "total": 61,
+    "passed": 61,
+    "failed": 0
+  },
+  "syntax": {
+    "files": 287,
+    "status": "pass"
+  },
+  "projectNavigation": {
+    "assertions": 72,
+    "status": "pass"
+  },
+  "regressions": [
+    {
+      "name": "card-projects",
+      "status": "pass"
+    },
+    {
+      "name": "first-use",
+      "status": "pass"
+    },
+    {
+      "name": "sync-offline",
+      "status": "pass"
+    },
+    {
+      "name": "card-shell",
+      "status": "pass"
+    },
+    {
+      "name": "slash",
+      "status": "pass"
+    },
+    {
+      "name": "config-box",
+      "status": "pass"
+    },
+    {
+      "name": "project-write",
+      "status": "pass"
+    },
+    {
+      "name": "locate-review",
+      "status": "pass"
+    },
+    {
+      "name": "chat-history",
+      "status": "pass"
+    },
+    {
+      "name": "model-recovery",
+      "status": "pass"
+    }
+  ],
+  "visual": {
+    "automatedScreenshots": 12,
+    "openedAndInspected": true,
+    "checks": [
+      "长项目名",
+      "多行草稿",
+      "深浅色",
+      "菜单与错误状态",
+      "加载禁用态",
+      "项目确认两列布局",
+      "同步能力与错误反馈"
+    ],
+    "nativeScreenshots": 3
+  },
+  "paidModelRequests": 0,
+  "realRemoteSync": false,
+  "limitations": [
+    "Windows 尚未验收",
+    "真实远端同步适配器尚未接入"
+  ],
+  "checks": {
+    "cssBraces": "pass",
+    "gitDiffCheck": "pass"
+  },
+  "nativePreview": {
+    "scope": "tool-demo",
+    "sync": "仅本机",
+    "action": "了解同步",
+    "overflow": false,
+    "draftLength": 0,
+    "returnedToOriginal": true,
+    "existingMessagesUnchanged": true,
+    "rendererErrors": [],
+    "normalHost": true,
+    "paidModelRequests": 0
+  },
+  "workbench": {
+    "/": 200,
+    "/lessons": 200
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "rank": 8,
+  "id": "petdex-08-noir-webling",
+  "slug": "noir-webling",
+  "displayName": "Noir Webling",
+  "source": "https://petdex.dev/pets/noir-webling",
+  "zipUrl": "https://assets.petdex.dev/curated/noir-webling/noir-webling.zip",
+  "author": "railly",
+  "metrics": {
+    "installCount": 3032,
+    "likeCount": 48,
+    "zipDownloadCount": 189
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "d7182a47adffea962c7ac4227780752313016fe45507ed362f78c8238e47a44d",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

@@ -80,7 +80,21 @@
     "e2e:desktop:at-share": "node scripts/e2e/desktop-at-share.mjs",
     "e2e:desktop:project-write": "node scripts/e2e/desktop-project-write.mjs",
     "e2e:desktop:config-box": "node scripts/e2e/desktop-config-box.mjs",
-    "e2e:desktop:setup-probe": "node scripts/e2e/desktop-setup-probe.mjs"
+    "e2e:desktop:setup-probe": "node scripts/e2e/desktop-setup-probe.mjs",
+    "e2e:desktop:first-use": "node scripts/e2e/desktop-first-use.mjs",
+    "e2e:desktop:locate-review": "node scripts/e2e/desktop-locate-review.mjs",
+    "e2e:desktop:model-recovery": "node scripts/e2e/desktop-model-recovery.mjs",
+    "e2e:desktop:chat-history": "node scripts/e2e/desktop-chat-history.mjs",
+    "e2e:desktop:project-navigation": "node scripts/e2e/desktop-project-navigation.mjs",
+    "e2e:desktop:memory-sync": "node scripts/e2e/desktop-memory-sync.mjs",
+    "e2e:desktop:bundled-skills": "node scripts/e2e/desktop-bundled-skills.mjs",
+    "e2e:desktop:skill-invocation": "node scripts/e2e/desktop-skill-invocation.mjs",
+    "e2e:desktop:skill-discovery": "node scripts/e2e/desktop-skill-discovery.mjs",
+    "e2e:desktop:experience-loop": "node scripts/e2e/desktop-experience-loop.mjs",
+    "e2e:desktop:evidence-quality": "node scripts/e2e/desktop-evidence-quality.mjs",
+    "e2e:desktop:github-project": "node scripts/e2e/desktop-github-project.mjs",
+    "e2e:desktop:appearance": "node scripts/e2e/desktop-appearance.mjs",
+    "assets:petdex": "python3 scripts/import-petdex.py"
   },
   "main": "desktop/main.cjs",
   "build": {
@@ -92,6 +106,7 @@
       "src/**/*",
       "web/**/*",
       "domains/**/*",
+      "resources/skills/**/*",
       "examples/**/*",
       "package.json"
     ],
@@ -99,6 +114,7 @@
       "output": "dist-companion"
     },
     "win": {
+      "icon": "desktop/assets/branding/app-icon.ico",
       "target": [
         {
           "target": "portable",
@@ -110,6 +126,9 @@
     },
     "portable": {
       "artifactName": "OwnerCompanion-${version}-portable.exe"
+    },
+    "mac": {
+      "icon": "desktop/assets/branding/app-icon.icns"
     },
     "asarUnpack": [
       "node_modules/@pydantic/monty/**",

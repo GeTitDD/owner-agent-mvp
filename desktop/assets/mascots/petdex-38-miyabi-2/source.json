@@ -1,0 +1,20 @@
+{
+  "rank": 38,
+  "id": "petdex-38-miyabi-2",
+  "slug": "miyabi-2",
+  "displayName": "Miyabi",
+  "source": "https://petdex.dev/pets/miyabi-2",
+  "zipUrl": "https://assets.petdex.dev/pets/miyabi-e6781959b87d/zip.zip",
+  "author": "篮高手 灌.",
+  "metrics": {
+    "installCount": 1448,
+    "likeCount": 14,
+    "zipDownloadCount": 14
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "7269b5c12302bb01c7cca8f80408c7012d42cd59e190b5560c5c5a63d413c6a9",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

@@ -1,0 +1,20 @@
+{
+  "rank": 43,
+  "id": "petdex-43-erii-mingfei",
+  "slug": "erii-mingfei",
+  "displayName": "Erii & Mingfei",
+  "source": "https://petdex.dev/pets/erii-mingfei",
+  "zipUrl": "https://assets.petdex.dev/pets/erii-mingfei-b451ecf535a3/zip.zip",
+  "author": "Vin Y.",
+  "metrics": {
+    "installCount": 1405,
+    "likeCount": 5,
+    "zipDownloadCount": 6
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "47b64c354bb737525b412e5836003b5843d26f2229896f0aa20a0955c5e5ed99",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

@@ -9,6 +9,7 @@ import { OwnerAgent } from '../src/owner-agent.mjs';
 import { PiAnalysisWorker } from '../src/pi-analysis-worker.mjs';
 import { DefaultPiSessionFactory } from '../src/pi-session-factory.mjs';
 import { sha256 } from '../src/utils.mjs';
+import { rootIdentityOf } from '../src/project-identity.mjs';
 import { waitFor } from './helpers/wait.mjs';
 
 // Deterministic fake clock — lease/expiry assertions use injected timestamps, no sleeps.
@@ -459,18 +460,12 @@ test('[pi-r2 drift] a swapped project root is refused as project-root-moved (det
   const task=store.createTask({projectId:'drift',title:'drift task'});
   const job=store.createJob({projectId:'drift',jobType:'pi-analysis',title:'j',payload:{},idempotencyKey:'d1',ownerTaskId:task.id});
   store.approveJob(job.id,{now:clock.now()});
-  // renameSync moves the registered root (its identity marker travels with it, so the
-  // OLD identity survives under the backup path) and a FRESH directory takes the old
-  // path — a brand-new marker file with a brand-new identity. Deterministic on every
-  // platform, unlike rm+mkdir where the filesystem may reuse the inode (that flaked CI).
+  // 保留旧目录再替换路径，保证旧目录身份仍在，测试不依赖删除后的 inode 分配。
   const backup=path.join(dir,'drift-backup');
   renameSync(real,backup);
-  // The path now hosts a DIFFERENT project directory: fresh marker file with a fresh
-  // identity (the old marker survives under backup, so no inode reuse is possible).
+  // 新路径指向另一目录；不写任何项目标记来辅助验证。
   fs.mkdirSync(real,{recursive:true});
-  fs.writeFileSync(path.join(real,'.owner-root-identity'),'fresh-root',{encoding:'utf8'});
-  const markerAt=filename=>path.join(filename,'.owner-root-identity');
-  const backupIdentity=sha256(`${statSync(markerAt(backup),{bigint:true}).dev}:${statSync(markerAt(backup),{bigint:true}).ino}`).slice(0,32);
+  const backupIdentity=rootIdentityOf(backup);
   assert.equal(backupIdentity,stored.root_identity,'rename preserved the old identity');
   const factory=makeFactory();
   const timers=manualTimers();

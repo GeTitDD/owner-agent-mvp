@@ -1,0 +1,20 @@
+{
+  "rank": 1,
+  "id": "petdex-01-boba",
+  "slug": "boba",
+  "displayName": "Boba",
+  "source": "https://petdex.dev/pets/boba",
+  "zipUrl": "https://assets.petdex.dev/curated/boba/v2/boba.zip",
+  "author": "railly",
+  "metrics": {
+    "installCount": 12883,
+    "likeCount": 23,
+    "zipDownloadCount": 157
+  },
+  "spriteVersionNumber": 2,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "ababd6911d11c6b1fa51366a84e0757f8f1242bb7b69458ad4f50f98a0a38a17",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

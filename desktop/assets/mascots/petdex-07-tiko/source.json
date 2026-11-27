@@ -1,0 +1,20 @@
+{
+  "rank": 7,
+  "id": "petdex-07-tiko",
+  "slug": "tiko",
+  "displayName": "Tiko",
+  "source": "https://petdex.dev/pets/tiko",
+  "zipUrl": "https://assets.petdex.dev/pets/tiko-beefcdec1197/zip.zip",
+  "author": "huigegood",
+  "metrics": {
+    "installCount": 3780,
+    "likeCount": 38,
+    "zipDownloadCount": 113
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "cbeee2ea008eba26a5b16002084f80a7d650145ee4f416469a06ec3b3d4cbcb4",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

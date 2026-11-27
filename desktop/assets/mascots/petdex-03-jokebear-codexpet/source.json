@@ -1,0 +1,20 @@
+{
+  "rank": 3,
+  "id": "petdex-03-jokebear-codexpet",
+  "slug": "jokebear-codexpet",
+  "displayName": "JokeBear-CodexPet",
+  "source": "https://petdex.dev/pets/jokebear-codexpet",
+  "zipUrl": "https://assets.petdex.dev/pets/jokebear-codexpet-c09688a19f19/zip.zip",
+  "author": "yechengzhi",
+  "metrics": {
+    "installCount": 5473,
+    "likeCount": 52,
+    "zipDownloadCount": 131
+  },
+  "spriteVersionNumber": 2,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "a75fab4de02519ca69856236029a565a7cb1da960e694ffd52809e582efa6b8f",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

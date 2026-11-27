@@ -1,0 +1,20 @@
+{
+  "rank": 40,
+  "id": "petdex-40-bubu-3",
+  "slug": "bubu-3",
+  "displayName": "Bubu",
+  "source": "https://petdex.dev/pets/bubu-3",
+  "zipUrl": "https://assets.petdex.dev/pets/bubu-774f22263277/zip.zip",
+  "author": "je1zzz",
+  "metrics": {
+    "installCount": 1413,
+    "likeCount": 18,
+    "zipDownloadCount": 28
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "7756f649b4e8ca7095ca9a863c588929e00503cfa2dd52ed636603a97e1c06b9",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

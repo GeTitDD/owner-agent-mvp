@@ -176,7 +176,7 @@
     stream.setSelectMode(true);
     sync();
 
-    const build = () => {
+    const build = async () => {
       const messages = stream.messages();
       return buildPrompt({
         instruction: field.value,
@@ -184,7 +184,7 @@
         messages,
         selected: new Set(stream.selectedIndexes()),
         // #124：输入框上方的关联胶囊与「生成 prompt」共用同一份「## 关联项目」段。
-        projectSection: ctx.ui.atProject?.sectionText?.() ?? ''
+        projectSection: await (ctx.ui.atProject?.resolveSection?.() ?? ctx.ui.atProject?.sectionText?.() ?? '')
       });
     };
 
@@ -207,7 +207,8 @@
       busy = true;
       sync();
       try {
-        const prompt = build();
+        const prompt = await build();
+        if(ctx.ui.header.currentId()!==sessionId){ctx.notify('会话已切换，未写入生成结果；返回原会话后可重试。','warn');return;}
         await ctx.report('生成 prompt', async () => {
           // 结果是一条普通回复：正文为空，只有一个 code 块，复制按钮来自 #110。
           await ctx.store.append({

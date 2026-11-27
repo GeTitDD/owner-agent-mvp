@@ -1,0 +1,12 @@
+{
+  "id": "petdex-08-noir-webling",
+  "displayName": "Noir Webling",
+  "description": "A tiny monochrome spider detective in a fedora and trench coat, built for shadowy Codex investigations.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 8
+}

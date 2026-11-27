@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "status": {
+    "state": "unknown",
+    "availability": {
+      "available": false,
+      "mode": "manual-preview",
+      "reason": "sync-target-missing"
+    }
+  },
+  "configUnchanged": true,
+  "consoleErrors": []
+}

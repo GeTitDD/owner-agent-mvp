@@ -71,6 +71,26 @@ const fakeService = (adapter, options = {}) => {
   return { service, state };
 };
 
+test('保存新模型不会中断正在回答的旧模型，旧会话在回答结束后释放', async () => {
+  let release;
+  let started;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const began = new Promise((resolve) => { started = resolve; });
+  let disposed = 0;
+  const adapter = { ...makeAdapter({ answer: '旧回答完整结束' }),
+    prompt: async () => { started(); await gate; }, dispose: () => { disposed += 1; } };
+  const { service } = fakeService(adapter);
+  const request = service.ask({ project: { id: 'alpha', root: os.tmpdir() }, model: 'fixture/old', question: '继续回答' });
+  await began;
+  try {
+    service.setModel('fixture/new');
+    assert.equal(disposed, 0, '正在回答的会话必须保留到这次回答结束');
+    release();
+    assert.equal((await request).status, 'ok');
+    assert.equal(disposed, 1);
+  } finally { release(); await request; service.disposeAll(); }
+});
+
 test('对话提示词包含项目边界、只读约束与路径引用格式', () => {
   const prompt = buildChatPrompt({
     project: { id: 'demo', root: 'D:\\demo' },
@@ -105,6 +125,7 @@ test('回答拼装：未找到的路径必须显式提醒', () => {
 });
 
 const fakeSdk = (rawSession, seen = {}) => ({
+  ModelRuntime: { create: async () => ({ getModel: (provider, id) => ({ provider, id }) }) },
   DefaultResourceLoader: class {
     constructor(options) { seen.loader = options; }
     async reload() { seen.reloaded = true; }
@@ -389,6 +410,47 @@ test('skill 工具不接受路径：只认索引里的 id', async () => {
 });
 
 // ── 流式：事件翻译与收尾 ──────────────────────────────────────────
+
+test('停止信号到达时底层 prompt 同步正常结束，仍须返回取消而非成功', async () => {
+  const project = makeProject(); const controller = new AbortController();
+  let started; let finish;
+  const ready = new Promise(resolve => { started = resolve; });
+  const adapter = { ...makeAdapter({answer:'停止前的半段回复'}),
+    prompt: () => new Promise(resolve => { finish = resolve; started(); }),
+    abort: () => { finish?.(); }
+  };
+  const { service } = fakeService(adapter);
+  try {
+    const pending = service.askStream({project,question:'停止这一轮',model:'fake/model',signal:controller.signal});
+    await ready; controller.abort(); const result = await pending;
+    assert.equal(result.status,'aborted'); assert.equal(result.ok,false);
+  } finally { service.disposeAll(); fs.rmSync(project.root,{recursive:true,force:true}); }
+});
+
+test('准备阶段已经停止的轮次不再创建模型会话或发出 prompt', async () => {
+  const project = makeProject(); const controller = new AbortController(); controller.abort();
+  let prompts = 0;
+  const { service, state } = fakeService(makeAdapter({promptHook:()=>{prompts += 1;}}));
+  try {
+    const result = await service.askStream({project,question:'已经停止',model:'fake/model',signal:controller.signal});
+    assert.equal(result.status,'aborted'); assert.equal(state.created,0); assert.equal(prompts,0);
+  } finally { service.disposeAll(); fs.rmSync(project.root,{recursive:true,force:true}); }
+});
+
+test('停止时 SDK 尚未提交最终消息，也要保留本轮已流出的正文', async () => {
+  const project = makeProject(); const controller = new AbortController();
+  let started; let subscriber; const ready = new Promise(resolve => { started = resolve; });
+  const adapter = { ...makeAdapter({answer:''}),
+    subscribe: callback => { subscriber = callback; return () => {}; },
+    prompt: () => { subscriber({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'已经流出的半段正文'}});started();return new Promise(()=>{}); }
+  };
+  const { service } = fakeService(adapter);
+  try {
+    const pending = service.askStream({project,question:'核对停止',model:'fake/model',signal:controller.signal,onEvent:()=>{}});
+    await ready;controller.abort();const result = await pending;
+    assert.equal(result.status,'aborted');assert.equal(result.answer,'已经流出的半段正文');
+  } finally {service.disposeAll();fs.rmSync(project.root,{recursive:true,force:true});}
+});
 
 test('forwardChatEvent 只转正文 / 思考 / 工具三类事件', () => {
   const seen = [];

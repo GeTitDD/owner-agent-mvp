@@ -1,0 +1,20 @@
+{
+  "rank": 29,
+  "id": "petdex-29-pochita-mini",
+  "slug": "pochita-mini",
+  "displayName": "Pochita Mini",
+  "source": "https://petdex.dev/pets/pochita-mini",
+  "zipUrl": "https://assets.petdex.dev/pets/pochita-mini-f6a7e0edb895/zip.zip",
+  "author": "san-shia",
+  "metrics": {
+    "installCount": 1640,
+    "likeCount": 24,
+    "zipDownloadCount": 47
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "21335c2589c98fa78cea0e42c0a42296d9013471438db797dd43e9c3bd25afa6",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

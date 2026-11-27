@@ -107,6 +107,7 @@
   const fromStored = (rows) => (Array.isArray(rows) ? rows : []).map((row) => {
     const text = String(row?.text ?? '');
     const message = { role: row?.role === 'user' ? 'user' : 'agent', text };
+    if (row?.status === 'error') message.status = 'error';
     const seq = Number(row?.seq);
     if (Number.isInteger(seq) && seq > 0) message.seq = seq;
     if (Array.isArray(row?.blocks) && row.blocks.length > 0) message.blocks = [...row.blocks];

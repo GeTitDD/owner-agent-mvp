@@ -165,3 +165,42 @@ test('invocationFor：数字行记「命令」，技能行记「调用技能」�
   assert.match(missing.reply.text, /缺失/u);
   assert.ok(missing.reply.blocks[0].rows.some((row) => row[0] === '状态' && row[1].includes('缺失')));
 });
+
+test('不可调用技能不占数字，空正文和 Playbook-only 不能伪装成可用',()=>{
+  const rows=slash.flattenCatalog({items:[skill('empty',{callable:false,callReason:'正文为空'}),skill('play',{playbookOnly:true}),skill('ready',{callable:true,callId:'pstack:ready'})]});
+  assert.equal(rows.find(row=>row.id==='empty').callable,false);
+  assert.deepEqual(slash.defaultSlots(rows).map(row=>row.id),['ready']);
+});
+
+test('编辑快捷键采用交换，不产生新的重复；清空也尊重其它占位',()=>{
+  const skills=[skill('a'),skill('b'),skill('c')];const slots=slash.mergeAliases({skills}).slots;
+  const overrides=slash.applyAliasEdit({},slots,'a','2');assert.deepEqual(overrides,{a:2,b:1});assert.deepEqual(slash.mergeAliases({skills,overrides}).conflicts.numbers,[]);
+});
+test('手输完整身份选中准确来源，短名重复时不猜测，禁用项保留原因',()=>{
+  const skills=slash.flattenCatalog({items:[skill('pstack:same'),skill('matt:eng/same'),skill('pstack:empty',{callable:false,callReason:'正文为空'})]});
+  assert.equal(slash.resolveInvocation('/same 问题',skills).ambiguous,true);assert.equal(slash.resolveInvocation('/matt:eng/same 问题',skills).id,'matt:eng/same');
+  assert.equal(slash.resolveInvocation('/empty 问题',skills).callable,false);assert.equal(slash.resolveInvocation('/empty 问题',skills).reason,'正文为空');
+});
+
+test('手输或粘贴技能后确认空格、换行、制表符，保留多行问题原文', () => {
+  const rows = slash.flattenCatalog({items:[skill('local:root:review',{commandName:'review'})]});
+  for (const separator of [' ','\n','\t','\u3000']) {
+    assert.deepEqual(slash.typedSelection('/review'+separator+'第一行\n  第二行  ',rows),{id:'local:root:review',question:'第一行\n  第二行  '});
+    assert.equal(slash.resolveInvocation('/review'+separator+'问题',rows).question,'问题');
+  }
+  assert.equal(slash.typedSelection('/review',rows),null);
+  assert.equal(slash.typedSelection('普通内容 /review 问题',rows),null);
+  assert.equal(slash.typedSelection('/unknown 问题',rows),null);
+  assert.equal(slash.typedSelection('/review 问题',[...rows,skill('pstack:review')]),null);
+  assert.equal(slash.typedSelection('/review 问题',rows.map(row=>({...row,callable:false}))),null);
+});
+
+test('技能标签按明确指定身份持久化并重放，不把普通斜杠文字标成已用技能', () => {
+  const selected=skill('local:root:review',{commandName:'review',sourceLabel:'本机'});
+  const block=slash.selectionBlock(selected);
+  const message={role:'user',text:'/review 第一行\n第二行',blocks:[block]};
+  assert.deepEqual(slash.messageSelection(message),{id:selected.id,name:'/review',source:'本机',body:'第一行\n第二行',block});
+  assert.equal(slash.messageSelection({...message,blocks:[]}),null);
+  assert.equal(slash.messageSelection({...message,role:'agent'}),null);
+  assert.equal(slash.selectionBlock(null),null);
+});

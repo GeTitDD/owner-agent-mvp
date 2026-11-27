@@ -8,6 +8,7 @@
 // - 同现象经验累积到 3 条时只返回提议信号，不自动提升、不自动合并：由人决定提哪一条。
 //   「3 条」按经验行数算（ADR-0007 的「同类经验 3 条」），不拿执行记录数兜底（P0-5）。
 // 本模块不联网、不调真实模型、不引入依赖；测试用 PersonalKnowledgeStore(':memory:')。
+import { lessonContent } from '../knowledge/lesson-content.mjs';
 import { flatText } from '../utils.mjs';
 import { lessonStatusOf } from '../lesson-status.mjs';
 import { CANDIDATE_CONTRACT, candidateToProposal } from './contracts.mjs';
@@ -51,17 +52,13 @@ const lessonEvidenceRefs = (lesson) => {
  * 只做映射，不写库；候选类型固定 pattern（落库是 claim），层跟着经验的作用域层走。
  * 经验本身永远不是「已验证」，所以候选的 verificationStatus 由契约给成 unverified。
  */
-export function lessonToCandidateDraft(lesson) {
+export function lessonToCandidateDraft(lesson, { ownerStore } = {}) {
   if (!lesson || typeof lesson !== 'object' || Array.isArray(lesson)) throw new Error('lesson is required');
   const phenomenon = flat(lesson.phenomenon);
   if (!phenomenon) throw new Error('Lesson phenomenon is required');
   const mechanism = flat(lesson.mechanism);
   const countermeasure = flat(lesson.countermeasure);
-  const claim = [
-    phenomenon,
-    mechanism ? `机制：${mechanism}` : '',
-    countermeasure ? `对策：${countermeasure}` : ''
-  ].filter(Boolean).join('\n');
+  const claim = lessonContent(lesson, { ownerStore });
   return {
     title: phenomenon,
     claim,
@@ -98,7 +95,7 @@ const candidateFor = (personalStore, lessonId, status) => {
  *   已有待审候选时 created 为 false 并原样返回那条候选；已被接受过的不再重复提交。
  */
 export function promoteLessonToCandidate({
-  personalStore, lessonId, actor = 'local-user', note = '', playbook = 'edae', steps = []
+  personalStore, lessonId, ownerStore, actor = 'local-user', note = '', playbook = 'edae', steps = []
 } = {}) {
   if (!personalStore || typeof personalStore.submitProposal !== 'function'
     || typeof personalStore.getLesson !== 'function') {
@@ -125,7 +122,7 @@ export function promoteLessonToCandidate({
     };
   }
 
-  const draft = lessonToCandidateDraft(lesson);
+  const draft = lessonToCandidateDraft(lesson, { ownerStore });
   const layer = draft.proposedLayer;
   // 直接复用现有候选契约：层 / 作用域 / 项目 / 域 / tags / sourceRef 都由它统一决定。
   const mapped = candidateToProposal({
@@ -138,7 +135,7 @@ export function promoteLessonToCandidate({
     playbook,
     steps
   });
-  const meta = { ...mapped.meta, sourceLessonIds: [lesson.id] };
+  const meta = { ...mapped.meta, sourceLessonIds: [lesson.id], sourceLessonHash: lesson.payloadHash ?? null, sourceProjectId: lessonProjectId(lesson) };
   const proposal = personalStore.submitProposal({
     targetId: null,
     payload: mapped.payload,

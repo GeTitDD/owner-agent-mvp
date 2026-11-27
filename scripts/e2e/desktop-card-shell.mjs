@@ -200,25 +200,25 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     check('the write-scope slot keeps its label',
       JSON.stringify(header.placeholders) === JSON.stringify(['只读·全局']),
       JSON.stringify(header.placeholders));
-    check('the capsule says there is no session yet', header.label === '还没有会话', header.label);
+    check('first launch prepares a session automatically', header.label === '新会话', header.label);
 
-    // ① 首启空态：没有会话时不许发消息。
+    // ① 首启直接可输入，不要求先学习会话管理。
     const firstThread = await readThread(panel);
-    check('empty state explains there is no session', firstThread.emptyText.includes('还没有会话'),
-      firstThread.emptyText);
-    check('composer is locked while there is no session',
-      firstThread.inputDisabled === true && firstThread.sendDisabled === true,
+    check('first launch shows a project onboarding action',
+      await panel.evaluate("document.getElementById('firstProject').hidden === false"));
+    check('composer is ready and empty send stays disabled',
+      firstThread.inputDisabled === false && firstThread.sendDisabled === true,
       JSON.stringify({ input: firstThread.inputDisabled, send: firstThread.sendDisabled }));
     await capture(panel, path.join(shotsDir, 'sessions-empty.png'));
 
     // ② 新建三条会话，各发一句：会话是对话流的唯一容器。
     await setPopover(panel, true);
-    const first = await createSession(panel);
+    const first = (await readSessions(panel)).rows.find((row) => row.current)?.id;
     check('new session appears in the list and becomes current', Boolean(first));
     const afterCreate = await readThread(panel);
     check('composer unlocks once a session exists', afterCreate.inputDisabled === false);
-    check('a fresh session starts with an empty thread hint',
-      afterCreate.count === 0 && afterCreate.emptyText.includes('还没有消息'), afterCreate.emptyText);
+    check('a fresh session shows the first-project action',
+      afterCreate.count === 0 && await panel.evaluate("document.getElementById('firstProject').hidden === false"));
 
     await setPopover(panel, false);
     check('a line goes into the current session', await sendLine(panel, '第一条会话的问题', 2));
@@ -444,8 +444,8 @@ const secondRun = async ({ userData, ownerDb, knowledgeDb }, seen) => {
     check('empty list explains how to start again',
       emptyList.hint.includes('还没有会话') && emptyList.hintKind === 'no-session', emptyList.hint);
     const emptyThread = await readThread(panel);
-    check('the thread goes back to the empty state',
-      emptyThread.count === 0 && emptyThread.emptyText.includes('还没有会话'), emptyThread.emptyText);
+    check('the thread goes back to the project onboarding state',
+      emptyThread.count === 0 && await panel.evaluate("document.getElementById('firstProject').hidden === false"));
     check('no session means no sending (composer locked)',
       emptyThread.inputDisabled === true && emptyThread.sendDisabled === true,
       JSON.stringify({ input: emptyThread.inputDisabled, send: emptyThread.sendDisabled }));

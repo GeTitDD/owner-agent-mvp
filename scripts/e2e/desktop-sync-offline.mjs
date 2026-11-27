@@ -214,7 +214,8 @@ const runScenario = async (probe) => {
       `hidden=${offline.retryHidden} text=${offline.retryText}`);
     check('断网时说明行保留最后成功时间', /最后同步 20\d\d-\d\d-\d\d \d\d:\d\d UTC/u.test(offline.detail),
       offline.detail);
-    check('断网时说明行给出失败原因', /network unreachable/u.test(offline.detail), offline.detail);
+    check('断网时说明行给出可执行的恢复提示', /联网后重试/u.test(offline.detail), offline.detail);
+    check('断网时原始错误仍可在详情中回查', /network unreachable/u.test(offline.hint), offline.hint);
     check('断网时说明行先写最后成功时间（不会被截掉）', offline.detail.startsWith('最后同步 '),
       offline.detail);
     check('断网时的最后成功时间与恢复前同一条', offline.detail.includes(

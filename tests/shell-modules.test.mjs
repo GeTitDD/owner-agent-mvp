@@ -40,6 +40,17 @@ test('knownScope 去掉首尾空白后再比对', () => {
   assert.equal(header.knownScope(projects, '   '), '');
 });
 
+test('定位恢复最近项目会话，排除置顶顺序、跨项目视图和已删除项', () => {
+  const rows = [
+    { id: 'pinned', projectId: 'alpha', viewProjectId: 'alpha', lastOpenedAt: '2026-11-01', pinned: true },
+    { id: 'recent', projectId: 'alpha', viewProjectId: 'alpha', lastOpenedAt: '2026-11-20' },
+    { id: 'cross', projectId: 'alpha', viewProjectId: 'beta', lastOpenedAt: '2026-11-25' },
+    { id: 'deleted', projectId: 'alpha', viewProjectId: 'alpha', lastOpenedAt: '2026-11-26', deletedAt: '2026-11-26' }
+  ];
+  assert.equal(header.resumeSessionOf(rows, 'alpha').id, 'recent');
+  assert.equal(header.resumeSessionOf(rows, 'gamma'), null);
+});
+
 // ── 输入区：文案只由「能不能发 + 正在看的项目」决定 ────────────────
 
 test('同步输入区：没有会话时锁死并给出去处', () => {
@@ -191,11 +202,11 @@ test('/经验：候选在前、经验在后，空库时给下一步', () => {
     pending: [{ id: 'p1', title: '重试上限', claim: '重试要有上限' }],
     lessons: [{ id: 'l1', phenomenon: '重试没上限', mechanism: 'm', countermeasure: 'c', verificationStatus: 'unverified' }]
   });
-  assert.match(withData.text, /经验 1 条/u);
+  assert.match(withData.text, /经验 \/ 知识 1 条/u);
   assert.match(withData.text, /待审核候选 1 条/u);
   assert.equal(withData.blocks[0].kind, 'candidate');
   assert.equal(withData.blocks[1].kind, 'lesson');
-  assert.deepEqual(withData.blocks[0].actions.map((action) => action.id), ['approve', 'reject']);
+  assert.deepEqual(withData.blocks[0].actions.map((action) => action.id), ['approve', 'reject', 'cancel-experience']);
   assert.deepEqual(withData.blocks[1].actions.map((action) => action.id), ['promote']);
 
   const empty = compose.lessonsReply({});
@@ -268,6 +279,43 @@ test('#111 变化窗口：首次查看不写成「没有变化」，算不全要
   assert.ok(unknown.blocks.some((block) => block.type === 'table' && block.rows[0][0] === '提交'));
 });
 
+test('变化回复列出真实提交、文件和未知历史，不再只有计数', () => {
+  const reply = compose.sinceReply({
+    status: 'unknown', watermark: { known: false }, counts: { total: 1 },
+    blocks: [{ key: 'dirty', title: '未提交改动', items: [{ title: 'M src/retry.mjs', path: 'src/retry.mjs', status: 'M' }] }],
+    unknown: { items: [{ category: 'commits', title: '修复最后一次重试', shortSha: 'a12b34cd', at: '2026-11-26T01:00:00Z' }] }
+  });
+  const body = JSON.stringify(reply);
+  assert.match(body, /src\/retry.mjs/);
+  assert.match(body, /修复最后一次重试/);
+  assert.match(body, /无法判断新旧/);
+});
+
+test('候选审核卡完整展示正文、范围与证据，分页报总数而非隐瞒剩余', () => {
+  const reply = compose.lessonsReply({ pendingTotal: 7, pending: [{
+    id: 'full', title: '完整内容', content: '第一行\n第二行', scopeLabel: '仅项目：Alpha',
+    evidenceText: 'run:1\n成功返回', sourceLabel: '来源经验', verificationLabel: '待验证',
+    applicability: ['重试'], exceptions: ['无权限'], facts: ['200'], inferences: ['机制'], unknowns: ['边界未测']
+  }] });
+  const body = JSON.stringify(reply);
+  for (const value of ['第一行', '第二行', '仅项目：Alpha', '成功返回', '无权限', '边界未测']) assert.ok(body.includes(value), value);
+  assert.match(reply.text, /共 7 条/);
+  assert.match(reply.text, /本次显示 1 条/);
+});
+
+test('多张最长正文候选分条保存，正文无损且每条低于块存储上限', () => {
+  const content = '多行中文正文\n'.repeat(1000).slice(0, 8000);
+  const blocks = Array.from({ length: 20 }, (_, i) => compose.candidateReviewBlock({ id: `p-${i}`, content,
+    evidenceText: '证据'.repeat(20000), facts: ['事实'.repeat(20000)] }));
+  const parts = compose.replyParts({ text: '共 20 条候选', blocks });
+  assert.ok(parts.length > 1);
+  assert.equal(parts.flatMap((part) => part.blocks).length, 20);
+  for (const part of parts) {
+    assert.ok(JSON.stringify(part.blocks).length < 64 * 1024);
+    for (const block of part.blocks) assert.equal(block.rows[0][1], content);
+  }
+});
+
 test('#111 发布回复：草稿要求再确认，发布后给版本与导出', () => {
   const draft = compose.publishReply({
     snapshot: { nextLabel: 'v3', draft: { generatedAt: '2026-01-02T00:00:00.000Z', counts: { total: 4 } } }
@@ -297,8 +345,8 @@ test('#111 发布回复：草稿要求再确认，发布后给版本与导出', 
 test('普通消息走 companion.chat.ask，主进程有 chat-ask 通道与 PiChatService', () => {
   const composeSrc = fs.readFileSync(path.join(root, 'desktop/shell-compose.cjs'), 'utf8');
   assert.match(composeSrc, /window\.companion\?\.chat/u, '壳必须从主进程桥取模型接口');
-  assert.match(composeSrc, /ask\(\{[\s\S]{0,120}projectId: ctx\.ui\.header\.viewProjectId\(\)[\s\S]{0,80}question:/u,
-    '提问要带项目（全局为空串）与正文');
+  assert.match(composeSrc, /ask\(\{[\s\S]{0,120}projectId: context\.projectId[\s\S]{0,200}question:/u,
+    '提问使用发送时冻结的项目范围，切换项目不改变原问题归属');
   const mainSrc = fs.readFileSync(path.join(root, 'desktop/main.cjs'), 'utf8');
   assert.match(mainSrc, /companion:chat-ask/u, '主进程要有 chat-ask 通道');
   assert.match(mainSrc, /PiChatService/u, '对话后端必须是只读 Pi 会话');
@@ -319,4 +367,9 @@ test('顶栏写范围的兜底文案与 writeScopeText 同源', () => {
     source.includes(`label: viewProjectId ? '${project.label}' : '${glob.label}'`),
     '兜底文案与 writeScopeText 不一致'
   );
+});
+
+test('自然同步命令与英文别名都进入真实记忆同步，不落到风险样本',()=>{
+ for(const command of ['/记忆同步','/同步','/sync']){assert.deepEqual(compose.parseCapabilityCommand(command),{kind:'memorySync',confirm:false});assert.equal(compose.isExactBuiltinCommand(command),true);}
+ assert.ok(compose.BUILTIN_COMMANDS.some(command=>command.id==='记灵感'&&command.insert==='/记灵感 '));
 });

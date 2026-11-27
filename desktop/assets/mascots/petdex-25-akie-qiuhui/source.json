@@ -1,0 +1,20 @@
+{
+  "rank": 25,
+  "id": "petdex-25-akie-qiuhui",
+  "slug": "akie-qiuhui",
+  "displayName": "akie_qiuhui",
+  "source": "https://petdex.dev/pets/akie-qiuhui",
+  "zipUrl": "https://assets.petdex.dev/pets/akie-qiuhui-1e2c2bd3513d/zip.zip",
+  "author": "ov4quoub",
+  "metrics": {
+    "installCount": 1778,
+    "likeCount": 2,
+    "zipDownloadCount": 5
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "6191f1dc40c56314a5be404130550ba5d05dd080bf99edf6bc866a5fc93fa6f9",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

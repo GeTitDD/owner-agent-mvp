@@ -191,21 +191,25 @@ export function readCommitList({ root, limit = 50, gitBin = 'git' } = {}) {
  *
  * 为什么要补：probeProject 只给 uncommittedFiles 这个数量，回答不了「改了哪些文件」。
  * 变化窗口的「未提交改动」是按文件列的，所以补一份清单；status 保留 git 的两位状态码，
- * 目录/重命名行也原样给（change-window 只把 status 当徽章，空着也能显示路径）。
+ * 使用 NUL 分隔，避免中文被转义、带换行的路径被拆开。重命名的旧路径单独返回。
  *
  * @param {{root:string, gitBin?:string}} options
  * @returns {Array<{status:string, path:string}>|null} 读不到仓库时返回 null
  */
 export function readWorkingTreeChanges({ root, gitBin = 'git' } = {}) {
   if (typeof root !== 'string' || !root.trim()) throw new ObserverProbeError('Invalid project root');
-  const output = tryGit(gitBin, root, ['status', '--porcelain=v1', '--untracked-files=all']);
+  const output = tryGit(gitBin, root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   if (output === null) return null;
-  return output
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => ({
-      // porcelain v1 的格式固定：前两位是状态，第三位是空格，之后是路径。
-      status: line.slice(0, 2).trim(),
-      path: line.slice(3).trim()
-    }));
+  const records = output.split('\0');
+  const changes = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const line = records[index];
+    if (!line) continue;
+    const status = line.slice(0, 2).trim();
+    const item = { status, path: line.slice(3) };
+    // -z 的重命名格式是「新路径 NUL 旧路径 NUL」，旧路径不另计一条变化。
+    if (/[RC]/u.test(status)) item.previousPath = records[++index] ?? '';
+    changes.push(item);
+  }
+  return changes;
 }

@@ -21,6 +21,10 @@
     return list.some((project) => project.id === key) ? key : '';
   };
 
+  const navigation = typeof module === 'object' && module.exports
+    ? require('../src/project-navigation.cjs') : globalThis.OwnerProjectNavigation;
+  const { resumeSessionOf } = navigation;
+
   /** 建立顶栏这一块：查 DOM、绑事件，返回给装配层用的入口。 */
   const create = (ctx) => {
     const listApi = ctx.listApi;
@@ -49,6 +53,13 @@
     const projectPopover = $('projectPopover');
     const projectList = $('projectList');
     const projectHint = $('projectHint');
+    const projectAdd = $('projectAdd');
+    const projectAddStatus = $('projectAddStatus');
+    const firstProject = $('firstProject');
+    const firstProjectAdd = $('firstProjectAdd');
+    const firstProjectError = $('firstProjectError');
+    let addingProject = false;
+    let projectOpening = false;
     const writeScopeNode = $('writeScope');
     const locateView = $('locateView');
     const locateTitle = $('locateTitle');
@@ -85,6 +96,7 @@
     // #139 定位屏：进入全局（不选项目）时读一次，点「刷新」再读；不参与轮询，也不推进水位。
     let locateData = null;
     let locateBusy = false;
+    let locateOpening = false;
     // #140 标记已读的回执：留在状态行里说明「这次做了什么」，刷新或换范围时清掉。
     let locateReceipt = '';
     // 切项目确认弹窗：null = 关着；'' 是合法目标（切回全局），所以不能用假值判断。
@@ -92,6 +104,8 @@
     // #131 同步状态：null = 还没读到（按「从未成功同步」显示）；busy 只挡重复点击。
     let syncStatus = null;
     let syncBusy = false;
+    let syncReading = true;
+    let syncReadError = '';
 
     const el = (tag, className, text) => {
       const node = document.createElement(tag);
@@ -140,7 +154,9 @@
     };
 
     const renderProject = () => {
-      projectLabel.textContent = projectsApi.scopeLabel(projects, viewProjectId);
+      projectLabel.textContent = projectOpening ? '正在打开…' : projectsApi.scopeLabel(projects, viewProjectId);
+      projectToggle.disabled = projectOpening;
+      projectToggle.setAttribute('aria-busy', String(projectOpening));
       projectToggle.dataset.scope = viewProjectId || 'global';
       projectToggle.title = viewProjectId
         ? `项目：${projectsApi.scopeLabel(projects, viewProjectId)}（点击切换）`
@@ -154,10 +170,34 @@
         const button = el('button', 'project-name');
         button.type = 'button';
         button.dataset.project = option.id;
-        button.title = option.hint;
+        button.disabled = projectOpening;
+        button.title = `打开${option.label}的独立会话，恢复历史与草稿`;
         button.append(el('span', 'project-title', option.label));
         if (option.current) button.append(el('span', 'pin-mark', '当前'));
-        row.append(button, el('span', 'project-meta', option.hint));
+        const plan = navigation.projectNavigationPlan({ sessions, projectId: option.id, currentSession: currentSession() });
+        const recent = sessions.find((session) => session.id === plan.sessionId);
+        const hint = plan.kind === 'stay' ? '正在此会话中' : plan.kind === 'resume'
+          ? `继续：${listApi.titleOf(recent)}` : option.id ? '开始这个项目的会话' : '返回定位屏，保留项目上下文';
+        const sub = el('div', 'project-subrow');
+        const meta = el('span', 'project-meta', hint);
+        meta.title = hint;
+        sub.append(meta);
+        if (currentId && option.id !== viewProjectId) {
+          const cross = el('button', 'project-cross-action', '在本会话查看');
+          cross.type = 'button';
+          cross.dataset.project = option.id;
+          cross.dataset.projectIntent = 'in-session';
+          cross.disabled = projectOpening;
+          cross.setAttribute('aria-label', `在当前会话查看${option.label}（先确认）`);
+          sub.append(cross);
+        }
+        row.append(button, sub);
+        const project=projects.find(item=>item.id===option.id);
+        if(project?.root){const location=el('span','project-location',project.root);location.title=project.root;row.append(location);}
+        if(project?.github){
+          const github=el('button','project-github-source',`GitHub · ${project.github.nameWithOwner}`);github.type='button';
+          github.title=`打开 ${project.github.url}`;github.addEventListener('click',event=>{event.stopPropagation();void window.companion.openExternal(project.github.url).catch(()=>ctx.notify?.('暂时无法打开仓库链接','error'));});row.append(github);
+        }
         return row;
       }));
     };
@@ -184,7 +224,12 @@
      */
     const renderSync = () => {
       const api = window.OwnerSyncStatus ?? null;
-      const badge = api?.syncBadge
+      const badge = syncReading ? {
+        state: 'loading', tone: 'unknown', label: '读取中', detail: '', hint: '正在读取本机同步状态。', retry: false
+      } : syncReadError ? {
+        state: 'unknown', tone: 'unknown', label: '状态未知', detail: '暂时无法读取同步状态',
+        hint: syncReadError, retry: true, retryLabel: '重试读取'
+      } : api?.syncBadge
         ? api.syncBadge(syncStatus)
         : {
           state: 'unknown',
@@ -209,15 +254,21 @@
     /** 读一次同步状态；没有主进程接口时保持「未同步 / 未知」，不写默认已同步。 */
     const loadSyncStatus = async () => {
       const syncStore = window.companion?.syncStatus ?? null;
+      syncReading = true;
+      syncReadError = '';
+      renderSync();
       if (!syncStore?.get) {
+        syncReading = false;
+        syncReadError = '同步状态接口不可用，请重新启动应用。';
         renderSync();
         return;
       }
       try {
         syncStatus = await syncStore.get();
       } catch (error) {
-        setError(`读取同步状态失败：${error?.message ?? error}`);
+        syncReadError = String(error?.message ?? error);
       }
+      syncReading = false;
       renderSync();
     };
 
@@ -226,7 +277,15 @@
      * 本地读写不经过这里，所以断网时点它只会更新标记，不会挡住任何本地动作。
      */
     const attemptSync = async () => {
-      if (syncBusy) return;
+      if (syncBusy || syncReading) return;
+      if (syncReadError) {
+        await loadSyncStatus();
+        return;
+      }
+      if (window.OwnerSyncStatus?.syncBadge(syncStatus)?.action === 'info') {
+        ctx.ui.config.openSection('sync');
+        return;
+      }
       const syncStore = window.companion?.syncStatus ?? null;
       if (!syncStore?.attempt) {
         ctx.notify?.('补同步不可用：这个窗口没有拿到主进程接口。', 'error');
@@ -267,6 +326,8 @@
       name.type = 'button';
       name.dataset.project = row.projectId;
       name.title = `切到「${row.name}」`;
+      name.dataset.locateIntent = 'project';
+      name.disabled = locateOpening;
       head.append(name);
       if (row.tierLabel) {
         const tag = el('span', 'locate-tier', row.tierLabel);
@@ -287,15 +348,25 @@
       head.append(mark);
 
       const counts = el('p', 'locate-counts');
-      const pending = el('span', 'locate-pending', row.pendingLabel);
+      const pending = el('button', 'locate-pending locate-link', row.pendingLabel);
+      pending.type = 'button';
+      pending.dataset.project = row.projectId;
+      pending.dataset.locateIntent = 'pending';
+      pending.disabled = locateOpening || row.pending.total <= 0;
+      pending.title = `查看「${row.name}」已有的待确认内容，不扫描新会话`;
       pending.dataset.known = row.pending.total > 0 ? 'true' : 'false';
-      const unread = el('span', 'locate-unread', row.unreadLabel);
+      const unread = el('button', 'locate-unread locate-link', row.unreadLabel);
+      unread.type = 'button';
+      unread.dataset.project = row.projectId;
+      unread.dataset.locateIntent = 'since';
+      unread.disabled = locateOpening;
       unread.dataset.known = row.unread.known ? 'true' : 'false';
-      unread.title = row.unread.known ? '' : (row.unread.unknownText ?? '');
+      unread.title = `查看具体提交、文件和事件；查看后推进本项目已读水位。${row.unread.known ? '' : (row.unread.unknownText ?? '')}`;
       counts.append(pending, unread);
 
       const meta = el('p', 'locate-meta', row.lastReadLabel);
       const decision = el('p', 'locate-decision', row.decisionLabel);
+      if (row.latestDecision?.reason) decision.append(el('span', 'locate-decision-reason', `理由：${row.latestDecision.reason}`));
       item.append(head, counts, meta, decision);
       return item;
     };
@@ -308,7 +379,11 @@
       const global = !viewProjectId;
       locateView.hidden = !global;
       if (!global) return;
-      locateTitle.textContent = locateData?.title ?? '先看哪个';
+      const first = Boolean(locateData && !(locateData.projects ?? []).length);
+      if (firstProject) firstProject.hidden = !first;
+      locateHint.hidden = first;
+      locateRefresh.hidden = first;
+      locateTitle.textContent = first ? '欢迎使用 Owner Companion' : (locateData?.title ?? '先看哪个');
       locateHint.textContent = locateData?.hint
         ?? '排序：待确认候选 > 有未读变化 > 超过 7 天未看 > 其余。切换项目不会清零未读。';
       locateStatus.textContent = locateBusy
@@ -321,7 +396,7 @@
       }
       locateList.replaceChildren(...(locateData.projects ?? []).map(renderLocateRow));
       const empty = locateData.empty;
-      locateEmpty.hidden = !empty;
+      locateEmpty.hidden = !empty || first;
       locateEmpty.textContent = empty ? `${empty.title}：${empty.detail}` : '';
     };
 
@@ -540,26 +615,33 @@
      * boot 时不写 last_opened_at——启动只是「回到上次那条」，不是一次新的选择。
      * #107：正在看的项目跟着会话走，所以切换会话也要重画范围与全局区。
      */
-    const selectSession = async (id, { remember = true } = {}) => {
-      const next = String(id ?? '');
-      currentId = sessions.some((item) => item.id === next) ? next : '';
-      if (currentId && remember) {
-        try {
-          await store.touch({ id: currentId });
-        } catch {
-          // 记不住「上次选的哪条」不该挡住切换本身。
+    let selecting = Promise.resolve();
+    const selectSession = (id, { remember = true } = {}) => {
+      selecting = selecting.catch(() => {}).then(async () => {
+        await ctx.ui.compose?.flushDraft?.();
+        const next = String(id ?? '');
+        currentId = sessions.some((item) => item.id === next) ? next : '';
+        const projectId = knownScope(projects, projectsApi.viewProjectIdOf(currentSession()));
+        await ctx.ui.compose?.restoreDraft?.({ id: currentId, projectId });
+        if (currentId && remember) {
+          try {
+            await store.touch({ id: currentId });
+          } catch {
+            // 记不住「上次选的哪条」不该挡住切换本身。
+          }
         }
-      }
-      await ctx.ui.stream.load();
-      ctx.ui.stream.render();
-      renderSessions();
-      applyScopeChange();
+        await ctx.ui.stream.load();
+        ctx.ui.stream.render();
+        renderSessions();
+        applyScopeChange();
+      });
+      return selecting;
     };
 
     // ── 动作：新建 / 切换 / 重命名 / 置顶 / 删除 / 找回 ──────────────
 
     const createSession = () => report('新建会话', async () => {
-      const created = await store.create({ title: '' });
+      const created = await store.create({ title: '', projectId: viewProjectId });
       query = '';
       searchInput.value = '';
       showArchive = false;
@@ -591,6 +673,7 @@
     });
 
     const confirmDelete = (id) => report('删除会话', async () => {
+      await ctx.ui.compose?.flushDraft?.();
       const before = sessions;
       const wasCurrent = id === currentId;
       pendingDelete = '';
@@ -620,7 +703,8 @@
           id: String(project?.id ?? ''),
           name: String(project?.name ?? ''),
           // #124：关联项目的 prompt 段要写「项目名（来源 · 路径）」，路径随项目一起读。
-          root: String(project?.root ?? '')
+          root: String(project?.root ?? ''),
+          github: project?.github ? {nameWithOwner:String(project.github.nameWithOwner??''),url:String(project.github.url??'')} : null
         }))
         .filter((project) => project.id);
     };
@@ -631,8 +715,12 @@
       if (open) {
         // 列表每次打开都重画：别处登记/删了项目时不会展示过期项。
         renderProject();
+        void report('读取项目', async () => {
+          await loadProjects();
+          renderProject();
+        });
         projectHint.textContent = currentId
-          ? '不选项目就是全局：读所有项目的记忆，不写入任何项目。切换项目会先出四条后果。'
+          ? '点项目继续上次会话，历史和草稿各自保留。跨项目查看请选「在本会话查看」。'
           : projectsApi.NO_SESSION_HINT;
       }
     };
@@ -693,20 +781,128 @@
       await selectSession(session.id);
     });
 
-    /** 点项目胶囊里的一项：同一项不动；没有会话就直接开一条绑定它的；否则先确认。 */
-    const chooseScope = (targetId) => report('切换项目', async () => {
-      const target = String(targetId ?? '');
+    /** 默认导航恢复项目上下文；只有明确的跨项目动作才改本会话视图。 */
+    const chooseScope = async (targetId, intent = 'project') => {
+      if (projectOpening || locateOpening) return;
+      const target = String(targetId ?? '').trim();
       setProjectPopover(false);
-      if (target === viewProjectId) return;
-      if (!currentId) {
-        setProjectPopover(false);
-        const created = await store.create({ title: '', projectId: target });
-        await loadSessions();
-        await selectSession(created.id);
+      if (intent === 'in-session' && currentSession()) {
+        if (target !== viewProjectId) openConfirm(target);
         return;
       }
-      openConfirm(target);
-    });
+      const origin = currentId;
+      let destinationId = '';
+      let selectionStarted = false;
+      projectOpening = true;
+      projectAddStatus.hidden = true;
+      renderProject();
+      try {
+        await ctx.ui.compose?.flushDraft?.();
+        await loadProjects();
+        await loadSessions();
+        if (currentId !== origin) return;
+        if (target && !projects.some((project) => project.id === target)) throw new Error('项目已不存在');
+        const plan = navigation.projectNavigationPlan({ sessions, projectId: target,
+          currentSession: currentSession(), hasDraft: ctx.ui.compose?.hasDraft?.() });
+        if (plan.kind === 'stay') { ctx.ui.compose.focus(); return; }
+        const next = plan.kind === 'resume' ? { id: plan.sessionId }
+          : await store.create({ title: '', projectId: target, reuseEmptyGlobalId: plan.reuseEmptyGlobalId });
+        destinationId = next.id;
+        await loadSessions();
+        if (currentId !== origin) return;
+        selectionStarted = true;
+        await selectSession(next.id);
+        ctx.ui.compose.focus();
+      } catch (error) {
+        // 目标历史读取失败时，把已切到一半的输入范围与会话一起退回，避免顶栏和正文分属两边。
+        let restored = true;
+        if (selectionStarted && currentId === destinationId) {
+          try { await selectSession(origin, { remember: false }); }
+          catch { restored = false; }
+        }
+        setProjectPopover(true);
+        projectAddStatus.textContent = restored
+          ? '暂时无法打开项目，原会话和草稿已保留。请重新选择项目重试。'
+          : '暂时无法读取会话，草稿已保存在本机。请重新选择会话后重试。';
+        projectAddStatus.title = String(error?.message ?? error);
+        projectAddStatus.hidden = false;
+      } finally {
+        projectOpening = false;
+        renderProject();
+      }
+    };
+
+    /** 明确的定位动作恢复独立项目会话；只是进入项目时绝不触发已读或扫描。 */
+    const openLocate = async (projectId, intent) => {
+      if (locateOpening || projectOpening) return;
+      locateOpening = true;
+      renderLocate();
+      try {
+        await report('打开项目内容', async () => {
+          await loadProjects();
+          if (!projects.some((project) => project.id === projectId)) throw new Error('项目已不存在，请刷新定位屏。');
+          await loadSessions();
+          const existing = resumeSessionOf(sessions, projectId);
+          const target = existing ?? await store.create({ title: '', projectId });
+          if (!existing) await loadSessions();
+          await selectSession(target.id);
+          if (intent !== 'project') await ctx.ui.compose.openFromLocate(intent);
+          ctx.ui.compose.focus();
+        });
+      } finally {
+        locateOpening = false;
+        renderLocate();
+      }
+    };
+
+    // 目录选择沿用主进程原生对话框；成功后直接进入新项目，取消保留会话与草稿。
+    const addProject = async () => {
+      if (addingProject) return;
+      addingProject = true;
+      const buttons = [projectAdd, firstProjectAdd].filter(Boolean);
+      for (const button of buttons) {
+        button.disabled = true;
+        button.dataset.label = button.textContent;
+        button.textContent = '正在选择项目…';
+      }
+      const status = (text) => {
+        projectAddStatus.textContent = text;
+        projectAddStatus.hidden = !text;
+        firstProjectError.textContent = text;
+        firstProjectError.hidden = !text;
+      };
+      status('');
+      try {
+        await ctx.ui.compose?.flushDraft?.();
+        const bridge = window.companion?.settings;
+        if (!bridge?.addProject) throw new Error('项目选择不可用，请重新启动应用');
+        const project = await bridge.addProject();
+        if (!project) return;
+        await loadProjects();
+        const reusable = !viewProjectId && !currentSession()?.messageCount && !ctx.ui.compose?.hasDraft?.();
+        const created = await store.create({ projectId: project.id, title: '', reuseEmptyGlobalId: reusable ? currentId : '' });
+        await loadSessions();
+        await selectSession(created.id);
+        setProjectPopover(false);
+        ctx.notify?.('项目已打开，项目文件保持不变');
+        ctx.ui.compose.focus();
+      } catch (error) {
+        const detail = String(error?.message ?? error);
+        const message = /must already exist|ENOENT/u.test(detail)
+          ? '项目目录已移动或不存在，请重新选择。'
+          : /readable directory|EACCES|EPERM/u.test(detail)
+            ? '无法读取这个文件夹，请检查目录权限后重试。'
+            : '暂时无法添加项目，当前草稿已保留，请重试。';
+        status(message);
+        ctx.notify?.(message, 'error');
+      } finally {
+        addingProject = false;
+        for (const button of buttons) {
+          button.disabled = false;
+          button.textContent = button.dataset.label;
+        }
+      }
+    };
 
     // ── 会话浮层 ──────────────────────────────────────────────────────
 
@@ -757,17 +953,18 @@
 
     capsule.addEventListener('click', () => setPopover(popover.hidden));
 
-    // #107 项目胶囊：一个浮层装「全局 + 已登记项目」；选择本身不直接改范围，先走确认。
+    // 项目主入口恢复独立会话；跨项目查看由行内的明确动作进入确认。
     projectToggle.addEventListener('click', () => setProjectPopover(projectPopover.hidden));
+    projectAdd?.addEventListener('click', () => void addProject());
+    firstProjectAdd?.addEventListener('click', () => void addProject());
 
     projectList.addEventListener('click', (event) => {
       const button = event.target.closest?.('button[data-project]');
       if (!button) return;
-      void chooseScope(button.dataset.project ?? '');
+      void chooseScope(button.dataset.project ?? '', button.dataset.projectIntent || 'project');
     });
 
-    // 定位屏的一行就是切换入口：走与项目胶囊同一个确认流程，不清零未读（ADR-0014）。
-    // #140「标记已读」是这一屏唯一的写动作，先认它，避免落进下面的切换确认。
+    // 定位屏恢复项目独立会话；只有明确点击变化或标记已读才推进水位。
     locateList.addEventListener('click', (event) => {
       const mark = event.target.closest?.('button[data-mark-read]');
       if (mark) {
@@ -776,7 +973,7 @@
       }
       const button = event.target.closest?.('button[data-project]');
       if (!button) return;
-      void chooseScope(button.dataset.project ?? '');
+      void openLocate(button.dataset.project ?? '', button.dataset.locateIntent || 'project');
     });
 
     confirmInSession.addEventListener('click', () => void runSwitch(projectsApi.EXITS.inSession));
@@ -880,9 +1077,10 @@
       attemptSync,
       syncStatus: () => syncStatus,
       closePopoverIfOpen,
-      dismissOverlay
+      dismissOverlay,
+      openProject: projectId => openLocate(projectId,'project')
     };
   };
 
-  return { knownScope, create };
+  return { knownScope, resumeSessionOf, create };
 });

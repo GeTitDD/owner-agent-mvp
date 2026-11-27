@@ -1,0 +1,12 @@
+{
+  "id": "petdex-07-tiko",
+  "displayName": "Tiko",
+  "description": "An original tiny yellow utility robot pet with curious camera eyes, treads, and friendly clamp arms.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 7
+}

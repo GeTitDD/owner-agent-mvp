@@ -1,6 +1,6 @@
 // #116 验收：外发确认卡 / 删除确认卡 / 删除回执 / 写后外发拆两次。
 //
-// 路径：卡片壳（#105）→ 输入 /外发、/删除、/同步（脚本化，不真的发、不真的删）。
+// 路径：卡片壳（#105）→ 输入 /外发、/删除、/样例同步（脚本化，不真的发、不真的删）。
 // 断言：
 //   ① 外发卡：强调「发出即收不回」；动作只有发出这一次 / 取消，没有免问；
 //      取消后回执说「未发出」，且没有新增确认卡（本地状态未变）；
@@ -274,7 +274,7 @@ const runConfirm = async () => {
       JSON.stringify(deleteCancelReceipt));
 
     // ③ 同一动作里的写入 + 外发：两张卡，先写后发。
-    await sendDraft(panel, '/同步');
+    await sendDraft(panel, '/样例同步');
     const both = await waitFor(panel, `(() => {
       const msgs = [...document.querySelectorAll('#messages .msg.agent')];
       const last = msgs[msgs.length - 1];

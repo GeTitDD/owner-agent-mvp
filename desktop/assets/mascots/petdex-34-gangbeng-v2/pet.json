@@ -1,0 +1,12 @@
+{
+  "id": "petdex-34-gangbeng-v2",
+  "displayName": "钢蹦",
+  "description": "A chibi Codex pet based on Gangbeng, a black-and-white curly-coated cat with giant ears, green eyes, a pink nose, and a curious tilted head.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 34
+}

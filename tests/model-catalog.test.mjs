@@ -1,7 +1,7 @@
 // 模型目录：把 Pi 的两个目录文件合并成配置箱可选的行。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildModelCatalog, hasCredential } from '../src/model-catalog.mjs';
+import { buildModelCatalog, hasCredential, modelCatalogOf } from '../src/model-catalog.mjs';
 
 const store = {
   file: 'models-store.json',
@@ -62,4 +62,15 @@ test('读不到目录时返回空表而不是抛错', () => {
   const catalog = buildModelCatalog({ stores: [{ file: 'x', data: null }, { file: 'y', data: {} }] });
   assert.deepEqual(catalog.items, []);
   assert.deepEqual(catalog.providers, []);
+});
+
+test('运行时目录输出与实际模型一致，只含白名单字段，不暴露凭据或地址', () => {
+  const catalog = modelCatalogOf({
+    getModels: () => [{ provider: 'custom', id: 'a', name: '中文模型', apiKey: 'SECRET', headers: { Authorization: 'SECRET' } }],
+    hasConfiguredAuth: () => true, getError: () => undefined
+  });
+  assert.equal(catalog.items[0].id, 'custom/a');
+  assert.equal(catalog.items[0].ready, true);
+  assert.equal(JSON.stringify(catalog).includes('SECRET'), false);
+  assert.deepEqual(Object.keys(catalog.items[0]).sort(), ['id', 'provider', 'model', 'label', 'ready', 'source'].sort());
 });

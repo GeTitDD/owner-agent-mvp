@@ -18,7 +18,9 @@
 
 - 参考：Codex Pet 社区包格式（`pet.json` + spritesheet，8×9 / 8×11）与 Petdex 的“导入/一键切换”体验。
 - 使用范围：仅借鉴公开的包字段与状态行命名；`src/mascots.mjs`、`desktop/pet.js` 中的解析与动画逻辑为本项目实现。
-- 未包含：Codex Pet / Petdex 的代码、运行时、在线图库或美术资源。
+- 未包含：Codex Pet / Petdex 的应用代码或运行时。
+- 已按用户要求包含 Petdex 站点安装量快照前 50 的动画美术资源，清单位于 `desktop/assets/mascots/petdex-manifest.json`。每项保留作者、原始下载地址、下载时间、包摘要、原始配置与包内许可文件；未声明许可的项目不推定为 MIT、Apache-2.0 或其他开源许可。
+- 运行时不访问在线图库；使用轻量首帧封面和本地完整图集。
 
 Apache License 2.0 全文：https://www.apache.org/licenses/LICENSE-2.0
 
@@ -36,3 +38,12 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ```
+
+
+## Wikipe-tan 动漫头像与应用图标
+
+- 原作：Kasuga；SVG 矢量化：Actam。
+- 来源：https://commons.wikimedia.org/wiki/File:Wikipe-tan_face.svg
+- 许可：CC BY-SA 3.0（https://creativecommons.org/licenses/by-sa/3.0/）。
+- 修改：加入深蓝/浅蓝圆角边框、调整构图，导出 PNG、ICO 与 ICNS。
+- 原始 SVG、来源摘要和完整许可位于 `desktop/assets/branding/`。此处派生图像继续按 CC BY-SA 3.0 提供；不改变应用代码或其他资源各自的许可。

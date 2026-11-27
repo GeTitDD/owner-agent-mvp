@@ -176,9 +176,19 @@ async function loadProvenance(id){
 async function loadUsage(id){
   const panel=$('#usagePanel');if(!panel)return;
   try{
-    const usages=await api(`/api/knowledge/usages?knowledgeId=${encodeURIComponent(id)}`);
-    panel.innerHTML=usages.length?usages.map(item=>`<div class="usage-item"><div><strong>${esc(item.targetRunId??item.target_run_id??'run')}</strong><small>r${esc(item.revision)} · ${esc(item.outcome??'unknown')} · ${esc(item.observedBenefit??item.observed_benefit??'unknown')}</small></div><small>${esc(item.contextSnapshotId??item.context_snapshot_id??'')}</small></div>`).join(''):'<p class="empty-line">还没有使用记录。Context Compiler 引用后会在这里出现。</p>';
-  }catch(e){panel.innerHTML=`<p class="empty-line">使用记录读取失败：${esc(e.message)}</p>`;}
+    const [usages,references]=await Promise.all([
+      api(`/api/knowledge/usages?knowledgeId=${encodeURIComponent(id)}&limit=200`),
+      api(`/api/knowledge/chat-references?knowledgeId=${encodeURIComponent(id)}`)
+    ]);
+    if (state.selected?.id !== id || !panel.isConnected) return;
+    const outcome=value=>({unknown:'未知',succeeded:'成功',failed:'失败',canceled:'已取消',aborted:'已停止'})[value]||value||'未知';
+    const benefit=value=>({unknown:'未知',positive:'正面',negative:'负面'})[value]||'未知';
+    panel.innerHTML=`<p class="notice">以下分别显示最近最多 200 条记录。提供资料不等于模型采纳；任务成功也不等于知识产生收益。</p>
+      <h3>已完成对话引用 · ${references.length} 条</h3>
+      ${references.length?references.map(item=>`<div class="usage-item"><div><strong>${item.projectId?`项目 ${esc(item.projectId)}`:'全局会话'}</strong><small>r${esc(item.revision)} · ${esc(item.createdAt)}</small></div><small>会话 ${esc(item.sessionId)} · 本轮 ${esc(item.turnId)}</small></div>`).join(''):'<p class="empty-line">还没有已完成对话的引用记录。只检索、未注入、失败或取消均不计入。</p>'}
+      <h3>任务上下文复用 · ${usages.length} 条</h3>
+      ${usages.length?usages.map(item=>`<div class="usage-item"><div><strong>${esc(item.targetRunId)}</strong><small>r${esc(item.revision)} · 任务结果：${esc(outcome(item.outcome))} · 复用收益：${esc(benefit(item.observedBenefit))}</small></div><small>${esc(item.contextSnapshotId)}</small></div>`).join(''):'<p class="empty-line">还没有任务上下文复用记录；对话引用单独计量，不自动转为任务或收益。</p>'}`;
+  }catch(e){if(state.selected?.id === id && panel.isConnected)panel.innerHTML=`<p class="empty-line">使用记录读取失败：${esc(e.message)}</p>`;}
 }
 async function loadConflicts(id){
   const panel=$('#conflictPanel');if(!panel)return;

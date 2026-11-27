@@ -40,8 +40,8 @@ export const SECTIONS = Object.freeze([
         label: '主模型',
         kind: 'model',
         key: 'model',
-        placeholder: '留空 = Pi 默认模型',
-        effect: '对话、补丁、Playbook 都改用它；可从已装模型里选，也可手填 provider/model。'
+        placeholder: '留空 = 暂不连接模型',
+        effect: '对话、补丁、Playbook 都改用它；可从模型目录选择，也可手填 provider/model。'
       }),
       Object.freeze({
         id: 'diagramModel',
@@ -140,10 +140,10 @@ export const SECTIONS = Object.freeze([
       }),
       Object.freeze({
         id: 'mattSkills',
-        label: '自定义技能目录',
+        label: 'Matt Pocock 技能包',
         kind: 'readonly',
         from: { bag: 'paths', key: 'skills' },
-        effect: '扫描时缺目录标「缺失」；安装新技能要先确认才写盘。'
+        effect: '默认使用应用内置的固定版本；外部目录仅作为显式扩展，不需要另行安装。'
       }),
       Object.freeze({
         id: 'skillCap',
@@ -220,8 +220,10 @@ export const SECTIONS = Object.freeze([
   Object.freeze({
     id: 'sync',
     label: '同步',
-    hint: '方向已经定了（ADR-0013）；这一区是说明，不是开关。',
+    hint: '用自己的私有 GitHub 仓库同步知识、决策与经验。先保存设置，再检查清单；每次确认后才传输。',
     rows: Object.freeze([
+      Object.freeze({id:'syncRepo',label:'私有仓库',kind:'text',key:'syncRepo',placeholder:'GitHub 用户名/仓库名',effect:'只支持当前凭据对应用户的私有可写仓库；留空则仅使用本机。'}),
+      Object.freeze({id:'syncBranch',label:'同步分支',kind:'text',key:'syncBranch',placeholder:'main',effect:'建议使用专用分支；切换目标后会重新检查，不沿用旧目标的成功状态。'}),
       Object.freeze({
         id: 'syncCredential',
         label: '同步令牌',
@@ -241,8 +243,8 @@ export const SECTIONS = Object.freeze([
         id: 'syncRun',
         label: '同步执行',
         kind: 'readonly',
-        text: '引擎已有，未接界面（#130/#131）',
-        effect: '本票只读说明：配置箱不触发拉取或推送。'
+        text: '手动检查 → 逐篇确认 → 先拉后推',
+        effect: '只同步知识、决策和经验；应用配置、凭据、原始聊天、审计与项目文件不会传输。'
       }),
       Object.freeze({
         id: 'syncOrder',
@@ -387,4 +389,30 @@ export function patchForSave(draft = {}) {
       : raw.trim();
   }
   return patch;
+}
+
+/** 检测到凭据不等于连接成功；目录状态只说明本地条件，不承诺额度和网络可用。 */
+export function modelSelectionState({ model = '', catalog = null } = {}) {
+  const id = String(model ?? '').trim();
+  if (!id) return { state: 'missing', text: '尚未选择主模型。可先记录项目与决策；要提问，请从目录选择模型后保存。' };
+  if (!catalog) return { state: 'unknown', text: '模型目录读取失败。可以重新打开设置刷新；手填格式为 provider/model。' };
+  const entry = catalog.items?.find((item) => item.id === id);
+  if (!entry) return { state: 'unknown', text: '当前模型不在本地目录中。请刷新目录或重新选择；保存配置不会验证连接。' };
+  return entry.ready
+    ? { state: 'configured', text: '已在本地找到模型与凭据。保存后下一次提问使用它；网络、额度和凭据有效性尚未验证。' }
+    : { state: 'missing', text: '已找到模型，但未检测到凭据。请在 Pi 中登录对应服务或配置其 API key，再刷新目录。' };
+}
+
+/** 模型目录可能上千条：先按名称/提供商/ID 检索，再限制显示数，避免原生下拉被长清单淹没。 */
+export function modelOptionsFor({ items = [], query = '', current = '' } = {}) {
+  const limit = 100;
+  const wanted = String(query).trim().toLowerCase();
+  const matches = items.filter((item) => !wanted || [item.id, item.label, item.provider]
+    .some((value) => String(value ?? '').toLowerCase().includes(wanted)));
+  const visible = matches.slice(0, limit);
+  const selected = items.find((item) => item.id === current);
+  if (selected && !visible.some((item) => item.id === current)) visible.unshift(selected);
+  return { items: visible, matched: matches.length, total: items.length,
+    label: matches.length > limit ? `匹配 ${matches.length} 个，先显示 ${limit} 个；输入关键词继续缩小范围。`
+      : (matches.length ? `匹配 ${matches.length} 个模型。` : '没有匹配的模型；可换关键词或手填完整 ID。') };
 }

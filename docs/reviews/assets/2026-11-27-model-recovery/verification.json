@@ -1,0 +1,75 @@
+{
+  "date": "2026-11-27",
+  "platform": "darwin",
+  "unit": {
+    "total": 1259,
+    "passed": 1254,
+    "skipped": 5,
+    "failed": 0
+  },
+  "syntax": {
+    "files": 282,
+    "status": "pass"
+  },
+  "modelRecovery": {
+    "status": "pass",
+    "assertions": 59
+  },
+  "regressions": [
+    {
+      "name": "first-use",
+      "status": "pass"
+    },
+    {
+      "name": "locate-review",
+      "status": "pass"
+    },
+    {
+      "name": "config-box",
+      "status": "pass"
+    },
+    {
+      "name": "card-shell",
+      "status": "pass"
+    },
+    {
+      "name": "card-projects",
+      "status": "pass"
+    },
+    {
+      "name": "slash",
+      "status": "pass"
+    },
+    {
+      "name": "blocks",
+      "status": "pass"
+    },
+    {
+      "name": "copy-export",
+      "status": "pass"
+    },
+    {
+      "name": "at-project",
+      "status": "pass"
+    },
+    {
+      "name": "at-session",
+      "status": "pass"
+    }
+  ],
+  "css": "balanced",
+  "backend": "real installed SDK + local HTTP/SSE fixture; no chat IPC stubs; no paid provider calls",
+  "limitations": [
+    "Windows 未验收",
+    "真实提供商的质量、凭据有效性与额度未验证"
+  ],
+  "livePreview": {
+    "desktop": "running",
+    "projects": 3,
+    "draftAndScopePreserved": true,
+    "rendererErrors": 0,
+    "modelPicker": "bounded to 100 matches plus current selection; native keyword search verified",
+    "workbenchHome": 200,
+    "workbenchLessons": 200
+  }
+}

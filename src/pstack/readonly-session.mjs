@@ -10,6 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { resolvePiModel } from '../pi-model-catalog.mjs';
+import { bundledPstackSkills } from '../bundled-skills.mjs';
 import { READONLY_TOOLS, FORBIDDEN_TOOLS } from './playbooks.mjs';
 
 // pstack skills 目录：与 Knowledge Harvest 共用同一套解析规则。
@@ -17,6 +18,7 @@ export function resolvePstackSkillsDir(explicit = process.env.PSTACK_DIR) {
   const candidates = [
     explicit ? path.join(explicit, 'skills') : '',
     explicit ?? '',
+    bundledPstackSkills,
     path.resolve(process.cwd(), '..', 'pstack-pi', 'skills'),
     'D:\\nautilus_trader\\.tmp\\opencode\\pstack-pi\\skills'
   ].filter(Boolean);
@@ -126,7 +128,7 @@ export function createReadonlySessionFactory({ playbook, skillsDir, python = fal
             ...(customTools.length ? { customTools } : {}),
             sessionManager: sdk.SessionManager.inMemory(),
             resourceLoader: loader,
-            ...(model ? { model: resolvePiModel(model) } : {})
+            ...await resolvePiModel(model, { sdk })
           });
           // 二次核对：只读白名单之外出现任何工具都直接失败。
           const active = typeof session.getActiveToolNames === 'function'

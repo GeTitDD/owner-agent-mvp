@@ -1,0 +1,12 @@
+{
+  "id": "petdex-30-lin-pianpian",
+  "displayName": "林翩翩",
+  "description": "A graceful feminine Codex digital pet based on the provided Lin Pianpian reference, elegant and poised with a handheld round fan.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 30
+}

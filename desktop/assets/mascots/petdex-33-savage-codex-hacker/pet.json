@@ -1,0 +1,12 @@
+{
+  "id": "petdex-33-savage-codex-hacker",
+  "displayName": "Savage Codex Hacker",
+  "description": "A smug little Codex logo mascot wearing pixel shades and typing on a tiny laptop.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 33
+}

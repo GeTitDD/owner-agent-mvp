@@ -1,0 +1,12 @@
+{
+  "id": "petdex-40-bubu-3",
+  "displayName": "Bubu",
+  "description": "A limbless round orange carrot companion with green leaves, thick outlines, and gentle desktop-pet expressions.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 40
+}

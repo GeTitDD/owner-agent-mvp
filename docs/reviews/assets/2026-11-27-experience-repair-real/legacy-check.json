@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "checks": [
+    "旧实验 r2 在 Owner 项目显式命中同一知识",
+    "旧实验 r2 的同一 ID 和完整边界进入新会话实际请求",
+    "工作台读到的仍是旧实验同一条知识 r2",
+    "实验副本的长标题不挤压验证状态"
+  ],
+  "root": "/var/folders/qk/m7qdw6r15m13l_wjvbmj_3140000gn/T/owner-legacy-repair-gWPGo6",
+  "source": "original real-project study databases copied, never rewritten",
+  "realProviderCalls": 0,
+  "localFixtureRequests": 1
+}

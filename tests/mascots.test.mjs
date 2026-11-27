@@ -44,6 +44,7 @@ test('用户目录同名皮肤覆盖内置，manifest 可改显示名与默认�
   const catalog = listMascots({ builtinDir: builtin, userDir: user });
   const cindy = catalog.skins.find((item) => item.id === 'cindy');
   assert.equal(cindy.source, 'custom');
+  assert.equal(cindy.builtin, false);
   assert.equal(cindy.label, 'Cindy 自定义');
   assert.equal(catalog.skins.find((item) => item.id === 'my-pet').label, '我的宠物');
   assert.equal(catalog.default, 'my-pet');
@@ -53,10 +54,10 @@ test('用户目录同名皮肤覆盖内置，manifest 可改显示名与默认�
   assert.match(resolved.file, /my-pet\.png$/u);
 });
 
-test('无效配置回退到 manifest 默认或 pululu，再回退到首个可用皮肤', () => {
+test('无效配置回退到 manifest 默认或首个可用模板，再回退到首个可用皮肤', () => {
   const { builtin, user } = makeDirs();
   const fallback = resolveMascot({ builtinDir: builtin, userDir: user, skin: 'not-exist' });
-  assert.equal(fallback.skin, DEFAULT_MASCOT_SKIN);
+  assert.equal(fallback.skin, 'cindy');
   assert.equal(fallback.fallback, true);
 
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'mascot-empty-'));

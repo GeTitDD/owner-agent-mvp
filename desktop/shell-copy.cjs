@@ -287,6 +287,7 @@
   };
 
   const RENDERERS = {
+    'chat-recovery': (model) => finish([`### ${model.title}`, '', model.note]),
     card: cardMarkdown,
     table: tableMarkdown,
     kpi: kpiMarkdown,

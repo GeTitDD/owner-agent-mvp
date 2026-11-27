@@ -1,0 +1,20 @@
+{
+  "rank": 49,
+  "id": "petdex-49-jotaro",
+  "slug": "jotaro",
+  "displayName": "Jotaro",
+  "source": "https://petdex.dev/pets/jotaro",
+  "zipUrl": "https://assets.petdex.dev/pets/jotaro-d81518c99336/zip.zip",
+  "author": "Criss W.",
+  "metrics": {
+    "installCount": 1342,
+    "likeCount": 11,
+    "zipDownloadCount": 36
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "7adabf03149e03ff980b299ff7171ea9c8e3de29d27b1b1a47982e366bded2c4",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

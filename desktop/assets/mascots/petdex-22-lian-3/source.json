@@ -1,0 +1,20 @@
+{
+  "rank": 22,
+  "id": "petdex-22-lian-3",
+  "slug": "lian-3",
+  "displayName": "Lian",
+  "source": "https://petdex.dev/pets/lian-3",
+  "zipUrl": "https://assets.petdex.dev/pets/lian-aed075301650/zip.zip",
+  "author": "某",
+  "metrics": {
+    "installCount": 1903,
+    "likeCount": 11,
+    "zipDownloadCount": 15
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "624a8e0de0e0f492b1d1a936ea13133067ce24f3afa035b60e950e39d3b8c566",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

@@ -1,0 +1,110 @@
+{
+  "date": "2026-11-27",
+  "timezone": "Asia/Shanghai",
+  "type": "real-project-dogfood",
+  "result": "core-experience-loop-blocked",
+  "businessCodeChanged": false,
+  "projects": [
+    {
+      "id": "ai-novel-writing-assistant",
+      "name": "AI-Novel-Writing-Assistant",
+      "head": "76c8d514d7bbe5e1b95d9be932e681c681650d9a"
+    },
+    {
+      "id": "owner-agent-mvp",
+      "name": "owner-agent-mvp",
+      "head": "65cdbaef0ab310fe13ec3051c1d14379719d8788"
+    }
+  ],
+  "realProvider": "deepseek/deepseek-flash",
+  "realModelCalls": 3,
+  "callPurposes": [
+    "真实提交摘要分析",
+    "同项目新会话经验复用",
+    "另一项目请求经验复用（领域共享前）"
+  ],
+  "budgetEnforcement": "隔离 Electron 宿主在 ModelRuntime.streamSimple 第四次调用前拒绝；无模型回复替身",
+  "checks": [
+    "两个登记项目均指向真实 Git 仓库",
+    "owner-agent-mvp 的 HEAD 未变化",
+    "owner-agent-mvp 的既有暂存外差异未变化",
+    "AI-Novel-Writing-Assistant 的 HEAD 未变化",
+    "AI-Novel-Writing-Assistant 的既有暂存外差异未变化",
+    "桃花坞 Git 状态逐字保持原样",
+    "两个真实项目没有伪造的终态执行记录",
+    "只生成了一条灵感来源的经验",
+    "复现：经验只有 160 字现象，机制和对策仍为空",
+    "复现：关键跨进程边界仍在证据中而没有进入经验正文",
+    "Workbench 修订同一知识为领域共享，没有另造一条",
+    "补全后的正式知识保留适用边界与待验证状态",
+    "原始截断的第一修订仍可追查",
+    "真实实验决策保留选择和理由",
+    "真实 SDK 提供商调用严格为三次",
+    "三次调用没有工具结果或额外工具循环",
+    "同项目新会话请求未注入经验或知识正文和条目 ID",
+    "真实模型的新会话答复明确没有拿到经验",
+    "领域共享后桌面命令仍查不到，项目库计数已能看见",
+    "关联项目生成的 prompt 只有资料指针，未含真实经验正文"
+  ],
+  "findings": [
+    "R01-chat-retrieval-not-connected",
+    "R02-idea-body-truncated",
+    "R03-review-missing-edit-and-scope",
+    "R04-explicit-command-misses-shared-knowledge",
+    "R05-linked-prompt-missing-material",
+    "R06-external-evidence-onboarding-gap"
+  ],
+  "screenshots": [
+    "01-real-project-registered.png",
+    "02-second-real-project.png",
+    "03-distill-empty-real-records.png",
+    "04-real-model-configured.png",
+    "05-real-model-analysis.png",
+    "06-chat-not-distillable.png",
+    "07-real-idea-receipt.png",
+    "08-lesson-truncated-no-editor.png",
+    "09-project-only-candidate.png",
+    "10-knowledge-accepted.png",
+    "11-explicit-lesson-lookup.png",
+    "12-same-project-new-session-no-memory.png",
+    "13-other-project-no-shared-entry.png",
+    "14-cross-project-no-reference.png",
+    "15-real-project-changes.png",
+    "16-method-menu.png",
+    "17-link-real-project-experience.png",
+    "18-prompt-select-real-question.png",
+    "19-linked-prompt-only-pointer.png",
+    "20-real-experiment-decision.png",
+    "21-decision-saved.png",
+    "22-library-after-decision.png",
+    "23-generated-prompt-visible.png",
+    "24-real-project-locate.png",
+    "25-real-data-workbench.png",
+    "26-workbench-knowledge.png",
+    "27-workbench-edit-project-knowledge.png",
+    "28-workbench-shared-knowledge-r2.png",
+    "29-shared-knowledge-missed-by-command.png",
+    "30-project-library-sees-domain-knowledge.png",
+    "31-workbench-lesson-evidence.png",
+    "32-real-lesson-dark.png",
+    "33-real-study-restored-after-restart.png"
+  ],
+  "limitations": [
+    "Windows 未验收",
+    "没有真实终态 Owner 执行记录，未声称自动蒸馏成功",
+    "领域共享后未再调用模型（已达三次预算）",
+    "未覆盖写回项目、外发、发布与真实跨设备同步",
+    "业务代码未改，本轮未重跑全量单元测试"
+  ],
+  "baseline": {
+    "existingTrackedDiffUnchanged": true,
+    "novelGitStatusUnchanged": true
+  },
+  "privateArtifacts": "原始调用上下文、隔离 SQLite、会话原文与 Git 基线只保留在本机实验目录，未放进仓库",
+  "restartReadback": {
+    "projectId": "ai-novel-writing-assistant",
+    "knowledgeRevision": 2,
+    "knowledgeScope": "domain",
+    "realModelCallsAfterRestart": 3
+  }
+}

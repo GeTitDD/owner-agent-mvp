@@ -272,6 +272,7 @@
 
   const renderCode = (model) => {
     const node = blockNode(model);
+    if(model.title==='生成的 prompt')node.classList.add('prompt-output');
     if (model.title || model.lang) node.append(headNode(model.title, model.lang));
     if (model.lines.length === 0) {
       node.append(el('p', 'block-note', '这个代码块是空的。'));
@@ -720,6 +721,41 @@
    * 动作的语义由调用方处理（提升为候选 / 接受 / 改写 / 拒绝），这里只画。
    * 决策卡（#138）多一张内嵌表单：候选从「改写」展开，记决策直接展开。
    */
+  // 草稿只存本机，按来源身份与审阅版本隔离；切换会话或保存失败后仍能继续填写。
+  const experienceDraftKey = model => `${model.editKind}:${model.ideaId||model.proposalId}:${model.expectedHash}`;
+  const renderExperienceForm = (model,node) => {
+    const form=el('div','experience-form');
+    const draftKey=experienceDraftKey(model);node.dataset.experienceDraftKey=draftKey;
+    const values={...model.editValues};
+    const field=(label,key,max,lines=1)=>{
+      const row=el('label','review-field');row.append(el('span','review-field-label',label));
+      const input=lines>1?el('textarea','review-input'):el('input','review-input');
+      if(lines>1)input.rows=lines;else input.type='text';
+      input.dataset.experienceField=key;input.value=values[key]||'';input.maxLength=max;
+      row.append(input);form.append(row);return row;
+    };
+    if(model.editKind==='idea'){
+      field('现象（短标题）','phenomenon',160);
+      field('机制 · 为什么发生','mechanism',1000,2);
+      field('对策 · 下次怎么做','countermeasure',1000,3);
+      field('记录正文 · 原文与适用边界完整保留','content',16000,5);
+    }else{
+      field('知识标题','title',200);
+      field('知识正文 · 核对机制、对策与适用边界','content',20000,8);
+      const scopeRow=el('label','review-field');scopeRow.append(el('span','review-field-label','使用范围'));
+      const scope=el('select','review-input');scope.dataset.experienceField='scope';
+      for(const [value,label]of [['project','仅来源项目'],['domain','领域共享 · 供同领域项目引用']]){const option=el('option','',label);option.value=value;scope.append(option);}
+      scope.value=values.scope||'project';scopeRow.append(scope);form.append(scopeRow);
+      if(model.projectName||model.projectId)form.append(el('p','block-note',`来源项目：${model.projectName||model.projectId}`));
+      const domains=field('共享领域 ID（逗号分隔）','domains',1000);
+      const updateScope=()=>{domains.hidden=scope.value!=='domain';};scope.addEventListener('change',updateScope);updateScope();
+      field('适用条件 · 哪些情况下可用','applicability',1000,2);
+      field('例外 / 边界 · 哪些情况下不能直接套用','exceptions',1000,2);
+    }
+    const error=el('p','experience-error');error.dataset.experienceError='1';error.setAttribute('role','alert');error.hidden=true;form.append(error);
+    return form;
+  };
+
   const renderReview = (model) => {
     const node = blockNode(model);
     node.dataset.reviewKind = model.kind;
@@ -733,7 +769,7 @@
     if (model.editable) node.dataset.decisionEditable = '1';
 
     const kindLabel = model.kind === 'candidate'
-      ? '待审核'
+      ? (model.answered ? '已处理' : '待审核')
       : (model.kind === 'decision'
         ? (model.mode === 'compose' ? '记决策' : '决策候选')
         : '经验');
@@ -742,15 +778,16 @@
     head.append(el('span', `review-kind kind-${model.kind}`, kindLabel));
     node.append(head);
 
+    if(model.editKind && !model.answered)node.append(renderExperienceForm(model,node));
     if (model.rows.length) {
       const rows = el('dl', 'review-rows');
-      for (const row of model.rows) {
+      for (const row of model.rows.filter(row=>!model.editKind||model.answered||!['正文','范围','适用/例外'].includes(row[0]))) {
         const item = el('div', 'review-row');
         item.append(el('dt', '', row[0]));
         item.append(el('dd', '', row.slice(1).join(' ')));
         rows.append(item);
       }
-      node.append(rows);
+      if(model.editKind){const detail=el('details','experience-source');detail.append(el('summary','','来源、证据与验证状态（只读）'),rows);node.append(detail);}else node.append(rows);
     }
 
     if (model.answered) {
@@ -775,7 +812,26 @@
     return node;
   };
 
+  const renderRecovery = (model) => {
+    const node = blockNode(model);
+    node.dataset.category = model.category;
+    node.append(headNode(model.title));
+    node.append(el('p', 'block-note', model.note));
+    const actions = el('div', 'recovery-actions');
+    for (const action of model.actions) {
+      const button = el('button', 'review-action', action.label);
+      button.type = 'button';
+      button.dataset.chatRecovery = action.id;
+      button.disabled = Boolean(model.answered);
+      actions.append(button);
+    }
+    node.append(actions);
+    if (model.answered) node.append(el('p', 'block-note', `已处理：${model.answered}`));
+    return node;
+  };
+
   const RENDERERS = {
+    'chat-recovery': renderRecovery,
     card: renderCard,
     table: renderTable,
     kpi: renderKpi,

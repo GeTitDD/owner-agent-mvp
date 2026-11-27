@@ -1,0 +1,20 @@
+{
+  "rank": 30,
+  "id": "petdex-30-lin-pianpian",
+  "slug": "lin-pianpian",
+  "displayName": "林翩翩",
+  "source": "https://petdex.dev/pets/lin-pianpian",
+  "zipUrl": "https://assets.petdex.dev/pets/lin-pianpian-4878cc60102d/zip.zip",
+  "author": "admintertar",
+  "metrics": {
+    "installCount": 1609,
+    "likeCount": 14,
+    "zipDownloadCount": 17
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "328d6929edb95e75f9d526b0b479471507e8c3f285f0eeda8bf4379808d9c098",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

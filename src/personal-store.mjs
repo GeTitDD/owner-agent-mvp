@@ -1,3 +1,4 @@
+import { knowledgeReviewEdits, proposalReviewHash } from './knowledge/experience-review.mjs';
 // Personal Knowledge Workbench storage. Editable data lives alongside, but never overwrites,
 // the versioned domain package files. Every mutation appends an immutable revision.
 import { DatabaseSync } from 'node:sqlite';
@@ -22,6 +23,12 @@ export class KnowledgeValidationError extends Error { constructor(message) { sup
 const valid = (condition, message) => { if (!condition) throw new KnowledgeValidationError(message); };
 const own = (obj, name) => Object.prototype.hasOwnProperty.call(obj, name);
 const now = () => new Date().toISOString();
+// 灵感与任意文字引用只能追溯来源，不能充当独立执行的事实证据。
+const executionEvidence = (item) => Boolean(item.recordId && item.ref
+  && !/^idea[:_-]/iu.test(item.recordId) && !/^idea:/iu.test(item.ref)
+  && ((item.kind === 'record' && item.ref === item.recordId)
+    || (['sandbox-run','stdout','stderr','patch','job'].includes(item.kind)
+      && /^(?:sandbox|evidence|patch|job):/u.test(item.ref))));
 const SCOPES = new Set(['personal','domain','project']);
 const LAYERS = new Set(['domain','applied','project']);
 const KINDS = new Set(['note','concept','claim','hypothesis','procedure','experiment',DECISION_KIND]);
@@ -182,7 +189,8 @@ function rowToItem(row) {
     id:row.id,revision:row.revision,createdAt:row.created_at,updatedAt:row.updated_at,
     ...JSON.parse(row.payload),
     // 当前决策状态只从列上读：payload 里不再存第二份（非决策条目这一列为空）。
-    decisionStatus: row.decision_status ?? null
+    decisionStatus: row.decision_status ?? null,
+    ...(row.sync_archived_at ? { syncArchivedAt: row.sync_archived_at } : {})
   };
 }
 export class PersonalKnowledgeStore {
@@ -226,6 +234,14 @@ export class PersonalKnowledgeStore {
         UNIQUE(knowledge_id,revision,target_run_id,context_snapshot_id)
       );
       CREATE INDEX IF NOT EXISTS knowledge_usages_target ON knowledge_usages(target_run_id,created_at DESC);
+      -- 对话引用是提供资料的回执，不冒充执行 Usage，也不参与收益与升级计算。
+      CREATE TABLE IF NOT EXISTS knowledge_chat_references (
+        turn_id TEXT NOT NULL, session_id TEXT NOT NULL, project_id TEXT NOT NULL,
+        context_hash TEXT NOT NULL, item_id TEXT NOT NULL, kind TEXT NOT NULL,
+        revision INTEGER NOT NULL, created_at TEXT NOT NULL,
+        PRIMARY KEY(turn_id,kind,item_id,revision)
+      );
+      CREATE INDEX IF NOT EXISTS knowledge_chat_references_item ON knowledge_chat_references(item_id,created_at DESC);
       CREATE TABLE IF NOT EXISTS knowledge_feedback (
         id TEXT PRIMARY KEY, usage_id TEXT NOT NULL UNIQUE REFERENCES knowledge_usages(id),
         outcome TEXT NOT NULL, observed_benefit TEXT NOT NULL, proposed_evolution TEXT NOT NULL,
@@ -275,6 +291,12 @@ export class PersonalKnowledgeStore {
     // 决策状态列（#87）：决策的「生效中 / 已被取代 / 已放弃」单独一列，
     // 与 payload.verificationStatus 分开。老库没有这一列时补上，已有行留空（它们本来就不是决策）。
     this.lastDecisionStatusMigration = this.addDecisionStatusColumn();
+    // 远端移除只归档，内容和修订仍留在本机；普通列表不再把归档记忆作为当前结论。
+    for (const table of ['personal_units', 'knowledge_lessons']) {
+      if (!this.db.prepare(`PRAGMA table_info(${table})`).all().some(column => column.name === 'sync_archived_at')) {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN sync_archived_at TEXT`);
+      }
+    }
   }
   close() { this.db.close(); }
 
@@ -412,7 +434,7 @@ export class PersonalKnowledgeStore {
     }
   }
   list({q='',domain='',layer='',scope='',status='',projectId='',limit=500}={}) {
-    const rows = this.db.prepare('SELECT * FROM personal_units ORDER BY updated_at DESC,id LIMIT ?').all(Math.min(Math.max(1,limit),2000));
+    const rows = this.db.prepare('SELECT * FROM personal_units WHERE sync_archived_at IS NULL ORDER BY updated_at DESC,id LIMIT ?').all(Math.min(Math.max(1,limit),2000));
     const query=q.trim().toLocaleLowerCase();
     return rows.map(rowToItem).filter(x=>(!query || [x.title,x.content,...x.tags,...x.domains].join(' ').toLocaleLowerCase().includes(query))
       && (!domain || x.domains.includes(domain)) && (!layer || x.layer===layer)
@@ -423,6 +445,111 @@ export class PersonalKnowledgeStore {
   revisions(id) {
     return this.db.prepare('SELECT revision,actor,note,timestamp,payload_hash,payload FROM personal_revisions WHERE unit_id=? ORDER BY revision DESC').all(id).map(row=>({...row,payload:JSON.parse(row.payload)}));
   }
+
+  /** 同步需要完整事实清单，不能复用为界面设计的 500/1000 条窗口。这里只读，不包含候选、对话或执行审计。 */
+  syncRecords({ includeArchived = false } = {}) {
+    const where = includeArchived ? '' : 'WHERE sync_archived_at IS NULL';
+    return [
+      ...this.db.prepare(`SELECT id FROM personal_units ${where} ORDER BY id`).all().map(({ id }) => ({ kind: 'knowledge', row: this.get(id) })),
+      ...this.db.prepare(`SELECT id FROM knowledge_lessons ${where} ORDER BY id`).all().map(({ id }) => ({ kind: 'lesson', row: this.getLesson(id) }))
+    ];
+  }
+
+  archiveSyncRecord({ kind, id, expectedStateHash } = {}) {
+    valid(kind === 'knowledge' || kind === 'lesson', '不支持的归档条目类型');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const existing = kind === 'knowledge' ? this.get(id) : this.getLesson(id);
+      if (!existing || sha256(canonical(existing)) !== expectedStateHash) throw new KnowledgeConflict('条目在预览后已变化，未归档。');
+      if (!existing.syncArchivedAt) this.db.prepare(`UPDATE ${kind === 'knowledge' ? 'personal_units' : 'knowledge_lessons'} SET sync_archived_at=? WHERE id=?`).run(now(),id);
+      this.db.exec('COMMIT');
+    } catch(error) { this.db.exec('ROLLBACK'); throw error; }
+    return kind === 'knowledge' ? this.get(id) : this.getLesson(id);
+  }
+
+  /** 使用预览时的完整状态做比较交换；导入保留身份与修订，不能覆盖检查后发生的本机编辑。 */
+  importSyncRecord({ kind, id, payload, expectedStateHash, createdAt = '', updatedAt = '', validateOnly = false } = {}) {
+    valid(kind === 'knowledge' || kind === 'lesson', '不支持的同步条目类型');
+    valid(expectedStateHash === null || typeof expectedStateHash === 'string' && /^[a-f0-9]{64}$/u.test(expectedStateHash), '同步导入缺少预览状态');
+    valid(payload && typeof payload === 'object' && !Array.isArray(payload), '同步条目正文无效');
+    requireId(id, 'sync record id');
+    const stamp = now();
+    const date = value => {
+      if (!value) return stamp;
+      valid(typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value)), '同步条目时间无效');
+      return new Date(value).toISOString();
+    };
+    const created = date(createdAt); const updated = date(updatedAt);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const existing = kind === 'knowledge' ? this.get(id) : this.getLesson(id);
+      const actual = existing ? sha256(canonical(existing)) : null;
+      if (actual !== expectedStateHash) throw new KnowledgeConflict('本机条目在预览后已变化，请重新检查同步。');
+      if (kind === 'knowledge') {
+        const normalized = normalize(payload, existing);
+        const body = canonical(unitPayloadBody(normalized));
+        if (existing && !existing.syncArchivedAt && body === canonical(unitPayloadBody(normalize(existing))) && normalized.decisionStatus === existing.decisionStatus) {
+          this.db.exec(validateOnly ? 'ROLLBACK' : 'COMMIT'); return this.get(id);
+        }
+        const revision = (existing?.revision ?? 0) + 1;
+        if (existing) this.db.prepare('UPDATE personal_units SET revision=?,payload=?,updated_at=?,decision_status=?,sync_archived_at=NULL WHERE id=?')
+          .run(revision, body, updated, normalized.decisionStatus ?? null, id);
+        else this.db.prepare('INSERT INTO personal_units(id,revision,payload,created_at,updated_at,decision_status) VALUES(?,?,?,?,?,?)')
+          .run(id, revision, body, created, updated, normalized.decisionStatus ?? null);
+        this.db.prepare('INSERT INTO personal_revisions(unit_id,revision,payload,actor,note,timestamp,payload_hash) VALUES(?,?,?,?,?,?,?)')
+          .run(id, revision, body, 'sync', '由确认的跨设备同步导入', stamp, sha256(body));
+      } else {
+        const lesson = JSON.parse(JSON.stringify(payload));
+        const evidence = lesson.evidence; delete lesson.evidence;
+        valid(Array.isArray(evidence) && evidence.length <= 2000, '经验同步证据无效');
+        const projectId = safeText(lesson.projectId, 90, 'lesson project id', true);
+        const sourceRecordId = safeText(lesson.sourceRecordId, 200, 'lesson source record id', true);
+        const phenomenon = safeText(lesson.phenomenon, 200, 'lesson phenomenon', true);
+        safeText(lesson.mechanism, 25000, 'lesson mechanism'); safeText(lesson.countermeasure, 25000, 'lesson countermeasure');
+        valid(['project', 'domain'].includes(lesson.scope?.layer), '经验同步范围无效');
+        valid(LESSON_STATUSES.includes(lesson.verificationStatus), '经验同步状态无效');
+        const dedupeKey = safeText(lesson.dedupeKey, 128, 'lesson dedupe key', true);
+        const cleanEvidence = evidence.map(entry => {
+          valid(entry && typeof entry === 'object' && !Array.isArray(entry), '经验同步证据结构无效');
+          const ref = safeText(entry.ref, 500, 'lesson evidence ref', true);
+          const excerpt = safeText(entry.excerpt ?? '', 2000, 'lesson evidence excerpt');
+          rejectObviousSecrets(excerpt);
+          return { recordId: safeText(entry.recordId, 200, 'lesson evidence record', true), ref,
+            kind: safeText(entry.kind, 40, 'lesson evidence kind', true), excerpt,
+            contentHash: safeText(entry.contentHash ?? sha256(excerpt), 128, 'lesson evidence hash', true) };
+        });
+        valid(new Set(cleanEvidence.map(e => e.ref)).size === cleanEvidence.length, '经验同步证据有重复引用');
+        if (['unverified', 'verified'].includes(lesson.verificationStatus)) valid(cleanEvidence.length > 0, '有验证状态的经验须保留证据');
+        for (const field of ['phenomenon', 'mechanism', 'countermeasure']) rejectObviousSecrets(lesson[field]);
+        const next = { ...lessonPayloadBody(lesson), id, projectId, sourceRecordId, phenomenon, dedupeKey,
+          createdAt: existing?.createdAt || created };
+        const body = canonical(next);
+        if (existing && !existing.syncArchivedAt && body === canonical(lessonPayloadBody(Object.fromEntries(Object.entries(existing).filter(([key]) => !['evidence','payloadHash','syncArchivedAt'].includes(key)))))
+          && lesson.verificationStatus === existing.verificationStatus
+          && canonical(cleanEvidence) === canonical(this.lessonEvidence(id).map(({recordId,ref,kind:evidenceKind,excerpt,contentHash}) => ({recordId,ref,kind:evidenceKind,excerpt,contentHash})))) {
+          this.db.exec(validateOnly ? 'ROLLBACK' : 'COMMIT'); return this.getLesson(id);
+        }
+        // 经验原来没有通用修订表；同步覆盖前保留完整旧状态，便于检查与恢复。
+        this.db.exec(`CREATE TABLE IF NOT EXISTS knowledge_sync_imports(
+          seq INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,record_id TEXT NOT NULL,
+          before_json TEXT,after_json TEXT NOT NULL,created_at TEXT NOT NULL)`);
+        this.db.prepare('INSERT INTO knowledge_sync_imports(kind,record_id,before_json,after_json,created_at) VALUES(?,?,?,?,?)')
+          .run(kind,id,existing ? canonical(existing) : null,canonical({ ...next,verificationStatus:lesson.verificationStatus,evidence:cleanEvidence }),stamp);
+        if (existing) this.db.prepare(`UPDATE knowledge_lessons SET project_id=?,source_record_id=?,phenomenon=?,scope_layer=?,
+          verification_status=?,dedupe_key=?,payload=?,payload_hash=?,sync_archived_at=NULL WHERE id=?`)
+          .run(projectId,sourceRecordId,phenomenon,lesson.scope.layer,lesson.verificationStatus,dedupeKey,body,sha256(body),id);
+        else this.db.prepare(`INSERT INTO knowledge_lessons(id,project_id,source_record_id,phenomenon,scope_layer,verification_status,dedupe_key,created_at,payload,payload_hash)
+          VALUES(?,?,?,?,?,?,?,?,?,?)`).run(id,projectId,sourceRecordId,phenomenon,lesson.scope.layer,lesson.verificationStatus,dedupeKey,created,body,sha256(body));
+        this.db.prepare('DELETE FROM knowledge_lesson_evidence WHERE lesson_id=?').run(id);
+        const insert = this.db.prepare(`INSERT INTO knowledge_lesson_evidence(id,lesson_id,record_id,ref,kind,excerpt,content_hash,created_at) VALUES(?,?,?,?,?,?,?,?)`);
+        for (const entry of cleanEvidence) insert.run(`le_${randomUUID().replaceAll('-','').slice(0,24)}`,id,entry.recordId,entry.ref,entry.kind,entry.excerpt,entry.contentHash,stamp);
+      }
+      const result = kind === 'knowledge' ? this.get(id) : this.getLesson(id);
+      this.db.exec(validateOnly ? 'ROLLBACK' : 'COMMIT');
+      return result;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
   create(payload,{actor='user',note='Created'}={}) {
     const normalized=normalize(payload);
     const id=`personal.${randomUUID().replaceAll('-','').slice(0,24)}`;
@@ -443,6 +570,7 @@ export class PersonalKnowledgeStore {
     try {
       const existing=this.get(id);
       if(!existing) throw new KnowledgeValidationError('Knowledge not found');
+      valid(!existing.syncArchivedAt,'这条记忆已归档，请先从同步设置恢复后再编辑。');
       if(existing.revision!==expectedRevision) throw new KnowledgeConflict(`Revision conflict: expected ${expectedRevision}, actual ${existing.revision}`);
       const normalized=normalize(payload,existing);
       const body=canonical(unitPayloadBody(normalized)),stamp=now(),next=existing.revision+1;
@@ -496,19 +624,27 @@ export class PersonalKnowledgeStore {
       .map(r=>({...r,payload:JSON.parse(r.payload),meta:JSON.parse(r.meta_json??'{}')}))
       .filter(r=>!status||r.status===status);
   }
-  reviewProposal(id,{decision,reviewer='user',expectedRevision=null}) {
+  reviewProposal(id,{decision,reviewer='user',expectedRevision=null,edits=null,expectedProposalHash=''}) {
     valid(['approved','rejected'].includes(decision),'Invalid proposal decision');
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const proposal=this.proposal(id);
       if(!proposal) throw new KnowledgeValidationError('Proposal not found');
       if(proposal.status!=='pending') throw new KnowledgeConflict('Proposal already reviewed');
+      if(expectedProposalHash && proposalReviewHash(proposal)!==expectedProposalHash)throw new KnowledgeConflict('候选在打开后已变化，未接受。请重新打开最新候选；当前输入可复制保留。');
+      if(edits && !expectedProposalHash)throw new KnowledgeConflict('缺少审阅版本，请重新打开候选。');
+      if(decision==='approved' && proposal.meta?.sourceLessonHash){
+        const lesson=this.getLesson(proposal.meta.sourceLessonIds?.[0]);
+        if(!lesson || lesson.syncArchivedAt || lesson.payloadHash!==proposal.meta.sourceLessonHash || lesson.verificationStatus==='superseded')throw new KnowledgeConflict('来源经验在准备候选后已变化或被取代，未接受；请拒绝旧候选，再从经验重新准备。原输入保留。');
+        if(edits && lesson.verificationStatus==='disputed')throw new KnowledgeConflict('来源经验仍有争议，请先裁决，不把争议自动升级为知识。');
+      }
       let appliedId=null;
       // We want a single atomic transaction. create/update use their own transactions,
       // so reproduce the minimal creation/revision operation here under the current lock.
       if(decision==='approved') {
         const existing=proposal.target_id ? this.get(proposal.target_id):null;
         if(proposal.target_id && !existing) throw new KnowledgeConflict('Target knowledge was removed');
+        if(existing?.syncArchivedAt) throw new KnowledgeConflict('这条记忆已归档，请先恢复后重新审核。');
         if (existing && (!Number.isSafeInteger(proposal.target_revision) ||
           existing.revision !== proposal.target_revision ||
           (expectedRevision !== null && existing.revision !== expectedRevision))) {
@@ -517,7 +653,10 @@ export class PersonalKnowledgeStore {
         if (existing && (proposal.payload.scope !== existing.scope || proposal.payload.projectId !== existing.projectId)) {
           throw new KnowledgeConflict('Proposal cannot change target scope or project ownership');
         }
-        const normalized=normalize(proposal.payload,existing), body=canonical(unitPayloadBody(normalized)), stamp=now();
+        if(edits && existing){const next=knowledgeReviewEdits(proposal,edits);if(next.scope!==existing.scope||next.projectId!==existing.projectId)throw new KnowledgeConflict('目标知识的归属不能通过旧候选改变。');}
+        const reviewedPayload=edits?knowledgeReviewEdits(proposal,edits):proposal.payload;
+        const normalized=normalize(reviewedPayload,existing), body=canonical(unitPayloadBody(normalized)), stamp=now();
+        if(edits)this.db.prepare('UPDATE personal_proposals SET payload=? WHERE id=?').run(body,id);
         const note=`Accepted proposal ${id}`;
         if(existing) {
           const rev=existing.revision+1;
@@ -602,6 +741,41 @@ export class PersonalKnowledgeStore {
     const rows=this.db.prepare(`SELECT id FROM knowledge_usages ${where.length?`WHERE ${where.join(' AND ')}`:''}
       ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params,Math.min(Math.max(1,limit),1000));
     return rows.map(({id})=>this.getUsage(id));
+  }
+  /** 仅保存已完成对话的引用身份，不复制正文；同一轮重试落盘不会重复计数。 */
+  recordChatReferences({ turnId, sessionId, projectId = '', contextHash, items = [] } = {}) {
+    safeText(turnId, 200, 'chat turn id', true); safeText(sessionId, 200, 'chat session id', true);
+    safeText(projectId, 90, 'chat project id');
+    valid(/^[a-f0-9]{64}$/u.test(contextHash), 'Invalid chat context hash');
+    valid(Array.isArray(items) && items.length <= 50, 'Invalid chat references');
+    const references = items.map(item => {
+      valid(['knowledge','lesson'].includes(item?.kind), 'Invalid chat reference kind');
+      safeText(item.id, 200, 'chat reference id', true);
+      valid(item.kind === 'lesson' ? item.revision === null : Number.isSafeInteger(item.revision) && item.revision > 0,
+        'Invalid chat reference revision');
+      return { ...item, revision: item.revision ?? 0 };
+    });
+    const stamp = now();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const prior = this.db.prepare('SELECT session_id,project_id,context_hash FROM knowledge_chat_references WHERE turn_id=? LIMIT 1').get(turnId);
+      valid(!prior || (prior.session_id === sessionId && prior.project_id === projectId && prior.context_hash === contextHash),
+        '该轮引用身份已存在，未覆盖原记录');
+      const insert = this.db.prepare(`INSERT OR IGNORE INTO knowledge_chat_references
+        (turn_id,session_id,project_id,context_hash,item_id,kind,revision,created_at) VALUES(?,?,?,?,?,?,?,?)`);
+      for (const item of references) insert.run(turnId,sessionId,projectId,contextHash,item.id,item.kind,item.revision,stamp);
+      this.db.exec('COMMIT');
+    } catch(error) { this.db.exec('ROLLBACK'); throw error; }
+    return { count: new Set(references.map(item => `${item.kind}:${item.id}@${item.revision}`)).size };
+  }
+  listChatReferences({ knowledgeId = '', kind = 'knowledge', limit = 200 } = {}) {
+    valid(['knowledge','lesson'].includes(kind), 'Invalid chat reference kind');
+    const params = [kind]; let where = 'kind=?';
+    if (knowledgeId) { where += ' AND item_id=?'; params.push(knowledgeId); }
+    const cap = Number.isSafeInteger(limit) ? Math.min(1000, Math.max(1,limit)) : 200;
+    return this.db.prepare(`SELECT * FROM knowledge_chat_references WHERE ${where} ORDER BY created_at DESC,turn_id DESC LIMIT ?`)
+      .all(...params,cap).map(row => ({ turnId:row.turn_id, sessionId:row.session_id, projectId:row.project_id,
+        contextHash:row.context_hash, id:row.item_id, kind:row.kind, revision:row.revision || null, createdAt:row.created_at }));
   }
   updateUsageOutcome(id,{outcome,observedBenefit,outcomeEvidenceRefs,benefitEvidenceRefs}={}) {
     const usage=this.getUsage(id);
@@ -736,11 +910,15 @@ export class PersonalKnowledgeStore {
     const row = this.db.prepare('SELECT * FROM knowledge_lessons WHERE id=?').get(id);
     if(!row) return null;
     // 状态只认列（P0-2）：payload 里的旧状态字段一律以列上的当前值为准。
+    const { reproducedAt: _oldReproducedAt, ...payload } = JSON.parse(row.payload);
     return {
-      ...JSON.parse(row.payload),
+      ...payload,
+      // 旧库与同步导入可能携带误标；读取时从当前证据重算，绝不把旧徽章当证据。
+      ...this.lessonReproductionState(row.phenomenon, row.project_id),
       verificationStatus: row.verification_status,
       status: row.verification_status,
       payloadHash: row.payload_hash,
+      ...(row.sync_archived_at ? { syncArchivedAt: row.sync_archived_at } : {}),
       dedupeKey: row.dedupe_key,
       evidence: this.lessonEvidence(row.id)
     };
@@ -751,7 +929,7 @@ export class PersonalKnowledgeStore {
         excerpt:row.excerpt,contentHash:row.content_hash,createdAt:row.created_at}));
   }
   listLessons({projectId='',verificationStatus='',sourceRecordId='',limit=100}={}) {
-    const where=[];const params=[];
+    const where=['sync_archived_at IS NULL'];const params=[];
     if(projectId){where.push('project_id=?');params.push(projectId);}
     if(verificationStatus){where.push('verification_status=?');params.push(verificationStatus);}
     if(sourceRecordId){where.push('source_record_id=?');params.push(sourceRecordId);}
@@ -774,7 +952,7 @@ export class PersonalKnowledgeStore {
   /** 按去重键找已有经验：键 = 规范化现象 + 作用域层 + 项目，由 contracts.lessonDedupeKey 产出。 */
   lessonByDedupe(dedupeKey) {
     const key = safeText(dedupeKey,128,'lesson dedupe key',true);
-    const row = this.db.prepare('SELECT id FROM knowledge_lessons WHERE dedupe_key=? ORDER BY created_at,id LIMIT 1').get(key);
+    const row = this.db.prepare('SELECT id FROM knowledge_lessons WHERE dedupe_key=? AND sync_archived_at IS NULL ORDER BY created_at,id LIMIT 1').get(key);
     return row ? this.getLesson(row.id) : null;
   }
 
@@ -815,8 +993,9 @@ export class PersonalKnowledgeStore {
     const id = safeText(lessonId,90,'lesson id',true);
     const sourceRecordId = safeText(lesson?.sourceRecordId,200,'lesson source record id',true);
     valid(Array.isArray(evidence),'Lesson evidence must be an array');
-    const row = this.db.prepare('SELECT payload,verification_status FROM knowledge_lessons WHERE id=?').get(id);
+    const row = this.db.prepare('SELECT payload,verification_status,sync_archived_at FROM knowledge_lessons WHERE id=?').get(id);
     valid(Boolean(row),'Lesson not found');
+    valid(!row.sync_archived_at,'这条经验已归档，请先恢复后再修改。');
     const payload = JSON.parse(row.payload);
     const stamp = now();
     const known = new Set(this.db.prepare('SELECT ref FROM knowledge_lesson_evidence WHERE lesson_id=?').all(id)
@@ -854,7 +1033,8 @@ export class PersonalKnowledgeStore {
       ].filter(Boolean))];
       // 后来补上可追证据的推断，升级为待验证；其余状态（待验证 / 争议 / 已验证 / 已被取代）不因合并而变。
       const previous = row.verification_status ?? 'inferred';
-      const verificationStatus = previous === 'inferred' && Number(stats.evidence) > 0 ? 'unverified' : previous;
+      const hasExecutionEvidence = this.lessonEvidence(id).some(executionEvidence);
+      const verificationStatus = previous === 'inferred' && hasExecutionEvidence ? 'unverified' : previous;
       // payload 里不带状态（P0-2）：状态只写列，读的时候由 getLesson 覆盖回来。
       const next = {
         ...lessonPayloadBody(payload),
@@ -873,7 +1053,7 @@ export class PersonalKnowledgeStore {
     return this.getLesson(id);
   }
 
-  /** 这条经验被多少条执行记录支持：按证据指向的执行记录去重，不按被引用的次数。 */
+  /** 追溯这条经验的来源记录数；包含灵感来源，不作为独立执行复现的计数。 */
   lessonSupport(lessonId) {
     const id = safeText(lessonId,90,'lesson id',true);
     const row = this.db.prepare('SELECT id,project_id,created_at FROM knowledge_lessons WHERE id=?').get(id);
@@ -909,9 +1089,8 @@ export class PersonalKnowledgeStore {
   }
 
   // ---- 三层沉淀：跨项目复现与作用域升级（#56 / P0-1） ----
-  // 复现的判定是「规范化现象 + 作用域层」，但行仍然**按项目各自成行**：
-  // 同一现象在第二个项目出现时，第二个项目写自己那条项目级经验，两条都打「已复现」，
-  // 并把两个项目的来源台账写进各自的 payload.sources。
+  // 同一规范化现象按项目各自成行；只有不同项目的独立事实证据才支持「已复现」。
+  // 来源台账保留灵感等出处，但 supportProjects 只计独立执行证据，二者不能混用。
   //
   // 为什么不合并成一行（P0-1 的修正）：如果两个项目共用一行，行上的 project_id 只能指向最早
   // 那个项目，listLessons({projectId:'第二个项目'}) 会返回空——#59 的「按项目过滤命中项目级
@@ -920,19 +1099,66 @@ export class PersonalKnowledgeStore {
   //
   // 升域仍只能由人显式调用 promoteLessonToDomain；复现只打标记，系统不替人把经验升为已验证。
 
+  /** 来源项目与独立事实支持分别计算；共享同一执行记录的多个项目不算独立复现。 */
+  lessonReproductionState(phenomenon, originProjectId) {
+    const rows = this.db.prepare(`SELECT id,project_id,verification_status,payload,created_at FROM knowledge_lessons
+      WHERE lower(phenomenon)=lower(?) AND sync_archived_at IS NULL ORDER BY created_at,id`).all(phenomenon);
+    const evidence = this.db.prepare(`SELECT e.lesson_id,e.record_id AS recordId,e.ref,e.kind,e.created_at AS createdAt
+      FROM knowledge_lesson_evidence e JOIN knowledge_lessons l ON l.id=e.lesson_id
+      WHERE lower(l.phenomenon)=lower(?) AND l.sync_archived_at IS NULL AND l.verification_status!='superseded'`).all(phenomenon);
+    const projects = new Map(rows.map(row => [row.id, row.project_id]));
+    const sources = new Map();
+    for (const row of rows) {
+      const payload = JSON.parse(row.payload);
+      // 升域不能抹掉历史来源，但来源台账的项目数不是事实支持项目数。
+      for (const source of [...(Array.isArray(payload.sources) ? payload.sources : []),
+        { projectId: row.project_id, recordIds: [], firstAt: row.created_at, lastAt: row.created_at }]) {
+        if (typeof source?.projectId !== 'string' || !source.projectId.trim()) continue;
+        const prior = sources.get(source.projectId);
+        sources.set(source.projectId, { projectId: source.projectId,
+          recordIds: [...new Set([...(prior?.recordIds ?? []), ...(Array.isArray(source.recordIds) ? source.recordIds.filter(id => typeof id === 'string') : [])])].sort(),
+          firstAt: [prior?.firstAt, source.firstAt, row.created_at].filter(Boolean).sort()[0],
+          lastAt: [prior?.lastAt, source.lastAt, row.created_at].filter(Boolean).sort().at(-1) });
+      }
+    }
+    const owners = new Map();
+    const facts = evidence.filter(executionEvidence);
+    for (const item of facts) {
+      for (const key of [`record:${item.recordId}`, `ref:${item.ref}`]) {
+        if (!owners.has(key)) owners.set(key, new Set());
+        owners.get(key).add(projects.get(item.lesson_id));
+      }
+    }
+    const supported = new Map();
+    for (const item of evidence) {
+      const source = sources.get(projects.get(item.lesson_id));
+      if (source) source.recordIds = [...new Set([...source.recordIds, item.recordId])].sort();
+    }
+    for (const item of facts) {
+      if (owners.get(`record:${item.recordId}`).size !== 1 || owners.get(`ref:${item.ref}`).size !== 1) continue;
+      const project = projects.get(item.lesson_id);
+      const stamp = item.createdAt;
+      if (!supported.has(project) || stamp < supported.get(project)) supported.set(project, stamp);
+    }
+    const reproduced = supported.size >= 2 && supported.has(originProjectId);
+    return { sources: [...sources.values()].sort((a,b) => a.projectId.localeCompare(b.projectId)),
+      supportedByProjects: [...supported.keys()].sort(), supportProjects: supported.size, reproduced,
+      ...(reproduced ? { reproducedAt: [...supported.values()].sort()[1] } : {}) };
+  }
+
   /** 同一现象的项目级经验行：按项目各自成行后，同现象会有多行（每个项目一行）。 */
   lessonsByPhenomenon(phenomenon, { layer = 'project' } = {}) {
     const flat = safeText(phenomenon,400,'lesson phenomenon',true);
     valid(['project','domain'].includes(layer),'Invalid lesson scope layer');
     return this.db.prepare(`SELECT id FROM knowledge_lessons
-      WHERE lower(phenomenon)=lower(?) AND scope_layer=? ORDER BY created_at,id`).all(flat,layer)
+      WHERE lower(phenomenon)=lower(?) AND scope_layer=? AND sync_archived_at IS NULL ORDER BY created_at,id`).all(flat,layer)
       .map((row)=>this.getLesson(row.id));
   }
 
   /** 按规范化现象找最早的一条经验：读路径用（例如「这条现象以前出现过吗」）。 */
   lessonByPhenomenon(phenomenon, { layer = '' } = {}) {
     const flat = safeText(phenomenon,400,'lesson phenomenon',true);
-    const where = ['lower(phenomenon)=lower(?)'];
+    const where = ['lower(phenomenon)=lower(?)', 'sync_archived_at IS NULL'];
     const params = [flat];
     if (layer) {
       valid(['project','domain'].includes(layer),'Invalid lesson scope layer');
@@ -946,52 +1172,24 @@ export class PersonalKnowledgeStore {
 
   /**
    * 复现台账（写，P0-1）：把同一现象的项目级经验行归成一组，每一行都写上同一份
-   * sources / supportProjects / reproduced。行不改、不合并、不删；只是把「同一现象在哪些
-   * 项目出现过」这个属性同步到组内每一行，让任一项目都能查回整组来源。
+   * sources / supportProjects / reproduced。不合并、不删除经验正文；来源和当前支持证据
+   * 分别派生，让任一项目都能查回整组来源，又不会把复制的灵感计为复现。
    *
    * 每个项目自己的记录 ID 从该行证据表推出（按项目聚合、去重），不把别的项目的证据复制过来。
    */
   syncLessonReproduction(phenomenon, { layer = 'project' } = {}) {
     const peers = this.lessonsByPhenomenon(phenomenon, { layer });
     if (!peers.length) return [];
-    const stamp = now();
-    // 一个项目可能有多条同现象经验（对策不同 → 争议各成一行）：按项目合并记录 ID。
-    const byProject = new Map();
-    for(const peer of peers) {
-      const projectId = String(peer.scope?.projectId ?? peer.projectId ?? '');
-      if(!projectId) continue;
-      const prior = (Array.isArray(peer.sources) ? peer.sources : [])
-        .find((source)=>source?.projectId === projectId);
-      const entry = byProject.get(projectId) ?? {
-        projectId,
-        recordIds: new Set(),
-        firstAt: prior?.firstAt ?? peer.createdAt ?? stamp,
-        lastAt: stamp
-      };
-      for(const recordId of this.lessonSupport(peer.id)?.recordIds ?? []) entry.recordIds.add(String(recordId));
-      const peerLast = peer.lastMergedAt ?? peer.createdAt ?? null;
-      if(peerLast && peerLast > entry.lastAt) entry.lastAt = peerLast;
-      byProject.set(projectId,entry);
-    }
-    const sources = [...byProject.values()]
-      .map((entry)=>({ ...entry, recordIds:[...entry.recordIds] }))
-      .sort((a,b)=>a.projectId.localeCompare(b.projectId));
-    const supportProjects = sources.length;
-    const reproduced = supportProjects >= 2;
     const write = this.db.prepare('UPDATE knowledge_lessons SET payload=?,payload_hash=? WHERE id=?');
     this.db.exec('BEGIN IMMEDIATE');
     try {
       for(const peer of peers) {
         let payload = {};
-        try { payload = JSON.parse(this.db.prepare('SELECT payload FROM knowledge_lessons WHERE id=?').get(peer.id)?.payload ?? '{}') ?? {}; } catch { payload = {}; }
+        try { payload = JSON.parse(this.db.prepare('SELECT payload,sync_archived_at FROM knowledge_lessons WHERE id=?').get(peer.id)?.payload ?? '{}') ?? {}; } catch { payload = {}; }
+        const { reproducedAt: _oldReproducedAt, ...current } = payload;
         const next = {
-          ...payload,
-          sources,
-          supportedByProjects:sources.map((source)=>source.projectId),
-          supportProjects,
-          reproduced,
-          // 只记第一次跨到两个项目的时刻；此后的复现不再改写它。
-          ...(reproduced && !payload.reproducedAt ? { reproducedAt:stamp } : {})
+          ...current,
+          ...this.lessonReproductionState(phenomenon, peer.projectId)
         };
         const body = canonical(next);
         write.run(body,sha256(body),peer.id);
@@ -1011,8 +1209,9 @@ export class PersonalKnowledgeStore {
   promoteLessonToDomain(lessonId, { domainIds = [] } = {}) {
     const id = safeText(lessonId,90,'lesson id',true);
     valid(Array.isArray(domainIds),'Lesson domain ids must be an array');
-    const row = this.db.prepare('SELECT payload,project_id,scope_layer FROM knowledge_lessons WHERE id=?').get(id);
+    const row = this.db.prepare('SELECT payload,project_id,scope_layer,sync_archived_at FROM knowledge_lessons WHERE id=?').get(id);
     valid(Boolean(row),'Lesson not found');
+    valid(!row.sync_archived_at,'这条经验已归档，请先恢复后再修改。');
     let payload = {};
     try { payload = JSON.parse(row.payload) ?? {}; } catch { payload = {}; }
     const stamp = now();
@@ -1042,19 +1241,17 @@ export class PersonalKnowledgeStore {
       layer:'domain',
       projectId:null
     }));
-    const supportProjects = sources.length;
+    const reproduction = this.lessonReproductionState(payload.phenomenon, row.project_id);
+    const { reproducedAt: _oldReproducedAt, ...current } = payload;
     const next = {
-      ...payload,
+      ...current,
       scope: { layer:'domain', projectId:null, domainIds:mergedDomains },
       originProjectId: payload.originProjectId ?? payload.projectId ?? row.project_id,
       // 记下升级前的作用域，事后仍能解释这条经验最初来自哪个项目。
       promotedFrom: payload.promotedFrom ?? { layer: row.scope_layer ?? 'project', projectId: row.project_id },
       promotedAt: payload.promotedAt ?? stamp,
-      sources,
-      supportedByProjects: sources.map((source)=>source.projectId),
-      supportProjects,
-      reproduced: supportProjects >= 2,
-      ...(supportProjects >= 2 && !payload.reproducedAt ? { reproducedAt: stamp } : {})
+      ...reproduction,
+      sources
     };
     const body = canonical(next);
     this.db.prepare(`UPDATE knowledge_lessons SET payload=?,payload_hash=?,scope_layer='domain',dedupe_key=? WHERE id=?`)
@@ -1083,12 +1280,14 @@ export class PersonalKnowledgeStore {
           firstAt: payload.createdAt ?? null,
           lastAt: null
         }];
+    const current = this.getLesson(id);
     return {
       lessonId: id,
       projects: sources.map((source)=>source.projectId),
       projectCount: sources.length,
       sources,
-      reproduced: sources.length >= 2,
+      reproduced: current.reproduced,
+      supportProjects: current.supportProjects,
       scopeLayer: payload.scope?.layer ?? row.scope_layer
     };
   }
@@ -1103,14 +1302,10 @@ export class PersonalKnowledgeStore {
       throw new KnowledgeValidationError('limit must be an integer between 1 and 500');
     }
     // 经验是本地几百条的规模，整表读一遍再按来源台账过滤；不额外加索引也不用 JSON 函数。
-    const rows = this.db.prepare(`SELECT id,project_id,payload FROM knowledge_lessons
+    const rows = this.db.prepare(`SELECT id,project_id,payload FROM knowledge_lessons WHERE sync_archived_at IS NULL
       ORDER BY created_at DESC,id DESC LIMIT ?`).all(500);
-    return rows.filter((row)=>{
-      if(row.project_id === project) return true;
-      try {
-        return (JSON.parse(row.payload).sources ?? []).some((source)=>source?.projectId === project);
-      } catch { return false; }
-    }).slice(0,limit).map((row)=>this.getLesson(row.id));
+    return rows.map(row => this.getLesson(row.id)).filter(lesson => lesson.projectId === project
+      || lesson.sources.some(source => source.projectId === project)).slice(0,limit);
   }
 
   // ---- 三层沉淀：冲突与争议（#57） ----
@@ -1240,8 +1435,9 @@ export class PersonalKnowledgeStore {
       'Lesson ids must be an array of 1 to 20 ids');
     const ids = [...new Set(lessonIds.map((id)=>safeText(id,90,'lesson id',true)))];
     const rows = ids.map((id)=>{
-      const row = this.db.prepare('SELECT payload,verification_status FROM knowledge_lessons WHERE id=?').get(id);
+      const row = this.db.prepare('SELECT payload,verification_status,sync_archived_at FROM knowledge_lessons WHERE id=?').get(id);
       valid(Boolean(row),'Lesson not found');
+    valid(!row.sync_archived_at,'这条经验已归档，请先恢复后再修改。');
       let payload = {};
       try { payload = JSON.parse(row.payload) ?? {}; } catch { payload = {}; }
       return { id, payload, status: row.verification_status ?? 'inferred' };
@@ -1293,8 +1489,9 @@ export class PersonalKnowledgeStore {
     const loser = safeText(loserId,90,'lesson id',true);
     valid(winner !== loser,'A lesson cannot supersede itself');
     const load = (id)=>{
-      const row = this.db.prepare('SELECT payload FROM knowledge_lessons WHERE id=?').get(id);
+      const row = this.db.prepare('SELECT payload,sync_archived_at FROM knowledge_lessons WHERE id=?').get(id);
       valid(Boolean(row),'Lesson not found');
+    valid(!row.sync_archived_at,'这条经验已归档，请先恢复后再修改。');
       try { return JSON.parse(row.payload) ?? {}; } catch { return {}; }
     };
     const winnerPayload = load(winner);
@@ -1466,7 +1663,7 @@ export class PersonalKnowledgeStore {
   listDecisions({ projectId = '', includeEnded = true, limit = 200 } = {}) {
     const project = projectId ? safeText(projectId,90,'project id',true) : '';
     const cap = Math.min(Math.max(1, Number(limit) || 200), 2000);
-    return this.db.prepare('SELECT * FROM personal_units ORDER BY updated_at DESC,id LIMIT ?').all(2000)
+    return this.db.prepare('SELECT * FROM personal_units WHERE sync_archived_at IS NULL ORDER BY updated_at DESC,id LIMIT ?').all(2000)
       .map(rowToItem)
       .filter((row) => row.kind === DECISION_KIND)
       // 项目级决策按项目过滤；域级决策对所有项目可见（升域是显式动作，见下）。
@@ -1502,6 +1699,7 @@ export class PersonalKnowledgeStore {
   setDecisionStatus(id, status, { actor = 'user', note = '' } = {}) {
     const existing = this.get(id);
     valid(Boolean(existing),'Knowledge not found');
+    valid(!existing.syncArchivedAt,'这条记忆已归档，请先恢复后再修改。');
     valid(existing.kind === DECISION_KIND,'Only decision knowledge carries a decision status');
     const from = normalizeDecisionStatus(existing.decisionStatus) || DEFAULT_DECISION_STATUS;
     const verdict = decisionStatusChange(from, status);
@@ -1541,6 +1739,7 @@ export class PersonalKnowledgeStore {
   promoteDecisionToDomain(id, { domainIds = [] } = {}) {
     const existing = this.get(id);
     valid(Boolean(existing),'Knowledge not found');
+    valid(!existing.syncArchivedAt,'这条记忆已归档，请先恢复后再修改。');
     valid(existing.kind === DECISION_KIND,'Only decision knowledge can be promoted to a domain decision');
     valid(Array.isArray(domainIds),'Decision domain ids must be an array');
     const domains = [...new Set(domainIds.map((domain)=>safeText(String(domain),80,'domain id',true)))];

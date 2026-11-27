@@ -79,3 +79,14 @@ export function hasCredential(provider, authKeys = new Set(), env = {}) {
   const names = PROVIDER_ENV[provider] ?? [];
   return names.some((name) => String(env?.[name] ?? '').trim().length > 0);
 }
+
+/** SDK 的本地目录是实际请求的依据；输出白名单字段，绝不把 API key、地址或鉴权头带到界面。 */
+export function modelCatalogOf(runtime) {
+  const items = runtime.getModels().map((model) => ({
+    id: `${model.provider}/${model.id}`, provider: String(model.provider), model: String(model.id),
+    label: String(model.name || model.id), ready: runtime.hasConfiguredAuth(model.provider) === true,
+    source: 'Pi 本地目录'
+  })).sort((a, b) => Number(b.ready) - Number(a.ready) || a.id.localeCompare(b.id));
+  return { items, providers: [...new Set(items.map((item) => item.provider))],
+    warning: runtime.getError?.() ? '部分模型目录读取失败，请检查 Pi 的 models.json 配置。' : '' };
+}

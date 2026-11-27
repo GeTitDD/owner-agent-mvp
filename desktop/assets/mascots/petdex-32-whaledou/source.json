@@ -1,0 +1,20 @@
+{
+  "rank": 32,
+  "id": "petdex-32-whaledou",
+  "slug": "whaledou",
+  "displayName": "whaledou",
+  "source": "https://petdex.dev/pets/whaledou",
+  "zipUrl": "https://assets.petdex.dev/pets/whaledou-c4cb6b24fb56/zip.zip",
+  "author": "isdou",
+  "metrics": {
+    "installCount": 1588,
+    "likeCount": 6,
+    "zipDownloadCount": 20
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "a19c468992659293386763272ae37726c31c3d3bfb38da06ee690d7241470955",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

@@ -1,0 +1,81 @@
+{
+  "date": "2026-11-26",
+  "platform": "darwin",
+  "unit": {
+    "total": 1249,
+    "passed": 1244,
+    "skipped": 5,
+    "failed": 0
+  },
+  "syntax": {
+    "files": 277,
+    "status": "pass"
+  },
+  "locateReview": {
+    "assertions": 72,
+    "status": "pass"
+  },
+  "firstUse": {
+    "assertions": 85,
+    "status": "pass"
+  },
+  "regressions": [
+    {
+      "name": "card-shell",
+      "status": "pass",
+      "assertions": 60
+    },
+    {
+      "name": "card-projects",
+      "status": "pass",
+      "assertions": 54
+    },
+    {
+      "name": "slash",
+      "status": "pass",
+      "assertions": 53
+    },
+    {
+      "name": "config-box",
+      "status": "pass",
+      "assertions": 48
+    },
+    {
+      "name": "at-menu",
+      "status": "pass",
+      "assertions": 47
+    },
+    {
+      "name": "at-project",
+      "status": "pass",
+      "assertions": 58
+    },
+    {
+      "name": "at-session",
+      "status": "pass",
+      "assertions": 46
+    }
+  ],
+  "css": "balanced",
+  "notes": [
+    "关联项目测试以持久化 Markdown 和实际渲染分别验证。",
+    "未使用真实模型；Windows 未验收。"
+  ],
+  "livePreview": {
+    "desktop": {
+      "status": "running",
+      "debugPort": 9333,
+      "projects": 3,
+      "consoleErrors": 0,
+      "normalLauncher": true,
+      "directPending": "pass",
+      "returnedTo": "global"
+    },
+    "workbench": {
+      "status": "running",
+      "port": 4317,
+      "homeHttp": 200,
+      "lessonsHttp": 200
+    }
+  }
+}

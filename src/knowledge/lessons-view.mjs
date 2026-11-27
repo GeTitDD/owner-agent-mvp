@@ -185,7 +185,7 @@ const renderLesson = (item) => `<article class="lesson" id="lesson-${escapeHtml(
       <h2>${escapeHtml(item.phenomenon)}</h2>
       <p class="lesson-meta">
         <span class="badge status-${escapeHtml(item.status)}">${escapeHtml(item.statusLabel)}</span>
-        ${item.reproduced ? '<span class="badge badge-reproduced">已复现</span>' : ''}
+        ${item.reproduced ? '<span class="badge badge-reproduced" title="独立证据支持同一现象在多个项目出现；不代表机制或对策已经验证">已复现</span>' : ''}
         <span>来源项目 <code>${escapeHtml(item.projectLabel)}</code></span>
         ${item.createdAt ? `<span>创建于 ${escapeHtml(String(item.createdAt).replace('T', ' ').slice(0, 19))}</span>` : ''}
       </p>

@@ -448,6 +448,10 @@ input[type='search']::-webkit-search-cancel-button { -webkit-appearance: none; }
 .source-link small{color:var(--muted)}
 .usage-item{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;border-top:1px solid var(--line);padding:8px 0;font-size:12px}
 .usage-item small{color:var(--muted);font-size:11px}
+/* 引用身份和时间需要分行，长会话标识不能挤压项目与修订信息。 */
+.usage-panel .usage-item{display:block;overflow-wrap:anywhere}
+.usage-panel .usage-item>div{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px}
+.usage-panel .usage-item>small{display:block;margin-top:4px}
 .maintenance-list{display:grid;gap:10px}
 .maintenance-item{border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px;background:var(--surface-2)}
 .maintenance-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px}
@@ -456,3 +460,7 @@ input[type='search']::-webkit-search-cancel-button { -webkit-appearance: none; }
 .mini-diff{margin:8px 0 0;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:8px;font-size:10px;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-word}
 .empty-line{color:var(--muted);font-size:12px;margin:6px 0}
 @media(max-width:900px){.diff-grid{grid-template-columns:1fr}}
+
+/* 长标题不能挤碎验证状态徽章。 */
+.detail-heading > div { min-width:0; overflow-wrap:anywhere; }
+.detail-heading > .tag { flex-shrink:0; white-space:nowrap; }

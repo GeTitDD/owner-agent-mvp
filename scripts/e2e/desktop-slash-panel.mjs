@@ -214,8 +214,10 @@ const run = async () => {
       && model.groups.some((group) => group.text.includes('数字快捷'))
       && model.groups.some((group) => group.text.includes('全部技能')),
       model.groups.map((group) => group.text).join(' | '));
-    check('the built-in section lists /setup with a 内置 badge',
-      model.builtin.some((row) => row.cmd === '/setup' && row.src === '内置'),
+    check('application commands are collapsed so skills are visible first',model.builtin.length===0);
+    await click(panel,'[data-builtin-toggle]');model=await readPanel(panel);
+    check('the expanded section lists /setup with an application-command badge',
+      model.builtin.some((row) => row.cmd === '/setup' && row.src === '应用命令'),
       JSON.stringify(model.builtin.map((row) => row.cmd)));
     // #132：原判据要求两段标题「不滚动就能同时看到」，字体度量稍宽就必红。
     // 改成「两段都在，且各自都能滚进视野」——仍然要求两条标题都存在、都能看到，
@@ -260,7 +262,7 @@ const run = async () => {
       || model.rows.some((row) => row.desc.includes('Review fixture')),
       model.rows.find((row) => row.desc.includes('Panel fixture'))?.desc ?? '');
     check('the full scan is listed, not only the first group',
-      model.rest.length >= 20 && model.count.includes('共 '),
+      model.rest.length >= 20 && model.count.includes('可用 '),
       `${model.rest.length} rows / ${model.count}`);
     await capture(panel, path.join(shotsDir, 'slash-panel.png'));
 
@@ -322,7 +324,7 @@ const run = async () => {
       await click(panel, `.slash-item[data-skill-row=${JSON.stringify(mattId)}]`));
     await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000);
     check('clicking a skill shows it as a chip',
-      (await chipText(panel)) === `/${skillName(mattId)}`, await chipText(panel));
+      (await chipText(panel)).startsWith(`/${skillName(mattId)} · `), await chipText(panel));
     check('the composer holds only the question',
       (await inputValue(panel)) === '', await inputValue(panel));
     check('clicking a skill does not send a scripted card',
@@ -345,7 +347,7 @@ const run = async () => {
     check('Enter is handled by the panel', await pressKey(panel, 'Enter'));
     await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000);
     check('the numeric row shows the skill as a chip',
-      (await chipText(panel)) === `/${skillName(secondQuickId)}`, await chipText(panel));
+      (await chipText(panel)).startsWith(`/${skillName(secondQuickId)} · `), await chipText(panel));
     check('the numeric row leaves the composer empty',
       (await inputValue(panel)) === '', await inputValue(panel));
     check('the numeric row does not send anything',
@@ -361,14 +363,10 @@ const run = async () => {
     // 让第一名和第二名同号：冲突必须当场可见。
     await setAliasNumber(panel, idA, '2');
     model = await readPanel(panel);
-    check('duplicate numbers are marked on both rows',
-      model.quick[0].conflict === true && model.quick[1].conflict === true,
-      JSON.stringify(model.quick.slice(0, 2)));
-    check('a conflict banner explains what will happen',
-      model.conflictText.includes('数字冲突') && model.conflictText.includes(idA)
-      && model.conflictText.includes(idB),
-      model.conflictText);
-    await capture(panel, path.join(shotsDir, 'slash-alias-conflict.png'));
+    check('occupied alias swaps both rows without duplicates',
+      model.quick.find(row=>row.id===idA)?.number==='2'&&model.quick.find(row=>row.id===idB)?.number==='1'&&model.quick.every(row=>!row.conflict),JSON.stringify(model.quick.slice(0,2)));
+    check('swapping does not leave a conflict banner',model.conflictText==='');
+    await capture(panel,path.join(shotsDir,'slash-alias-swap.png'));
 
     // 交换两个数字，冲突消失。
     await setAliasNumber(panel, idB, '1');
@@ -400,7 +398,7 @@ const run = async () => {
       await click(panel, `.slash-item[data-skill-row="${idA}"]`));
     await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000);
     check('the renumbered row shows the skill as a chip',
-      (await chipText(panel)) === `/${skillName(idA)}`, await chipText(panel));
+      (await chipText(panel)).startsWith(`/${skillName(idA)} · `), await chipText(panel));
 
     // ⑦ 刷新：数字别名仍在（localStorage 持久化 + 合并）。
     await panel.send('Page.reload');
@@ -421,19 +419,20 @@ const run = async () => {
       model.quick.slice(0, 2).map((row) => `${row.number}:${row.id}`).join(' '));
     check('skill clicks never wrote history',
       (await readThread(panel)).count === 0, String((await readThread(panel)).count));
+    check('selected skill is restored with the session draft',
+      (await chipText(panel)).startsWith(`/${skillName(idA)} · `));
+    // 新草稿会恢复技能胶囊；用户清除后再验证普通文本不被技能前缀污染。
+    await click(panel, '#skillChipClear');
 
-    // ⑧ #132 回归：没有匹配项时 Enter 不能吞键——关面板，并把这条照常发出去。
+    // 未知技能保留为草稿并说明原因，不能伪装成普通模型问答。
     await typeInput(panel, '/definitely-no-such-skill');
     await waitFor(panel, "Boolean(document.querySelector('#skillList .slash-empty'))", 10000);
     check('Enter is still handled by the composer', await pressKey(panel, 'Enter'));
     check('no match + Enter closes the panel',
       await waitFor(panel, "document.getElementById('skillPanel').hidden === true", 5000));
-    check('no match + Enter sends the draft as a normal message',
-      await waitFor(panel, "document.querySelectorAll('#messages .msg').length === 2", 8000),
-      String((await readThread(panel)).count));
-    const thread = await readThread(panel);
-    check('the sent draft keeps its raw text',
-      thread.texts.includes('/definitely-no-such-skill'), JSON.stringify(thread.texts));
+    check('unknown skill stays in the draft with an explanation',
+      await panel.evaluate("document.querySelector('#input').value==='/definitely-no-such-skill'&&document.querySelector('#toast').textContent.includes('没有找到')"));
+    check('unknown skill does not become a normal model turn', (await readThread(panel)).count === 0);
 
     const errors = consoleErrors(panel);
     check('console is clean', errors.length === 0, errors.slice(0, 3).join(' | '));

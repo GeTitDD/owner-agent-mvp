@@ -1,0 +1,20 @@
+{
+  "rank": 35,
+  "id": "petdex-35-cold-ink-amulet",
+  "slug": "cold-ink-amulet",
+  "displayName": "Cold-Ink Amulet",
+  "source": "https://petdex.dev/pets/cold-ink-amulet",
+  "zipUrl": "https://assets.petdex.dev/pets/cold-ink-amulet-6a9f522e7b61/zip.zip",
+  "author": "codexfede",
+  "metrics": {
+    "installCount": 1496,
+    "likeCount": 5,
+    "zipDownloadCount": 2
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "ac061f882faaae9feb9e9637e595d6312624eeee0cdc151ec19133e11dbde599",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

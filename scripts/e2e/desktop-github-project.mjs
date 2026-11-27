@@ -1,0 +1,90 @@
+// 新入口的完整体验：真实 Electron / IPC / SQLite / Git；仅网络传输、网络元数据和原生选目录由宿主替代。
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { OwnerStore } from '../../src/owner-store.mjs';
+import { ChatSessionStore } from '../../src/chat-sessions.mjs';
+import { createGitHubProjectFixture,FIXTURE_GITHUB_SOURCE } from './lib/github-project-fixture.mjs';
+import { startApp,waitFor,capture,consoleErrors,sleep } from './lib/cdp.mjs';
+
+const repo=path.resolve(import.meta.dirname,'../..');const root=fs.mkdtempSync(path.join(os.tmpdir(),'owner-github-ui-'));
+const shots=path.resolve(process.env.SHOTS_DIR||path.join(repo,'.verify/github-project'));fs.mkdirSync(shots,{recursive:true});fs.rmSync(path.join(shots,'failure.png'),{force:true});
+const fixture=createGitHubProjectFixture(root),parent=path.join(root,'downloads'),wrong=path.join(root,'wrong');fs.mkdirSync(parent);
+fixture.git(['clone','--quiet',fixture.remote,wrong]);fixture.git(['-C',wrong,'remote','set-url','origin','https://github.com/other/wrong.git']);
+fs.mkdirSync(path.join(parent,'occupied'));fs.writeFileSync(path.join(parent,'occupied','keep.txt'),'保持原样');
+const baseline={seed:fixture.git(['-C',fixture.seed,'status','--porcelain']),origin:fixture.git(['-C',fixture.seed,'remote','get-url','origin']),wrong:fixture.git(['-C',wrong,'remote','get-url','origin'])};
+const userData=path.join(root,'data');fs.mkdirSync(userData);fs.writeFileSync(path.join(userData,'companion.json'),JSON.stringify({gatewayUrl:'http://127.0.0.1:1',pstackSkills:path.join(root,'empty'),mattSkills:path.join(root,'empty')}));
+const ownerDb=path.join(root,'owner.sqlite'),knowledgeDb=path.join(root,'knowledge.sqlite'),store=new OwnerStore(ownerDb),chats=new ChatSessionStore({db:store.db});
+const picksFile=path.join(root,'picker-results.json'),quitProof=path.join(root,'quit-finished.json');fs.writeFileSync(picksFile,JSON.stringify([null,parent,wrong,fixture.seed,parent]));
+const entry=path.join(root,'test-host.cjs');
+fs.writeFileSync(entry,`
+const {dialog}=require('electron');const cp=require('node:child_process');const {promisify}=require('node:util');
+const original=cp.execFile;
+const exec=function(command,args,options,callback){if(command==='gh'){(callback||options)(null,'{}','');return {on(){return this;}};}return original.apply(this,arguments);};
+exec[promisify.custom]=async function(command,...args){if(command==='gh')return {stdout:'{}',stderr:''};return original[promisify.custom](command,...args);};cp.execFile=exec;
+const files=require('node:fs');dialog.showOpenDialog=async()=>{const list=JSON.parse(files.readFileSync(${JSON.stringify(picksFile)},'utf8'));const value=list.shift();files.writeFileSync(${JSON.stringify(picksFile)},JSON.stringify(list));return value?{canceled:false,filePaths:[value]}:{canceled:true,filePaths:[]};};
+require('electron').app.on('quit',()=>files.writeFileSync(${JSON.stringify(quitProof)},'finished'));
+(async()=>{
+ const {createGitHubProjectFixture}=await import(${JSON.stringify(new URL('./lib/github-project-fixture.mjs',import.meta.url).href)});
+ const transport=createGitHubProjectFixture(${JSON.stringify(root)},{existing:true});
+ const {GitHubProjectService}=await import(${JSON.stringify(new URL('../../src/github-project.mjs',import.meta.url).href)});
+ const inspect=GitHubProjectService.prototype.inspect;GitHubProjectService.prototype.inspect=async function(source,options){if(source==='fixture-owner/delayed-check')await new Promise(resolve=>setTimeout(resolve,1500));return inspect.call(this,source,options);};
+ const clone=GitHubProjectService.prototype.clone;let slowCalls=0;
+ GitHubProjectService.prototype.clone=function(input){
+   transport.setMode(String(input.source).includes('/private-unavailable')?'failed':String(input.source).includes('/slow')&&slowCalls++===0?'slow':'ok');
+   this.run=transport.run;return clone.call(this,input);
+ };
+ require(${JSON.stringify(path.join(repo,'desktop/main.cjs'))});
+})().catch(error=>{console.error(error);process.exit(1);});
+`);
+const options={userData,ownerDb,knowledgeDb,entry,env:{OWNER_AGENT_CHAT_FAKE:'1',OWNER_AGENT_WATCH_DIR:path.join(root,'watch')}};
+let app,p,passed=false;const checks=[];const check=(label,value)=>{assert.ok(value,label);checks.push(label);console.log('OK '+label);};
+const evaluate=code=>p.evaluate(code);
+const click=async selector=>{const point=await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e||e.disabled||!e.getClientRects().length)throw Error('不可点击 '+${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('被遮挡 '+${JSON.stringify(selector)});return{x,y};})()`);for(const type of ['mousePressed','mouseReleased'])await p.send('Input.dispatchMouseEvent',{type,...point,button:'left',clickCount:1});};
+const fill=async(selector,text)=>{await click(selector);await evaluate(`document.querySelector(${JSON.stringify(selector)}).select()`);await p.send('Input.insertText',{text});};
+const status=phrase=>waitFor(p,`document.querySelector('#githubProjectStatus').textContent.includes(${JSON.stringify(phrase)})&&!document.querySelector('#githubProjectInspect').disabled`);
+const inspect=async source=>{await fill('#githubProjectSource',source);await click('#githubProjectInspect');check('检查完成并恢复操作',await waitFor(p,"!document.querySelector('#githubProjectInspect').disabled"));};
+const shot=async name=>{await sleep(150);await capture(p,path.join(shots,name+'.png'));check(name+'：无横向溢出',await evaluate('document.documentElement.scrollWidth<=innerWidth+1'));check(name+'：添加窗口位于视口内',await evaluate("(()=>{const d=document.querySelector('#githubProjectDialog');if(!d.open)return true;const r=d.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1;})()"));check(name+'：返回与下载操作始终可见',await evaluate("(()=>{const d=document.querySelector('#githubProjectDialog');if(!d.open)return true;const box=d.getBoundingClientRect();return ['#githubProjectClose','#githubProjectCancel','#githubProjectClone'].map(s=>document.querySelector(s)).filter(e=>!e.hidden).every(e=>{const r=e.getBoundingClientRect();return r.top>=box.top&&r.bottom<=box.bottom&&r.left>=box.left&&r.right<=box.right;});})()"));};
+const openFromMenu=async()=>{await click('#projectToggle');await click('#githubProjectAdd');check('项目菜单可打开 GitHub 添加',await waitFor(p,"document.querySelector('#githubProjectDialog').open"));};
+try{
+ app=await startApp(options);p=app.panel;check('首次使用提供 GitHub 入口',await waitFor(p,"!document.querySelector('#firstProject').hidden&&!document.querySelector('#input').disabled"));
+ const globalId=await evaluate("document.querySelector('#sessionList [data-current=true]').dataset.id");const draft='全局草稿保持原样\n添加 GitHub 项目不能吃掉这段中文输入';await fill('#input',draft);
+ await click('#firstGithubProjectAdd');check('首次入口打开表单',await waitFor(p,"document.querySelector('#githubProjectDialog').open"));await shot('01-github-entry');
+ const unselected=await evaluate(`window.companion.githubProjects.clone({source:${JSON.stringify(FIXTURE_GITHUB_SOURCE)},parent:${JSON.stringify(parent)},folderName:'not-authorized',requestId:'unselected-directory'})`);
+ check('没有原生选择位置时不能借 IPC 写入目录',unselected.code==='directory-not-selected'&&store.listProjects().length===0&&!fs.existsSync(path.join(parent,'not-authorized')));
+ await inspect('https://github.com/user/project/tree/main');check('非仓库链接原位提示且没有登记',await status('仓库主页')&&store.listProjects().length===0);await shot('02-invalid-link');
+ await fill('#githubProjectSource','fixture-owner/delayed-check');await click('#githubProjectInspect');check('慢检查明确显示等待状态',await waitFor(p,"document.querySelector('#githubProjectInspect').disabled&&document.querySelector('#githubProjectStatus').textContent.includes('正在检查')"));await shot('02b-checking');
+ await p.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',windowsVirtualKeyCode:27});await p.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',windowsVirtualKeyCode:27});check('Escape 关闭检查并保留原草稿',await waitFor(p,"!document.querySelector('#githubProjectDialog').open")&&await evaluate(`document.querySelector('#input').value===${JSON.stringify(draft)}`));await click('#firstGithubProjectAdd');check('取消的检查不会遗留正在检查状态',await waitFor(p,"document.querySelector('#githubProjectStatus').textContent.includes('已取消检查')&&!document.querySelector('#githubProjectInspect').disabled"));
+ await inspect(FIXTURE_GITHUB_SOURCE);check('仓库检查不创建目录或项目',await status('链接格式正确')&&store.listProjects().length===0&&fs.readdirSync(parent).length===1);
+ await click('#githubProjectChooseParent');check('取消选择位置仍保留仓库链接',await evaluate(`document.querySelector('#githubProjectSource').value===${JSON.stringify(FIXTURE_GITHUB_SOURCE)}&&document.querySelector('#githubProjectParent').value===''`));
+ await click('#githubProjectChooseParent');check('选择的下载位置可见',await waitFor(p,`document.querySelector('#githubProjectParent').value===${JSON.stringify(parent)}`));await fill('#githubProjectFolder','中文长名称项目：保留本机目录与 GitHub 来源的不同含义');await shot('03-location-and-confirmation');
+ const early=await evaluate(`(async()=>{const bridge=window.companion.githubProjects;const requestId=crypto.randomUUID();const running=bridge.clone({source:'fixture-owner/early-cancel',parent:${JSON.stringify(parent)},folderName:'early-cancel',requestId});const canceled=await bridge.cancel({requestId});return {canceled,result:await running};})()`);
+ check('准备阶段立即取消也不会继续下载或登记',early.canceled.canceled&&early.result.code==='canceled'&&store.listProjects().length===0&&!fs.existsSync(path.join(parent,'early-cancel')));
+ await click('#githubProjectLink');check('关联错误目录时不改 origin 或登记',await status('origin')&&store.listProjects().length===0&&fixture.git(['-C',wrong,'remote','get-url','origin'])===baseline.wrong);await shot('04-link-mismatch');
+ await click('#githubProjectCancel');check('关闭添加保留原会话草稿',await waitFor(p,"!document.querySelector('#githubProjectDialog').open")&&await evaluate(`document.querySelector('#input').value===${JSON.stringify(draft)}`));
+ await click('#firstGithubProjectAdd');check('重开表单仍保留链接与位置',await waitFor(p,"document.querySelector('#githubProjectDialog').open")&&await evaluate(`document.querySelector('#githubProjectSource').value===${JSON.stringify(FIXTURE_GITHUB_SOURCE)}&&document.querySelector('#githubProjectParent').value===${JSON.stringify(parent)}`));
+ await click('#githubProjectLink');check('关联成功后直接进入项目并可输入',await waitFor(p,"!document.querySelector('#githubProjectDialog').open&&document.querySelector('#projectToggle').dataset.scope!=='global'&&!document.querySelector('#input').disabled"));
+ const linked=store.listProjects()[0];check('只登记，不改已有目录状态',store.listProjects().length===1&&fixture.git(['-C',fixture.seed,'status','--porcelain'])===baseline.seed&&fixture.git(['-C',fixture.seed,'remote','get-url','origin'])===baseline.origin);
+ const globalDraft=chats.getDraft({id:globalId,projectId:''});check('原全局草稿持久化保留',globalDraft.text===draft);
+ await click('#projectToggle');check('项目列表分别显示 GitHub 来源与本机路径',await waitFor(p,"document.querySelector('.project-github-source')?.textContent.includes('fixture-owner/owner-demo')&&!!document.querySelector('.project-location')"));await shot('05-linked-project-source');await click('#githubProjectAdd');await inspect(FIXTURE_GITHUB_SOURCE);
+ check('重复添加显示已有项目，而非重复下载',await waitFor(p,"!document.querySelector('#githubProjectExisting').hidden&&document.querySelector('#githubProjectClone').hidden"));await shot('06-existing-project');await click('[data-github-existing]');check('已有项目恢复同一项目',await waitFor(p,"!document.querySelector('#githubProjectDialog').open")&&store.listProjects().length===1&&await evaluate(`document.querySelector('#projectToggle').dataset.scope===${JSON.stringify(linked.id)}`));
+ await openFromMenu();await inspect('fixture-owner/new-project');await fill('#githubProjectFolder','occupied');await click('#githubProjectClone');check('现有目录拒绝覆盖且输入保留',await status('已经存在')&&fs.readFileSync(path.join(parent,'occupied','keep.txt'),'utf8')==='保持原样'&&store.listProjects().length===1);await shot('07-existing-directory-protected');
+ await inspect('fixture-owner/private-unavailable');await fill('#githubProjectFolder','权限恢复后可以重试的项目');await click('#githubProjectClone');check('访问失败说明权限与登录，未留下空项目',await status('无法访问')&&store.listProjects().length===1&&fs.readdirSync(parent).length===1);await shot('08-access-error');
+ await p.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:'dark'}]});await shot('09-access-error-dark');
+ await p.send('Emulation.setDeviceMetricsOverride',{width:380,height:560,deviceScaleFactor:1,mobile:false});await shot('09b-small-window');await p.send('Emulation.clearDeviceMetricsOverride');
+ await inspect('fixture-owner/slow');const folderName='中文长名称用于检查下载完成后的项目归属与重新打开';await fill('#githubProjectFolder',folderName);await click('#githubProjectClone');
+ check('下载进度可见且重复提交被禁用',await waitFor(p,"document.querySelector('#githubProjectStatus').textContent.includes('35%')&&document.querySelector('#githubProjectSource').disabled&&document.querySelector('#githubProjectClone').disabled"));await shot('10-downloading');await click('#githubProjectCancel');
+ check('取消后可以重试且没有空项目或遗留临时目录',await status('已取消下载')&&store.listProjects().length===1&&fs.readdirSync(parent).length===1);check('取消仍保留下载名称与来源',await evaluate(`document.querySelector('#githubProjectFolder').value===${JSON.stringify(folderName)}&&document.querySelector('#githubProjectSource').value==='fixture-owner/slow'`));await shot('11-canceled-retry');
+ await click('#githubProjectClone');check('重试使用真实 Git 下载后进入新项目',await waitFor(p,"!document.querySelector('#githubProjectDialog').open&&!document.querySelector('#input').disabled",20000)&&store.listProjects().length===2);
+ const downloaded=store.listProjects().find(project=>project.id!==linked.id);check('本机目录与 GitHub origin 正确，未运行安装',downloaded.name===folderName&&fixture.git(['-C',downloaded.root,'remote','get-url','origin'])==='https://github.com/fixture-owner/slow.git'&&!fs.existsSync(path.join(downloaded.root,'must-not-run'))&&fixture.git(['-C',downloaded.root,'status','--porcelain'])==='');
+ check('下载期间没有改变原全局草稿',chats.getDraft({id:globalId,projectId:''}).text===draft);await click('#projectToggle');await shot('12-downloaded-project-source');await click('#projectToggle');
+ const savedConfig=JSON.parse(fs.readFileSync(path.join(userData,'companion.json'),'utf8'));check('添加项目没有配置或触发记忆同步',!savedConfig.syncRepo);check('渲染控制台无异常',consoleErrors(p).length===0);
+ await app.stop();app=await startApp(options);p=app.panel;check('重启恢复新项目与输入能力',await waitFor(p,`document.querySelector('#projectToggle').dataset.scope===${JSON.stringify(downloaded.id)}&&!document.querySelector('#input').disabled`));await shot('13-restart-project');
+ check('没有重复登记，原目录和文件未改变',store.listProjects().length===2&&fixture.git(['-C',fixture.seed,'status','--porcelain'])===baseline.seed&&fs.readFileSync(path.join(parent,'occupied','keep.txt'),'utf8')==='保持原样');
+ await openFromMenu();await inspect('fixture-owner/slow-quit');await click('#githubProjectChooseParent');check('退出验收选择位置完成',await waitFor(p,`document.querySelector('#githubProjectParent').value===${JSON.stringify(parent)}`));await fill('#githubProjectFolder','quit-canceled');await click('#githubProjectClone');check('退出前下载确实正在运行',await waitFor(p,"document.querySelector('#githubProjectStatus').textContent.includes('35%')"));await shot('14-quit-during-download');fs.rmSync(quitProof,{force:true});await evaluate('window.companion.quit()');
+ for(let attempt=0;attempt<100&&!fs.existsSync(quitProof);attempt++)await sleep(50);
+ check('退出应用等待取消与临时目录清理完成',fs.existsSync(quitProof)&&!fs.readdirSync(parent).some(name=>name.startsWith('.owner-project-'))&&!fs.existsSync(path.join(parent,'quit-canceled'))&&store.listProjects().length===2);
+ fs.writeFileSync(path.join(shots,'electron.log'),app.log.join(''));app=null;passed=true;
+}catch(error){if(p){await capture(p,path.join(shots,'failure.png')).catch(()=>{});console.error((await evaluate('document.body.innerText').catch(()=>'')).slice(-3500));}throw error;}
+finally{if(app){fs.writeFileSync(path.join(shots,'electron.log'),app.log.join(''));await app.stop();}fs.writeFileSync(path.join(shots,'acceptance.json'),JSON.stringify({passed,checks,root,transport:'real local Git bare repository replaces GitHub transport; native chooser and network metadata replaced only in test host; no real GitHub or model calls',screenshots:fs.readdirSync(shots).filter(n=>n.endsWith('.png'))},null,2));store.close();console.log('Evidence '+shots);console.log('Isolated data '+root);}

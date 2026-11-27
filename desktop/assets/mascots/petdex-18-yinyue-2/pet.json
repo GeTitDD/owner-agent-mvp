@@ -1,0 +1,12 @@
+{
+  "id": "petdex-18-yinyue-2",
+  "displayName": "银月",
+  "description": "白发狐耳仙侠少女化成的银蓝眼小型 Codex 数字宠物。",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 18
+}

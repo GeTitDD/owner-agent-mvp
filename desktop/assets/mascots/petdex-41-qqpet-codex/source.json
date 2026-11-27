@@ -1,0 +1,20 @@
+{
+  "rank": 41,
+  "id": "petdex-41-qqpet-codex",
+  "slug": "qqpet-codex",
+  "displayName": "QQpet-codex",
+  "source": "https://petdex.dev/pets/qqpet-codex",
+  "zipUrl": "https://assets.petdex.dev/pets/qqpet-codex-aa076dbeacb8/zip.zip",
+  "author": "Frank C.",
+  "metrics": {
+    "installCount": 1412,
+    "likeCount": 58,
+    "zipDownloadCount": 68
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "33020f1cf35049ae4e1af2a79fd09418183a8aa83d4c4429a51a95625f54afeb",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

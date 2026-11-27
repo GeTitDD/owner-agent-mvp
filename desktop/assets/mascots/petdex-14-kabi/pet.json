@@ -1,0 +1,12 @@
+{
+  "id": "petdex-14-kabi",
+  "displayName": "卡比兽",
+  "description": "贪睡贪吃苹果的卡比兽",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 14
+}

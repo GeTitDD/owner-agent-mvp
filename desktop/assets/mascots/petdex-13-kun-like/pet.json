@@ -1,0 +1,12 @@
+{
+  "id": "petdex-13-kun-like",
+  "displayName": "Kun Like",
+  "description": "A pixel-art chicken-headed desktop pet with silver center-parted hair, white overalls, and a basketball.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 13
+}

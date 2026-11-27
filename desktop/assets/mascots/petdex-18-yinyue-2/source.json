@@ -1,0 +1,20 @@
+{
+  "rank": 18,
+  "id": "petdex-18-yinyue-2",
+  "slug": "yinyue-2",
+  "displayName": "银月",
+  "source": "https://petdex.dev/pets/yinyue-2",
+  "zipUrl": "https://assets.petdex.dev/pets/yinyue-7b6e2648345b/zip.zip",
+  "author": "is_coward",
+  "metrics": {
+    "installCount": 2072,
+    "likeCount": 30,
+    "zipDownloadCount": 66
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "8b4bf438f745ae52ca4bf952d7b3c86bb28d916d0e3ca5e7b8dce1a4d45e7937",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

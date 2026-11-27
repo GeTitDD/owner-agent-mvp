@@ -1,0 +1,12 @@
+{
+  "id": "petdex-35-cold-ink-amulet",
+  "displayName": "Cold-Ink Amulet",
+  "description": "A squat ink-bottle amulet wrapped in lead foil with a sealed cork eye.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 35
+}

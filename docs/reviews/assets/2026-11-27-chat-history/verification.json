@@ -1,0 +1,101 @@
+{
+  "date": "2026-11-27",
+  "platform": "darwin",
+  "unit": {
+    "total": 1265,
+    "passed": 1260,
+    "skipped": 5,
+    "failed": 0
+  },
+  "focusedFinal": {
+    "total": 47,
+    "passed": 47,
+    "failed": 0
+  },
+  "syntax": {
+    "files": 284,
+    "status": "pass"
+  },
+  "chatHistory": {
+    "assertions": 60,
+    "status": "pass"
+  },
+  "regressions": [
+    {
+      "name": "model-recovery",
+      "status": "pass"
+    },
+    {
+      "name": "card-shell",
+      "status": "pass"
+    },
+    {
+      "name": "card-projects",
+      "status": "pass"
+    },
+    {
+      "name": "slash",
+      "status": "pass"
+    },
+    {
+      "name": "config-box",
+      "status": "pass"
+    },
+    {
+      "name": "copy-export",
+      "status": "pass"
+    },
+    {
+      "name": "at-prompt",
+      "status": "pass"
+    },
+    {
+      "name": "project-write",
+      "status": "pass"
+    },
+    {
+      "name": "locate-review",
+      "status": "pass"
+    },
+    {
+      "name": "first-use",
+      "status": "pass"
+    }
+  ],
+  "visual": {
+    "automatedScreenshots": 8,
+    "openedAndInspected": true,
+    "checks": [
+      "多行中文",
+      "长会话/项目标题",
+      "浅色/深色",
+      "错误与加载禁用态",
+      "滚动位置保持",
+      "草稿与导出路径隔离"
+    ],
+    "nativeScreenshots": 3
+  },
+  "paidModelRequests": 0,
+  "limitations": [
+    "Windows 尚未验收",
+    "真实提供商质量未验收",
+    "极大历史量性能未评估"
+  ],
+  "nativePreview": {
+    "messages": 200,
+    "history": "已显示 200 / 520 条消息",
+    "overflow": false,
+    "project": "项目\n          命令行工具（演示）\n          ▾",
+    "draft": "",
+    "rendererErrors": [],
+    "synthetic": true
+  },
+  "workbench": {
+    "/": 200,
+    "/lessons": 200
+  },
+  "checks": {
+    "cssBraces": "pass",
+    "gitDiffCheck": "pass"
+  }
+}

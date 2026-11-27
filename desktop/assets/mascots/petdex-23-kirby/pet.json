@@ -1,0 +1,12 @@
+{
+  "id": "petdex-23-kirby",
+  "displayName": "Kirby",
+  "description": "A Kirby-themed pink pet with clean padded Codex frames.",
+  "spritesheetPath": "spritesheet.png",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 23
+}

@@ -1,0 +1,20 @@
+{
+  "rank": 26,
+  "id": "petdex-26-droid",
+  "slug": "droid",
+  "displayName": "Droid",
+  "source": "https://petdex.dev/pets/droid",
+  "zipUrl": "https://assets.petdex.dev/pets/droid-8b1dafdb3ec8/zip.zip",
+  "author": "holtchas",
+  "metrics": {
+    "installCount": 1722,
+    "likeCount": 8,
+    "zipDownloadCount": 17
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "5edb1e0ffa447b4e9b30226bcaefed25232a359c7946d1d58b5e2d4935031a98",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

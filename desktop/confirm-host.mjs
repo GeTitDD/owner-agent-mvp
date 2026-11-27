@@ -7,7 +7,7 @@
 // 三条脚本化命令（都只出卡，不真的发、不真的删）：
 //   /外发 [目标]  纯外发：一张外发卡；
 //   /删除         纯删除：一张删除卡；
-//   /同步         同一动作里既有写入又有外发：两张卡，先写后发，并写明顺序理由。
+//   /样例同步     同一动作里既有写入又有外发：两张卡，先写后发，并写明顺序理由。
 //
 // 时序：模块脚本晚于经典脚本执行，confirm-cards.cjs / risk-card.cjs 已经挂在 window；
 // 这里再挂 window.OwnerConfirm，shell-compose 在发送时读取。
@@ -152,10 +152,10 @@ async function buildReply(command) {
 }
 
 const api = Object.freeze({
-  // /同步 不走 confirm-cards 的 parseCommand（那条只管外发与删除），在这里补上。
+  // /样例同步 不走 confirm-cards 的 parseCommand（那条只管外发与删除），在这里补上。
   parseCommand: (input) => {
     const text = String(input ?? '').trim();
-    if (text === '/同步' || text === '/sync') return { kind: 'sync', arg: '' };
+    if (text === '/样例同步') return { kind: 'sync', arg: '' };
     return cardsApi()?.parseCommand(text) ?? null;
   },
   isCommand: (input) => api.parseCommand(input) !== null,

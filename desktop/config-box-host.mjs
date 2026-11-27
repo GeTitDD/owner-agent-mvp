@@ -10,7 +10,7 @@
 // 这里不持有状态：当前值留在主进程的 companion.json。
 import {
   SECRET_LABELS, SECTIONS, SOURCE, SOURCE_LABELS,
-  buildRows, displayOf, editableRows, listText, patchForSave, resolveSource, rowById, secretStateOf
+  buildRows, displayOf, editableRows, listText, patchForSave, resolveSource, rowById, secretStateOf, modelSelectionState, modelOptionsFor
 } from '../src/config-box.mjs';
 
 window.OwnerConfigBox = Object.freeze({
@@ -23,6 +23,8 @@ window.OwnerConfigBox = Object.freeze({
   editableRows,
   listText,
   patchForSave,
+  modelSelectionState,
+  modelOptionsFor,
   resolveSource,
   rowById,
   secretStateOf

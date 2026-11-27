@@ -16,6 +16,7 @@ import {
   normalizeSyncStatus,
   syncAttemptText,
   syncBadge,
+  syncErrorView,
   syncStatusLine
 } from '../src/memory/sync-status.mjs';
 
@@ -28,6 +29,7 @@ window.OwnerSyncStatus = Object.freeze({
   normalizeSyncStatus,
   syncAttemptText,
   syncBadge,
+  syncErrorView,
   syncStatusLine
 });
 window.dispatchEvent(new Event('owner-sync-status-ready'));

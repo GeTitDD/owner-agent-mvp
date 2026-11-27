@@ -12,6 +12,8 @@
 // 本文件只接收它算好的计数，不推进水位，也不触发任何扫描。
 
 /** 陈旧阈值固定 7 天，不做配置项（ADR-0014）。 */
+import { candidateProjectIds } from '../knowledge/candidate-view.mjs';
+
 export const STALE_DAYS = 7;
 
 /** 关注顺序的四档，顺序即优先级。 */
@@ -106,11 +108,10 @@ const emptyPending = () => ({ knowledge: 0, decisions: 0, total: 0 });
  * @returns {{byProject: Record<string, {knowledge:number, decisions:number, total:number}>}}
  */
 export function pendingCountsOf({ proposals = [], lessons = [], decisionSummary = null } = {}) {
-  const lessonProject = new Map();
+  const lessonById = new Map();
   for (const lesson of asArray(lessons)) {
     const id = text(lesson?.id);
-    const projectId = text(lesson?.scope?.projectId ?? lesson?.projectId);
-    if (id && projectId) lessonProject.set(id, projectId);
+    if (id) lessonById.set(id, lesson);
   }
 
   const byProject = {};
@@ -121,18 +122,9 @@ export function pendingCountsOf({ proposals = [], lessons = [], decisionSummary 
 
   for (const proposal of asArray(proposals)) {
     if (proposal?.status !== 'pending' || !isKnowledgeCandidate(proposal)) continue;
-    const ownProject = text(proposal?.payload?.projectId);
-    if (ownProject) {
-      ensure(ownProject).knowledge += 1;
-      continue;
+    for (const projectId of candidateProjectIds(proposal, (id) => lessonById.get(id))) {
+      ensure(projectId).knowledge += 1;
     }
-    // 应用层 / 域级候选：沿来源经验归因；同一候选只在一个项目里记一次。
-    const owners = new Set();
-    for (const lessonId of asArray(proposal?.meta?.sourceLessonIds)) {
-      const projectId = lessonProject.get(text(lessonId));
-      if (projectId) owners.add(projectId);
-    }
-    for (const projectId of owners) ensure(projectId).knowledge += 1;
   }
 
   for (const group of asArray(decisionSummary?.projects)) {
@@ -172,7 +164,9 @@ export function latestDecisionsOf({ decisions = [], projects = [] } = {}) {
     byProject[id] = own
       ? {
         id: text(own.id),
-        title: oneLine(own.title, 160) || '（没有标题的决策）',
+        title: oneLine(own.decision?.intent || own.title, 160) || '（没有标题的决策）',
+        reason: oneLine(own.decision?.reason, 300),
+        phenomenon: oneLine(own.title, 160),
         status: text(own.decisionStatus || own.verificationStatus),
         at: text(own.updatedAt)
       }
@@ -332,6 +326,8 @@ export function locateScreenView({
       ? {
         id: text(viewed.latestDecision.id),
         title: oneLine(viewed.latestDecision.title, 160) || '（没有标题的决策）',
+        reason: oneLine(viewed.latestDecision.reason, 300),
+        phenomenon: oneLine(viewed.latestDecision.phenomenon, 160),
         status: text(viewed.latestDecision.status),
         at: text(viewed.latestDecision.at)
       }

@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync
@@ -560,7 +561,8 @@ test('[patch#11] workspace ids are sanitized and cleanup refuses an un-reconcile
   assert.throws(() => WorkspaceBroker.sanitizeIds({ projectId: 'p', jobId: '..', attempt: 1 }), /invalid job id/);
   assert.throws(() => WorkspaceBroker.sanitizeIds({ projectId: 'p', jobId: 'j', attempt: 0 }), /invalid attempt/);
   const expected = broker.workspacePath('proj-a', 'job-1', 1);
-  assert.ok(expected.toLowerCase().startsWith(path.join(root, 'workspaces').toLowerCase()));
+  // macOS 的 /var 与 /private/var 是同一目录，比较规范路径才能验证真实的越界。
+  assert.ok(expected.toLowerCase().startsWith(path.join(realpathSync.native(root), 'workspaces').toLowerCase()));
 
   const { job } = submitCode(store, clock, { base, key: 'cleanup-1' });
   const run = await runWorker({ store, broker, clock });

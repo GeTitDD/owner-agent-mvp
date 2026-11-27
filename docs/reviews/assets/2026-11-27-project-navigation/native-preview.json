@@ -1,0 +1,12 @@
+{
+  "scope": "tool-demo",
+  "sync": "仅本机",
+  "action": "了解同步",
+  "overflow": false,
+  "draftLength": 0,
+  "returnedToOriginal": true,
+  "existingMessagesUnchanged": true,
+  "rendererErrors": [],
+  "normalHost": true,
+  "paidModelRequests": 0
+}

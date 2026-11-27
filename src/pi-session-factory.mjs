@@ -38,7 +38,7 @@ export const DefaultPiSessionFactory={
           noTools:true,
           sessionManager:sdk.SessionManager.inMemory(),
           resourceLoader:loader,
-          ...(model?{model:resolvePiModel(model)}:{})
+          ...await resolvePiModel(model,{sdk})
         });
         let disposed=false;
         return {

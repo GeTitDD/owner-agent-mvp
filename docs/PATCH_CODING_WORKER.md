@@ -36,7 +36,7 @@ OwnerTask → code-patch Job（人工审批）→ 固定 base 的独立 Worktree
   时直接拒绝。`patch-protocol` 将 `.gitattributes` 加入 deny-list，提案不能修改属性语义。
   LFS 等需要 filter 的仓库暂不支持，后续应由安全 materialization 处理。
 - 创建前依次拒绝：
-  1. 未登记 / 根目录缺失 / 根身份漂移（复用 v0.7 `.owner-root-identity` 文件身份）；
+  1. 未登记 / 根目录缺失 / 根身份漂移（共享只读目录身份校验，兼容旧项目标记）；
   2. `git rev-parse --show-toplevel` 与登记根不一致；
   3. 可执行 Git filter（见上）；
   4. 工作树脏（排除 v0.7 的 `.owner-root-identity` 标记）；
@@ -247,7 +247,7 @@ OWNER_AGENT_REAL_PATCH_TEST=1 npm test   # 需要已配置的 Pi 凭据，会产
 - SQLite 与文件系统不做跨资源事务；崩溃恢复依赖 Owner 显式裁定。
 - 单进程 CLI 假设：启动时的 `applying` 扫描按“上一进程已死亡”处理；多进程同时使用时
   需额外的进程锁（未在本 Issue 范围）。
-- `.owner-root-identity` 仍由 v0.7 登记写入项目根；Broker 的干净检查排除它，不新增主工作区
+- 新登记项目不再写入 `.owner-root-identity`；旧项目遗留的标记仍受兼容校验保护，Broker 的干净检查排除它，不新增主工作区
   写入。是否迁移到 Owner 侧留待后续 Issue。
 
 [#5]: https://github.com/GeTitDD/owner-agent-mvp/issues/5

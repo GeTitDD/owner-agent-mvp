@@ -145,7 +145,7 @@ export function createWriterSessionFactory({ model = '', python = false } = {}) 
             customTools,
             sessionManager: sdk.SessionManager.inMemory(),
             resourceLoader: loader,
-            ...(model ? { model: resolvePiModel(model) } : {})
+            ...await resolvePiModel(model, { sdk })
           });
           const active = typeof session.getActiveToolNames === 'function'
             ? [...session.getActiveToolNames()]

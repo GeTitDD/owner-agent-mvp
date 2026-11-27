@@ -14,8 +14,31 @@ import {
   patchForSave,
   resolveSource,
   rowById,
-  secretStateOf
+  secretStateOf,
+  modelSelectionState,
+  modelOptionsFor
 } from '../src/config-box.mjs';
+
+test('模型状态区分未选择、目录未知和已检测凭据，不把本地检测宣称为连接成功', () => {
+  assert.equal(modelSelectionState({}).state, 'missing');
+  assert.equal(modelSelectionState({ model: 'unknown/model', catalog: { items: [] } }).state, 'unknown');
+  const result = modelSelectionState({ model: 'local/check', catalog: { items: [{ id: 'local/check', ready: true }] } });
+  assert.equal(result.state, 'configured');
+  assert.match(result.text, /尚未验证/);
+  assert.match(modelSelectionState({ model: 'local/check', catalog: { items: [{ id: 'local/check', ready: false }] } }).text, /未检测到凭据/);
+});
+
+test('千条模型目录可按名称、提供商和 ID 检索，先过滤后限制并保留当前选择', () => {
+  const items = Array.from({ length: 1600 }, (_, i) => ({ id: `provider/model-${i}`, label: `模型 ${i}`, provider: 'provider' }));
+  items.push({ id: 'fixture/check', label: '中文验收模型', provider: 'fixture' });
+  assert.equal(modelOptionsFor({ items }).items.length, 100);
+  assert.equal(modelOptionsFor({ items, current: 'fixture/check' }).items[0].id, 'fixture/check');
+  assert.equal(modelOptionsFor({ items, query: '中文验收' }).items[0].id, 'fixture/check');
+  assert.equal(modelOptionsFor({ items, query: 'FIXTURE' }).matched, 1);
+  assert.equal(modelOptionsFor({ items, query: 'provider/model-1599' }).items[0].id, 'provider/model-1599');
+  assert.equal(modelOptionsFor({ items, query: '不存在' }).matched, 0);
+  assert.match(modelOptionsFor({ items }).label, /1601.*100/);
+});
 
 const FACTS = Object.freeze({
   paths: {
@@ -69,9 +92,9 @@ test('可写行都有配置键，只读行与密钥行都没有', () => {
   }
 });
 
-test('可写行只有五个：主模型 / 图谱模型 / 网关 / 快照包含 / 隐式技能', () => {
+test('可写行包含模型、目录、技能与不含凭据的同步目标', () => {
   assert.deepEqual(editableRows().map((row) => row.id),
-    ['model', 'diagramModel', 'gatewayUrl', 'includePaths', 'chatSkills']);
+    ['model', 'diagramModel', 'gatewayUrl', 'includePaths', 'chatSkills', 'syncRepo', 'syncBranch']);
 });
 
 // ── 来源标注：探测 vs 手改 ─────────────────────────────────────────
@@ -149,9 +172,9 @@ test('只读行先看注入的事实，没有事实就用写死的文案', () =>
   assert.equal(displayOf(rowById('skillCap'), {}, FACTS), '12 个');
 });
 
-test('buildRows 的 24 行都挂对分区，输入框只给可写行', () => {
+test('buildRows 的 26 行都挂对分区，输入框只给可写行', () => {
   const rows = buildRows({ values: {}, facts: FACTS });
-  assert.equal(rows.length, 24);
+  assert.equal(rows.length, 26);
   for (const row of rows) {
     assert.ok(SECTIONS.some((section) => section.id === row.section), `${row.id} 分区不认识`);
     if (row.kind === 'text' || row.kind === 'list' || row.kind === 'model') {

@@ -105,7 +105,8 @@ const setSessionPopover = async (panel, opened) => {
 
 /** 等确认弹窗真的出现，并返回它此刻的四条后果。 */
 const openConfirmFor = async (panel, projectId) => {
-  await chooseProject(panel, projectId);
+  await setProjectPopover(panel, true);
+  await click(panel, `#projectList button[data-project="${projectId}"][data-project-intent="in-session"]`);
   const shown = await waitFor(panel, "document.getElementById('projectConfirm').hidden === false", 5000);
   return shown ? readUi(panel) : null;
 };
@@ -423,7 +424,7 @@ const run = async () => {
     knowledgeDb: path.join(root, 'knowledge.sqlite')
   };
   fs.writeFileSync(path.join(userData, 'companion.json'), JSON.stringify({
-    projectId: '', gatewayUrl: 'http://127.0.0.1:18789', model: '', includePaths: ['package.json']
+    projectId: '', gatewayUrl: 'http://127.0.0.1:1', model: '', includePaths: ['package.json']
   }, null, 2));
   seedData({ root, ...files });
   try {

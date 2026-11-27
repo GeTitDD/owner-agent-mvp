@@ -1,0 +1,20 @@
+{
+  "rank": 9,
+  "id": "petdex-09-capvolt",
+  "slug": "capvolt",
+  "displayName": "Pikachu‌",
+  "source": "https://petdex.dev/pets/capvolt",
+  "zipUrl": "https://assets.petdex.dev/pets/capvolt-7be64ef6cfa2/zip.zip",
+  "author": "zlss g.",
+  "metrics": {
+    "installCount": 2965,
+    "likeCount": 69,
+    "zipDownloadCount": 238
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "fcb7525edb6ffff8c4c09dddbade799c96192183c9b4e7a070a935f81663eeb2",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

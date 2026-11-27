@@ -45,16 +45,47 @@
 
   /** 可见回执：成功与失败都留 4 秒；不静默，也不弹窗打断。 */
   let toastTimer = null;
+  let toastVersion = 0;
+  const positionToast = () => {
+    const shell = document.querySelector('.shell');
+    const shellBounds = shell.getBoundingClientRect();
+    const shellBottom = shellBounds.bottom;
+
+    // 面板跟随实际输入区和关联胶囊高度；固定 bottom 会在多行草稿时盖住发送按钮。
+    const anchors = ['sessionPointers', 'projectLinks', 'skillChip', 'composer']
+      .map((id) => document.getElementById(id)).filter((node) => node?.getClientRects().length);
+    const anchorTop = Math.min(...anchors.map((node) => node.getBoundingClientRect().top));
+    toastNode.style.bottom = `${shellBottom - anchorTop + 8}px`;
+    shell.style.setProperty('--composer-bottom-offset', `${shellBottom - anchorTop + 6}px`);
+    shell.style.setProperty('--composer-room', `${Math.max(100, anchorTop - shellBounds.top - 80)}px`);
+  };
+  // 多行输入和草稿状态会让输入区上移；布局变化后持续让提示避开输入区。
+  const feedbackObserver = new ResizeObserver(positionToast);
+  feedbackObserver.observe(document.getElementById('composer'));
+  feedbackObserver.observe(document.getElementById('draftStatus'));
+  for (const id of ['sessionPointers', 'projectLinks', 'skillChip']) feedbackObserver.observe(document.getElementById(id));
   const notify = (text, tone = 'ok') => {
+    const version = ++toastVersion;
     toastNode.textContent = text;
     toastNode.dataset.tone = tone;
+    // 输入框高度随草稿改变，提示定位在输入区上方，避免遮住正在编辑的正文。
+    positionToast();
     toastNode.hidden = false;
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
       toastNode.hidden = true;
       toastNode.textContent = '';
     }, 4000);
+    // 读取动作结束时可撤下自己的加载提示，不误清后来出现的成功/失败回执。
+    return () => {
+      if (version !== toastVersion) return;
+      clearTimeout(toastTimer);
+      toastNode.hidden = true;
+      toastNode.textContent = '';
+    };
   };
+
+  notify.clear = () => { toastVersion += 1; clearTimeout(toastTimer); toastNode.hidden=true; toastNode.textContent=''; };
 
   // 三块界面的入口：构造时互相还不存在，运行期统一用 ui.* 取，所以顺序不锁死。
   const ui = {};
@@ -77,8 +108,10 @@
 
   ui.header = headerApi.create(ctx);
   ui.compose = composeApi.create(ctx);
+  ui.githubProject = window.OwnerShellGitHubProject.create(ctx);
   // #127 配置箱：覆盖层挂在装配层，Esc 与保存回执都要用；它自己绑顶栏的 ⚙。
   ui.config = configApi.create(ctx);
+  ui.appearance = window.OwnerShellAppearance.create(ctx);
   // #122：`@@` 面板要在输入区之后建（它打开时会收起 `/` 面板），
   // 输入区在运行期才取 ui.at，所以两块不锁构造顺序。
   ui.at = atApi.create(ctx);
@@ -97,12 +130,19 @@
     ui.stream.render();
     ui.header.render();
     ui.header.renderScope();
+    void ui.header.loadSyncStatus();
   };
 
   // Esc 先收最上面的一层：配置箱（全窗口覆盖层）> 顶栏的确认弹窗 > 项目浮层 > 会话浮层，
   // 然后是 `@@` 方法面板（与 `/` 面板不会同时开），最后才是 `/` 面板。
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
+    // 原生外观弹窗位于配置箱之上，交给 dialog 自己取消，不能顺手关掉底层草稿。
+    if (document.querySelector('#appearanceDialog')?.open) return;
+    if (ui.githubProject.dismiss()) {
+      event.preventDefault();
+      return;
+    }
     if (ui.config.dismiss()) {
       event.preventDefault();
       return;
@@ -134,7 +174,14 @@
       // 项目先读：会话的「正在看的项目」要按已登记项目校验，否则旧 id 会把顶栏写成不存在的项目。
       await ui.header.loadProjects();
       await ui.header.loadSessions();
-      await ui.header.selectSession(listApi.pickInitialSession(ui.header.sessions()), {
+      // 首次启动直接准备会话，用户可以先说一句，不需要学习「新建会话」的概念。
+      let initial = listApi.pickInitialSession(ui.header.sessions());
+      if (!initial) {
+        const created = await store.create({ title: '' });
+        initial = created.id;
+        await ui.header.loadSessions();
+      }
+      await ui.header.selectSession(initial, {
         remember: false
       });
       ui.header.renderScope();

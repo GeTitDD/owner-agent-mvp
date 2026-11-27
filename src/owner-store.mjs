@@ -1,11 +1,12 @@
 // Local, owner-centric project/event registry. All durable facts are explicit records,
 // not summaries inferred from an LLM conversation. No source code or prompt capture.
 import { DatabaseSync } from 'node:sqlite';
-import { realpathSync, mkdirSync, statSync, existsSync, writeFileSync } from 'node:fs';
+import { realpathSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { defaultDbPath } from './storage.mjs';
 import { sha256 } from './utils.mjs';
+import { rootIdentityOf } from './project-identity.mjs';
 import { canonicalProposalHash } from './patch-protocol.mjs';
 import { SANDBOX_STATUSES, approvalHash as computeSandboxApprovalHash } from './sandbox-protocol.mjs';
 import { PersonalKnowledgeStore } from './personal-store.mjs';
@@ -479,9 +480,7 @@ export class OwnerStore {
     // task edits cannot change what an approved job will analyse.
     const jobColumns=this.db.prepare('PRAGMA table_info(owner_jobs)').all().map(c=>c.name);
     if(!jobColumns.includes('input_snapshot'))this.db.exec(`ALTER TABLE owner_jobs ADD COLUMN input_snapshot TEXT NOT NULL DEFAULT ''`);
-    // v0.7: root identity (sha256 of dev/ino) for path-drift rejection — a swapped root
-    // (symlink to another directory) resolves to a different file identity than registered.
-    // Raw ino can exceed JS safe integers on Windows, so only the hash is stored.
+    // 身份只存哈希，避免 Windows 的大整数精度损失；旧标记与新目录身份共享这一列。
     const projectColumns=this.db.prepare('PRAGMA table_info(owner_projects)').all().map(c=>c.name);
     if(!projectColumns.includes('root_identity'))this.db.exec(`ALTER TABLE owner_projects ADD COLUMN root_identity TEXT NOT NULL DEFAULT ''`);
   }
@@ -491,17 +490,9 @@ export class OwnerStore {
     check(statuses.has(status),'Invalid project status');
     check(typeof root==='string'&&root.length<=1500,'Invalid path');
     let resolved;try{resolved=realpathSync(root);}catch{throw new OwnerInputError('Project directory must already exist');}
-    // Root identity marker: a small file inside the root pins the directory identity
-    // (sha256 of its dev/ino). A file keeps its id across renames and a fresh one always
-    // carries a new id, so drift detection (deleted/recreated/swapped root) is
-    // deterministic on every platform. Best-effort, not adversarial fencing.
-    let rootIdentity='';
-    try{
-      const markerPath=path.join(resolved,'.owner-root-identity');
-      if(!existsSync(markerPath))writeFileSync(markerPath,stamp(),{encoding:'utf8',flag:'wx'});
-      const st=statSync(markerPath,{bigint:true});
-      rootIdentity=sha256(`${st.dev}:${st.ino}`).slice(0,32);
-    }catch{/* stat/write unavailable: drift check skipped for this project */}
+    // 身份与规范路径只落自有数据库；添加观察对象不改变其文件或 Git 状态。
+    const rootIdentity=rootIdentityOf(resolved);
+    check(rootIdentity,'Project path must be a readable directory');
     const cleanedDomains=safeArray(domains,'domains');
     const cleanedImports=safeArray(imports,'imports');
     check(cleanedDomains.length>0||!!primaryDomain,'Project needs at least one domain');

@@ -1,0 +1,20 @@
+{
+  "rank": 2,
+  "id": "petdex-02-lulu-capybara-2",
+  "slug": "lulu-capybara-2",
+  "displayName": "噜噜",
+  "source": "https://petdex.dev/pets/lulu-capybara-2",
+  "zipUrl": "https://assets.petdex.dev/pets/lulu-capybara-9f9107636ecc/zip.zip",
+  "author": "gitcjp",
+  "metrics": {
+    "installCount": 5594,
+    "likeCount": 67,
+    "zipDownloadCount": 273
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "8b7c5751315a46e2d4fe87ccc5494f791f032e25dcfdd07408862370b648cffd",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

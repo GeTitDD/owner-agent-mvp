@@ -46,6 +46,24 @@ const withStore = (run) => {
   }
 };
 
+test('同一想法在两个项目整理成经验，不得仅凭灵感来源标为跨项目复现', () => withStore((personalStore) => {
+  const items = ['a', 'b'].map((id) => ({ ...IDEA, id: `copied-${id}` }));
+  const store = {
+    getIdeaItem: (id) => items.find((item) => item.id === id),
+    getProject: (id) => ({ id })
+  };
+  for (const id of ['a', 'b']) {
+    const result = promoteIdeaToLesson({ store, personalStore, id: `copied-${id}`, projectId: id,
+      edits: { phenomenon: '相同人工观察', mechanism: '尚未核验的机制', countermeasure: '尚未验证的对策' } });
+    assert.equal(result.ok, true, result.reason);
+  }
+  for (const lesson of personalStore.listLessons()) {
+    assert.equal(Boolean(lesson.reproduced), false, '两个灵感不等于两次事实复现');
+    assert.equal(lesson.verificationStatus, 'inferred');
+    assert.equal(lesson.scope.layer, 'project');
+  }
+}));
+
 test('灵感回执带 id，并且只有一个「提升为 Lesson」动作', async () => {
   const result = await runOwnWrite({
     kind: 'idea',
@@ -178,12 +196,12 @@ test('提升后的经验卡还是普通审核卡：只带「提升为候选」�
   assert.equal(card.lessonId, lesson.id);
   assert.equal(card.title, IDEA.rawText);
   assert.equal(card.rows[0][1], '（未记录）');
-  assert.deepEqual(card.actions, [{ id: 'promote', label: '提升为候选' }]);
+  assert.deepEqual(card.actions, [{ id: 'promote', label: '审阅并沉淀' }]);
   assert.match(card.note, /不会|只生成候选/u);
 
   const model = blocks.normalizeBlock(card);
   assert.equal(model.kind, 'lesson');
-  assert.deepEqual(model.actions, [{ id: 'promote', label: '提升为候选' }]);
+  assert.deepEqual(model.actions, [{ id: 'promote', label: '审阅并沉淀' }]);
 
   // 候选仍要人再点一次；提升为 Lesson 本身没有写知识库。
   assert.equal(personal.proposals('pending').length, 0);

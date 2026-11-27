@@ -160,6 +160,8 @@ test('续聊上下文只取最近几轮成功消息', () => {
   const history = store.historyForPrompt(session.id, { limit: 10 });
   assert.deepEqual(history.map((item) => item.text), ['问题一', '问题二', '答案二']);
   assert.equal(store.historyForPrompt(session.id, { limit: 1 }).length, 1);
+  const questionTwo = store.getSession(session.id).messages.find((message) => message.text === '问题二');
+  assert.deepEqual(store.historyForPrompt(session.id, { beforeSeq: questionTwo.seq }).map((item) => item.text), ['问题一']);
 });
 
 test('旧库平滑升级：只新增会话表，旧表与旧数据保持原样', () => {

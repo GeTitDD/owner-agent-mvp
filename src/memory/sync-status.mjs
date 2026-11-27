@@ -153,6 +153,28 @@ export function applySyncAttempt(previous, result, at = new Date()) {
   };
 }
 
+/** 日常反馈只说原因和下一步，底层步骤名与原始错误留在详情中。 */
+export function syncFailureSummary(failure) {
+  if (!failure) return '';
+  const raw = `${failure.code || ''} ${failure.message || ''}`;
+  if (failure.code==='preview-pending') return '已发现待同步文档，等待确认';
+  if (failure.conflict) return '有文档冲突，等待逐篇确认';
+  if (/sync-target-missing/u.test(raw)) return '尚未设置同步仓库';
+  if (/401|403|auth|credential|permission|denied|凭据|权限/iu.test(raw)) return '无法验证同步权限，请检查凭据后重试';
+  if (/network|unreachable|ECONN|ENOTFOUND|offline|timed?\s*out|timeout|网络|断网/iu.test(raw)) return '连接失败，请联网后重试';
+  return '同步未完成，请查看详情后重试';
+}
+
+/** IPC 包装与底层 Git 错误只放详情；日常提示保留用户能采取的下一步。 */
+export function syncErrorView(error) {
+  const raw=String(error?.message ?? error ?? '同步没有返回原因。');
+  const detail=raw.replace(/^Error invoking remote method '[^']+': (?:[A-Za-z]*Error): /u,'');
+  if(/Git 同步未完成|git-failed|does not appear to be a git repository|could not resolve|unable to access/iu.test(detail)) {
+    return {text:'无法连接同步仓库，请检查网络、仓库地址和权限后重新检查。',detail};
+  }
+  return {text:detail,detail:detail===raw?'':raw};
+}
+
 /**
  * 顶栏要画的这一格：标签、语气、一行说明、要不要显示「补同步」。
  *
@@ -165,9 +187,30 @@ export function applySyncAttempt(previous, result, at = new Date()) {
 export function syncBadge(status) {
   const view = normalizeSyncStatus(status);
   const successText = view.lastSuccessAt ? `最后同步 ${formatSyncTime(view.lastSuccessAt)}` : '';
-  const reason = view.failure
+  const technicalReason = view.failure
     ? `${view.failure.step ? `${view.failure.step}：` : ''}${view.failure.message}`
     : '';
+  const reason = syncFailureSummary(view.failure);
+
+  if (status?.availability?.mode === 'manual-preview') {
+    const ready=status.availability.available;
+    const pending=Number(status.count)||0;const unresolved=Number(status.unresolved)||0;
+    const clean=ready&&view.state==='synced'&&!pending&&!unresolved;
+    return {state:clean?'synced':ready?'unsynced':'local-only',tone:clean?'ok':ready?'warn':'unknown',
+      label:clean?'已同步':ready?'待检查':'仅本机',
+      detail:!ready?(status.availability.reason==='auth-missing'?'未检测到同步令牌':'尚未设置同步仓库')
+        :unresolved?`${unresolved} 篇冲突未解决`:pending?`${pending} 篇本机变化待同步`:reason||successText||'尚未检查远端',
+      hint:[reason,technicalReason,successText,'检查后先预览，确认后才传输；远端变化需再次检查'].filter(Boolean).join('；'),
+      retry:true,retryLabel:ready?'检查同步':'设置同步',action:'info'};
+  }
+
+  if (status?.availability?.available === false) {
+    return { state: 'local-only', tone: SYNC_TONES.unknown, label: '仅本机',
+      detail: '跨设备同步尚未接入',
+      hint: ['当前版本只保存到本机，跨设备同步执行器尚未接入。本机读写照常。', successText,
+        technicalReason].filter(Boolean).join('；'),
+      retry: true, retryLabel: '了解同步', action: 'info' };
+  }
 
   if (view.state === 'synced') {
     return {
@@ -188,7 +231,7 @@ export function syncBadge(status) {
       label: '未同步',
       // 时间放前面：440px 的顶栏放不下长原因时会截断尾部，最后成功时间不能被截掉。
       detail: [successText, reason].filter(Boolean).join(' · '),
-      hint: [`未同步：${reason || '本次同步没有完成'}`, successText].filter(Boolean).join('；'),
+      hint: [`未同步：${reason || '本次同步没有完成'}`, successText, technicalReason].filter(Boolean).join('；'),
       retry: true,
       retryLabel: '补同步'
     };
@@ -199,7 +242,7 @@ export function syncBadge(status) {
     tone: SYNC_TONES.unknown,
     label: '未同步',
     detail: ['从未成功同步过', reason].filter(Boolean).join(' · '),
-    hint: ['从未成功同步过，本地读写照常', reason].filter(Boolean).join('；'),
+    hint: ['从未成功同步过，本地读写照常', reason, technicalReason].filter(Boolean).join('；'),
     retry: true,
     retryLabel: '补同步'
   };
@@ -224,6 +267,6 @@ export function syncAttemptText({ status, result } = {}) {
       ? `同步完成，${formatSyncTime(status.lastSuccessAt)}。`
       : '同步完成。');
   }
-  const reason = textOf(result?.message) || textOf(result?.text) || '同步没有完成，也没有给出原因。';
+  const reason = syncFailureSummary({ ...result, conflict: result?.status === 'conflict' }) || '请稍后重试';
   return `补同步未完成：${reason}`;
 }

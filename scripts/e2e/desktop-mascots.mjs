@@ -3,14 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { createRequire } from 'node:module';
+import {startApp,connectCdp,findPanelTarget,waitFor,capture} from './lib/cdp.mjs';
 import { OwnerStore } from '../../src/owner-store.mjs';
 import { createSyntheticProject } from '../knowledge-loop/fixtures.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
-const pluginDir = path.join(repoRoot, 'integrations', 'openclaw-plugin');
-const { _electron: electron } = createRequire(path.join(pluginDir, 'package.json'))('playwright-core');
-const electronPath = createRequire(path.join(repoRoot, 'package.json'))('electron');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const failures = [];
 const check = (label, condition, detail = '') => {
@@ -93,7 +90,7 @@ const run = async () => {
   }, null, 2));
   fs.writeFileSync(path.join(userData, 'companion.json'), JSON.stringify({
     pet: { x: 220, y: 180 }, projectId: 'demo', mascotSkin: 'sprite-pet',
-    gatewayUrl: 'http://127.0.0.1:18789', model: '', includePaths: ['package.json']
+    gatewayUrl: 'http://127.0.0.1:1', model: '', includePaths: ['package.json']
   }, null, 2));
 
   const owner = new OwnerStore(ownerDb);
@@ -101,28 +98,22 @@ const run = async () => {
     createSyntheticProject({ store: owner, root: path.join(root, 'demo'), projectId: 'demo', name: 'Demo' });
   } finally { owner.close(); }
 
-  const app = await electron.launch({
-    executablePath: electronPath,
-    args: [path.join(repoRoot, 'desktop', 'main.cjs'), `--user-data-dir=${userData}`],
-    env: {
-      ...process.env,
-      OWNER_AGENT_DB: ownerDb,
-      OWNER_AGENT_NOTIFICATIONS: '0',
-      OWNER_AGENT_E2E_OFFSCREEN: '1'
-    },
-    timeout: 60000
-  });
-
+  const app = await startApp({userData,ownerDb,knowledgeDb:path.join(root,'knowledge.sqlite')});
+  let client;
   let failed = true;
   let petPage;
   try {
-    const deadline = Date.now() + 30000;
-    while (!petPage && Date.now() < deadline) {
-      petPage = app.windows().find((page) => page.url().includes('pet.html')) ?? null;
-      if (!petPage) await sleep(300);
-    }
-    if (!petPage) throw new Error('pet window missing');
-    await petPage.waitForSelector('#pet', { timeout: 20000 });
+    client = await connectCdp(await findPanelTarget(app.port,'pet.html'));
+    const pointOf=async selector=>client.evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    petPage={
+      evaluate:fn=>client.evaluate(`(${fn.toString()})()`),
+      screenshot:({path:file})=>capture(client,file),
+      locator:selector=>({
+        hover:async()=>client.send('Input.dispatchMouseEvent',{type:'mouseMoved',...await pointOf(selector)}),
+        click:async()=>{const point=await pointOf(selector);await client.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1});await client.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1});}
+      })
+    };
+    if(!await waitFor(client,"!!document.querySelector('#pet')"))throw Error('桌宠未就绪');
     await sleep(1500);
 
     const initial = await petPage.evaluate(() => ({
@@ -167,21 +158,19 @@ const run = async () => {
       mascotSrc: document.getElementById('mascot')?.getAttribute('src')
     }));
     check('one-click skin cycle changes the active skin', cycled.skin && cycled.skin !== 'sprite-pet', cycled.skin);
-    check('static skin falls back to mascot image', cycled.spriteHidden === true && cycled.mascotHidden === false && Boolean(cycled.mascotSrc), JSON.stringify(cycled));
+    // 前五十动画排在前面，循环下一项不再假设是静态图；显式切到 Cindy 检查静态路径。
+    await petPage.evaluate(()=>window.companion.mascots.set({skin:'cindy'}));
+    await waitFor(client,"document.querySelector('#pet').dataset.skin==='cindy'");
+    const staticSkin=await petPage.evaluate(()=>({spriteHidden:document.querySelector('#sprite').hidden,mascotHidden:document.querySelector('#mascot').hidden,mascotSrc:document.querySelector('#mascot').getAttribute('src')}));
+    check('static skin falls back to mascot image', staticSkin.spriteHidden===true&&staticSkin.mascotHidden===false&&Boolean(staticSkin.mascotSrc),JSON.stringify(staticSkin));
 
     // #111 撤旧壳后设置页的皮肤网格随旧面板一起删除；换肤仍在宠物自己的工具条上，
     // 这里继续用「↻」绕一圈，保证一键换肤能回到精灵皮肤。
-    let restored = null;
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      restored = await petPage.evaluate(() => ({
-        skin: document.getElementById('pet')?.dataset.skin,
-        spriteHidden: document.getElementById('sprite')?.hidden
-      }));
-      if (restored.skin === 'sprite-pet') break;
-      await petPage.locator('.stage').hover();
-      await petPage.locator('#skinNext').click({ force: true });
-      await sleep(1200);
-    }
+    await petPage.evaluate(async()=>{const c=await window.companion.mascots.list();const i=c.skins.findIndex(s=>s.id==='sprite-pet');await window.companion.mascots.set({skin:c.skins[(i+c.skins.length-1)%c.skins.length].id});});
+    await sleep(1200);
+    await petPage.locator('.stage').hover();await petPage.locator('#skinNext').click();
+    await waitFor(client,"document.querySelector('#pet').dataset.skin==='sprite-pet'");
+    const restored=await petPage.evaluate(()=>({skin:document.querySelector('#pet').dataset.skin,spriteHidden:document.querySelector('#sprite').hidden}));
     check('one-click skin cycle can return to sprite pet', restored?.skin === 'sprite-pet' && restored?.spriteHidden === false, JSON.stringify(restored));
     await petPage.screenshot({ path: path.join(evidence, 'pet-sprite-restored.png') });
 
@@ -192,7 +181,7 @@ const run = async () => {
     if (failed && petPage) {
       try { await petPage.screenshot({ path: path.join(evidence, 'pet-failure.png') }); } catch { /* best effort */ }
     }
-    await app.close();
+    client?.close();await app.stop();
     if (!failures.length) fs.rmSync(root, { recursive: true, force: true });
     else console.error(`[MASCOT] kept state: ${root}`);
   }

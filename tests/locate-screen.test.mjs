@@ -174,6 +174,18 @@ test('最近一条决策：项目自己的决策优先，没有时才用域级�
   assert.equal(latest.beta.id, 'd-domain');
 });
 
+test('最近决策展示实际选择和理由，现象只保留为背景', () => {
+  const latest = latestDecisionsOf({ projects: [project('alpha')], decisions: [{
+    id: 'choice', projectId: 'alpha', scope: 'project', title: '请求失败后无限重试',
+    decision: { intent: '最多重试 3 次', reason: '防止请求雪崩' }
+  }] });
+  assert.equal(latest.alpha.title, '最多重试 3 次');
+  assert.equal(latest.alpha.reason, '防止请求雪崩');
+  assert.equal(latest.alpha.phenomenon, '请求失败后无限重试');
+  const screen = locateScreenView({ projects: [project('alpha')], attention: { alpha: { latestDecision: latest.alpha } } });
+  assert.equal(screen.projects[0].latestDecision.reason, '防止请求雪崩');
+});
+
 test('未读预览用旧水位算差异，且绝不写新水位', () => withDb(async (dbPath) => {
   const store = new MemoryWatermarkStore({ dbPath });
   try {

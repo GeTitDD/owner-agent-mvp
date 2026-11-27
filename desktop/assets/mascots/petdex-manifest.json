@@ -1,0 +1,2365 @@
+{
+  "schemaVersion": 1,
+  "sourcePage": "https://petdex.dev/zh",
+  "api": "https://petdex.dev/api/pets/search?sort=installed&limit=50&includeMeta=0",
+  "sort": "installed",
+  "sortLabel": "Most installed",
+  "snapshotAt": "2026-11-27T00:38:40.087845+00:00",
+  "count": 50,
+  "listingSha256": "00c2608ae4cee6d20935ed37b639cd8998e17557a754fd75850e6f318d900cf2",
+  "pets": [
+    {
+      "rank": 1,
+      "id": "petdex-01-boba",
+      "slug": "boba",
+      "displayName": "Boba",
+      "source": "https://petdex.dev/pets/boba",
+      "zipUrl": "https://assets.petdex.dev/curated/boba/v2/boba.zip",
+      "author": "railly",
+      "metrics": {
+        "installCount": 12883,
+        "likeCount": 23,
+        "zipDownloadCount": 157
+      },
+      "spriteVersionNumber": 2,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "ababd6911d11c6b1fa51366a84e0757f8f1242bb7b69458ad4f50f98a0a38a17",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "5e323bd670f63a8bb5f80cd324f217fb0de15ee4592e3d91309110cc649e845c",
+          "bytes": 323
+        },
+        {
+          "path": "source.json",
+          "sha256": "605f60601ab963f59d7bcf29d37d0f0859e922986a5a71dcb30193a9af4ab783",
+          "bytes": 544
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "b2a723fc55ac6af867765dedc26b3841fbf178d7e1025d6011e8d96ac44f19c9",
+          "bytes": 2440892
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "479b6de6a9fdbff611d08c18342d8027be2013767cedddc45247ed6259b9670d",
+          "bytes": 20838
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "a5f00ef46e5dc981430286cc11bad3b54fca73551f66ac47faa71d3ecc47f75c",
+          "bytes": 200
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "id": "petdex-02-lulu-capybara-2",
+      "slug": "lulu-capybara-2",
+      "displayName": "噜噜",
+      "source": "https://petdex.dev/pets/lulu-capybara-2",
+      "zipUrl": "https://assets.petdex.dev/pets/lulu-capybara-9f9107636ecc/zip.zip",
+      "author": "gitcjp",
+      "metrics": {
+        "installCount": 5594,
+        "likeCount": 67,
+        "zipDownloadCount": 273
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "8b7c5751315a46e2d4fe87ccc5494f791f032e25dcfdd07408862370b648cffd",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "769aefd718e03f3a2e9a405e4b99ff1d994ac5c70e679dc7cd0ce622d6e2e064",
+          "bytes": 298
+        },
+        {
+          "path": "source.json",
+          "sha256": "879aeb06c8344e979c423069ff10d64dd0954b4536a5802177bc0ece3fae124b",
+          "bytes": 593
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "f4b279d042266ae978a857bc25eefae49bb9bb9865917d7d1d5d1d02c77432a8",
+          "bytes": 1521972
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "fc856183e80b84ec7a14e6e7e21717ca9ff6f7259be94d052f6199cd6b5476ef",
+          "bytes": 16383
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "77eb59bb89f04a715fca6ed96b11e07beef412a1c4379344dec3284d851d682a",
+          "bytes": 238
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "id": "petdex-03-jokebear-codexpet",
+      "slug": "jokebear-codexpet",
+      "displayName": "JokeBear-CodexPet",
+      "source": "https://petdex.dev/pets/jokebear-codexpet",
+      "zipUrl": "https://assets.petdex.dev/pets/jokebear-codexpet-c09688a19f19/zip.zip",
+      "author": "yechengzhi",
+      "metrics": {
+        "installCount": 5473,
+        "likeCount": 52,
+        "zipDownloadCount": 131
+      },
+      "spriteVersionNumber": 2,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "a75fab4de02519ca69856236029a565a7cb1da960e694ffd52809e582efa6b8f",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "0d7df88d798acaaab1d235dbd5609a478104525726d9374ac7abfbe59a3f109d",
+          "bytes": 498
+        },
+        {
+          "path": "source.json",
+          "sha256": "c19e7c25b0c2e6a325b52ebf6ff428c72da7e0d480c7292b2deb438f20c3aa11",
+          "bytes": 618
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "86662b0ad39947c5ba2b732d7626e4bbda89ecacc68d484eae75053d1f6c44c9",
+          "bytes": 1502152
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "d5477a595f8b014a3a37c5333b9aecace01af49c1c4f297f0a005db537ef3ac9",
+          "bytes": 15787
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "0587b7e639bb07ffef73c934dc74413f9275fe19046c76321b00f620b9c37294",
+          "bytes": 376
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "id": "petdex-04-deepseek",
+      "slug": "deepseek",
+      "displayName": "deepseek酱",
+      "source": "https://petdex.dev/pets/deepseek",
+      "zipUrl": "https://assets.petdex.dev/pets/deepseek-c3fa684cfe03/zip.zip",
+      "author": "fightingshine",
+      "metrics": {
+        "installCount": 4855,
+        "likeCount": 55,
+        "zipDownloadCount": 258
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "8bcf93748054ba31c659a46b4b1f8f41453c5fa78ccc6f3f7ac40c9fd57f5918",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "409c27a3510dd626fb8acb7d1d43d95a2b712b4d4d204fca874ec544fc3354c7",
+          "bytes": 309
+        },
+        {
+          "path": "source.json",
+          "sha256": "9ae238104863a54686fd4c7040c6ceb37aa5fb276540f3d20145ad2d52e2099b",
+          "bytes": 579
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "e4f757ad42f1d1a6a7af44a9b7d2fe053aac960751e34db6efcecf88901340b2",
+          "bytes": 2063498
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "97cdbaffcc71187abc01fff355d1f8ec111f05f2a161c3cc46804ea9f4f512a4",
+          "bytes": 22812
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "9ade230e610f16feff02d9cdd6eac07a8ff1bffc6884cb17c9a88f6e98962863",
+          "bytes": 194
+        }
+      ]
+    },
+    {
+      "rank": 5,
+      "id": "petdex-05-doraemon",
+      "slug": "doraemon",
+      "displayName": "Doraemon",
+      "source": "https://petdex.dev/pets/doraemon",
+      "zipUrl": "https://assets.petdex.dev/pets/doraemon-58b12a5012e0/zip.zip",
+      "author": "korkyzer",
+      "metrics": {
+        "installCount": 4775,
+        "likeCount": 54,
+        "zipDownloadCount": 303
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "f6b9a13059104d6cb8fd74ef1d0d5518212c25eaeeb9befdb3d6350bcb58172e",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "2d5a95d85e363b096778db2a956e074ddef38e3f229960c8f2a03f61ca71e150",
+          "bytes": 342
+        },
+        {
+          "path": "source.json",
+          "sha256": "93d73cb20ac6e919dd6230ec695add6a24c3020ce435cd04456ddd15dc54d3d4",
+          "bytes": 571
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "1af435fc385dc935522edf13cefbe994c7c078ced46463b66ad6e401f72464c8",
+          "bytes": 1910048
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "0e6054d7b0ff1974f3208c4ef25d368000770121b32696455c8bceabe8424ea3",
+          "bytes": 19599
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "61150240c832c6f95bd5baec9e5e81ef2a63fc9b53b1f410d997bb9119773e5b",
+          "bytes": 221
+        }
+      ]
+    },
+    {
+      "rank": 6,
+      "id": "petdex-06-shinchan",
+      "slug": "shinchan",
+      "displayName": "Shinchan",
+      "source": "https://petdex.dev/pets/shinchan",
+      "zipUrl": "https://assets.petdex.dev/pets/shinchan-154a84d8ff3c/zip.zip",
+      "author": "adamholter",
+      "metrics": {
+        "installCount": 4320,
+        "likeCount": 66,
+        "zipDownloadCount": 164
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "c1a4cf865a672120403238d82bc06506f4c238e42f002b050ad2fe11b1401aa3",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "c5076206b339af4f95e39816c9384996a923f37b3771dc043d9e8fd534843df0",
+          "bytes": 314
+        },
+        {
+          "path": "source.json",
+          "sha256": "981708c1329f7069ae4273143323189c5122fdb45fe6cda7197877a1ffec28b6",
+          "bytes": 573
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "76ad7113c0e6ddebc2f2f120621fe96a034676bbb324ffdce6307ef8b6868c70",
+          "bytes": 1821064
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "b5e6659d37e08fbaa02be1cf5cde200311a07068b57bdfecd647dd1dac256797",
+          "bytes": 17259
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "ec2f64f94202b5233e43446eb45636006ece44f0c77785c67f5d8630d5c4a4ad",
+          "bytes": 193
+        }
+      ]
+    },
+    {
+      "rank": 7,
+      "id": "petdex-07-tiko",
+      "slug": "tiko",
+      "displayName": "Tiko",
+      "source": "https://petdex.dev/pets/tiko",
+      "zipUrl": "https://assets.petdex.dev/pets/tiko-beefcdec1197/zip.zip",
+      "author": "huigegood",
+      "metrics": {
+        "installCount": 3780,
+        "likeCount": 38,
+        "zipDownloadCount": 113
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "cbeee2ea008eba26a5b16002084f80a7d650145ee4f416469a06ec3b3d4cbcb4",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "a7f2db8a44189a359f7b55e8d812f2ab028bfef276669df9efe74b6410835474",
+          "bytes": 327
+        },
+        {
+          "path": "source.json",
+          "sha256": "ae8010c69ccfd0722bf833125e4924511b72445faf18437996f1d4b816918fd2",
+          "bytes": 552
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "c9f2934b62c746b5b11b451410ae3449a3e425de186343ce57db313838cb5518",
+          "bytes": 693898
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "620df01ea4c558f8100d7ac5ba0c38245a3c6ad5b720df3cece827b939eaaf95",
+          "bytes": 15002
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "aa5bb56cc0df28808a9298e2c4ebd8214b6f057f116de905e1f029be1d879767",
+          "bytes": 212
+        }
+      ]
+    },
+    {
+      "rank": 8,
+      "id": "petdex-08-noir-webling",
+      "slug": "noir-webling",
+      "displayName": "Noir Webling",
+      "source": "https://petdex.dev/pets/noir-webling",
+      "zipUrl": "https://assets.petdex.dev/curated/noir-webling/noir-webling.zip",
+      "author": "railly",
+      "metrics": {
+        "installCount": 3032,
+        "likeCount": 48,
+        "zipDownloadCount": 189
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "d7182a47adffea962c7ac4227780752313016fe45507ed362f78c8238e47a44d",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "3580f4b009c91b8e61aa3fcc0c92f2146b2489adcb3a2f5a3ab65c1a05e9242c",
+          "bytes": 346
+        },
+        {
+          "path": "source.json",
+          "sha256": "38e50b02ea5c4977963dd11e48bc3f75d2ff654ec5d679cde92e26ffc132652e",
+          "bytes": 588
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "9539f8e528f683e037b5b5771248c84e0d736d83c71e205478dfe1d763d90cb6",
+          "bytes": 1718080
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "9f71cd36ea5ab689d3238458f881b5c0e97889d2ce4f68194b5e0b6c89d79a9a",
+          "bytes": 20530
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "ee4b39c40d8f327dd2716bab925ca8f3a7769fadc0aaaea9f5d7213115dd867b",
+          "bytes": 225
+        }
+      ]
+    },
+    {
+      "rank": 9,
+      "id": "petdex-09-capvolt",
+      "slug": "capvolt",
+      "displayName": "Pikachu‌",
+      "source": "https://petdex.dev/pets/capvolt",
+      "zipUrl": "https://assets.petdex.dev/pets/capvolt-7be64ef6cfa2/zip.zip",
+      "author": "zlss g.",
+      "metrics": {
+        "installCount": 2965,
+        "likeCount": 69,
+        "zipDownloadCount": 238
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "fcb7525edb6ffff8c4c09dddbade799c96192183c9b4e7a070a935f81663eeb2",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "359b11629b67a3ba95fc974d9288ae7add20517c038582d4bcc3eddfd01bd3f1",
+          "bytes": 315
+        },
+        {
+          "path": "source.json",
+          "sha256": "085a86ceac04373aa0f5e406ed5e515bde02e945f20de3392d81294427a4c825",
+          "bytes": 568
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "d6497b2b37fade1dd75d01026367cbc121269b926bb5b06fb2cae124fd43d6a0",
+          "bytes": 1847444
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "cdfe1f663c2f29709a4bd25f7dbe5c4bbda41b7891fc378b533cc531a84d7cd5",
+          "bytes": 21261
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "07a746df64fc60fcdac2e935675ca41ba709acef101e20232e547b2a2f7432e6",
+          "bytes": 272
+        }
+      ]
+    },
+    {
+      "rank": 10,
+      "id": "petdex-10-wangcai",
+      "slug": "wangcai",
+      "displayName": "Wangcai",
+      "source": "https://petdex.dev/pets/wangcai",
+      "zipUrl": "https://assets.petdex.dev/pets/wangcai-4745956f417b/zip.zip",
+      "author": "boxu-openai",
+      "metrics": {
+        "installCount": 2862,
+        "likeCount": 26,
+        "zipDownloadCount": 98
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "ab9b32b69d43f757b11f200c05e6281a1086bf8f7bf4df753010b0159eb526ad",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "a1aa4c7a883dffcb9928c4dc3ec7a709307ba04d8a4aec5e7732eb6f15c05aa3",
+          "bytes": 305
+        },
+        {
+          "path": "source.json",
+          "sha256": "98eed390868cbe35eef93c716461032a92968e6ceebd107296efca637079722f",
+          "bytes": 569
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "3c813f6ba2e759392fa13a3e11ff8ea9bd75754ae6e10f16e54320bc96168919",
+          "bytes": 2028840
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "1e206587480bb30bcea3195bd865c608d94f706705c542d4cbe85189f262c23e",
+          "bytes": 25642
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "1a375c15931c68f08d95dbc05a8b8009e791a1c7b22581909ce479c31469982d",
+          "bytes": 183
+        }
+      ]
+    },
+    {
+      "rank": 11,
+      "id": "petdex-11-usagi",
+      "slug": "usagi",
+      "displayName": "Usagi",
+      "source": "https://petdex.dev/pets/usagi",
+      "zipUrl": "https://assets.petdex.dev/pets/usagi-4e4254c223e6/zip.zip",
+      "author": "koktlzz",
+      "metrics": {
+        "installCount": 2762,
+        "likeCount": 48,
+        "zipDownloadCount": 113
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "a3b3db229dd9faf8f8694ad625ef2b0b050e1bde584bc2df947d05942d3b1a83",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "5ac5441f1f0d469f26436a8b608f11a944ae149c6e5d5a9d32e17c18f9118577",
+          "bytes": 298
+        },
+        {
+          "path": "source.json",
+          "sha256": "40a5c4c04d9479155d8b32a00348a5b90614540ac6c73697348f487928d38e4d",
+          "bytes": 556
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "535193ef93f3084bc2959913e19f21a2ced97afe1f526a2100a277f336cf3397",
+          "bytes": 1529510
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "9d5b9f26a4b3e07f597332f40705f9bc825a89041e7e3234fa78cc29d032e4f0",
+          "bytes": 16520
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "e95998f86b439175ad0349bd40af58414d9fae24df3087e8176bd9bd7a6ad65f",
+          "bytes": 176
+        }
+      ]
+    },
+    {
+      "rank": 12,
+      "id": "petdex-12-nezukocoder",
+      "slug": "nezukocoder",
+      "displayName": "NezukoCoder",
+      "source": "https://petdex.dev/pets/nezukocoder",
+      "zipUrl": "https://assets.petdex.dev/pets/nezukocoder-7d766f7c2597/zip.zip",
+      "author": "Miro H.",
+      "metrics": {
+        "installCount": 2603,
+        "likeCount": 76,
+        "zipDownloadCount": 130
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "9d2c5bef55fc64513b78b8de82a777f0db5b818ae326e564e96361c1d2f20e92",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "e78dfddadf74a720ca618c35df8320d7efa98285a2682fe5e368ff28bcd3c890",
+          "bytes": 330
+        },
+        {
+          "path": "source.json",
+          "sha256": "2b9c776df884aa5d5c1b8931cb27bcca1b1f8771e969a5e3be50a70bcb86e24e",
+          "bytes": 586
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "25e5d9952591238e3238f237928aa4168c4ac124458b67a32278c191dc1707ff",
+          "bytes": 2407932
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "bccc44dcd0b5d491e4851b28d616f3f6d58d71b03a7e861ab1ed9b6b24b7b413",
+          "bytes": 27169
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "9d2c5ffe4d19544046bd649f4d09e354c6f0977337d0219f5fcd3ca9eee45169",
+          "bytes": 214
+        }
+      ]
+    },
+    {
+      "rank": 13,
+      "id": "petdex-13-kun-like",
+      "slug": "kun-like",
+      "displayName": "Kun Like",
+      "source": "https://petdex.dev/pets/kun-like",
+      "zipUrl": "https://assets.petdex.dev/pets/kun-like-13c0db2cff04/zip.zip",
+      "author": "leodora_u",
+      "metrics": {
+        "installCount": 2519,
+        "likeCount": 33,
+        "zipDownloadCount": 94
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "55140db10cd32ce7ff61e4dc61ee37b28e1d9fccf4a8891a20f4f1ad7b310cfa",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "fbf0e50cc8f7088245bd60d48539998686e5c64545f2f82a8b0756e77fe5ec8b",
+          "bytes": 340
+        },
+        {
+          "path": "source.json",
+          "sha256": "fa20e57cddef29354c9e2b32c77aa691b75aa617b39b3c4c5c8af368ac7602a8",
+          "bytes": 572
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "15195116df5b548a67da9b1a43ccc6f5733f748a9d8a95765d51e8106659a40a",
+          "bytes": 2102950
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "0e82d990be6947b22274b0403d851ed0906e5a41a17167c6786d578a2c3b65d8",
+          "bytes": 21314
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "2f66b498c99fec330277e69b80cc931c0a417ac81c2563c942de9538b37deaa4",
+          "bytes": 217
+        }
+      ]
+    },
+    {
+      "rank": 14,
+      "id": "petdex-14-kabi",
+      "slug": "kabi",
+      "displayName": "卡比兽",
+      "source": "https://petdex.dev/pets/kabi",
+      "zipUrl": "https://assets.petdex.dev/pets/kabi-8d6adeb86474/zip.zip",
+      "author": "tfeng9669",
+      "metrics": {
+        "installCount": 2301,
+        "likeCount": 40,
+        "zipDownloadCount": 160
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "667eb6a1988423693866235dce5518364e6ad2684bd7916c253e61bcdef8cc12",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "548a11a7e71e6f0b8650a898f45a3caa8bc5bcbeaca0a30f83eaeca409f22c6c",
+          "bytes": 263
+        },
+        {
+          "path": "source.json",
+          "sha256": "ed5dca514749b557c83cdbe454e3cbd609c3c5109549f649dc0e1eb935581908",
+          "bytes": 558
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "49185cdaf8b776955d39ac716c8fdb9febd474171a2d76146406da2652ccd275",
+          "bytes": 1221714
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "af3d4b865025d7332827cf502ab238a53d1099398948dfff02336921936a345c",
+          "bytes": 11698
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "c6a73b351d55aa1015f59faddc3cabdb5a1a3e1fe510408c19f4f95b6a7767d0",
+          "bytes": 141
+        }
+      ]
+    },
+    {
+      "rank": 15,
+      "id": "petdex-15-hoops",
+      "slug": "hoops",
+      "displayName": "Hoops",
+      "source": "https://petdex.dev/pets/hoops",
+      "zipUrl": "https://assets.petdex.dev/pets/hoops-206e70d7dbd5/zip.zip",
+      "author": "kaidi c.",
+      "metrics": {
+        "installCount": 2213,
+        "likeCount": 37,
+        "zipDownloadCount": 90
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "af8bd86408fb90e0b60a530e22d556755941b9c54633ffd643f2c394a5a16c98",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "a8eadde7b90c1d856ed2880c3fd5dc5760d63f4e5d14d763db67984b3c419a01",
+          "bytes": 293
+        },
+        {
+          "path": "source.json",
+          "sha256": "b4b61b77b561096b81b0c9a6a067e9450e1ed5d45ecafeb72c92e62a6472efbe",
+          "bytes": 556
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "87193b94745fb6cd7e5f65bbae3caff2997678b10a0074e0e06e5e4ed8b62e2d",
+          "bytes": 2283928
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "6666c790d0b447f9bddbfa283f332ce052349026bb6644f691f99bccd20077bc",
+          "bytes": 25049
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "dbd1d496fe162946fa4e4a66677f2ea73860392022db504b7aac5ca9a7235e39",
+          "bytes": 171
+        }
+      ]
+    },
+    {
+      "rank": 16,
+      "id": "petdex-16-ddo-zvzo-2",
+      "slug": "ddo-zvzo-2",
+      "displayName": "ddo-zvzo",
+      "source": "https://petdex.dev/pets/ddo-zvzo-2",
+      "zipUrl": "https://assets.petdex.dev/pets/ddo-zvzo-49f5c2067af6/zip.zip",
+      "author": "준회 Junhoe Kim 김.",
+      "metrics": {
+        "installCount": 2207,
+        "likeCount": 15,
+        "zipDownloadCount": 105
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "1f693e03d6790edb61ff5fe9c6c22cec5ae13bc30b7ed31d853b11b47e2938e9",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "14893ad3a705f3d7ea1545659b9958dc85efcb16cd4199fd3e40a723d8a1570a",
+          "bytes": 347
+        },
+        {
+          "path": "source.json",
+          "sha256": "88b4ea917c7046196ce9dcc8572bae39019193f7a3c575ba6051d14afa463c34",
+          "bytes": 592
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "efbef96ac199cd095c5a90a20e6deb59947d860ac9642abfc6636307f18a8e64",
+          "bytes": 200874
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "8c6f0d0fe7a7fcf149ef73f5ccd058dca089b2aefa13a4faebb437001be00e16",
+          "bytes": 7114
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "af5249492addee0234f42e0e987aedc08cdcd0e0f96c0f9b5839489903416811",
+          "bytes": 223
+        }
+      ]
+    },
+    {
+      "rank": 17,
+      "id": "petdex-17-dasheng",
+      "slug": "dasheng",
+      "displayName": "Dasheng",
+      "source": "https://petdex.dev/pets/dasheng",
+      "zipUrl": "https://assets.petdex.dev/pets/dasheng-06c6070cff28/zip.zip",
+      "author": "剑文 张.",
+      "metrics": {
+        "installCount": 2116,
+        "likeCount": 1,
+        "zipDownloadCount": 12
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "4fc13c5fcb13257d7573deb4b1a02309a757877b853a4a2534df527cac74b107",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "1dc1d161fd2acd1361a65601b242fdef9d2f372b7b71c89b19e2c29fbbfe79bc",
+          "bytes": 427
+        },
+        {
+          "path": "source.json",
+          "sha256": "c44235a96dab688b7ae88f13aa0d41ec292f1a5285a078ae93a6399b79d60ac6",
+          "bytes": 568
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "af94f1071c345c36fa7dccbe5ba90ee1f1b7dda8d399a951ba82f1b475d5aa02",
+          "bytes": 2344796
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "d261ccd563c1b6b9e2403500ef17b637b241a4e70b1019bbf06e78461dd2b814",
+          "bytes": 21794
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "ee094ec12597744a668a1a1fdf5ac73c5db15b6a621ac5e6e7634cf2d3cd0e5c",
+          "bytes": 311
+        }
+      ]
+    },
+    {
+      "rank": 18,
+      "id": "petdex-18-yinyue-2",
+      "slug": "yinyue-2",
+      "displayName": "银月",
+      "source": "https://petdex.dev/pets/yinyue-2",
+      "zipUrl": "https://assets.petdex.dev/pets/yinyue-7b6e2648345b/zip.zip",
+      "author": "is_coward",
+      "metrics": {
+        "installCount": 2072,
+        "likeCount": 30,
+        "zipDownloadCount": 66
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "8b4bf438f745ae52ca4bf952d7b3c86bb28d916d0e3ca5e7b8dce1a4d45e7937",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "bb8843e0b4e0b02155a55add10c83972977daea817c668fa370d90cfd4a771ad",
+          "bytes": 304
+        },
+        {
+          "path": "source.json",
+          "sha256": "6326c749454591e1e51aa9a2948363e972990fe20f52bdece9e70a05bb818b62",
+          "bytes": 568
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "61bd684ba29f6ce29deb8a6212c1d37d520865c27e9cf69e2a76fbd2f98dd434",
+          "bytes": 2324200
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "8039983849f9ee5e820ce032aec53c2c85c02f0885957464dcddd804c850f754",
+          "bytes": 25331
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "e08a5cadcece10045db121e4429aa531b28a263322cadf96f21889a9b76ba625",
+          "bytes": 249
+        }
+      ]
+    },
+    {
+      "rank": 19,
+      "id": "petdex-19-yukina",
+      "slug": "yukina",
+      "displayName": "Yukina",
+      "source": "https://petdex.dev/pets/yukina",
+      "zipUrl": "https://assets.petdex.dev/pets/yukina-3eb6cf89dcf1/zip.zip",
+      "author": "YK L.",
+      "metrics": {
+        "installCount": 1983,
+        "likeCount": 10,
+        "zipDownloadCount": 5
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "d2d06673e105c44f3f18aadeff42abee2a43e6d8a18f69ee3dfaed964937f44c",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "0808fce4e898a43dd0d0957a6cb70ffb6af1b2d4fbaf536e6e61d8028ae0ff1a",
+          "bytes": 354
+        },
+        {
+          "path": "source.json",
+          "sha256": "9450cc35e04f0e27d121cade626c13d773f0de9f61c7637d9e1ce49d347986e8",
+          "bytes": 557
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "66f0cc3b2cafe623d29e6575b6a9c916c301b151ac5eca340028fc4c9babee0e",
+          "bytes": 1460784
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "0a1493315b1c8ffc7654fa961212a286dfb57013b0a7a5d1e7503baa26830810",
+          "bytes": 17085
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "c45c77c5ad9911bae9a0641c01919b531234be34ace58d3dfe567c516686732b",
+          "bytes": 250
+        }
+      ]
+    },
+    {
+      "rank": 20,
+      "id": "petdex-20-ai-2",
+      "slug": "ai-2",
+      "displayName": "Ai",
+      "source": "https://petdex.dev/pets/ai-2",
+      "zipUrl": "https://assets.petdex.dev/pets/ai-274da11c107e/zip.zip",
+      "author": "yadoon",
+      "metrics": {
+        "installCount": 1953,
+        "likeCount": 17,
+        "zipDownloadCount": 15
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "fef18ec677cf19fa0d9cb345ea5a8974197ef5a500913fe00d5848b8195ea5a5",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "e9dd198f1aa816ff4ca052189137b52a029946dc87a96400ff0c1b714727fed4",
+          "bytes": 322
+        },
+        {
+          "path": "source.json",
+          "sha256": "ae95410ace3defab8340c2ec691bb65c3df713619a3427f31b26f95a4351ab63",
+          "bytes": 545
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "345ac45eee8d92511bf09a3472514ada8b372ecf34b599012176a339f0eae690",
+          "bytes": 1730394
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "1e392f6b12f9834f1981770421d113c9647196071aea506c0afff47bb89a360a",
+          "bytes": 19247
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "f2efdbc6fad07fd5c6d4cce0dbeccf3fa40cc0eb5a5aef683de35f7ec935916c",
+          "bytes": 198
+        }
+      ]
+    },
+    {
+      "rank": 21,
+      "id": "petdex-21-hachiware-2",
+      "slug": "hachiware-2",
+      "displayName": "小八",
+      "source": "https://petdex.dev/pets/hachiware-2",
+      "zipUrl": "https://assets.petdex.dev/pets/hachiware-6d07aabe3762/zip.zip",
+      "author": "pasta547",
+      "metrics": {
+        "installCount": 1945,
+        "likeCount": 45,
+        "zipDownloadCount": 97
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "086a6564329f855d79f52f7212fc193e5c06cf19024267388178196907c6bb74",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "ce2bafe12d281a78ac80da14b5fd971593045eb89bd500efc1e3df9e17c87ef7",
+          "bytes": 345
+        },
+        {
+          "path": "source.json",
+          "sha256": "84d9ba57c9e2e752401694279040f57012fb5270809e0839f6e7f0ec401e959c",
+          "bytes": 579
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "deb9966a3d720376cebac6f8dab7f03d0d2d629a82f55c9126233365d1eb0543",
+          "bytes": 1727898
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "70e83e0796f7906f05f09cde824564c74b607beef46195607287be8d2a60bfa9",
+          "bytes": 20046
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "268b097dad3ba53ba664f88943f59c54613979597e8600cb3b35985048d8c6e5",
+          "bytes": 233
+        }
+      ]
+    },
+    {
+      "rank": 22,
+      "id": "petdex-22-lian-3",
+      "slug": "lian-3",
+      "displayName": "Lian",
+      "source": "https://petdex.dev/pets/lian-3",
+      "zipUrl": "https://assets.petdex.dev/pets/lian-aed075301650/zip.zip",
+      "author": "某",
+      "metrics": {
+        "installCount": 1903,
+        "likeCount": 11,
+        "zipDownloadCount": 15
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "624a8e0de0e0f492b1d1a936ea13133067ce24f3afa035b60e950e39d3b8c566",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "d7e99840c9760391d708b0641c0a54883d02f4ec042e1f6d5eda718e16a961f9",
+          "bytes": 341
+        },
+        {
+          "path": "source.json",
+          "sha256": "301bf52572145b5e9674f293a3ca5cccf2c523cb39ab4d89a3e64f5601f90790",
+          "bytes": 552
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "98228b7c3aa1dd9fe3632c626882ea5823f1f2bedd0d0cab710cf3a01a8c10a2",
+          "bytes": 2882048
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "92e0b71ef743bce44e5e49d783763f483e198d0f452c23c3dff0ab0d6f4f47e1",
+          "bytes": 29878
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "fd9a72024e88018473de77544d272bdbf278cb59f8dcf76f3977206c40a54d67",
+          "bytes": 223
+        }
+      ]
+    },
+    {
+      "rank": 23,
+      "id": "petdex-23-kirby",
+      "slug": "kirby",
+      "displayName": "Kirby",
+      "source": "https://petdex.dev/pets/kirby",
+      "zipUrl": "https://assets.petdex.dev/pets/kirby-602269bf05c2/zip.zip",
+      "author": "Bao Chi P.",
+      "metrics": {
+        "installCount": 1857,
+        "likeCount": 43,
+        "zipDownloadCount": 77
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "510a75df839097568d532639ccee24109dbd9578097ec041c425a2ffc1d44f62",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "b5f75d57069b7b13f097a0aec41b1582fdc46e1dab3b2e127b8ad66d944d6b02",
+          "bytes": 284
+        },
+        {
+          "path": "source.json",
+          "sha256": "1ffd6f79a4d9894f884d6e402005f41f807c453f4e84f293aecb2021691df91c",
+          "bytes": 558
+        },
+        {
+          "path": "spritesheet.png",
+          "sha256": "efcfe1fb68aec650ef1838575db381c8c4a7dcb071c27b6110d046e697a40ac6",
+          "bytes": 1504448
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "a81c5ec31d42964558c0abf104d8676d5399c9d9ecd60b4d4b0ff06be16c4d18",
+          "bytes": 10222
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "4d4b87656110c1507f5e34a66dce8293922e8ec8402c306821c5cb51d1b87a6c",
+          "bytes": 162
+        }
+      ]
+    },
+    {
+      "rank": 24,
+      "id": "petdex-24-uika",
+      "slug": "uika",
+      "displayName": "Uika",
+      "source": "https://petdex.dev/pets/uika",
+      "zipUrl": "https://assets.petdex.dev/pets/uika-77268ee712a3/zip.zip",
+      "author": "桜 八.",
+      "metrics": {
+        "installCount": 1809,
+        "likeCount": 12,
+        "zipDownloadCount": 13
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "acaf549f7485a20255d71a27375a00830c956179457f9a059cc88d86fd24f92e",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "0142be37043560390005e26fae5f73e7d942834661490d13f6e436a76aaf7010",
+          "bytes": 313
+        },
+        {
+          "path": "source.json",
+          "sha256": "335dcb314f5f7e91b1397dafe5ed911a2b05bc6ad5ce0fe1e600aa25b0b688b4",
+          "bytes": 551
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "d8675c87c38ad7a7cf875f39630615429c9e2329d0941ba5a807d2a91f737f84",
+          "bytes": 1609212
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "52bc60934e325c329aa7e2e4c0b1e1cb1f0a782d3d5299bf6752886ce2d65f1d",
+          "bytes": 16819
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "c9f5fbf0657bf99d5a9a7a9d83d4a5372ad31fe9e4a0dfa181a4d2630de6910a",
+          "bytes": 191
+        }
+      ]
+    },
+    {
+      "rank": 25,
+      "id": "petdex-25-akie-qiuhui",
+      "slug": "akie-qiuhui",
+      "displayName": "akie_qiuhui",
+      "source": "https://petdex.dev/pets/akie-qiuhui",
+      "zipUrl": "https://assets.petdex.dev/pets/akie-qiuhui-1e2c2bd3513d/zip.zip",
+      "author": "ov4quoub",
+      "metrics": {
+        "installCount": 1778,
+        "likeCount": 2,
+        "zipDownloadCount": 5
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "6191f1dc40c56314a5be404130550ba5d05dd080bf99edf6bc866a5fc93fa6f9",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "bd42e56cc6f1c7214972681970752ea9dad59165c84edce25f2de6edbec8dc79",
+          "bytes": 376
+        },
+        {
+          "path": "source.json",
+          "sha256": "db2b35052c9e329ba9d9684e53b76d931e3c57ca956186c0d2f1873372112d5d",
+          "bytes": 584
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "a1b2731ba6558c013acf14ca8f7eb5a73f78212d37bba1bcd1d4bc3e3a97c015",
+          "bytes": 2324038
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "c6fbae1c1e296d555df3b8aa8f2081f0614c94793433e3df13e070e2cf1f5bb2",
+          "bytes": 22544
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "ec624f159529f1b0a4f0e094e4db2912d1431d41b7d728ceb7f39e9e4cd784be",
+          "bytes": 270
+        }
+      ]
+    },
+    {
+      "rank": 26,
+      "id": "petdex-26-droid",
+      "slug": "droid",
+      "displayName": "Droid",
+      "source": "https://petdex.dev/pets/droid",
+      "zipUrl": "https://assets.petdex.dev/pets/droid-8b1dafdb3ec8/zip.zip",
+      "author": "holtchas",
+      "metrics": {
+        "installCount": 1722,
+        "likeCount": 8,
+        "zipDownloadCount": 17
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "5edb1e0ffa447b4e9b30226bcaefed25232a359c7946d1d58b5e2d4935031a98",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "247422b4ff7e58af3b2b7737a9bf7622f37a7259ca7429ca3a181b4c6b2542d4",
+          "bytes": 314
+        },
+        {
+          "path": "source.json",
+          "sha256": "6337bd2d4423cfd98e81a2ce7cf2fcc859a05f76ed4a7c8ba22751dee8e8ee68",
+          "bytes": 555
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "5b739bec87d7e32cd01efa9b844d251a43d3e01f7f690f391c6feb4881c1a568",
+          "bytes": 1652822
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "79edc247ad096bff16794581b7c89080193b0c050d2ced0fcb9911b3c09c4ab1",
+          "bytes": 18951
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "534bf0c241f2be73a8c16f0011efd7476729f1610abd375b29e697d418a2a713",
+          "bytes": 192
+        }
+      ]
+    },
+    {
+      "rank": 27,
+      "id": "petdex-27-pupu",
+      "slug": "pupu",
+      "displayName": "PUPU",
+      "source": "https://petdex.dev/pets/pupu",
+      "zipUrl": "https://assets.petdex.dev/pets/pupu-44d3b8bb6ca5/zip.zip",
+      "author": "nomanplay",
+      "metrics": {
+        "installCount": 1708,
+        "likeCount": 3,
+        "zipDownloadCount": 6
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "36f9257561f163cca1d832f9bedf8c6de176bc901248eab5e9f0735df6dd963e",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "16da901222b9da7a99fb97ee5ab71e4a42446f641530bb9a7bcf0f9c714ffc9d",
+          "bytes": 436
+        },
+        {
+          "path": "source.json",
+          "sha256": "5e16de6ad83abb245cb0899db14dbf13e24c3f9102cbee3290b3d5c3bf937110",
+          "bytes": 550
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "c441a1e3b05c41f936a5ce44bdd06e78c47412b935c54e6955e3cd4bc313bf8f",
+          "bytes": 2055276
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "b69cef62204ab888eee041602cb608ec7d4429eb9b4246ce81ec34e6c281ed03",
+          "bytes": 23724
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "b215888c207a3af8eee9229f8be87b93d4af6e477a78acc79f72b2ee8b68c376",
+          "bytes": 322
+        }
+      ]
+    },
+    {
+      "rank": 28,
+      "id": "petdex-28-freeticket",
+      "slug": "freeticket",
+      "displayName": "Freeticket",
+      "source": "https://petdex.dev/pets/freeticket",
+      "zipUrl": "https://assets.petdex.dev/pets/freeticket-229c32d21497/zip.zip",
+      "author": "Lucas L.",
+      "metrics": {
+        "installCount": 1657,
+        "likeCount": 0,
+        "zipDownloadCount": 1
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "e39f4cde823bfb03413c6fca0114739e910930ff7c02fa4bc3eb700a2f3e2a9a",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "6a64201fb55ce9a246b6a8b97ed7edd87e7a0f8871447ae30937b3531654119e",
+          "bytes": 321
+        },
+        {
+          "path": "source.json",
+          "sha256": "6514dcc2468c10e77f6de21eae23a335ff0f7fd2111f33f5effa862ef96524dd",
+          "bytes": 579
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "714b7011966a6ce7592f9d85c7c85b923e5d01055fd15d9964384cda7191ac75",
+          "bytes": 2292906
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "4c092867259217cf6d35be43e03f046d6097a165b61bdc85ba339872450d3fd1",
+          "bytes": 24087
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "cc83923681b1e5c5f0375678b32e2f52755566f40e3322d1c7125fac4bfe99ee",
+          "bytes": 199
+        }
+      ]
+    },
+    {
+      "rank": 29,
+      "id": "petdex-29-pochita-mini",
+      "slug": "pochita-mini",
+      "displayName": "Pochita Mini",
+      "source": "https://petdex.dev/pets/pochita-mini",
+      "zipUrl": "https://assets.petdex.dev/pets/pochita-mini-f6a7e0edb895/zip.zip",
+      "author": "san-shia",
+      "metrics": {
+        "installCount": 1640,
+        "likeCount": 24,
+        "zipDownloadCount": 47
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "21335c2589c98fa78cea0e42c0a42296d9013471438db797dd43e9c3bd25afa6",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "8c8de760131550f04ade1d017f24305a6b68834993939f4aa2b87ab7f08bc051",
+          "bytes": 343
+        },
+        {
+          "path": "source.json",
+          "sha256": "88366f7b6f1a37c27fa3212d1c5c88a44bad24e2216dee41af289a631009b148",
+          "bytes": 591
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "9e779d4a42f214bd6a7de2038ffb38927a041f90916b4cc6f84c6d17a9c0ff0b",
+          "bytes": 1600626
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "83f8279e8a28ff09eac88cac632cec1c0fa2d80cc8062a65450521dd8efb46a4",
+          "bytes": 17307
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "aaeff60e2789313e456da3fe34accf1264fa2fc4c9a1c576543579d4eba07348",
+          "bytes": 221
+        }
+      ]
+    },
+    {
+      "rank": 30,
+      "id": "petdex-30-lin-pianpian",
+      "slug": "lin-pianpian",
+      "displayName": "林翩翩",
+      "source": "https://petdex.dev/pets/lin-pianpian",
+      "zipUrl": "https://assets.petdex.dev/pets/lin-pianpian-4878cc60102d/zip.zip",
+      "author": "admintertar",
+      "metrics": {
+        "installCount": 1609,
+        "likeCount": 14,
+        "zipDownloadCount": 17
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "328d6929edb95e75f9d526b0b479471507e8c3f285f0eeda8bf4379808d9c098",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "b72b0afbc5c723855a59cbcd1ecfe13bd800b75a98ff9757a035a950f276f8d3",
+          "bytes": 370
+        },
+        {
+          "path": "source.json",
+          "sha256": "364d4c2387071e33ab0ea1819bc9ce059b162c12c497da86c4ba55313d3b9842",
+          "bytes": 591
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "4e0b29e060d8e0414961bb22f2da9f831c78a4ce7ce83cea45b7d23f26ec5f4e",
+          "bytes": 2255338
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "b0812575904fa60e6a1ed94b465f8bb4ce3dcd3a6ebc5e0c4acacb9e3117d22e",
+          "bytes": 21929
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "8cd4ed2c78b5b456d09d32379cad417847296050ab096abebc0f67adab606257",
+          "bytes": 257
+        }
+      ]
+    },
+    {
+      "rank": 31,
+      "id": "petdex-31-yuexinmiao",
+      "slug": "yuexinmiao",
+      "displayName": "月薪喵",
+      "source": "https://petdex.dev/pets/yuexinmiao",
+      "zipUrl": "https://assets.petdex.dev/pets/yuexinmiao-f35a9aec318c/zip.zip",
+      "author": "T C.",
+      "metrics": {
+        "installCount": 1591,
+        "likeCount": 60,
+        "zipDownloadCount": 92
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "88b34849cf17d61db42df643740a2bbe40414cf8ddcc85fc602389af88b816cb",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "a079157b9765e3b240505a53d429f74d0d7d95b8c9f16ca3f6792c9f38506347",
+          "bytes": 344
+        },
+        {
+          "path": "source.json",
+          "sha256": "23a76b3b23437830a2434872284a536e6df5ff9bd2fc75e9bed230a530cbccd0",
+          "bytes": 576
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "9370752a17dd77b4d688290061aaa506fb82932e8734066919fb0274894e9110",
+          "bytes": 1732872
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "61965c3c35309e98bfe342f3014c35fb15940da9bb092cb345451e9820bb6e1b",
+          "bytes": 20286
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "7fd605bdff39f12f7287f43ed4efb3bdfbfba20a7545b3e37570a15f4a74c7e4",
+          "bytes": 228
+        }
+      ]
+    },
+    {
+      "rank": 32,
+      "id": "petdex-32-whaledou",
+      "slug": "whaledou",
+      "displayName": "whaledou",
+      "source": "https://petdex.dev/pets/whaledou",
+      "zipUrl": "https://assets.petdex.dev/pets/whaledou-c4cb6b24fb56/zip.zip",
+      "author": "isdou",
+      "metrics": {
+        "installCount": 1588,
+        "likeCount": 6,
+        "zipDownloadCount": 20
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "a19c468992659293386763272ae37726c31c3d3bfb38da06ee690d7241470955",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "9d83d804c15e5f5871274d57b934232563f87d7923ef53911db795b660ecbad2",
+          "bytes": 310
+        },
+        {
+          "path": "source.json",
+          "sha256": "8324057eca75247eb140f658362cca31f5396ff40dc0b7803e190a962a6054f1",
+          "bytes": 567
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "7912966c89eb7644d2f3875d6adc6dbc4a33e5720020685ae4b23ac791a55ab3",
+          "bytes": 1890562
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "2aabaf11bedbbe5141172493b2e4bdcb3c17627c3bdb7ad257f5a6c9cda9156d",
+          "bytes": 19822
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "de6724237698036f7c4f5f5c128e73f58e584e06c325d4c1546f4df77102fbf2",
+          "bytes": 188
+        }
+      ]
+    },
+    {
+      "rank": 33,
+      "id": "petdex-33-savage-codex-hacker",
+      "slug": "savage-codex-hacker",
+      "displayName": "Savage Codex Hacker",
+      "source": "https://petdex.dev/pets/savage-codex-hacker",
+      "zipUrl": "https://assets.petdex.dev/pets/savage-codex-hacker-21162d863d8a/zip.zip",
+      "author": "Meet L.",
+      "metrics": {
+        "installCount": 1584,
+        "likeCount": 19,
+        "zipDownloadCount": 37
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "1f646d2bb470ead937b5b0631560edbbcda664316bbb146843e30343ded8921d",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "656828538529fe1f302af0191e3f53951c78eefbe374b34ecd1f96f00d5bc830",
+          "bytes": 339
+        },
+        {
+          "path": "source.json",
+          "sha256": "d277939d86b2cfb4866ec63c629ad1bb03a25ac9c0d110c49f842d2f4a41960f",
+          "bytes": 625
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "51df3a96fd22751a5b2ce0e5486667492f145adea6c84800f61ceb5d7387859a",
+          "bytes": 1969610
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "40b0b36b77612bee0fd85264a0f1c6f4b373a4e588f1d6e9467d9dc1dd1752b1",
+          "bytes": 22452
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "ae3b7ee5277fa902a613d4c538fee12c1f86df857418f98b53a40612d08f2878",
+          "bytes": 223
+        }
+      ]
+    },
+    {
+      "rank": 34,
+      "id": "petdex-34-gangbeng-v2",
+      "slug": "gangbeng-v2",
+      "displayName": "钢蹦",
+      "source": "https://petdex.dev/pets/gangbeng-v2",
+      "zipUrl": "https://assets.petdex.dev/pets/gangbeng-v2-dedecf6f4eb6/zip.zip",
+      "author": "Kesi S.",
+      "metrics": {
+        "installCount": 1523,
+        "likeCount": 5,
+        "zipDownloadCount": 13
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "f923583779784d5b704fbca2530812a0cb7d43095907087632cdece2b54b5764",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "1cff0c4f81c44b02dddca50566f416ce90b9e8ed559a9037e4896f5bec878ce4",
+          "bytes": 377
+        },
+        {
+          "path": "source.json",
+          "sha256": "bacfc082ada72104b9da598cc524f96cbff2b708171c5482f2c5fdbbfbcb6ca1",
+          "bytes": 579
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "237abd79d823f9f6efa8e7ad3a17d6550bfd8e496dcf051042d76b76bc849bc7",
+          "bytes": 1734618
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "c5540e215110a61d9a68609122b44ca4fade4092203ce205cf4e3cd8172aa631",
+          "bytes": 15501
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "05a1ffd316c607a615021283a69eeb93a8e48ab254b4a12abf641450c6bbe92e",
+          "bytes": 255
+        }
+      ]
+    },
+    {
+      "rank": 35,
+      "id": "petdex-35-cold-ink-amulet",
+      "slug": "cold-ink-amulet",
+      "displayName": "Cold-Ink Amulet",
+      "source": "https://petdex.dev/pets/cold-ink-amulet",
+      "zipUrl": "https://assets.petdex.dev/pets/cold-ink-amulet-6a9f522e7b61/zip.zip",
+      "author": "codexfede",
+      "metrics": {
+        "installCount": 1496,
+        "likeCount": 5,
+        "zipDownloadCount": 2
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "ac061f882faaae9feb9e9637e595d6312624eeee0cdc151ec19133e11dbde599",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "9bce97d389fd6a325f00333692664bc3a1bb66aa6931650d18a138964e8dfc5d",
+          "bytes": 320
+        },
+        {
+          "path": "source.json",
+          "sha256": "8370b3d8e0b7b3a48fb1236097bfa1cf4ab0aa372fb681e4ea34be86beb97e96",
+          "bytes": 605
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "430cfa88e3fc4c7fbc1491def1417cf0017b2bc3eac84da8567e839bb1fa55a0",
+          "bytes": 2421926
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "67da8b30ba2b89804c71a107ff648110c59822908a69af568d7aa80ef9fec6f3",
+          "bytes": 24962
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "cdf220a3981c0f474e94090015dfb1b7dc49cec333f277488516c83762f41bb0",
+          "bytes": 198
+        }
+      ]
+    },
+    {
+      "rank": 36,
+      "id": "petdex-36-workwork",
+      "slug": "workwork",
+      "displayName": "Workwork",
+      "source": "https://petdex.dev/pets/workwork",
+      "zipUrl": "https://assets.petdex.dev/pets/workwork-e4660d1f53fe/zip.zip",
+      "author": "tracy p.",
+      "metrics": {
+        "installCount": 1488,
+        "likeCount": 4,
+        "zipDownloadCount": 5
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "0770122afe3100fdbfc4ae20465a67f84f06b9c95e5c561ab8330e02c7552825",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "53a4c35797e64ea82990b410c46a049548a9a85e7dabe095ad8955b63b5b4af2",
+          "bytes": 357
+        },
+        {
+          "path": "source.json",
+          "sha256": "f17bfef91c32953c47a27a5b1d5a1fdfcfafedc46498991aefd009068100fe8c",
+          "bytes": 569
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "8aa917562b450fe0154b3bb3c6f3e8decc1fea9210fb8c25491de57d1d42eaed",
+          "bytes": 2389646
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "87ac48d3a634654160fceb2628a6e9b94751200d325a6bea86d6b97169f6d75c",
+          "bytes": 26964
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "a8ddb4a75bbe8373a5df84047b6241f11b18b987b3355ea48409c0a45a01c66b",
+          "bytes": 235
+        }
+      ]
+    },
+    {
+      "rank": 37,
+      "id": "petdex-37-oiiai",
+      "slug": "oiiai",
+      "displayName": "oiiai",
+      "source": "https://petdex.dev/pets/oiiai",
+      "zipUrl": "https://assets.petdex.dev/pets/oiiai-23a48c92c83c/zip.zip",
+      "author": "carlhavingfun",
+      "metrics": {
+        "installCount": 1464,
+        "likeCount": 38,
+        "zipDownloadCount": 59
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "e47eb4b3e7d3b655cf3c37fc2f8471241beebae8ca43ba3f59a4f8d9e80402ab",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "c6d07b63c696627d3e20f8c9898dbebc495b28f715ba61857b313034d3f20047",
+          "bytes": 292
+        },
+        {
+          "path": "source.json",
+          "sha256": "6add7e91e4cc9da7cd194fe9ebebfe3129f808c5c29135e93003382cec95505a",
+          "bytes": 561
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "c20064a5afa01f15879c7e3d18caa7ccc2c3dba4c23a86b9fffb7f071e1f4b39",
+          "bytes": 706512
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "b6d4d48c2ed4efe4167a2d4ec55d0c6b9ff7b6607f110be725c1f30d0f2bc645",
+          "bytes": 22665
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "c3824f87736a848de440dbe5913e839c995f835d9758f3358a10d828b8b133fc",
+          "bytes": 170
+        }
+      ]
+    },
+    {
+      "rank": 38,
+      "id": "petdex-38-miyabi-2",
+      "slug": "miyabi-2",
+      "displayName": "Miyabi",
+      "source": "https://petdex.dev/pets/miyabi-2",
+      "zipUrl": "https://assets.petdex.dev/pets/miyabi-e6781959b87d/zip.zip",
+      "author": "篮高手 灌.",
+      "metrics": {
+        "installCount": 1448,
+        "likeCount": 14,
+        "zipDownloadCount": 14
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "7269b5c12302bb01c7cca8f80408c7012d42cd59e190b5560c5c5a63d413c6a9",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "f597317bca51acfc8e393e2390e7fb47f6c0a2be1b723d8bb17d2afac3150c8c",
+          "bytes": 315
+        },
+        {
+          "path": "source.json",
+          "sha256": "8c9d06fe606dcd3a562ea5d74451ddac4b6c4ed51dc2f8373877c45a1da84188",
+          "bytes": 573
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "64ed7d73d9f5a0950d9f9576babd4504477ce2b6b1602b6fbc1030c3ae377c33",
+          "bytes": 2253670
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "262b622d4c36e8eb716c7202961c929ce5bbd0092576fd00b143fcf099c91806",
+          "bytes": 26319
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "6239b248bebc62c2f7329cac0cafb541d0926f9fb9fdfef1caa6c489ca100b00",
+          "bytes": 197
+        }
+      ]
+    },
+    {
+      "rank": 39,
+      "id": "petdex-39-nickel-file-ledger",
+      "slug": "nickel-file-ledger",
+      "displayName": "Nickel File Ledger",
+      "source": "https://petdex.dev/pets/nickel-file-ledger",
+      "zipUrl": "https://assets.petdex.dev/pets/nickel-file-ledger-bac8e56a8fef/zip.zip",
+      "author": "codexfede",
+      "metrics": {
+        "installCount": 1428,
+        "likeCount": 3,
+        "zipDownloadCount": 7
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "c5d2f25e94f3a881fa532ea2682b89a587cbe46e98f228bd733117e55b2b8203",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "0868af95d6e3dd346eedee3ef0cbe623eb02221ce1f13d828ba2ede2c36dd474",
+          "bytes": 318
+        },
+        {
+          "path": "source.json",
+          "sha256": "96e8951b08b9933f4cfffebc1c92c313e6e961c19941d71ff603bb9e7a009bbe",
+          "bytes": 620
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "f03e309c84273ef9e1eda2379a2f4e5203d49147cb4c39fbfdbea1b0006ab8ed",
+          "bytes": 1698032
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "e6ba3f41c8df778f12e4a0cb5c8e6e0338f99c7c1294664c66e8f6c50be95fa4",
+          "bytes": 19696
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "1354bd5d5868d28d9065cdc072b2002c25fbfee17467a8a7edaeabf7c4ec2a09",
+          "bytes": 196
+        }
+      ]
+    },
+    {
+      "rank": 40,
+      "id": "petdex-40-bubu-3",
+      "slug": "bubu-3",
+      "displayName": "Bubu",
+      "source": "https://petdex.dev/pets/bubu-3",
+      "zipUrl": "https://assets.petdex.dev/pets/bubu-774f22263277/zip.zip",
+      "author": "je1zzz",
+      "metrics": {
+        "installCount": 1413,
+        "likeCount": 18,
+        "zipDownloadCount": 28
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "7756f649b4e8ca7095ca9a863c588929e00503cfa2dd52ed636603a97e1c06b9",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "18171ae529e51141c0fbb4fcdfcc659febf995f52ae69d743bd4820b4e0850ad",
+          "bytes": 341
+        },
+        {
+          "path": "source.json",
+          "sha256": "756c67dad741f4792a7ce1305ad97959259e1502b0d43b30a236c7606d3f7024",
+          "bytes": 555
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "99efaabbbd5b2cc4fb998a599a4cdf4152f8bfd26e6ed2711e943bedb77c0245",
+          "bytes": 1791452
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "bd9851b4b4ca9f12b83e4246829171315f31e59d7460a72e7fea129111bd6a84",
+          "bytes": 19807
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "f7eb4da9d08b9a8b352e5a1b03417910c5c145716cd35097a8a59cded8669970",
+          "bytes": 223
+        }
+      ]
+    },
+    {
+      "rank": 41,
+      "id": "petdex-41-qqpet-codex",
+      "slug": "qqpet-codex",
+      "displayName": "QQpet-codex",
+      "source": "https://petdex.dev/pets/qqpet-codex",
+      "zipUrl": "https://assets.petdex.dev/pets/qqpet-codex-aa076dbeacb8/zip.zip",
+      "author": "Frank C.",
+      "metrics": {
+        "installCount": 1412,
+        "likeCount": 58,
+        "zipDownloadCount": 68
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "33020f1cf35049ae4e1af2a79fd09418183a8aa83d4c4429a51a95625f54afeb",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "bf050cb958aba6e0ddec14c47189ef304ba1f3ed94dbca6cb88b8e40b631ff0c",
+          "bytes": 342
+        },
+        {
+          "path": "source.json",
+          "sha256": "48f81cdcbe896a85fc5d316055155169508a9207d6e9d7347ec22fb91cbaeed0",
+          "bytes": 586
+        },
+        {
+          "path": "spritesheet.png",
+          "sha256": "4c1f00b8a7377721caddbace7ade12335fb0ed2b4630ae116812d5cc1952c30f",
+          "bytes": 228593
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "11b3677c18b8c4ab2f184ce116c5adf5341706c2bb4a40c7696ae18379d04367",
+          "bytes": 11590
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "17e950a8076eb395c87f27cdde25cae07dbe5594fd9a3f4d806c9f2f73fa148e",
+          "bytes": 220
+        }
+      ]
+    },
+    {
+      "rank": 42,
+      "id": "petdex-42-eve",
+      "slug": "eve",
+      "displayName": "EVE",
+      "source": "https://petdex.dev/pets/eve",
+      "zipUrl": "https://assets.petdex.dev/pets/eve-743f1e0e6b0d/zip.zip",
+      "author": "Michael Z.",
+      "metrics": {
+        "installCount": 1407,
+        "likeCount": 43,
+        "zipDownloadCount": 115
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "ae2e155f7622a8fdbaea4e59b46577d6d6312d11351d8ddb018ec52f2edfa6fc",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "783f618b14f1af3a0e5e284a68a70378f4b7fcfaed2d20f686a0903168fd85be",
+          "bytes": 339
+        },
+        {
+          "path": "source.json",
+          "sha256": "92121128e5b5f0f66e366ac99c64fb43630021fc5498de3998d28878f652f5d8",
+          "bytes": 549
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "e445b22656450e8d118892ab647fa8edbc6890727620f3aae5c7368860574ba7",
+          "bytes": 1437454
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "4d47ee9b0b147e44dd1bce9b0280feb63fd672b6b84abf97284dcfb3b62c8935",
+          "bytes": 13287
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "0ae0db9d73d2af6a19821b80ab529a835730b47fdb0be0ab5e017bc2e6169123",
+          "bytes": 217
+        }
+      ]
+    },
+    {
+      "rank": 43,
+      "id": "petdex-43-erii-mingfei",
+      "slug": "erii-mingfei",
+      "displayName": "Erii & Mingfei",
+      "source": "https://petdex.dev/pets/erii-mingfei",
+      "zipUrl": "https://assets.petdex.dev/pets/erii-mingfei-b451ecf535a3/zip.zip",
+      "author": "Vin Y.",
+      "metrics": {
+        "installCount": 1405,
+        "likeCount": 5,
+        "zipDownloadCount": 6
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "47b64c354bb737525b412e5836003b5843d26f2229896f0aa20a0955c5e5ed99",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "59b3896b5b798e0515858506122376751d6d4bb456d85ef611ab1e0f93506332",
+          "bytes": 334
+        },
+        {
+          "path": "source.json",
+          "sha256": "56d887a198500fa1cc869708ebd9c67f1058549361bc49e2224279f12e27fc5e",
+          "bytes": 589
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "cf343db17ad14248fe5b8ada5b8444fcc72002324d55fe43c8e9f718b51fc76f",
+          "bytes": 2869110
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "6dda11b8e600ad431ea614aeda65519bbdd84c18517966b673d6a16685a4e782",
+          "bytes": 28536
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "eba30a312e5cbd9a22baf4c0c5cd372b8e0dde69cd13c6dcb69953e045394776",
+          "bytes": 212
+        }
+      ]
+    },
+    {
+      "rank": 44,
+      "id": "petdex-44-luluka",
+      "slug": "luluka",
+      "displayName": "Luluka",
+      "source": "https://petdex.dev/pets/luluka",
+      "zipUrl": "https://assets.petdex.dev/pets/luluka-725691dc8a09/zip.zip",
+      "author": "umbrellasoldier",
+      "metrics": {
+        "installCount": 1402,
+        "likeCount": 9,
+        "zipDownloadCount": 14
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "76642da574024af751fb4acfb7af9e5a821f61183d005e30e1042a7a9d99185f",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "14e2c54c076fa7a2bd8a7dc81a61c086d8559db6471b26b9a6dc0014cd8a6c95",
+          "bytes": 366
+        },
+        {
+          "path": "source.json",
+          "sha256": "333fac7404fc8cf676deac17a92aa71e6072046a86f016fb3505f093bba2084f",
+          "bytes": 567
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "5d728d756f916e4ff8560936b59c1226f151b7be9d2732cbfc22366a7817a1af",
+          "bytes": 2747822
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "5a6c13d3d5bfba6a13dad1bcda6c4de2371e9347e677e78ffd641aaec744070e",
+          "bytes": 27857
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "997d8e435c736bb3183cfef3dd24e2fba75fb3249a2b7e11f1f4b66d0dfe8fa9",
+          "bytes": 244
+        }
+      ]
+    },
+    {
+      "rank": 45,
+      "id": "petdex-45-luffy",
+      "slug": "luffy",
+      "displayName": "Luffy",
+      "source": "https://petdex.dev/pets/luffy",
+      "zipUrl": "https://assets.petdex.dev/pets/luffy-12e2064f59b6/zip.zip",
+      "author": "Oleg S.",
+      "metrics": {
+        "installCount": 1398,
+        "likeCount": 28,
+        "zipDownloadCount": 99
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "d33a905d38416210948b2ebc50e0a34af2f96209276e850e0ea25d19a163a07f",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "3de8976491fd8f5297c42bc3987f1ed118bdaa594f33f5d9d8f9517daad3c456",
+          "bytes": 324
+        },
+        {
+          "path": "source.json",
+          "sha256": "68048d68fbf2560559aabf007956a854c1b946633c46274f8168442911c91324",
+          "bytes": 555
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "bfb8c4b2919e0ad14a80f1d9e0c43b37ee7e6b94ad42b519d0a67b3cb785ab88",
+          "bytes": 2085134
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "7b3f0f5dd0d5a5af2fc9579f1cfad2929efb22004e50716edb52b3ad2e5f3225",
+          "bytes": 23485
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "0b21c9bfbbe135e0a31470ffc32e3e3a18b567b5419daa4506386e4a59aacee0",
+          "bytes": 208
+        }
+      ]
+    },
+    {
+      "rank": 46,
+      "id": "petdex-46-testbird",
+      "slug": "testbird",
+      "displayName": "TestBird",
+      "source": "https://petdex.dev/pets/testbird",
+      "zipUrl": "https://assets.petdex.dev/pets/testbird-fb3c75a55910/zip.zip",
+      "author": "lee l.",
+      "metrics": {
+        "installCount": 1379,
+        "likeCount": 5,
+        "zipDownloadCount": 6
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "b16e447f2545ae9d1d27f6079c02713abd31c31d39e1d75ebc3dfdbc5dc02470",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "37938a5544fa5fa1cb286dd625b5c08d10103363fdbc56e649e9eb8d2cb0a5b8",
+          "bytes": 306
+        },
+        {
+          "path": "source.json",
+          "sha256": "cf1948a3c5bdd1fc5f20a17601a73fa31cc12de1708d854c1a9cc1768774db15",
+          "bytes": 567
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "b5bb49a7c180c0e1ff468e6cff11c2bba9ffe67c5106c1b2a78f957510224be5",
+          "bytes": 1013396
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "05b63f93c09214949c264f4c54bc0ab0a5fc3068f7e8aa372a50234a49e7dc00",
+          "bytes": 10361
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "a32e5674bba8920a114a5f0afd3b64dfcfb2f217d7f472b17dddfd3a955dc2ff",
+          "bytes": 184
+        }
+      ]
+    },
+    {
+      "rank": 47,
+      "id": "petdex-47-spyro",
+      "slug": "spyro",
+      "displayName": "Spyro",
+      "source": "https://petdex.dev/pets/spyro",
+      "zipUrl": "https://assets.petdex.dev/pets/spyro-77142298d50f/zip.zip",
+      "author": "Wagner",
+      "metrics": {
+        "installCount": 1361,
+        "likeCount": 8,
+        "zipDownloadCount": 4
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "188bf3eeb742647698bcc4dd469bb97da3a9f9f45db25e2b6ead8cd92eb29777",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [
+        "Archive filename correction: spritesheet.webp -> spritesheet.png"
+      ],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "fb1d12df0ee719fc72263424c923839410787bc4e7cf63a0ad39d732aed1acf5",
+          "bytes": 330
+        },
+        {
+          "path": "source.json",
+          "sha256": "a0c35c843daf63677da06b92fbe538c3ac686e8dd888314a39bff5c489a1e6fb",
+          "bytes": 626
+        },
+        {
+          "path": "spritesheet.png",
+          "sha256": "cd6d9cb1aa05a3aaedc80e2b71b74e32dd0ee3f178e782dff14c07eaa6617c46",
+          "bytes": 2113646
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "82fb2368cd0161c0071239bd8df2205e7976c8ffa4c79e737ef9cd11fe4523dc",
+          "bytes": 21857
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "b40e81723aadc7b9bc04c1a973130241a00ed6cf4aea2f925135b253617296ca",
+          "bytes": 215
+        }
+      ]
+    },
+    {
+      "rank": 48,
+      "id": "petdex-48-round-maodie-c63864e8",
+      "slug": "round-maodie-c63864e8",
+      "displayName": "圆头耄耋",
+      "source": "https://petdex.dev/pets/round-maodie-c63864e8",
+      "zipUrl": "https://assets.petdex.dev/pets/round-maodie-c63864e8-173bca87-714/round-maodie-c63864e8.zip",
+      "author": "Ne1ther",
+      "metrics": {
+        "installCount": 1352,
+        "likeCount": 47,
+        "zipDownloadCount": 74
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "99b83dc58cda513b914554d658dfef5926c7f1dafed388eb25025df33211f854",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "32ced780dac735730dd27baf820d762a0965770669684de8355c58467f7282e7",
+          "bytes": 308
+        },
+        {
+          "path": "source.json",
+          "sha256": "af2125fab0821bdc2565eca2b92daedd197ad24bd6dfb891f2cb4ce5bea09943",
+          "bytes": 644
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "2acfced6f1fe875f68e96db1603132eb4f136db98677d699b6ff92d6db196eb4",
+          "bytes": 1517864
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "0c64a65a8cfc41f326887da47d85d7bc33726ed530badf99b990551d50c18777",
+          "bytes": 25180
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "e7402433e551e726fffffd6065b65266f2bb3c562c2e2a8bf0e2ce0498bf365e",
+          "bytes": 176
+        }
+      ]
+    },
+    {
+      "rank": 49,
+      "id": "petdex-49-jotaro",
+      "slug": "jotaro",
+      "displayName": "Jotaro",
+      "source": "https://petdex.dev/pets/jotaro",
+      "zipUrl": "https://assets.petdex.dev/pets/jotaro-d81518c99336/zip.zip",
+      "author": "Criss W.",
+      "metrics": {
+        "installCount": 1342,
+        "likeCount": 11,
+        "zipDownloadCount": 36
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "7adabf03149e03ff980b299ff7171ea9c8e3de29d27b1b1a47982e366bded2c4",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "8b22639f98437438ba09bdc608ec9c7041601d060c6427b4c6215d152e04f10f",
+          "bytes": 320
+        },
+        {
+          "path": "source.json",
+          "sha256": "4a17ade02e671beb527bfd70368f28ad4eb77a822b1ff41a7fa211e0ee82aba2",
+          "bytes": 561
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "e1adaa05ef7b6d904b72a8b32c6a10ad89e544a8d3bdcd5c5f92267460afe471",
+          "bytes": 1905442
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "cbd7090fdf6a4789578b9e15f1832dd83bdd1040157993d0b31d48b554836423",
+          "bytes": 20218
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "84a76ff65b8c523182188c713b6f8ab39a6a847c078b19e3c761da906ee00bbf",
+          "bytes": 198
+        }
+      ]
+    },
+    {
+      "rank": 50,
+      "id": "petdex-50-anya-2",
+      "slug": "anya-2",
+      "displayName": "阿尼亚",
+      "source": "https://petdex.dev/pets/anya-2",
+      "zipUrl": "https://assets.petdex.dev/pets/anya-8ef9d09d13c0/zip.zip",
+      "author": "Thomas W.",
+      "metrics": {
+        "installCount": 1336,
+        "likeCount": 25,
+        "zipDownloadCount": 52
+      },
+      "spriteVersionNumber": 1,
+      "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+      "archiveSha256": "82c8c0d325d9aedd68d1140e7886ad8afe166a52dc4bb6a535bd9971f8ee15d1",
+      "license": null,
+      "licenseFiles": [],
+      "adaptations": [],
+      "files": [
+        {
+          "path": "pet.json",
+          "sha256": "f67e4d666772ec784baa11ec6da9a6f3b1494a62e948ab3d1c8fa954612449b6",
+          "bytes": 302
+        },
+        {
+          "path": "source.json",
+          "sha256": "44e79ae98ec6cf7715719b52f34b254888bf3388bff01f736bb5ef080d73764b",
+          "bytes": 563
+        },
+        {
+          "path": "spritesheet.webp",
+          "sha256": "b7dd01c6193dec5d179774dfdb5624a084a1790a9cb4a6190ba8b0fb20efbab1",
+          "bytes": 1868920
+        },
+        {
+          "path": "thumb.png",
+          "sha256": "0187576a6882cab8366b0d4ae2cd57d44b47f8779064cc803fc5a43efaaecdac",
+          "bytes": 19643
+        },
+        {
+          "path": "upstream-pet.json",
+          "sha256": "319eed4d2be156a1fbb63aae2196ea9561e804d7abd5865a3126384eeb315c42",
+          "bytes": 187
+        }
+      ]
+    }
+  ],
+  "licenseNote": "按条目保留来源、作者与包内声明；未声明许可的条目不推定为 MIT 或其他开源许可。"
+}

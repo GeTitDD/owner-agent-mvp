@@ -1,0 +1,20 @@
+{
+  "rank": 34,
+  "id": "petdex-34-gangbeng-v2",
+  "slug": "gangbeng-v2",
+  "displayName": "钢蹦",
+  "source": "https://petdex.dev/pets/gangbeng-v2",
+  "zipUrl": "https://assets.petdex.dev/pets/gangbeng-v2-dedecf6f4eb6/zip.zip",
+  "author": "Kesi S.",
+  "metrics": {
+    "installCount": 1523,
+    "likeCount": 5,
+    "zipDownloadCount": 13
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "f923583779784d5b704fbca2530812a0cb7d43095907087632cdece2b54b5764",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

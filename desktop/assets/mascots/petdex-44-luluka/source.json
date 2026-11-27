@@ -1,0 +1,20 @@
+{
+  "rank": 44,
+  "id": "petdex-44-luluka",
+  "slug": "luluka",
+  "displayName": "Luluka",
+  "source": "https://petdex.dev/pets/luluka",
+  "zipUrl": "https://assets.petdex.dev/pets/luluka-725691dc8a09/zip.zip",
+  "author": "umbrellasoldier",
+  "metrics": {
+    "installCount": 1402,
+    "likeCount": 9,
+    "zipDownloadCount": 14
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "76642da574024af751fb4acfb7af9e5a821f61183d005e30e1042a7a9d99185f",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

@@ -1,0 +1,20 @@
+{
+  "rank": 42,
+  "id": "petdex-42-eve",
+  "slug": "eve",
+  "displayName": "EVE",
+  "source": "https://petdex.dev/pets/eve",
+  "zipUrl": "https://assets.petdex.dev/pets/eve-743f1e0e6b0d/zip.zip",
+  "author": "Michael Z.",
+  "metrics": {
+    "installCount": 1407,
+    "likeCount": 43,
+    "zipDownloadCount": 115
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "ae2e155f7622a8fdbaea4e59b46577d6d6312d11351d8ddb018ec52f2edfa6fc",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

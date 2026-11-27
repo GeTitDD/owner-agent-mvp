@@ -17,6 +17,7 @@ const PET_SIZE = 136;
 const PANEL_WIDTH = 440;
 const PANEL_HEIGHT = 640;
 const COMPANION_VERSION = '1.0.0';
+const APP_ICON = path.join(__dirname, 'assets', 'branding', process.platform === 'win32' ? 'app-icon.ico' : 'app-icon.png');
 // 单实例：桌面快捷方式重复双击时聚焦已有窗口，而不是再起一个进程抢同一份 SQLite。
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -77,16 +78,20 @@ let knowledgeSummaryModule = null;
 let knowledgeBrowseModule = null;
 let skillCatalogModule = null;
 let skillCatalogCache = null;
+let chatSkillEntries = [];
 let knowledgeReviewModule = null;
 let lessonRetrievalModule = null;
 // #58 / #61：待提炼提议、经验列表、经验提升为候选。三个模块都按需加载。
 let onDemandModule = null;
 let lessonModule = null;
 let promotionModule = null;
+let candidateViewModule = null;
 // 提炼器只用来「读队列」：它本身不落库、不调模型，构造一次复用即可。
 let lessonDistiller = null;
 let mascotModule = null;
 let githubModule = null;
+let githubProjectServicePromise = null;
+let githubProjectServiceInstance = null;
 let githubPrModule = null;
 let projectBriefModule = null;
 let nextActionModule = null;
@@ -160,7 +165,9 @@ const defaults = () => ({
   model: '',
   // 图谱生成专用模型：主模型不可用时的备用模型（留空则只用主模型）。
   diagramModel: '',
-  mascotSkin: 'pululu',
+  syncRepo: '',
+  syncBranch: 'main',
+  mascotSkin: 'petdex-01-boba',
   sandboxMode: 'auto',
   sandboxByProject: {},
   sandboxProjectDirByProject: {},
@@ -178,6 +185,11 @@ const defaults = () => ({
   setupProbed: {}
 });
 let config = defaults();
+// 三个入口共享同一只读召回口径，项目身份由主进程登记信息解析。
+const recallFor = async (input = {}) => {
+  const { recallExperience } = await importEsm('../src/knowledge/recall.mjs');
+  return recallExperience({ ...input, personalStore, ownerStore: store });
+};
 
 const errorLogPath = () => path.join(app.getPath('userData'), 'companion-errors.log');
 const logError = (scope, error) => {
@@ -220,7 +232,7 @@ const knowledgeDbPath = () =>
 
 // #127 配置箱读的三处路径：技能目录与技能扫描共用这一份，别处不要再拼一次。
 const mattSkillsDir = () =>
-  process.env.MATT_SKILLS_DIR || path.join(os.homedir(), '.owner-agent', 'skills', 'matt');
+  config.mattSkills || process.env.MATT_SKILLS_DIR || path.join(__dirname, '..', 'resources', 'skills', 'matt', 'skills');
 
 /**
  * #127 配置箱的只读事实：路径、密钥「配没配 / 从哪读」、以及可写项的来源标注。
@@ -451,6 +463,24 @@ const saveSessionScanState = async ({ sessions = [], fingerprints = [] } = {}) =
 // 所以这里先把「状态怎么变」与「执行器返回什么」分开——执行器的形状由 runSync 定义，
 // 状态判定由 src/memory/sync-status.mjs 定义，本文件只做落盘与注入。
 const syncStatusPath = () => path.join(app.getPath('userData'), 'sync-status.json');
+// 正常入口走只读预览；测试传输仅在显式隔离宿主里允许本地 bare 远端。
+let memorySyncController = null;
+const getMemorySync = async () => {
+  if (!config.syncRepo) throw new Error('请先保存自己的私有 GitHub 同步仓库。');
+  if (!personalStore) throw new Error('知识存储尚未就绪，请重启应用后重试。');
+  if (!memorySyncController) {
+    const { MemorySyncController } = await importEsm('../src/memory/sync-controller.mjs');
+    memorySyncController ??= new MemorySyncController({ store: personalStore, root: path.join(app.getPath('userData'),'memory-sync'),
+      repo: config.syncRepo, branch: config.syncBranch, env: process.env,
+      testRemote: e2eOffscreen && process.env.OWNER_AGENT_SYNC_TEST === '1' ? process.env.OWNER_AGENT_SYNC_TEST_REMOTE || '' : '' });
+  }
+  return memorySyncController;
+};
+const syncStatusForWindow = async (status) => {
+  if (process.env.OWNER_AGENT_SYNC_FAKE === '1') return {...status,availability:{available:true}};
+  if (!config.syncRepo) return {state:'unknown',availability:{available:false,mode:'manual-preview',reason:'sync-target-missing'}};
+  return (await getMemorySync()).status();
+};
 let syncStatusModule = null;
 let syncStatusStoreModule = null;
 let syncStatusStore = null;
@@ -466,8 +496,7 @@ const getSyncStatusStore = async () => {
 /**
  * 一次补同步的执行器。
  *
- * 真实适配器（读文档清单 → runSync → git 拉推）属于后续票；#127 之前没有同步目标可配，
- * 所以这里如实返回 unconfigured，不假装成功——「未同步期间不假装成功」也包含这一层。
+ * 保留旧验收协议；正常宿主从 memory-sync-* 走预览与确认，旧调用不能绕过确认直接推送。
  *
  * `OWNER_AGENT_SYNC_FAKE=1` 时改读 <userData>/sync-fake.json 的 `result`，只给 #131 的
  * 验收脚本注入失败/成功两种形状；不设这个变量时注入通道整条不存在。
@@ -492,7 +521,7 @@ const runSyncAttempt = async () => {
     status: 'unconfigured',
     step: 'target',
     code: 'sync-target-missing',
-    message: '还没有配置同步目标（配置箱 #127 接入后可用）；本地读写照常。'
+    message: '请从同步设置检查清单，确认后再传输记忆。'
   };
 };
 
@@ -997,7 +1026,7 @@ const mascotCatalog = async () => {
     fallback: resolved.fallback,
     userDir: mascotDirs().userDir,
     skins: resolved.skins.map((item) => ({
-      id: item.id, label: item.label, builtin: item.builtin, kind: item.kind ?? 'static',
+      id: item.id, label: item.label, builtin: item.builtin, kind: item.kind ?? 'static', collection:item.collection||'', rank:item.rank??null,
       url: pathToFileURL(item.file).href,
       thumb: item.dir && fs.existsSync(path.join(item.dir, 'thumb.png'))
         ? pathToFileURL(path.join(item.dir, 'thumb.png')).href
@@ -1108,7 +1137,7 @@ const lessonListItem = (lesson) => ({
 });
 
 // ---- 技能目录（只读） ----
-// 域包、pstack、插件三处技能合并成一份列表；扫描结果缓存一分钟，
+// 已知来源与本机技能合并成一份列表；扫描结果缓存一分钟，
 // 面板重复渲染不重复读盘，只有点「刷新」才强制重扫。
 const skillCatalogPayload = async ({ refresh = false } = {}) => {
   skillCatalogModule ??= await importEsm('../src/knowledge/skills.mjs');
@@ -1120,8 +1149,9 @@ const skillCatalogPayload = async ({ refresh = false } = {}) => {
       scan: () => skillCatalogModule.skillCatalogFor({
         domainRoot: path.join(__dirname, '..', 'domains'),
         pluginsDir: path.join(__dirname, '..', 'plugins'),
-        pstackSkillsDir: resolvePstackSkillsDir(),
+        pstackSkillsDir: config.pstackSkills ? (fs.existsSync(path.join(config.pstackSkills,'skills'))?path.join(config.pstackSkills,'skills'):config.pstackSkills) : resolvePstackSkillsDir(),
         mattSkillsDir: mattSkillsDir(),
+        localRoots: skillCatalogModule.localSkillRoots(),
         pstackSkillIds: registry.PLAYBOOKS.map((item) => ({
           id: item.id,
           playbookLabel: item.label,
@@ -1141,7 +1171,10 @@ const skillCatalogPayload = async ({ refresh = false } = {}) => {
   const picked = Array.isArray(config.chatSkills) && config.chatSkills.length
     ? config.chatSkills
     : chatMod.DEFAULT_SKILL_IDS;
-  return { ...view, implicitSkillIds: [...picked] };
+  const {chatSkillRegistry}=await importEsm('../src/knowledge/chat-catalog.mjs');
+  const {isBundledSkill}=await importEsm('../src/bundled-skills.mjs');
+  const registry=chatSkillRegistry(view.items.map(item=>({...item,distribution:isBundledSkill(item.path)?'bundled':'external'})));chatSkillEntries=registry.skills;
+  return { ...view,items:registry.items, implicitSkillIds: [...picked] };
 };
 
 const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) => {
@@ -1199,12 +1232,14 @@ const knowledgeAsk = ({ kind, projectId = '', domain = '', query = '' } = {}) =>
     const verified = units.filter((row) => row.verificationStatus === 'verified');
     const rows = verified.map((row) => {
       const usages = personalStore.listUsages({ knowledgeId: row.id, limit: 200 });
+      const chatReferences = personalStore.listChatReferences({ knowledgeId: row.id, limit: 200 });
       const projects = [...new Set(usages.map((usage) => usage.projectId))];
       const positive = usages.filter((usage) => usage.observedBenefit === 'positive').length;
       const negative = usages.filter((usage) => usage.observedBenefit === 'negative').length;
       return item('knowledge', row, {
         usageProjects: projects, positiveUsages: positive, negativeUsages: negative,
-        detail: `被 ${projects.length} 个项目复用；正反馈 ${positive}，负反馈 ${negative}`
+        chatReferenceCount: chatReferences.length,
+        detail: `最近最多 200 条：完成对话引用 ${chatReferences.length} 次；任务上下文涉及 ${projects.length} 个项目；收益正面 ${positive}，负面 ${negative}。提供资料不代表采纳。`
       });
     });
     return {
@@ -1241,7 +1276,8 @@ const knowledgeDetail = ({ id } = {}) => {
     const revisions = personalStore.revisions(id);
     const usages = personalStore.listUsages({ knowledgeId: id, limit: 200 });
     const feedback = usages.map((usage) => personalStore.feedbackForUsage(usage.id)).filter(Boolean);
-    return { kind: 'knowledge', item: unit, revisions, usages, feedback };
+    const chatReferences = personalStore.listChatReferences({ knowledgeId: id, limit: 200 });
+    return { kind: 'knowledge', item: unit, revisions, usages, feedback, chatReferences };
   }
   // 旧 experience/v1 已退役（#62）：详情只认知识、经验（lesson）与候选。
   const lesson = personalStore.getLesson(id);
@@ -1764,7 +1800,8 @@ const knowledgeDetail = ({ id } = {}) => {
     };
     // 待确认归因：只读两张表，不跑扫描。
     const proposals = readOr('locate.proposals', () => personalStore?.proposals('pending') ?? [], []);
-    const lessons = readOr('locate.lessons', () => personalStore?.listLessons({ limit: 1000 }) ?? [], []);
+    const lessons = readOr('locate.lessons', () => [...new Set(proposals.flatMap((row) => row.meta?.sourceLessonIds ?? []))]
+      .map((id) => personalStore?.getLesson(id)).filter(Boolean), []);
     const decisions = readOr('locate.decisions',
       () => personalStore?.listDecisions({ includeEnded: false, limit: 500 }) ?? [], []);
     let decisionSummary = { total: 0, projects: [] };
@@ -2622,6 +2659,7 @@ const watchWindow = (window, label) => {
 
 const createPet = () => {
   pet = new BrowserWindow({
+    icon: APP_ICON,
     width: PET_SIZE,
     height: PET_SIZE,
     frame: false,
@@ -2656,6 +2694,7 @@ const createPet = () => {
 
 const createPanel = () => {
   panel = new BrowserWindow({
+    icon: APP_ICON,
     width: PANEL_WIDTH,
     height: PANEL_HEIGHT,
     frame: false,
@@ -2717,6 +2756,7 @@ const openFull = async () => {
     throw new Error('OpenClaw Gateway 和 Workbench 都不可用，请先在设置里配置 Gateway 地址。');
   }
   fullWindow = new BrowserWindow({
+    icon: APP_ICON,
     width: 1180,
     height: 820,
     minWidth: 800,
@@ -2744,6 +2784,7 @@ const openKnowledgeWorkbench = async () => {
     return;
   }
   fullWindow = new BrowserWindow({
+    icon: APP_ICON,
     width: 1180,
     height: 820,
     minWidth: 800,
@@ -2769,6 +2810,7 @@ const openObserver = async () => {
     return;
   }
   observerWindow = new BrowserWindow({
+    icon: APP_ICON,
     width: 1180,
     height: 820,
     minWidth: 800,
@@ -2790,7 +2832,8 @@ const openObserver = async () => {
 };
 
 const createTray = () => {
-  const image = nativeImage.createFromPath(path.join(__dirname, 'tray.png'));
+  const avatar = nativeImage.createFromPath(APP_ICON);
+  const image = avatar.isEmpty() ? nativeImage.createFromPath(path.join(__dirname, 'tray.png')) : avatar.resize({ width: 18, height: 18, quality: 'best' });
   tray = new Tray(image);
   tray.setToolTip('Owner Companion');
   const rebuild = () => {
@@ -3180,9 +3223,11 @@ const requireChatSessions = () => {
  * 这里不猜默认值，也不在没模型时假装回答。
  */
 const getChatService = async () => {
-  if (chatService) return chatService;
+  await skillCatalogPayload();
+  if (chatService) {chatService.implicitIds=(config.chatSkills?.length?config.chatSkills:chatModule.DEFAULT_SKILL_IDS).slice(0,12);return chatService;}
   chatModule ??= await importEsm('../src/pi-chat.mjs');
   chatService = new chatModule.PiChatService({
+    skills:()=>chatSkillEntries,
     model: config.model || '',
     implicitSkillIds: Array.isArray(config.chatSkills) && config.chatSkills.length
       ? config.chatSkills
@@ -3240,7 +3285,19 @@ const registerIpc = () => {
 
   ipcMain.handle('companion:card-session-get', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    return requireChatSessions().getSession(String(input?.id ?? ''));
+    return requireChatSessions().getSession(String(input?.id ?? ''), {
+      limit: input?.limit, beforeSeq: input?.beforeSeq
+    });
+  });
+
+  ipcMain.handle('companion:card-session-message', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().getMessage(String(input?.id ?? ''), input?.seq);
+  });
+
+  ipcMain.handle('companion:card-session-transcript', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().getTranscript(String(input?.id ?? ''));
   });
 
   ipcMain.handle('companion:card-session-create', async (event, input) => {
@@ -3248,7 +3305,29 @@ const registerIpc = () => {
     // #107 才接项目；本轮新会话一律先是全局会话。
     return requireChatSessions().createSession({
       projectId: String(input?.projectId ?? ''),
-      title: String(input?.title ?? '')
+      title: String(input?.title ?? ''),
+      reuseEmptyGlobalId: String(input?.reuseEmptyGlobalId ?? '')
+    });
+  });
+
+  ipcMain.handle('companion:review-draft', async (event,input) => {
+    if(!fromCompanion(event))throw Error('Unauthorized');
+    return requireChatSessions().reviewDraft({id:input?.id,key:input?.key,values:input?.values,clear:input?.clear===true});
+  });
+  ipcMain.handle('companion:card-draft-get', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().getDraft({ id: input?.id, projectId: input?.projectId });
+  });
+  ipcMain.handle('companion:card-draft-save', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().saveDraft({
+      id: input?.id, projectId: input?.projectId, text: input?.text, skillId: input?.skillId
+    });
+  });
+  ipcMain.handle('companion:card-draft-clear', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return requireChatSessions().clearDraft({
+      id: input?.id, projectId: input?.projectId, text: input?.text, skillId: input?.skillId
     });
   });
 
@@ -3287,6 +3366,7 @@ const registerIpc = () => {
       sessionId: String(input?.id ?? ''),
       role: String(input?.role ?? ''),
       text: String(input?.text ?? ''),
+      status: input?.status === 'error' ? 'error' : 'ok',
       // #109 的块原样带过去：存储层不解释块结构。
       blocks: Array.isArray(input?.blocks) ? input.blocks : []
     });
@@ -3298,20 +3378,9 @@ const registerIpc = () => {
   ipcMain.handle('companion:model-catalog', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const mod = modelCatalogModule ??= await importEsm('../src/model-catalog.mjs');
-    const home = process.env.OWNER_AGENT_PI_HOME || path.join(os.homedir(), '.pi');
-    const agentDir = path.join(home, 'agent');
-    const readJson = (file) => {
-      try {
-        return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/u, ''));
-      } catch {
-        return null;
-      }
-    };
-    const stores = ['models-store.json', 'models.json']
-      .map((name) => ({ file: name, data: readJson(path.join(agentDir, name)) }))
-      .filter((store) => store.data);
-    const auth = readJson(path.join(agentDir, 'auth.json')) ?? {};
-    const catalog = mod.buildModelCatalog({ stores, auth, env: process.env });
+    const selection = await importEsm('../src/pi-model-catalog.mjs');
+    const runtime = await selection.createPiModelRuntime();
+    const catalog = mod.modelCatalogOf(runtime);
     return { ...catalog, current: config.model || '', diagram: config.diagramModel || '' };
   });
 
@@ -3354,7 +3423,7 @@ const registerIpc = () => {
       };
     }
 
-    const service = await getChatService();
+    let service = null;
     const projectId = String(input?.projectId ?? '').trim();
     const project = projectId
       ? (store?.listProjects() ?? []).find((item) => item.id === projectId) ?? null
@@ -3396,14 +3465,26 @@ const registerIpc = () => {
     };
 
     try {
-      return await service.askStream({
+      // 先登记可取消的轮次，再等待模型服务初始化；准备阶段点停止也必须能找到这一轮。
+      service = await getChatService();
+      const active = chatTurns.get(turnId);
+      if (active?.controller === controller) active.service = service;
+      const memory = await recallFor({ projectId, query: question, linkedProjects: input?.linkedProjects });
+      const result = await service.askStream({
+        memory,
         project: target,
         question,
         model,
         sessionId,
+        history: sessionId ? requireChatSessions().historyForPrompt(sessionId, { beforeSeq: Number(input?.sourceSeq) }) : [],
         signal: controller.signal,
         onEvent
       });
+      const { recordCompletedChatReferences } = await importEsm('../src/knowledge/chat-references.mjs');
+      const referenceTracking = recordCompletedChatReferences({ personalStore, memory,
+        result: controller.signal.aborted ? { ok:false, status:'aborted' } : result, turnId, sessionId, projectId });
+      if (result.memory) result.memory.referenceTracking = referenceTracking;
+      return result;
     } finally {
       flush();
       if (turnId) chatTurns.delete(turnId);
@@ -3427,7 +3508,7 @@ const registerIpc = () => {
     const turnId = String(input?.turnId ?? '');
     const entry = chatTurns.get(turnId);
     const text = String(input?.text ?? '').trim();
-    if (!entry || !text) return { steered: false, reason: entry ? 'empty' : 'no-active-turn' };
+    if (!entry?.service || !text) return { steered: false, reason: !text ? 'empty' : entry ? 'starting' : 'no-active-turn' };
     // 引导会被插进当前回答：先把已经流出来的旧文字清掉，避免两段答案粘在一起。
     entry.send?.({ type: 'turn-reset' });
     return entry.service.steer({
@@ -3490,9 +3571,12 @@ const registerIpc = () => {
   // #124 起多一个 root：关联项目的 prompt 段要写「项目名（来源 · 路径）」。
   ipcMain.handle('companion:card-projects', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const {parseGitHubRemote}=await importEsm('../src/github.mjs');
     return {
-      items: (store?.listProjects() ?? []).map((project) => ({
-        id: project.id, name: project.name, root: project.root ?? ''
+      // 只读本机 origin，不因打开项目列表触发 GitHub 网络请求或要求登录。
+      items: await Promise.all((store?.listProjects() ?? []).map(async project => {
+        const repository=parseGitHubRemote(await gitRemoteOf(project.root));
+        return {id:project.id,name:project.name,root:project.root??'',github:repository?{nameWithOwner:repository.nameWithOwner,url:repository.url}:null};
       }))
     };
   });
@@ -3552,7 +3636,7 @@ const registerIpc = () => {
   ipcMain.handle('companion:sync-status-get', async (event) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     const store = await getSyncStatusStore();
-    return store.read();
+    return await syncStatusForWindow(store.read());
   });
 
   ipcMain.handle('companion:sync-attempt', async (event) => {
@@ -3573,8 +3657,21 @@ const registerIpc = () => {
     }
     const status = mod.applySyncAttempt(previous, result, new Date());
     store.save(status);
-    return { status, result };
+    return { status: await syncStatusForWindow(status), result };
   });
+
+  for (const [channel,method] of [['prepare','prepare'],['detail','detail'],['execute','execute'],['cancel','cancel'],['archives','archives'],['restore','restore']]) {
+    ipcMain.handle(`companion:memory-sync-${channel}`, async (event,input) => {
+      if (!fromCompanion(event)) throw new Error('Unauthorized');
+      const controller=await getMemorySync();
+      const result=await controller[method](input);
+      if(channel==='prepare') {
+        const known=new Set((store?.listProjects()||[]).map(project=>project.id));
+        return {...result,unmappedProjects:[...new Set(result.documents.map(doc=>doc.projectId).filter(id=>id&&!known.has(id)))]};
+      }
+      return result;
+    });
+  }
 
   // #110 复制：渲染进程在 sandbox + contextIsolation 下不直接碰系统剪贴板，
   // 统一由主进程写。写入失败原样抛回，界面据此给可见提示，不静默。
@@ -3591,11 +3688,11 @@ const registerIpc = () => {
   ipcMain.handle('companion:conversation-export', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
     if (!conversationExportModule) throw new Error('会话导出模块尚未就绪，请重启后再试。');
-    return conversationExportModule.writeConversationExport({
+    return conversationExportModule.exportStoredConversation({
+      store: requireChatSessions(),
       root: app.getPath('userData'),
       sessionId: String(input?.sessionId ?? ''),
-      context: input?.context,
-      messages: input?.messages
+      context: input?.context
     });
   });
 
@@ -3658,6 +3755,12 @@ const registerIpc = () => {
     const projectId = String(input?.projectId ?? '').trim();
     if (!projectId) throw new Error('提升为 Lesson 要先在顶栏选一个项目：这次什么都没写。');
     if (!store?.getProject?.(projectId)) throw new Error(`项目不存在：${projectId}`);
+    if(input?.preview===true || input?.edits){
+      const mod=await importEsm('../src/knowledge/experience-review.mjs');
+      const args={ownerStore:store,personalStore,ideaId:String(input?.ideaId??''),projectId};
+      try { return input.preview===true?mod.ideaLessonDraft(args):mod.confirmIdeaLesson({...args,expectedHash:String(input.expectedHash??''),edits:input.edits}); }
+      catch(error) { return {ok:false,reason:error?.message||'没有保存成功，请保留输入后重试。'}; }
+    }
     ideaLessonModule = ideaLessonModule ?? await importEsm('../src/idea-lesson.mjs');
     const result = ideaLessonModule.promoteIdeaToLesson({
       store,
@@ -4163,7 +4266,7 @@ const registerIpc = () => {
       personalStore,
       id: String(input?.id ?? ''),
       decision: String(input?.decision ?? ''),
-      reviewer: 'local-user'
+      reviewer: 'local-user', edits: input?.edits ?? null, expectedHash: String(input?.expectedHash ?? '')
     });
   });
 
@@ -4181,16 +4284,21 @@ const registerIpc = () => {
   // 只把取数接到 IPC 上，不改对话的提示词与渲染（那是别的票）。
   ipcMain.handle('companion:lesson-retrieve', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    if (!personalStore) throw new Error('知识库尚未建立；任务完成后会自动提炼经验。');
-    lessonRetrievalModule = lessonRetrievalModule ?? await importEsm('../src/knowledge-loop/retrieval.mjs');
-    return lessonRetrievalModule.retrieveLessons({
-      personalStore,
-      ownerStore: store,
-      projectId: String(input?.projectId ?? '') || config.projectId,
-      domain: String(input?.domain ?? ''),
-      query: String(input?.query ?? ''),
-      limit: input?.limit
-    });
+    return recallFor({ projectId: String(input?.projectId ?? ''), query: String(input?.query ?? ''), limit: input?.limit });
+  });
+
+  ipcMain.handle('companion:candidate-draft', async (event,input) => {
+    if(!fromCompanion(event))throw Error('Unauthorized');
+    const mod=await importEsm('../src/knowledge/candidate-view.mjs');
+    const proposal=personalStore?.proposal(String(input?.id??''));
+    if(!proposal || proposal.status!=='pending')throw Error('候选已处理或不存在，请重新查询。');
+    return {ok:true,candidate:mod.candidateReviewView({proposal,personalStore,ownerStore:store,projects:store.listProjects()})};
+  });
+
+  ipcMain.handle('companion:experience-recall', async (event, input) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    return recallFor({ projectId: String(input?.projectId ?? ''), query: String(input?.query ?? ''),
+      linkedProjects: input?.linkedProjects, includeAll: input?.includeAll === true, limit: input?.limit });
   });
 
   ipcMain.handle('companion:knowledge-detail', async (event, input) => {
@@ -4263,19 +4371,14 @@ const registerIpc = () => {
   });
 
   // 待审候选：/经验 打开时把还没审的候选一起带出来，重启后也能接着审。
-  ipcMain.handle('companion:pending-proposals', async (event) => {
+  ipcMain.handle('companion:pending-proposals', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
-    if (!personalStore) return { items: [] };
-    const rows = personalStore.proposals('pending') ?? [];
-    return {
-      items: rows.slice(0, 20).map((row) => ({
-        id: row.id,
-        title: String(row.payload?.title ?? row.payload?.claim ?? '').slice(0, 200),
-        claim: String(row.payload?.claim ?? '').slice(0, 600),
-        createdAt: String(row.created_at ?? ''),
-        lessonIds: Array.isArray(row.meta?.sourceLessonIds) ? row.meta.sourceLessonIds : []
-      }))
-    };
+    candidateViewModule ??= await importEsm('../src/knowledge/candidate-view.mjs');
+    return candidateViewModule.pendingCandidateView({
+      personalStore, ownerStore: store, projects: store?.listProjects() ?? [],
+      projectId: String(input?.projectId ?? ''), keyword: String(input?.keyword ?? ''),
+      limit: input?.limit
+    });
   });
 
   // #61 经验列表（按项目）：项目级只看本项目，域级只列与项目主域相关的那些。
@@ -4298,14 +4401,20 @@ const registerIpc = () => {
     const result = promotionModule.promoteLessonToCandidate({
       personalStore,
       lessonId: String(input?.lessonId ?? ''),
+      ownerStore: store,
       actor: 'local-user'
     });
+    candidateViewModule ??= await importEsm('../src/knowledge/candidate-view.mjs');
     return {
       ok: true,
       created: result.created,
       reason: result.reason ?? null,
       lessonId: result.lesson?.id ?? null,
-      proposalId: result.proposal?.id ?? null
+      proposalId: result.proposal?.id ?? null,
+      knowledge: result.proposal?.applied_id ? personalStore.get(result.proposal.applied_id) : null,
+      candidate: candidateViewModule.candidateReviewView({
+        proposal: result.proposal, personalStore, ownerStore: store, projects: store?.listProjects() ?? []
+      })
     };
   });
 
@@ -4454,9 +4563,10 @@ const registerIpc = () => {
       id: project.id,
       name: project.name ?? ''
     }));
-    const summary = decisionScanModule.pendingSummary(scanStore.read(), projects);
+    const state = scanStore.read();
+    const summary = decisionScanModule.pendingSummary(state, projects);
     const projectId = String(input?.projectId ?? '');
-    return projectId ? { ...summary, projectId } : summary;
+    return projectId ? { ...summary, projectId, pending: decisionScanModule.pendingOf(state, projectId) } : summary;
   });
 
   // #135 接受：按未处理候选里的记录确认一条决策（写知识库），再把候选从列表移除。
@@ -4936,9 +5046,12 @@ const registerIpc = () => {
     return { canceled: false, ...imported, catalog: await mascotCatalog() };
   });
 
-  ipcMain.on('companion:open-skin-picker', () => {
+  ipcMain.on('companion:open-skin-picker', (event) => {
+    if (!fromCompanion(event)) return;
     showPanel();
-    try { panel?.webContents.send('companion:open-settings'); } catch { /* best effort */ }
+    const contents=panel?.webContents;
+    const open=()=>{try { if(!contents?.isDestroyed())contents?.send('companion:open-appearance'); } catch { /* 窗口关闭则停止通知。 */ }};
+    if(contents?.isLoadingMainFrame())contents.once('did-finish-load',open);else open();
   });
 
   ipcMain.handle('companion:diagnostics', async (event) => {
@@ -4996,6 +5109,15 @@ const registerIpc = () => {
 
   ipcMain.handle('companion:settings:set', async (event, input) => {
     if (!fromCompanion(event)) throw new Error('Unauthorized');
+    // 先校验整个同步补丁，再改变任何设置；非法目标不能部分保存或破坏旧预览。
+    let syncTarget=null;
+    if (Object.hasOwn(input||{},'syncRepo') || Object.hasOwn(input||{},'syncBranch')) {
+      if (memorySyncController?.service.active) throw new Error('同步正在进行，请等待或取消后再保存设置。');
+      const {normalizeSyncTarget}=await importEsm('../src/memory/sync-git.mjs');
+      const repo=String(input.syncRepo ?? config.syncRepo).trim();
+      syncTarget=repo?normalizeSyncTarget(repo,input.syncBranch ?? config.syncBranch):{repo:'',branch:'main'};
+      if (memorySyncController?.service.active) throw new Error('同步正在进行，请等待或取消后再保存设置。');
+    }
     const previousModel = config.model;
     if (typeof input?.allowedPaths === 'string') config.allowedPaths = input.allowedPaths.trim() || 'src/';
     if (Array.isArray(input?.includePaths)) {
@@ -5046,13 +5168,18 @@ const registerIpc = () => {
       // 免得旧客户端保存设置时报错；保存后这个键也不再写回。
       delete config.knowledgeAutoHarvest;
     }
+    if(syncTarget && (syncTarget.repo!==config.syncRepo || syncTarget.branch!==config.syncBranch)) {
+      memorySyncController?.cancel();memorySyncController=null;
+      config.syncRepo=syncTarget.repo;config.syncBranch=syncTarget.branch;
+    }
+    skillCatalogCache?.clear();
     saveConfig();
     serviceCache = { at: 0, value: null };
     const modelChanged = config.model !== previousModel;
     if (modelChanged) {
       playbookRunner = null;
       triageRunner = null;
-      // 换模型后旧的只读会话立刻作废：下一次提问按新模型重建，不混用。
+      // 空闲的旧会话释放；正在回答的会话留到收尾，下一次提问按新模型重建。
       try { chatService?.setModel(config.model || ''); } catch { /* 释放失败不影响保存 */ }
     }
     let modelApplied = true;
@@ -5113,6 +5240,65 @@ const registerIpc = () => {
       skipped: result.skipped,
       receipt: result.receipt
     };
+  });
+
+  const githubProjectDirectories=new Map();
+  const githubProjectPending=new Map();
+  const githubProjectDirectoryAllowed=async(event,purpose,value)=>{
+    const selected=githubProjectDirectories.get(event.sender.id)?.[purpose];if(!selected)return false;
+    try{const {rootIdentityOf,samePath}=await importEsm('../src/project-identity.mjs');const actual=fs.realpathSync(String(value??''));
+      return samePath(actual,selected.root)&&rootIdentityOf(actual)===selected.identity;
+    }catch{return false;}
+  };
+  const githubProjectService = async () => {
+    if (!store) throw new Error('本地项目存储尚未就绪。');
+    return githubProjectServicePromise ??= importEsm('../src/github-project.mjs').then(({GitHubProjectService})=>(githubProjectServiceInstance=new GitHubProjectService({store})));
+  };
+  for (const method of ['inspect','link','clone','cancel']) {
+    ipcMain.handle(`companion:github-project-${method}`, async (event,input={}) => {
+      if (!fromCompanion(event)) throw new Error('Unauthorized');
+      const requestedId=String(input?.requestId??'');let pending=null;
+      // 和对话停止相同：先登记请求再异步准备，不能让刚点下的取消找不到轮次。
+      if(method==='clone'){
+        if(!requestedId||requestedId.length>120)return {ok:false,code:'invalid-request',message:'下载请求已失效，请重新打开添加表单。'};
+        if(githubProjectPending.has(requestedId)||[...githubProjectPending.values()].some(item=>item.senderId===event.sender.id))return {ok:false,code:'import-busy',message:'已有下载正在准备，请等待完成或先取消。'};
+        pending={requestId:requestedId,senderId:event.sender.id,canceled:false};githubProjectPending.set(requestedId,pending);
+      }
+      try {
+        const {GitHubProjectError}=await importEsm('../src/github-project.mjs');
+        const service=await githubProjectService();
+        if(method==='inspect')return await service.inspect(input.source);
+        if(method==='link'){
+          if(!await githubProjectDirectoryAllowed(event,'link',input.root))return {ok:false,code:'directory-not-selected',message:'请先选择要关联的本机仓库目录，目录变化后需重新选择。'};
+          return {project:await service.link(input)};
+        }
+        if(method==='cancel'){
+          const request=githubProjectPending.get(requestedId);
+          if(!request||request.senderId!==event.sender.id)return {canceled:false};
+          const result=service.cancel(requestedId);if(result.finishing)return result;
+          request.canceled=true;return {canceled:true};
+        }
+        const requestId=String(input.requestId??'');
+        if(!await githubProjectDirectoryAllowed(event,'download',input.parent))return {ok:false,code:'directory-not-selected',message:'请先选择保存位置，目录变化后需重新选择。'};
+        if(pending.canceled)throw new GitHubProjectError('已取消下载，没有添加项目。','canceled');
+        const onProgress=progress=>{try{if(!event.sender.isDestroyed())event.sender.send('companion:github-project-progress',{requestId,...progress});}catch{}};
+        return {project:await service.clone({...input,requestId,onProgress})};
+      } catch(error) {const {githubProjectFailure}=await importEsm('../src/github-project.mjs');return githubProjectFailure(error);}
+      finally{if(pending&&githubProjectPending.get(requestedId)===pending)githubProjectPending.delete(requestedId);}
+    });
+  }
+  ipcMain.handle('companion:github-project-directory', async (event,input={}) => {
+    if (!fromCompanion(event)) throw new Error('Unauthorized');
+    const purpose=input.purpose==='link'?'link':'download';
+    const result=await dialog.showOpenDialog({title:purpose==='link'?'选择已下载的仓库目录':'选择项目下载位置',properties:['openDirectory']});
+    const chosen=result.canceled?null:result.filePaths[0]??null;if(!chosen)return null;
+    const {rootIdentityOf}=await importEsm('../src/project-identity.mjs');const root=fs.realpathSync(chosen);
+    if(!githubProjectDirectories.has(event.sender.id)){
+      githubProjectDirectories.set(event.sender.id,{});
+      event.sender.once('destroyed',()=>githubProjectDirectories.delete(event.sender.id));
+    }
+    githubProjectDirectories.get(event.sender.id)[purpose]={root,identity:rootIdentityOf(root)};
+    return chosen;
   });
 
   ipcMain.handle('companion:add-project', async (event) => {
@@ -5206,6 +5392,10 @@ const registerDisplayHandlers = () => {
 
 async function boot() {
   loadConfig();
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(path.join(__dirname, 'assets', 'branding', 'app-icon.png'));
+    if (e2eOffscreen) app.dock.hide();
+  }
   registerIpc();
   await startServices();
   createPet();
@@ -5265,7 +5455,15 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => { /* tray keeps the app alive */ });
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  const importing=githubProjectServiceInstance?.active;
+  if(importing){
+    event.preventDefault();
+    githubProjectServiceInstance.cancel(importing.requestId);
+    // 先等 Git 进程退出与临时目录清理，再关闭数据库，避免留下孤儿下载。
+    void importing.done.then(()=>app.quit());
+    return;
+  }
   quitting = true;
   if (dragTimer) clearInterval(dragTimer);
   if (workerTimer) clearInterval(workerTimer);

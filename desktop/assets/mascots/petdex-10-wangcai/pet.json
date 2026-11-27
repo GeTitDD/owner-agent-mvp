@@ -1,0 +1,12 @@
+{
+  "id": "petdex-10-wangcai",
+  "displayName": "Wangcai",
+  "description": "A calm fluffy ragdoll cat with blue eyes, dark ears, and a gentle face.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 10
+}

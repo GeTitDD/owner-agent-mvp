@@ -1,0 +1,12 @@
+{
+  "id": "petdex-39-nickel-file-ledger",
+  "displayName": "Nickel File Ledger",
+  "description": "A tiny nickel-gray ledger-file mascot for Petdex quality work.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 39
+}

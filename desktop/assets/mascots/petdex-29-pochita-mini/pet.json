@@ -1,0 +1,12 @@
+{
+  "id": "petdex-29-pochita-mini",
+  "displayName": "Pochita Mini",
+  "description": "A cute chibi anime desktop pet inspired by Pochita, optimized as a tiny full-body companion sprite.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 29
+}

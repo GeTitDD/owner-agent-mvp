@@ -1,0 +1,20 @@
+{
+  "rank": 36,
+  "id": "petdex-36-workwork",
+  "slug": "workwork",
+  "displayName": "Workwork",
+  "source": "https://petdex.dev/pets/workwork",
+  "zipUrl": "https://assets.petdex.dev/pets/workwork-e4660d1f53fe/zip.zip",
+  "author": "tracy p.",
+  "metrics": {
+    "installCount": 1488,
+    "likeCount": 4,
+    "zipDownloadCount": 5
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "0770122afe3100fdbfc4ae20465a67f84f06b9c95e5c561ab8330e02c7552825",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

@@ -16,6 +16,22 @@
   const decisionFormApi = (typeof module === 'object' && module.exports)
     ? require('./decision-form.cjs')
     : (typeof globalThis === 'undefined' ? null : globalThis.OwnerDecisionForm);
+  const recoveryApi = (typeof module === 'object' && module.exports)
+    ? require('./chat-recovery.cjs') : globalThis.OwnerChatRecovery;
+
+  const modelQuestionOf = (text, skillId = '', prefix = '') => {
+    const value = String(text).trim();
+    if (!skillId) return value;
+    const body = prefix && value.startsWith(prefix) ? value.slice(prefix.length) : value;
+    return `/skill:${skillId} ${body}`;
+  };
+  const modelFailureReply = (result = {}, context = {}) => ({
+    status: 'error',
+    text: [String(result.answer || '这次没有完成回答，原问题已保留，可以重试。'),
+      result.partial ? `已产出的部分（未完成）：\n${result.partial}` : ''].filter(Boolean).join('\n\n'),
+    blocks: [recoveryApi.normalize({ category: result.category, sourceSeq: context.sourceSeq,
+      projectId: context.projectId, skillId: context.skillId, skillPrefix: context.skillPrefix })]
+  });
 
   /**
    * 输入框的占位文案：没有会话时锁死；全局模式「能问不能写」；项目下只提示发送。
@@ -88,15 +104,18 @@
     library: '项目库',
     since: '变化窗口',
     publish: '发布',
-    monitor: '监控'
+    monitor: '监控',
+    memorySync: '记忆同步'
   });
 
   /**
    * 内置命令：不是技能，也不扫描目录，输入 `/` 就应该能被找到。
-   * 只列「单独执行就有意义」的：需要接参数的（`/记灵感 <内容>`）不列，避免点一下就发半句。
-   * 文本是最终发出去的那一句，执行仍走普通消息的同一条路（命令分派在下面）。
+   * 参数命令也可发现：选择时只填入前缀，补充并明确发送后才分派。
+   * 不把风险样本当成真实能力列出来；命令仍走普通消息的同一条执行路径。
    */
   const BUILTIN_COMMANDS = Object.freeze([
+    Object.freeze({ id: '记灵感', text: '/记灵感', insert:'/记灵感 ', description: '写下一条灵感，补充内容后发送；保存在本机' }),
+    Object.freeze({ id: '记忆同步', text: '/记忆同步', aliases:Object.freeze(['/同步','/sync']),description: '打开跨设备同步设置：先检查清单，确认后才传输' }),
     Object.freeze({ id: 'setup', text: '/setup', description: '探测本机：逐项判定，一次确认写盘' }),
     Object.freeze({ id: '提炼经验', text: '/提炼经验', description: '把当前项目里未提炼的执行记录提炼成经验' }),
     Object.freeze({ id: '提炼决策', text: '/提炼决策', description: '扫描当前项目的会话，产出决策候选并在流内确认' }),
@@ -113,7 +132,7 @@
   /** 输入框里是否已经是一条完整的内置命令；回车时据此跳过面板默认选中项。 */
   const isExactBuiltinCommand = (value) => {
     const text = String(value ?? '').trim();
-    return Boolean(text) && BUILTIN_COMMANDS.some((command) => command.text === text);
+    return Boolean(text) && BUILTIN_COMMANDS.some((command) => command.text === text || command.aliases?.includes(text));
   };
 
   /**
@@ -133,6 +152,7 @@
     if (publish) return { kind: 'publish', confirm: publish[1] === '确认' };
     if (raw === '/项目库') return { kind: 'library', confirm: false };
     if (raw === '/变化') return { kind: 'since', confirm: false };
+    if (['/记忆同步','/同步','/sync'].includes(raw)) return {kind:'memorySync',confirm:false};
     if (raw === '/监控') return { kind: 'monitor', confirm: false };
     return null;
   };
@@ -169,7 +189,7 @@
 
   /**
    * 变化窗口回复：首次查看不写成「没有变化」；算不全时如实带一句原因。
-   * 这条命令会推进水位（进入项目即「看过了」），在回复里明说，避免下次看不到同一批变化时误判。
+   * 这条命令会推进水位；普通切换项目不会。正文落进会话，重启后仍可回查。
    */
   const sinceReply = (view) => {
     const counts = view?.counts ?? {};
@@ -179,6 +199,14 @@
     const rows = blocks
       .filter((block) => Array.isArray(block?.items) && block.items.length > 0)
       .map((block) => [String(block.title ?? '变化'), `${block.items.length} 条`]);
+    const detailBlock = (title, items) => ({
+      type: 'kv', title,
+      rows: items.map((item) => [String(item.shortSha || item.status || '事件'),
+        [item.title || item.path || item.id || '无法识别的条目', item.author, item.at].filter(Boolean).join('\n')])
+    });
+    const details = blocks.filter((block) => block.items?.length)
+      .map((block) => detailBlock(`${block.title} · ${block.items.length} 条`, block.items));
+    const unknownItems = Array.isArray(view?.unknown?.items) ? view.unknown.items : [];
     const text = !known
       ? '首次查看：还没有上次看过的时间点，从这次开始记水位，下次只看新增的变化。'
       : (status === 'ok' && view?.empty === true
@@ -195,12 +223,15 @@
         ...(rows.length
           ? [{ type: 'table', title: '本次变化', head: ['类别', '条目'], rows }]
           : []),
+        ...details,
+        ...(unknownItems.length ? [detailBlock('无法判断新旧 · 以下内容未计入新增', unknownItems)] : []),
         {
           type: 'kv',
           title: '变化窗口 · 水位',
           rows: [
             ['上次看过', String(view?.previousAt ?? '（没有水位）')],
             ['本次检查', String(view?.checkedAt ?? '')],
+            ['范围', '提交与观察员事件各读取最近 50 条；未提交改动列出当前文件。'],
             ['说明', '这次检查已推进水位，下次只看新增。']
           ]
         }
@@ -255,7 +286,7 @@
       return { text: `没提炼成：${result?.reason || '原因未知'}`, blocks: [] };
     }
     if (result.attempted === 0) {
-      return { text: '没有待提炼的执行记录：已经提炼过的不会重复。', blocks: [] };
+      return { text: '没有待提炼的执行记录。这里仅处理本应用已完成的执行记录，不会把 Git 提交或普通聊天当作执行证据。外部经验可用 /记灵感 粘贴原文，再在回执上整理并确认；已提炼记录不会重复。', blocks: [] };
     }
     const rows = [
       ['尝试', `${result.attempted} 条`],
@@ -279,7 +310,7 @@
           ['对策', String(lesson.countermeasure ?? '') || '（未记录）'],
           ['状态', String(lesson.verificationStatus ?? '')]
         ],
-        actions: [{ id: 'promote', label: '提升为候选' }],
+        actions: [{ id: 'promote', label: '审阅并沉淀' }],
         note: '提升只生成候选；接受后才会写进知识库。'
       }))
       : [];
@@ -293,20 +324,69 @@
    * `/经验 [关键词]` 的回复：待审候选在前，经验在后；
    * 每张卡只带一个主操作，查看不跳页。
    */
-  const lessonsReply = ({ lessons = [], pending = [], keyword = '' } = {}) => {
-    const candidates = (Array.isArray(pending) ? pending : []).slice(0, 5).map((item) => ({
+  const reviewExcerpt = (value, max = 4000) => {
+    const text = String(value ?? '');
+    return text.length <= max ? text : `${text.slice(0, max)}\n…（补充信息较长，此处为节选，请回查来源记录。）`;
+  };
+  const candidateReviewBlock = (item = {}) => ({
       type: 'review',
       kind: 'candidate',
       proposalId: String(item.id ?? ''),
+      projectId: item.projectId ?? '', projectName:item.projectName ?? '',
+      editKind: 'candidate', expectedHash: item.expectedHash ?? '', editValues: item.editValues ?? {title:item.title||'',content:item.content||'',scope:'project',domains:'',applicability:'',exceptions:''},
       title: String(item.title ?? '待审核候选'),
       rows: [
-        ['来源', '经验提升'],
-        ['状态', '待审核'],
-        ['主张', String(item.claim ?? '') || '（无）']
+        ['正文', String(item.content ?? item.claim ?? '') || '（未提供正文，请先核对）'],
+        ['范围', item.scopeLabel || '未记录范围，请先核对'],
+        ['适用/例外', reviewExcerpt([
+          `适用：${(item.applicability ?? []).join('；') || '未记录'}`,
+          `例外：${(item.exceptions ?? []).join('；') || '未记录'}`
+        ].join('\n'))],
+        ['证据', reviewExcerpt(item.evidenceText || '未提供可追证据，请先核对', 6000)],
+        ['来源', reviewExcerpt(item.sourceLabel || '未记录来源', 2000)],
+        ['验证', item.verificationLabel || '待验证'],
+        ['事实/推断', reviewExcerpt([
+          ...(item.facts ?? []).map((value) => `事实：${value}`),
+          ...(item.inferences ?? []).map((value) => `推断：${value}`),
+          ...(item.unknowns ?? []).map((value) => `未知：${value}`),
+          ...(item.validationSuggestions ?? []).map((value) => `验证建议：${value}`)
+        ].join('\n') || '未另外记录')]
       ],
-      actions: [{ id: 'approve', label: '接受' }, { id: 'reject', label: '拒绝' }],
-      note: '接受会写入知识库；拒绝只留记录。'
-    }));
+      actions: [{ id: 'approve', label: '确认沉淀知识' }, { id: 'reject', label: '拒绝' }, {id:'cancel-experience',label:'暂不沉淀'}],
+      note: '第二次确认：核对正文、适用条件、例外与范围后写入知识。保持待验证，拒绝只留记录。'
+    });
+
+  /** 多张完整候选不能挤破单条会话 64 KiB 上限；分条保存，不截断将入库的正文。 */
+  const replyParts = (reply, max = 56 * 1024) => {
+    const expanded = [];
+    for (const block of reply.blocks ?? []) {
+      if ((block.type === 'kv' || block.type === 'table') && Array.isArray(block.rows)) {
+        let rows = [];
+        for (const row of block.rows) {
+          if (rows.length && JSON.stringify({ ...block, rows: [...rows, row] }).length > max) {
+            expanded.push({ ...block, rows });
+            rows = [];
+          }
+          rows.push(row);
+        }
+        expanded.push({ ...block, rows });
+      } else expanded.push(block);
+    }
+    const parts = [{ text: reply.text ?? '', blocks: [] }];
+    for (const block of expanded) {
+      if (JSON.stringify([block]).length > max) throw new Error('单张内容过长，暂时无法保存；请在工作台查看。');
+      let part = parts.at(-1);
+      if (part.blocks.length && JSON.stringify([...part.blocks, block]).length > max) {
+        part = { text: '内容续页', blocks: [] };
+        parts.push(part);
+      }
+      part.blocks.push(block);
+    }
+    return parts;
+  };
+
+  const lessonsReply = ({ lessons = [], memory = null, pending = [], pendingTotal = pending.length, keyword = '' } = {}) => {
+    const candidates = (Array.isArray(pending) ? pending : []).map(candidateReviewBlock);
     const cards = (Array.isArray(lessons) ? lessons : []).slice(0, 5).map((lesson) => ({
       type: 'review',
       kind: 'lesson',
@@ -315,18 +395,23 @@
       rows: [
         ['机制', String(lesson.mechanism ?? '') || '（未记录）'],
         ['对策', String(lesson.countermeasure ?? '') || '（未记录）'],
-        ['状态', String(lesson.verificationStatus ?? '')]
+        ['状态', String(lesson.statusLabel || ({ unverified: '待验证', inferred: '推断', verified: '已验证', disputed: '争议', superseded: '已被取代' })[lesson.verificationStatus] || '未知')]
       ],
-      actions: [{ id: 'promote', label: '提升为候选' }],
+      actions: [{ id: 'promote', label: '审阅并沉淀' }],
       note: '提升只生成候选；接受后才会写进知识库。'
     }));
-    const empty = !candidates.length && !cards.length;
+    const references = memory ? (memory.items ?? []).map(item => item.kind === 'lesson'
+      ? ({ type: 'review', kind: 'lesson', lessonId: item.id, title: item.title,
+        rows: [['正文',item.content],['状态 / 范围',`${item.statusLabel} · ${item.reason}`],['命中',item.matchReason],['引用',`[${item.ref}]`]],
+        actions: [{id:'promote',label:'审阅并沉淀'}],note:'只读经验参考；审阅正文和范围后才能确认为知识。' })
+      : ({type:'kv',title:item.title,rows:[['类型 / 状态',`知识 · ${item.statusLabel}`],['正文',item.content],['范围',item.reason],['命中',item.matchReason],['引用',`[${item.ref}]`],['证据',item.evidenceRefs.join('；')||'未提供']]})) : cards;
+    const empty = !candidates.length && !references.length;
     const text = empty
       ? (keyword
-        ? `没有匹配「${keyword}」的经验。`
-        : '还没有经验：先在项目里用 /提炼经验 从执行记录提炼。')
-      : `经验 ${cards.length} 条，待审核候选 ${candidates.length} 条。`;
-    return { text, blocks: [...candidates, ...cards] };
+        ? (memory?.reason || `没有匹配「${keyword}」的经验或知识。`)
+        : '还没有经验或知识：本应用的已完成执行记录可用 /提炼经验；外部记录可用 /记灵感 粘贴后整理。')
+      : `经验 / 知识 ${references.length} 条，待审核候选 ${candidates.length} 条。${pendingTotal > candidates.length ? `候选共 ${pendingTotal} 条，本次显示 ${candidates.length} 条；处理后重新打开可继续。` : ''}`;
+    return { text: text + ((memory?.omitted?.length) ? ' 部分正文超过容量，未截断后充当完整依据；请在工作台核对。' : ''), blocks: [...candidates, ...references] };
   };
 
   /**
@@ -412,6 +497,10 @@
     };
   };
 
+  // 发送时还会附加关联资料等元数据；它们不是草稿，不能阻止清除已发送的正文。
+  const sameDraftContent = (current, sent) => ['id','projectId','text','skillId']
+    .every(key => (current?.[key] ?? '') === (sent?.[key] ?? ''));
+
   const create = (ctx) => {
     const threadApi = ctx.threadApi;
     const listApi = ctx.listApi;
@@ -450,10 +539,16 @@
     const slashConflict = $('skillConflict');
     const slashError = $('skillError');
     const slashToggle = $('skillAliasToggle');
+    const slashRefresh = $('skillRefresh');
+    const slashReset = $('skillAliasReset');
+    input.setAttribute('aria-controls','skillList');input.setAttribute('aria-haspopup','listbox');
 
     /** 当前会话由顶栏持有：输入区只读，不另存一份。 */
     const currentId = () => ctx.ui.header.currentId();
     const report = (label, action) => ctx.report(label, action);
+    const appendReply = async (id, reply) => {
+      for (const part of replyParts(reply)) await store.append({ id, role: 'assistant', ...part });
+    };
 
     const el = (tag, className, text) => {
       const node = document.createElement(tag);
@@ -465,12 +560,17 @@
     // `/` 面板：技能行来自扫描结果；数字别名只存「我改过的那几个」。
     let skillRows = [];
     let skillCatalogEmpty = null;
+    let skillReadError = '';
     let skillsLoaded = false;
     let skillsLoading = false;
+    let skillsPending = null;
+    let resolvingSkill = false;
     let slashOpen = false;
     let slashQuery = '';
     let slashSelection = 0;
+    let slashNavigated = false;
     let slashCustomizing = false;
+    let builtinExpanded = false;
     let slashFlat = [];
     let busy = false;
     // 进行中的一轮：停止按钮按它来中止，不猜「当前那一轮」。
@@ -484,6 +584,90 @@
     let starting = false;
     // 从技能面板选中的技能：显示成胶囊，发送时才拼进消息。
     let pickedSkill = null;
+
+    // 输入区持有自己的绑定，保存时不临时读顶栏，避免切换途中把旧文字写给新项目。
+    let draftScope = { id: '', projectId: '' };
+    let draftLoading = false;
+    let draftLoadFailed = false;
+    let draftToken = 0;
+    let draftWrites = Promise.resolve();
+    let queuedDraft = '';
+    const draftStatus = $('draftStatus');
+    const draftKey = (scope) => JSON.stringify([scope.id, scope.projectId]);
+    const snapshotDraft = () => ({ ...draftScope, text: input.value, skillId: pickedSkill ?? '' });
+    const draftNotice = (text, tone = '') => {
+      if (!draftStatus) return;
+      draftStatus.textContent = text;
+      draftStatus.hidden = !text;
+      draftStatus.dataset.tone = tone;
+    };
+    const queueDraft = () => {
+      if (!draftScope.id || draftLoading || draftLoadFailed || !store?.saveDraft) return draftWrites;
+      const snapshot = snapshotDraft();
+      const signature = JSON.stringify(snapshot);
+      if (signature === queuedDraft) return draftWrites;
+      queuedDraft = signature;
+      if (snapshot.text || snapshot.skillId) draftNotice('正在保存草稿…');
+      draftWrites = draftWrites.catch(() => {}).then(() => store.saveDraft(snapshot));
+      draftWrites.then(() => {
+        if (JSON.stringify(snapshotDraft()) === signature) {
+          draftNotice(snapshot.text || snapshot.skillId ? '草稿已保存，仅用于当前会话与项目' : '');
+        }
+      }).catch((error) => {
+        if (draftKey(snapshot) !== draftKey(draftScope)) return;
+        queuedDraft = '';
+        draftNotice(`草稿未保存：${error?.message ?? error}；请重试后再切换`, 'error');
+      });
+      return draftWrites;
+    };
+    const saveDraftInBackground = () => { void queueDraft().catch(() => {}); };
+    const restoreDraft = async ({ id = '', projectId = '' } = {}) => {
+      const target = { id, projectId };
+      if (draftKey(target) === draftKey(draftScope) && !draftLoadFailed) return;
+      const token = ++draftToken;
+      draftScope = target;
+      draftLoading = true;
+      draftLoadFailed = false;
+      input.value = '';
+      pickedSkill = null;
+      projectLinks()?.clear?.();
+      ctx.ui.sessionPoints?.consume?.();
+      panelAt()?.close();
+      setSlashOpen(false);
+      draftNotice(id ? '正在恢复草稿…' : '');
+      syncComposer();
+      try {
+        const draft = id && store?.draft ? await store.draft(target) : {};
+        if (token !== draftToken) return;
+        input.value = String(draft.text ?? '');
+        pickedSkill = draft.skillId || null;
+        queuedDraft = JSON.stringify(snapshotDraft());
+        draftNotice(input.value || pickedSkill ? '草稿已恢复，仅用于当前会话与项目' : '');
+      } catch (error) {
+        draftLoadFailed = true;
+        draftNotice('草稿读取失败，重新选择会话后重试', 'error');
+        throw error;
+      } finally {
+        if (token === draftToken) {
+          draftLoading = false;
+          renderSkillChip();
+          resizeInput();
+          syncComposer();
+        }
+      }
+    };
+    const clearSentDraft = async (snapshot) => {
+      if (sameDraftContent(snapshotDraft(), snapshot)) {
+        input.value = '';
+        pickedSkill = null;
+        renderSkillChip();
+        queuedDraft = JSON.stringify(snapshotDraft());
+        draftNotice('');
+      }
+      // 与输入保存串行；存储层还会比较发送时的正文，不覆盖后来输入的内容。
+      draftWrites = draftWrites.catch(() => {}).then(() => store?.clearDraft?.(snapshot));
+      await draftWrites;
+    };
 
     /** 本地只存覆盖项；读失败就当没改过，不阻塞面板。 */
     const readAliases = () => {
@@ -531,43 +715,51 @@
       }
       const detail = conflicts.numbers.map((number) => {
         const ids = conflicts.byNumber[String(number)] ?? [];
-        return `${number}（${ids.join('、')}）`;
+        return `${number}：${ids.map(id=>{const skill=skillRows.find(row=>row.id===id);return `/${skill?.commandName||skillsApi.shortNameOf(id)}（${skill?.sourceLabel||'未知来源'}）`;}).join('、')}`;
       }).join('；');
-      slashConflict.textContent = `数字冲突：${detail}。两个命令用了同一个数字，按数字会命中排在前面的那个。`;
+      slashConflict.textContent = `旧快捷键重复：${detail}。请明确选择、重新分配或恢复默认；不会自动调用。`;
       slashConflict.hidden = false;
     };
 
     /** 技能目录只在第一次打开面板时读；失败就留在面板上，不写控制台。 */
-    const loadSkills = () => {
-      if (skillsLoaded || skillsLoading) return;
+    const loadSkills = ({refresh=false}={}) => {
+      if(skillsLoading)return skillsPending;
+      if(skillsLoaded&&!refresh)return Promise.resolve(true);
       const api = window.companion?.skills?.catalog;
       if (!api) {
         setSlashError('技能目录接口不可用：这个窗口没有拿到主进程桥。');
-        return;
+        return Promise.resolve(false);
       }
-      skillsLoading = true;
+      skillsLoading = true;skillReadError='';setSlashError('');
       slashCount.textContent = '读取中…';
-      void Promise.resolve()
-        .then(() => api({}))
+      skillsPending=Promise.resolve()
+        .then(() => api({refresh}))
         .then((data) => {
           skillRows = skillsApi.flattenCatalog(data);
           skillCatalogEmpty = data?.empty ?? null;
           skillsLoaded = true;
           setSlashError('');
+          renderSkillChip();
           if (slashOpen) renderSlash();
+          return true;
         })
         .catch((error) => {
-          setSlashError(`读取技能失败：${error?.message ?? error}`);
+          skillReadError=String(error?.message??error);
+          setSlashError(`读取技能失败，请点重试。`);
+          slashError.title=String(error?.message??error);
           if (slashOpen) renderSlash();
+          return false;
         })
         .finally(() => {
           skillsLoading = false;
           if (slashOpen) renderSlash();
         });
+      if(slashOpen)renderSlash();
+      return skillsPending;
     };
 
     const ensureSkills = () => {
-      if (skillsLoaded || skillsLoading) return;
+      if (skillsLoaded || skillsLoading || skillReadError) return;
       loadSkills();
     };
 
@@ -580,9 +772,12 @@
       row.dataset.kind = kind;
       row.dataset.skillRow = skill.id;
       row.dataset.index = String(index);
+      row.id=`slash-option-${index}`;row.setAttribute('role','option');row.setAttribute('aria-selected',index===slashSelection?'true':'false');
       if (index === slashSelection) row.classList.add('is-on');
       if (conflictIds.has(skill.id)) row.classList.add('is-conflict');
-      if (skill.missing) row.title = skill.reason || '扫描缺失';
+      row.setAttribute('aria-disabled',skill.callable===false?'true':'false');
+      if(skill.callable===false)row.classList.add('is-unavailable');
+      row.title=[skill.id,skill.callReason||skill.reason].filter(Boolean).join(' · ');
       if (kind === 'command') {
         if (slashCustomizing) {
           const field = el('input', 'slash-num-input');
@@ -603,12 +798,15 @@
       }
       // 只显示技能名：来源前缀（pstack: / matt:分类/ / domain:…）不占宽度，
       // 来源由右侧徽章说明；完整 id 留在 title 与 data-skill-row 上。
-      const cmd = el('span', 'slash-cmd', `/${skillNameOf(skill.id)}`);
+      const cmd = el('span', 'slash-cmd', `/${skill.commandName||skillNameOf(skill.id)}`);
       cmd.title = skill.id;
       row.append(cmd);
       const text = el('span', 'slash-text');
       // 说明原样显示，不翻译；名称已经包含在 /id 里，不再多占一行。
       text.append(el('span', 'slash-desc', skill.description || '（扫描没有读到说明）'));
+      if(skill.distribution==='bundled')text.append(el('span','slash-context',`应用内置 · ${skill.sourceLabel}${skill.origin&&skill.origin!==skill.source?` · ${skill.origin}`:''}`));
+      else if(skill.origin&&skill.origin!==skill.source)text.append(el('span','slash-context',`${skill.sourceLabel} · ${skill.origin}`));
+      if(skill.callable===false)text.append(el('span','slash-unavailable',skill.callReason||skill.reason||(skill.playbookOnly?'仅供 Playbook 使用，不在对话中执行':'当前不可调用')));
       row.append(text);
       if (skill.missing) row.append(el('span', 'slash-src is-missing', '缺失'));
       row.append(el('span', `slash-src src-${skill.source}`, skill.sourceLabel));
@@ -617,13 +815,14 @@
 
     /**
      * 一行内置命令：和技能行长得一样，但没有数字、没有来源目录。
-     * 点它等于把那句话打进输入框再发送，走的是普通消息的同一条路。
+     * 点它只把那句话填进输入框，核对后再发送，走的是普通消息的同一条路。
      */
     const builtinRow = (command, index) => {
       const row = el('div', 'slash-item');
       row.dataset.kind = 'builtin';
       row.dataset.skillRow = command.id;
       row.dataset.index = String(index);
+      row.id=`slash-option-${index}`;row.setAttribute('role','option');row.setAttribute('aria-selected',index===slashSelection?'true':'false');
       if (index === slashSelection) row.classList.add('is-on');
       row.append(el('span', 'slash-num is-empty', '·'));
       const cmd = el('span', 'slash-cmd', command.text);
@@ -631,7 +830,7 @@
       row.append(cmd);
       const text = el('span', 'slash-text');
       text.append(el('span', 'slash-desc', command.description));
-      row.append(text, el('span', 'slash-src src-command', '内置'));
+      row.append(text, el('span', 'slash-src src-command', '应用命令'));
       return row;
     };
 
@@ -651,22 +850,26 @@
       const conflictIds = new Set(model.conflicts.ids);
       // 内置命令排在最前：打 `/` 先看到「能做什么」，再看到「装了哪些技能」。
       const query = skillsApi.normalizeQuery(slashQuery);
-      const builtin = BUILTIN_COMMANDS.filter((command) =>
+      const builtinMatches = BUILTIN_COMMANDS.filter((command) =>
         !query || command.id.includes(query) || command.text.includes(query)
-        || command.description.includes(query))
+        || command.description.includes(query) || command.aliases?.some(alias=>alias.includes(query)))
         // 名字前缀命中排在「只是描述里带这几个字」前面：
         // 打 /经验 时，/经验 不能排在 /提炼经验 后面。
         .sort((a, b) => {
           if (!query) return 0;
-          const rank = (command) => (command.text.startsWith(`/${query}`) ? 0
-            : (command.id.startsWith(query) ? 1 : 2));
+          const rank = (command) => (command.aliases?.includes(`/${query}`)||command.text===`/${query}`?0:command.text.startsWith(`/${query}`)?1:command.id.startsWith(query)?2:3);
           return rank(a) - rank(b);
         });
-      const builtinRows = builtin.map((command) => ({ id: command.id, kind: 'builtin', text: command.text }));
+      const builtin = query || builtinExpanded ? builtinMatches : [];
+      const builtinRows = builtin.map((command) => ({ id: command.id, kind: 'builtin', text: command.insert||command.text }));
 
       slashList.replaceChildren();
-      slashList.append(el('div', 'slash-group',
-        `命令 · ${builtin.length}${query ? '（已过滤）' : ''}`));
+      if(skillsLoaded&&!skillRows.length&&!query)slashList.append(el('p','slash-empty','当前目录没有技能。下方内置命令仍可使用；检查技能目录与声明后点刷新。'));
+      if (!query) {
+        const toggle=el('button','slash-group slash-command-toggle',`应用命令 · ${builtinMatches.length} · ${builtinExpanded?'收起 ▴':'展开 ▾'}`);
+        toggle.type='button';toggle.dataset.builtinToggle='1';toggle.setAttribute('aria-expanded',String(builtinExpanded));
+        slashList.append(toggle);
+      } else slashList.append(el('div', 'slash-group',`应用内置命令 · ${builtin.length}（已过滤）`));
       builtin.forEach((command, index) => {
         slashList.append(builtinRow(command, index));
       });
@@ -728,21 +931,25 @@
           : (skillCatalogEmpty?.detail
             || (skillRows.length
               ? `没有匹配「${skillsApi.normalizeQuery(slashQuery)}」的技能。换个词，或者只打一个 / 看全部。`
-              : '扫描没有找到技能：检查 PSTACK_DIR / MATT_SKILLS_DIR / 域包 manifest / 插件 ghost.json。'));
+              : '扫描没有找到技能：检查本机技能目录、pstack/matt 设置、域包 manifest 或插件 ghost.json。'));
         slashList.append(el('p', 'slash-empty', message));
       }
 
+      if(slashRefresh){slashRefresh.disabled=skillsLoading;slashRefresh.textContent=skillsLoading?'读取中…':(skillReadError?'重试':'刷新');}
+      if(slashReset)slashReset.hidden=!slashCustomizing;
       slashCount.textContent = skillsLoaded
-        ? `共 ${skillRows.length} 个技能 · ${model.slots.length} 个数字快捷`
+        ? `可用 ${skillRows.filter(row=>row.callable!==false).length} / ${skillRows.length} · 快捷 ${model.slots.length}`
         : (slashError.hidden ? '读取中…' : '读取失败');
       slashToggle.textContent = slashCustomizing ? '完成' : '自定义';
       slashToggle.setAttribute('aria-pressed', slashCustomizing ? 'true' : 'false');
       slashHint.textContent = slashCustomizing
-        ? '数字只认 1-9；改成默认数字或清空即回到默认。改完点「完成」。'
-        : '↑↓ 选择 · Enter 填入技能（命令直接发送）· 没有匹配时 Enter 直接发送 · Esc 关闭';
+        ? '数字 1-9；占用时交换，清空回默认。旧冲突可恢复默认；改完点「完成」。'
+        : '↑↓ 选择 · Enter 选中后补充问题 · 技能带来源高亮 · Esc 关闭';
       syncConflictText(model.conflicts);
       // 键盘移动后把选中行带进视野；初始选中第一行时等于不滚动。
-      slashList.querySelector('.slash-item.is-on')?.scrollIntoView({ block: 'nearest' });
+      const active=slashList.querySelector('.slash-item.is-on');
+      if(active)input.setAttribute('aria-activedescendant',active.id);else input.removeAttribute('aria-activedescendant');
+      active?.scrollIntoView({ block: 'nearest' });
     };
 
     /** 改数字时不重画整段：重画会让输入框丢焦点，只更新冲突标记。 */
@@ -750,6 +957,7 @@
       const model = aliasModel();
       const conflictIds = new Set(model.conflicts.ids);
       slashList.querySelectorAll('[data-alias-for]').forEach((field) => {
+        field.value=String(model.slots.find(slot=>slot.id===field.dataset.aliasFor)?.number||'');
         field.classList.toggle('is-conflict', conflictIds.has(field.dataset.aliasFor));
       });
       slashList.querySelectorAll('.slash-item').forEach((row) => {
@@ -765,6 +973,8 @@
       }
       slashOpen = open;
       slashPanel.hidden = !open;
+      input.setAttribute('aria-expanded',open?'true':'false');
+      if(!open)input.removeAttribute('aria-activedescendant');
       if (!open) {
         slashCustomizing = false;
         slashSelection = 0;
@@ -773,7 +983,9 @@
       }
       // 打开技能面板先收起会话浮层：两个浮层不该同时压着。
       ctx.ui.header.closePopoverIfOpen();
-      slashSelection = 0;
+      slashSelection = 0;slashNavigated=false;
+      builtinExpanded = false;
+      if(!skillReadError)setSlashError('');
       slashQuery = input.value.startsWith('/') ? input.value.slice(1) : '';
       ensureSkills();
       renderSlash();
@@ -795,6 +1007,7 @@
 
     const moveSlashSelection = (delta) => {
       if (!slashFlat.length) return;
+      slashNavigated=true;
       slashSelection = (slashSelection + delta + slashFlat.length) % slashFlat.length;
       renderSlash();
     };
@@ -811,7 +1024,7 @@
       // 不能让 `/` 面板把回车吃掉——否则「有匹配项才调用」会变成「永远调不到」。
       // #128：/setup 同样不塞进技能面板（面板只列技能），否则会被 setup-pstack 之类的技能截走。
       const legacySample = value.trim() === blocksApi.SAMPLE_COMMAND
-        || Boolean(window.OwnerConfirm?.isCommand(value))
+        || (Boolean(window.OwnerConfirm?.isCommand(value))&&!isExactBuiltinCommand(value))
         || Boolean(window.OwnerSetupProbe?.isCommand?.(value));
       if (!value.startsWith('/') || legacySample) {
         if (slashOpen) setSlashOpen(false);
@@ -830,7 +1043,8 @@
       const next = value.slice(1);
       if (next !== slashQuery) {
         slashQuery = next;
-        slashSelection = 0;
+        if(!skillReadError)setSlashError('');
+        slashSelection = 0;slashNavigated=false;
       }
       renderSlash();
     };
@@ -865,7 +1079,9 @@
       if (!skillChipBar) return;
       skillChipBar.hidden = !pickedSkill;
       if (skillChipLabel) {
-        skillChipLabel.textContent = pickedSkill ? `/${skillNameOf(pickedSkill)}` : '';
+        const skill=skillRows.find(row=>row.id===pickedSkill);
+        skillChipLabel.textContent = pickedSkill ? `/${skill?.commandName||skillNameOf(pickedSkill)}${skill?` · ${skill.sourceLabel}`:''}` : '';
+        skillChipLabel.title=pickedSkill||'';
       }
       if (!pickedSkill) return;
       input.placeholder = '问这个技能要做什么…';
@@ -873,7 +1089,10 @@
 
     const composeSkill = (id) => {
       if (!listApi.canCompose(currentId())) return;
+      const skill=skillRows.find(row=>row.id===id);
+      if(!skill || skill.callable===false){setSlashError(skill?.callReason||skill?.reason||'这条技能当前不可调用，请刷新后重新选择。');return;}
       pickedSkill = String(id ?? '');
+      ctx.notify?.clear?.();
       // 面板是用 `/` 搜出来的：选中后把搜索串清掉，输入框只留问题。
       if (input.value.trim().startsWith('/')) {
         input.value = '';
@@ -881,45 +1100,52 @@
       }
       setSlashOpen(false);
       renderSkillChip();
+      syncComposer();
       input.placeholder = '问这个技能要做什么…';
+      saveDraftInBackground();
       input.focus();
+    };
+
+    /** 手输和粘贴也进入同一已选状态；异步目录只能处理原会话中未变化的原文。 */
+    const syncTypedSkill = () => {
+      const value = input.value;
+      if (pickedSkill || !/^\/\S+\s/u.test(value)) return false;
+      if (parseCapabilityCommand(value) || isExactBuiltinCommand(value)
+        || ownWrites()?.parseCommand(value) || projectSyncs()?.parseCommand?.(value)
+        || setupProbes()?.parseCommand?.(value) || window.OwnerConfirm?.isCommand(value)) return false;
+      if (!skillsLoaded) {
+        const scope = draftKey(draftScope);
+        void loadSkills().then(loaded => {
+          if (!loaded || resolvingSkill || scope !== draftKey(draftScope) || input.value !== value || pickedSkill) return;
+          if (syncTypedSkill()) { resizeInput(); syncComposer(); saveDraftInBackground(); }
+        });
+        return false;
+      }
+      const selection = skillsApi.typedSelection(value, skillRows);
+      if (!selection) return false;
+      pickedSkill = selection.id;
+      ctx.notify?.clear?.();
+      input.value = selection.question;
+      setSlashOpen(false);
+      renderSkillChip();
+      return true;
     };
 
     skillChipClear?.addEventListener('click', () => {
       pickedSkill = null;
       renderSkillChip();
       syncComposer();
+      saveDraftInBackground();
       input.focus();
     });
 
-    /** 面板里的技能 id 带来源前缀（pstack: / matt:分类/ / domain:…），pi-chat 只认目录名。 */
-    const chatSkillIdOf = (id) => String(id ?? '').split(/[:/]/u).filter(Boolean).pop() ?? '';
+    const skillCommandOf = raw => skillsApi.resolveInvocation(raw,skillRows);
 
-    /** 输入框里是不是「/某个已扫描技能 + 问题」；全名与短名都认，最长匹配防前缀互吃。 */
-    const skillCommandOf = (raw) => {
-      const text = String(raw ?? '').trim();
-      if (!text.startsWith('/')) return null;
-      let best = null;
-      for (const skill of skillRows) {
-        for (const token of new Set([String(skill.id), skillNameOf(skill.id)])) {
-          if (!token) continue;
-          if (text !== `/${token}` && !text.startsWith(`/${token} `)) continue;
-          if (!best || token.length > best.token.length) {
-            best = { skill, token };
-          }
-        }
-      }
-      if (!best) return null;
-      return {
-        id: best.skill.id,
-        question: text.slice(best.token.length + 1).trim()
-      };
-    };
-
-    const invokeSlashSelection = () => {
+    const invokeSlashSelection = ({explicit=false}={}) => {
+      if(!explicit&&!slashNavigated&&/^[1-9]$/u.test(slashQuery)&&aliasModel().conflicts.numbers.includes(Number(slashQuery))){setSlashError('数字重复，请点具体技能、用方向键选择或重新分配。');return;}
       const chosen = slashFlat[slashSelection];
       if (!chosen) return;
-      // 技能行（数字快捷与全部技能）都是「填进输入框」；内置命令才是「整句发送」。
+      // 技能行（数字快捷与全部技能）都是「填进输入框」；内置命令也只填入，避免一次菜单点击就执行有后果的动作。
       if (chosen.kind === 'skill' || chosen.kind === 'command') {
         composeSkill(chosen.id);
         return;
@@ -927,15 +1153,16 @@
       if (chosen.kind === 'builtin') {
         setSlashOpen(false);
         input.value = chosen.text;
-        resizeInput();
-        void send();
+        resizeInput();syncComposer();saveDraftInBackground();input.focus();
+        ctx.notify?.('已填入命令，补充或核对后发送');
         return;
       }
     };
 
     /** 没有会话就锁死输入框：不给「无会话却能发消息」留半截状态。 */
     const syncComposer = () => {
-      const open = listApi.canCompose(currentId());
+      const open = listApi.canCompose(currentId()) && !draftLoading && !draftLoadFailed;
+      const otherTurn = activeTurn && draftKey(activeTurn) !== draftKey(draftScope);
       if (!open && slashOpen) setSlashOpen(false);
       if (!open) panelAt()?.close();
       input.disabled = !open;
@@ -943,9 +1170,11 @@
       // 提示里说清落点为空，要写项目先选项目。
       input.placeholder = pickedSkill
         ? '问这个技能要做什么…'
-        : composerPlaceholder({ open, viewProjectId: ctx.ui.header.viewProjectId() });
+        : (otherTurn ? '另一会话正在回复，可以先写好草稿…' : composerPlaceholder({ open, viewProjectId: ctx.ui.header.viewProjectId() }));
       // 流式中按钮是「停止」：输入框已经清空，但按钮必须可点。
-      sendButton.disabled = (activeTurn || starting) ? false : (!open || !threadApi.canSend(input.value));
+      sendButton.textContent = otherTurn ? '等待' : ((activeTurn || starting) ? '停止' : '发送');
+      sendButton.disabled = otherTurn ? true : ((activeTurn || starting) ? false : (!open || !threadApi.canSend(input.value)));
+      if (insertButton) insertButton.hidden = !activeTurn || Boolean(otherTurn);
     };
 
     /**
@@ -957,6 +1186,7 @@
      * #116 的事，不能借这条路偷偷放行。
      */
     const runOwnWriteTurn = async (command, raw) => {
+      const sentDraft = snapshotDraft();
       const api = ownWrites();
       if (!api) {
         ctx.ui.header.setError('自有目录写入模块还没加载好，稍等一下再试。');
@@ -965,7 +1195,7 @@
       busy = true;
       try {
         // 先把「我要写什么」落进流里：失败时也看得出是哪一句没写成。
-        await store.append({ id: currentId(), role: 'user', text: raw });
+        await store.append({ id: sentDraft.id, role: 'user', text: raw });
         const result = await api.run({
           kind: command.kind,
           text: command.text,
@@ -982,7 +1212,7 @@
         if (result.receipt) {
           // 回执是一条普通回复：文字 + 键值块，复制与导出沿用 #109 / #110 的能力。
           await store.append({
-            id: currentId(),
+            id: sentDraft.id,
             role: 'assistant',
             text: result.receipt.text,
             blocks: result.receipt.blocks
@@ -990,7 +1220,7 @@
         } else {
           ctx.notify(`这个动作不在自有目录免确认范围内：${result.decision?.gate?.reason ?? ''}`, 'error');
         }
-        input.value = threadApi.draftAfterSend();
+        await clearSentDraft(sentDraft);
         resizeInput();
         await ctx.refreshThread();
         input.focus();
@@ -1028,6 +1258,7 @@
      * 没有选项目时明确说「什么都没写」，不回退到第一个项目。
      */
     const runProjectSyncTurn = async (command, raw) => {
+      const sentDraft = snapshotDraft();
       const api = projectSyncs();
       if (!api) {
         ctx.ui.header.setError('项目目录同步模块还没加载好，稍等一下再试。');
@@ -1036,14 +1267,14 @@
       busy = true;
       try {
         const sessionId = currentId();
-        // 先算正文再落「我的一句话」：这条命令本身不该被写进同步的笔记里。
-        const detail = await store.get({ id: sessionId });
-        const messages = threadApi.fromStored(detail?.messages);
+        const projectId = ctx.ui.header.viewProjectId();
         const session = ctx.ui.header.currentSession();
         const title = command.title || listApi.titleOf(session);
+        // 先算正文再落「我的一句话」：这条命令本身不该被写进同步的笔记里。
+        const detail = await store.transcript({ id: sessionId });
+        const messages = threadApi.fromStored(detail?.messages);
         const docs = await projectSyncDocs({ sessionId, title, messages });
         await store.append({ id: sessionId, role: 'user', text: raw });
-        const projectId = ctx.ui.header.viewProjectId();
         let reply = null;
         if (!projectId) {
           reply = { text: '同步到项目目录要先在顶栏选一个项目：这次什么都没写。', blocks: [] };
@@ -1061,7 +1292,7 @@
           text: reply?.text ?? '',
           blocks: Array.isArray(reply?.blocks) ? reply.blocks : []
         });
-        input.value = threadApi.draftAfterSend();
+        await clearSentDraft(sentDraft);
         resizeInput();
         await ctx.refreshThread();
         input.focus();
@@ -1082,6 +1313,7 @@
      * 不选项目时由主进程拒绝并给出原因；不后台跑、不重复提炼。
      */
     const runDistillTurn = async (raw, limit) => {
+      const sentDraft = snapshotDraft();
       const bridge = window.companion?.knowledge;
       if (typeof bridge?.distill !== 'function') {
         ctx.ui.header.setError('这个窗口没有拿到提炼接口（companion.knowledge.distill）。');
@@ -1091,19 +1323,14 @@
       busy = true;
       try {
         await store.append({ id: sessionId, role: 'user', text: raw });
-        input.value = threadApi.draftAfterSend();
+        await clearSentDraft(sentDraft);
         resizeInput();
         const result = await bridge.distill({
           projectId: ctx.ui.header.viewProjectId(),
           limit
         });
         const reply = distillReply(result);
-        await store.append({
-          id: sessionId,
-          role: 'assistant',
-          text: reply.text,
-          blocks: Array.isArray(reply.blocks) ? reply.blocks : []
-        });
+        await appendReply(sessionId, reply);
         await ctx.refreshThread();
         input.focus();
       } finally {
@@ -1116,40 +1343,72 @@
      * 只出卡片，不跳页；没有经验时给下一步（/提炼经验）。
      */
     const runLessonsTurn = async (raw, keyword) => {
+      const sentDraft = snapshotDraft();
       const bridge = window.companion?.knowledge;
       if (typeof bridge?.lessonList !== 'function') {
         ctx.ui.header.setError('这个窗口没有拿到经验接口（companion.knowledge.lessonList）。');
         return;
       }
       const sessionId = currentId();
+      const projectId = ctx.ui.header.viewProjectId();
       busy = true;
       try {
         await store.append({ id: sessionId, role: 'user', text: raw });
-        input.value = threadApi.draftAfterSend();
+        await clearSentDraft(sentDraft);
         resizeInput();
-        const projectId = ctx.ui.header.viewProjectId();
-        const [list, pending] = await Promise.all([
-          bridge.lessonList({ projectId, limit: 50 }),
-          typeof bridge.pendingProposals === 'function'
-            ? bridge.pendingProposals()
-            : Promise.resolve({ items: [] })
+        const [memory, pending] = await Promise.all([
+          bridge.recall({ projectId, query: keyword, limit: 5 }),
+          bridge.pendingProposals?.({ projectId, keyword, limit: 20 }) ?? Promise.resolve({ items: [] })
         ]);
-        const wanted = String(keyword ?? '').trim().toLowerCase();
-        const lessons = (Array.isArray(list?.lessons) ? list.lessons : []).filter((lesson) => (
-          !wanted || [lesson.phenomenon, lesson.mechanism, lesson.countermeasure]
-            .some((value) => String(value ?? '').toLowerCase().includes(wanted))
-        ));
-        const reply = lessonsReply({ lessons, pending: pending?.items ?? [], keyword: wanted });
-        await store.append({
-          id: sessionId,
-          role: 'assistant',
-          text: reply.text,
-          blocks: Array.isArray(reply.blocks) ? reply.blocks : []
-        });
+        const reply = lessonsReply({ memory, pending: pending?.items ?? [], pendingTotal: pending?.total, keyword });
+        await appendReply(sessionId, reply);
         await ctx.refreshThread();
         input.focus();
       } finally {
         busy = false;
+      }
+    };
+
+    /** 定位屏读取已有内容，不挪用输入框、不清草稿，也不触发决策扫描。 */
+    let openingLocate = false;
+    const openFromLocate = async (intent) => {
+      if (openingLocate) return;
+      const sessionId = currentId();
+      const projectId = ctx.ui.header.viewProjectId();
+      if (!sessionId || !projectId) throw new Error('先进入一个项目，再查看内容。');
+      openingLocate = true;
+      const stopNotice = ctx.notify?.(intent === 'since' ? '正在读取具体变化…' : '正在读取已有的待确认内容…');
+      try {
+        const bridge = window.companion;
+        let reply;
+        if (intent === 'since') {
+          reply = sinceReply(await bridge.sinceLastSeen({ projectId }));
+        } else {
+          const results = await Promise.allSettled([
+            bridge.knowledge.pendingProposals({ projectId, limit: 5 }),
+            bridge.memory.pendingDecisions({ projectId })
+          ]);
+          if (results.every((result) => result.status === 'rejected')) throw new Error('待确认内容读取失败，请返回定位屏重试；未改动任何候选。');
+          const knowledge = results[0].status === 'fulfilled' ? results[0].value : null;
+          const decisions = results[1].status === 'fulfilled' ? results[1].value?.pending ?? [] : null;
+          const items = knowledge?.items ?? [];
+          const decisionItems = decisions?.slice(0, 5) ?? [];
+          const totals = [
+            knowledge ? `知识候选共 ${knowledge.total} 条，本次显示 ${items.length} 条` : '知识候选读取失败，请返回重试',
+            decisions ? `决策候选共 ${decisions.length} 条，本次显示 ${decisionItems.length} 条` : '决策候选读取失败，请返回重试'
+          ];
+          reply = {
+            text: `${totals.join('；')}。只展示已有内容，没有扫描新会话。${items.length + decisionItems.length ? '处理后可从定位屏重新打开，继续查看剩余候选。' : ''}`,
+            blocks: [...items.map(candidateReviewBlock), ...decisionCandidateBlocks(decisionItems)]
+          };
+        }
+        await store.append({ id: sessionId, role: 'user', text: intent === 'since' ? '查看项目变化' : '查看待确认内容' });
+        await appendReply(sessionId, reply);
+        await ctx.refreshThread();
+        if (currentId() === sessionId && ctx.ui.header.viewProjectId() === projectId) ctx.ui.stream.revealLatestReply();
+      } finally {
+        openingLocate = false;
+        stopNotice?.();
       }
     };
 
@@ -1159,6 +1418,7 @@
      * 未处理候选与拒绝名单由主进程存进 memory-scan.json，壳只显示结果。
      */
     const runDecisionTurn = async (raw) => {
+      const sentDraft = snapshotDraft();
       const bridge = window.companion?.memory;
       if (typeof bridge?.scanDecisions !== 'function') {
         ctx.ui.header.setError('这个窗口没有拿到决策扫描接口（companion.memory.scanDecisions）。');
@@ -1168,7 +1428,7 @@
       busy = true;
       try {
         await store.append({ id: sessionId, role: 'user', text: raw });
-        input.value = threadApi.draftAfterSend();
+        await clearSentDraft(sentDraft);
         resizeInput();
         const projectId = ctx.ui.header.viewProjectId();
         let result;
@@ -1201,11 +1461,12 @@
      * 确认 / 取消都由审核卡那一个动作落点处理；这里只负责把卡画出来。
      */
     const runComposeDecisionTurn = async (raw) => {
+      const sentDraft = snapshotDraft();
       const sessionId = currentId();
       busy = true;
       try {
         await store.append({ id: sessionId, role: 'user', text: raw });
-        input.value = threadApi.draftAfterSend();
+        await clearSentDraft(sentDraft);
         resizeInput();
         const projectId = ctx.ui.header.viewProjectId();
         const project = (ctx.ui.header.projects?.() ?? []).find((item) => item.id === projectId) ?? null;
@@ -1227,6 +1488,7 @@
     };
 
     const runSetupTurn = async (raw, { appendCommand = true } = {}) => {
+      const sentDraft = snapshotDraft();
       if (!setupProbes()) {
         ctx.ui.header.setError('探测模块还没加载好，稍等一下再试。');
         return;
@@ -1263,7 +1525,7 @@
           return;
         }
         if (appendCommand) {
-          input.value = threadApi.draftAfterSend();
+          await clearSentDraft(sentDraft);
           resizeInput();
         }
       } finally {
@@ -1276,6 +1538,7 @@
      * 失败也留在流里（不静默），并明确说这次没有写成。
      */
     const runCapabilityTurn = async (command, raw) => {
+      const sentDraft = snapshotDraft();
       const label = CAPABILITY_LABELS[command.kind] ?? '命令';
       const bridge = window.companion ?? null;
       const projectId = ctx.ui.header.viewProjectId();
@@ -1285,8 +1548,8 @@
         await store.append({ id: sessionId, role: 'user', text: raw });
         let reply;
         try {
-          if (command.kind === 'monitor') {
-            const opened = ctx.ui.config?.openSection?.('watch') === true;
+          if (command.kind === 'monitor'||command.kind === 'memorySync') {
+            const opened = ctx.ui.config?.openSection?.(command.kind==='monitor'?'watch':'sync') === true;
             reply = {
               text: opened
                 ? '监控在配置箱的「监控」分区：心跳、水位与变更队列只写自有目录。'
@@ -1301,6 +1564,7 @@
                 ]
               }]
             };
+            if(command.kind==='memorySync')reply={text:opened?'已打开记忆同步设置。检查只生成清单，确认后才传输；没有配置也不影响本机使用。':'同步设置没有打开，请从齿轮进入同步分区。',blocks:[]};
           } else if (!projectId) {
             reply = {
               text: `「${label}」要先在顶栏选一个项目：全局模式只读聚合，不写任何项目。`,
@@ -1326,13 +1590,8 @@
         } catch (error) {
           reply = { text: `没有完成「${label}」：${error?.message || '未知原因'}`, blocks: [] };
         }
-        await store.append({
-          id: sessionId,
-          role: 'assistant',
-          text: reply.text ?? '',
-          blocks: Array.isArray(reply.blocks) ? reply.blocks : []
-        });
-        input.value = threadApi.draftAfterSend();
+        await appendReply(sessionId, reply);
+        await clearSentDraft(sentDraft);
         resizeInput();
         await ctx.refreshThread();
         input.focus();
@@ -1341,10 +1600,10 @@
       }
     };
 
-    /** 流式中：发送变停止，输入框只读（避免连发两轮）。 */
+    /** 等待回复时仍可编辑草稿；引导或下一次发送由 send 的会话范围检查决定。 */
     const setStreamingUi = (on) => {
       sendButton.textContent = on ? '停止' : '发送';
-      input.readOnly = on;
+      input.readOnly = false;
       if (insertButton) {
         insertButton.hidden = !on;
         if (on) renderInsertMode();
@@ -1368,21 +1627,21 @@
      * - abort：记下这句当作待发，停止当前一轮；停止收尾后自动接着发。
      */
     const insertWhileStreaming = async (text) => {
+      const sentDraft = snapshotDraft();
       const turn = activeTurn;
       if (!turn) return;
       if (insertMode === 'abort') {
-        pendingResend = text;
-        input.value = '';
-        resizeInput();
+        pendingResend = sentDraft;
+        // 停止确认前仍是草稿；保留在原输入框，切换时也能由正常保存路径落库。
         turn.stop();
         return;
       }
       const bridge = window.companion?.chat;
-      input.value = '';
-      resizeInput();
-      const sessionId = currentId();
+      const sessionId = sentDraft.id;
       // 这句是这一轮的一部分：先落库，再插进流里（不重绘，否则临时气泡会被删掉）。
       await store.append({ id: sessionId, role: 'user', text });
+      await clearSentDraft(sentDraft);
+      resizeInput();
       ctx.ui.stream.appendSteerMessage?.(text);
       const result = typeof bridge?.steer === 'function'
         ? await bridge.steer(turn.turnId, text)
@@ -1401,32 +1660,36 @@
      * 读不到项目文件，但能答通用问题、也能用 prompt 里的关联线索。
      * 没有模型时 pi-chat 返回 no-model，原样把原因给用户，不编答案。
      */
-    const askModel = async (raw, questionForModel = raw) => {
+    const askModel = async (raw, questionForModel = raw, context = snapshotDraft()) => {
       const bridge = window.companion?.chat;
       if (typeof bridge?.ask !== 'function') {
-        return { text: '这个窗口没有拿到模型接口（companion.chat.ask）：重启客户端再试。', blocks: [] };
+        return modelFailureReply({ category: 'session-error', answer: '模型接口暂时不可用，请重新打开应用后重试。' }, context);
       }
       const turnId = globalThis.crypto?.randomUUID?.() ?? `turn-${Date.now()}-${Math.random()}`;
       const stream = ctx.ui.stream;
-      stream.beginStream();
+      const visible = () => draftKey(context) === draftKey(draftScope);
+      if (visible()) stream.beginStream();
       const off = typeof bridge.onEvent === 'function'
         ? bridge.onEvent((event) => {
           if (event?.turnId !== turnId) return;
+          if (!visible()) return;
           if (event.type === 'delta') stream.appendText(event.text);
           else if (event.type === 'thinking') stream.appendThinking(event.text);
           else if (event.type === 'tool') stream.appendTool(event);
           else if (event.type === 'turn-reset') stream.resetStreamText();
         })
         : () => {};
-      activeTurn = { turnId, stop: () => { void bridge.abort?.(turnId); } };
+      activeTurn = { turnId, ...context, stop: () => { void bridge.abort?.(turnId); } };
       setStreamingUi(true);
       let result;
       try {
         // 先把请求发出去，再处理「准备阶段点过停止」——顺序反了会找不到这一轮。
         const request = bridge.ask({
           turnId,
-          sessionId: currentId(),
-          projectId: ctx.ui.header.viewProjectId(),
+          sessionId: context.id,
+          projectId: context.projectId,
+          sourceSeq: context.sourceSeq,
+          linkedProjects: context.linkedProjects ?? [],
           question: String(questionForModel ?? '')
         });
         if (pendingAbort) {
@@ -1443,13 +1706,26 @@
             aborted: true
           };
         }
+        if (result?.ok === false || result?.status === 'error') return modelFailureReply(result, context);
         const text = String(result?.answer ?? '').trim() || '这次没有结论。';
         const cites = Array.isArray(result?.citations) ? result.citations.filter(Boolean) : [];
         const missing = Array.isArray(result?.missingCitations) ? result.missingCitations.filter(Boolean) : [];
         const rows = [];
         if (cites.length) rows.push(['引用', cites.slice(0, 6).join('、')]);
         if (missing.length) rows.push(['未找到', missing.slice(0, 6).join('、')]);
-        return { text, blocks: rows.length ? [{ type: 'kv', title: '引用', rows }] : [] };
+        const refs=(result?.memory?.items??[]).map(item=>[`${item.kind==='knowledge'?'知识':'经验'} · ${item.statusLabel}`,`[${item.ref}] ${item.title}\n${item.reason} · ${item.matchReason}\n${item.content}\n证据：${item.evidenceRefs.join('；')||'未提供'}`]);
+        const blocks=rows.length?[{type:'kv',title:'文件引用',rows}]:[];
+        blocks.push({type:'kv',title:'本轮经验引用（只读）',rows:refs.length?refs:[['说明',result?.memory?.reason||'本轮没有命中本地经验或知识；不能把通用回答当作已保存经验。']]});
+        if (refs.length) blocks.push({ type:'kv', title:'引用计量', rows:[['说明',
+          result?.memory?.referenceTracking?.status === 'failed'
+            ? result.memory.referenceTracking.reason
+            : result?.memory?.referenceTracking?.status === 'recorded'
+              ? '已记录本轮完成对话引用；只表示向模型提供了资料，不代表采纳或收益。'
+              : '本轮只展示提供的资料，未记录引用次数；不代表采纳或收益。']] });
+        if(result?.memory?.omitted?.length)blocks.push({type:'kv',title:'未注入的资料',rows:result.memory.omitted.map(item=>[item.title,item.reason])});
+        return { text, blocks };
+      } catch {
+        return modelFailureReply({ category: 'network-error', answer: '回答连接中断，原问题仍保存在会话中。可以稍后重试。' }, context);
       } finally {
         off();
         stream.endStream();
@@ -1458,10 +1734,63 @@
       }
     };
 
+    /** 重试按原消息取问题，绕过命令分派，不新增用户消息，也不清空后来编辑的草稿。 */
+    const recoverChat = async (card, action) => {
+      const sessionId = currentId();
+      if (busy || activeTurn || !listApi.canCompose(sessionId)) {
+        ctx.notify?.('请等当前回答结束后再操作，草稿已保留。', 'warn');
+        return false;
+      }
+      const projectId = ctx.ui.header.viewProjectId();
+      if (projectId !== String(card.projectId ?? '')) {
+        ctx.notify?.('这条问题属于原来的项目，请先切回原项目再重试。', 'warn');
+        return false;
+      }
+      const original = await store.message({ id: sessionId, seq: card.sourceSeq });
+      if (!original || original.role !== 'user') throw new Error('没有找到原问题，未发出请求；可以从会话历史中重新选择问题。');
+      if (currentId() !== sessionId || ctx.ui.header.viewProjectId() !== projectId) {
+        ctx.notify?.('会话已切换，未发出请求；返回原问题后可以继续操作。', 'warn');
+        return false;
+      }
+      if (action === 'restore') {
+        // 已有草稿时复制原问题，绝不合并或覆盖它。
+        if (input.value || pickedSkill) {
+          await window.companion.writeClipboard(original.text);
+          ctx.notify?.('输入框已有草稿，原问题已复制；可以自行粘贴。');
+        } else {
+          input.value = original.text;
+          saveDraftInBackground();
+          resizeInput();
+          input.focus();
+          ctx.notify?.('原问题已取回，可编辑后发送。');
+        }
+        return false;
+      }
+      busy = true;
+      starting = true;
+      syncComposer();
+      const context = { ...snapshotDraft(), id: sessionId, projectId, sourceSeq: card.sourceSeq,
+        skillId: card.skillId, skillPrefix: card.skillPrefix };
+      try {
+        const reply = await askModel(original.text, modelQuestionOf(original.text, card.skillId, card.skillPrefix), context);
+        await store.append({ id: sessionId, role: 'assistant', text: reply.text ?? '', blocks: reply.blocks ?? [],
+          status: reply.status === 'error' ? 'error' : 'ok' });
+        return true;
+      } finally {
+        busy = false;
+        starting = false;
+        syncComposer();
+      }
+    };
+
     const send = () => report('发送', async () => {
       // 流式中：有字就按当前插入方式处理，没字就是「停止」。
       if (activeTurn) {
         const draft = input.value.trim();
+        if (draft && draftKey(activeTurn) !== draftKey(draftScope)) {
+          ctx.notify?.('另一会话正在回复，当前草稿已保留；等回复结束后再发送。', 'warn');
+          return;
+        }
         if (!draft) {
           activeTurn.stop();
           return;
@@ -1477,6 +1806,7 @@
       if (!listApi.canCompose(currentId())) return;
       // 会话在发起时固定：流式跑着时切走会话，回答也要落在它自己的会话里。
       const sessionId = currentId();
+      const sentDraft = { ...snapshotDraft(), linkedProjects: ctx.ui.atProject?.links?.() ?? [] };
       const draftText = input.value;
       // 选中的技能拼成消息原文（显示与落库都用这一句），输入框本身只放问题。
       // 消息里只写技能名，不带来源前缀。
@@ -1485,19 +1815,32 @@
         : draftText;
       if (!threadApi.canSend(raw)) return;
       // #111 旧能力的最小入口：/项目库、/变化、/发布、/监控 先于普通消息处理。
-      const capability = parseCapabilityCommand(raw);
+      if(resolvingSkill)return;
+      const localCommand=isExactBuiltinCommand(raw)||ownWrites()?.parseCommand(raw)||projectSyncs()?.parseCommand?.(raw)||setupProbes()?.parseCommand?.(raw)||/^\/(?:经验|提炼经验)(?:\s|$)/u.test(raw)||window.OwnerConfirm?.isCommand(raw)||blocksApi.isSampleCommand(raw)||riskApi.isRiskCommand(raw);
+      if((pickedSkill || (raw.startsWith('/')&&!localCommand))&&!skillsLoaded){
+        resolvingSkill=true;
+        const loaded=await loadSkills();resolvingSkill=false;
+        if(!sameDraftContent(snapshotDraft(),sentDraft)){ctx.notify?.('输入已变化，未发送旧内容。');return;}
+        if(!loaded&&pickedSkill){ctx.notify?.('技能目录读取失败，请刷新后重试；问题已保留。','error');return;}
+      }
+      if(pickedSkill){
+        const selected=skillRows.find(skill=>skill.id===pickedSkill);
+        if(!selected||selected.callable===false){ctx.notify?.(selected?.callReason||'指定技能已不可用，请刷新目录后重新选择；问题已保留。','error');return;}
+      }
+      const capability = !pickedSkill&&parseCapabilityCommand(raw);
       if (capability) {
         await runCapabilityTurn(capability, raw);
         return;
       }
       // 自有目录写入（/记灵感 等）：直接执行，不弹确认卡。
-      const command = ownWrites()?.parseCommand(raw) ?? null;
+      const command = !pickedSkill?(ownWrites()?.parseCommand(raw) ?? null):null;
+      if(command?.kind==='idea'&&!String(command.text||'').trim()){ctx.notify?.('请在 /记灵感 后写下内容，再发送。','warn');input.focus();return;}
       if (command) {
         await runOwnWriteTurn(command, raw);
         return;
       }
       // 项目目录同步（/同步到项目）：未授权先出确认卡，授权后按会话直接写。
-      const syncCommand = projectSyncs()?.parseCommand?.(raw) ?? null;
+      const syncCommand = !pickedSkill?(projectSyncs()?.parseCommand?.(raw) ?? null):null;
       if (syncCommand) {
         await runProjectSyncTurn(syncCommand, raw);
         return;
@@ -1505,53 +1848,66 @@
       // 技能行：`/matt:xxx/yyy 问题` 交给模型时转成 /skill:<id> <问题>，
       // 让 pi-chat 把技能正文强制带进这一轮；没有问题时把光标留在技能后面。
       const skillCall = pickedSkill
-        ? { id: pickedSkill, question: draftText.trim() }
+        ? { id: skillRows.find(row=>row.id===pickedSkill)?.callId||pickedSkill, question: draftText.trim(),callable:true }
         : skillCommandOf(raw);
+      if(skillCall?.ambiguous){ctx.notify?.('有多个同名技能，请从 / 面板按来源选择具体一项；问题已保留。','warn');return;}
+      if(skillCall?.callable===false){ctx.notify?.(skillCall.reason,'error');return;}
       if (skillCall && !skillCall.question) {
+        if (!pickedSkill) composeSkill(skillRows.find(row => (row.callId || row.id) === skillCall.id)?.id);
         ctx.notify?.('给这个技能写一句要它做什么，再发送', 'warn');
         renderSkillChip();
         input.focus();
         return;
       }
       // /记决策：手动写一条决策，卡片与候选改写共用同一张表单（不扫描、不调模型）。
-      const composeDecision = /^\/记决策$/u.exec(raw.trim());
+      const composeDecision = !skillCall&&/^\/记决策$/u.exec(raw.trim());
       if (composeDecision) {
         await runComposeDecisionTurn(raw);
         return;
       }
       // /提炼决策：只扫当前项目的会话，产决策候选并留在未处理列表（不调模型）。
-      const decisionScan = /^\/提炼决策$/u.exec(raw.trim());
+      const decisionScan = !skillCall&&/^\/提炼决策$/u.exec(raw.trim());
       if (decisionScan) {
         await runDecisionTurn(raw);
         return;
       }
       // /提炼经验：显式蒸馏当前项目里未提炼的执行记录（会调用模型）。
-      const distill = /^\/提炼经验(?:\s+(\d{1,2}))?$/u.exec(raw.trim());
+      const distill = !skillCall&&/^\/提炼经验(?:\s+(\d{1,2}))?$/u.exec(raw.trim());
       if (distill) {
         await runDistillTurn(raw, Number(distill[1]) || 5);
         return;
       }
       // /经验 [关键词]：查看当前项目的经验与待审候选（只读，不调模型）。
-      const lessons = /^\/经验(?:\s+(.+))?$/u.exec(raw.trim());
+      const lessons = !skillCall&&/^\/经验(?:\s+(.+))?$/u.exec(raw.trim());
       if (lessons) {
         await runLessonsTurn(raw, lessons[1] ?? '');
         return;
       }
       // /setup：进配置箱的探测态；一次确认后写入，取消一项都不写。
-      const setupCommand = setupProbes()?.parseCommand?.(raw) ?? null;
+      const setupCommand = !skillCall?(setupProbes()?.parseCommand?.(raw) ?? null):null;
       if (setupCommand) {
         await runSetupTurn(raw);
         return;
       }
       // 还没接模型：普通消息回占位回复；/blocks 块全览；/risk 确认卡；/外发 /删除 走 #116 的确认卡。
-      const confirmCommand = window.OwnerConfirm?.parseCommand(raw) ?? null;
+      const confirmCommand = !skillCall?(window.OwnerConfirm?.parseCommand(raw) ?? null):null;
+      if (!skillCall && !confirmCommand && !blocksApi.isSampleCommand(raw) && !riskApi.isRiskCommand(raw)
+        && /^\/[\p{L}\p{N}_:.-]+(?:\s|$)/u.test(raw)) {
+        ctx.notify?.(skillsLoaded ? '没有找到这个技能或命令。请从 / 菜单选择；原文已保留。' : '技能目录尚未读到，请打开 / 菜单刷新后重试；原文已保留。', 'warn');
+        input.focus();
+        return;
+      }
+      const modelContext = { ...sentDraft, sourceSeq: 0,
+        skillId: skillCall ? skillCall.id : '',
+        skillPrefix: skillCall ? raw.trim().slice(0, raw.trim().length - skillCall.question.length) : '' };
       const buildReply = async () => {
-        if (blocksApi.isSampleCommand(raw)) return blocksApi.sampleReply();
-        if (riskApi.isRiskCommand(raw)) return await riskApi.buildRiskReply(raw);
+        if (!skillCall&&blocksApi.isSampleCommand(raw)) return blocksApi.sampleReply();
+        if (!skillCall&&riskApi.isRiskCommand(raw)) return await riskApi.buildRiskReply(raw);
         if (confirmCommand) return await window.OwnerConfirm.buildReply(confirmCommand);
         return await askModel(
           raw,
-          skillCall ? `/skill:${chatSkillIdOf(skillCall.id)} ${skillCall.question}` : raw
+          modelQuestionOf(sentText, modelContext.skillId, modelContext.skillPrefix),
+          modelContext
         );
       };
       // #124 与 #125 都只服务这一次发送：先接「## 关联项目」段，再接会话指针段。
@@ -1564,13 +1920,12 @@
       sendButton.textContent = '停止';
       sendButton.disabled = false;
       try {
-        await store.append({ id: sessionId, role: 'user', text: sentText });
-        // 技能只服务这一问：消息落库后清掉胶囊，下一句默认还是一般对话。
-        pickedSkill = null;
-        renderSkillChip();
-        syncComposer();
+        const selected = skillCall && skillRows.find(row => (row.callId || row.id) === skillCall.id);
+        const marker = skillsApi.selectionBlock(selected);
+        const sentMessage = await store.append({ id: sessionId, role: 'user', text: sentText, blocks: marker ? [marker] : [] });
+        modelContext.sourceSeq = sentMessage.seq;
         // 输入框立刻清空：模型要跑一阵，不能让旧文字留在框里让人以为没发出去。
-        input.value = threadApi.draftAfterSend();
+        await clearSentDraft(sentDraft);
         resizeInput();
         // 正文已经落库，胶囊与指针完成使命：清空；发送失败则保留，下一次还能再试。
         projectLinks()?.clear?.();
@@ -1582,6 +1937,7 @@
           id: sessionId,
           role: 'assistant',
           text: reply.text ?? '',
+          status: reply.status === 'error' ? 'error' : 'ok',
           blocks: Array.isArray(reply.blocks) ? reply.blocks : []
         });
         await ctx.refreshThread();
@@ -1598,9 +1954,11 @@
         if (pendingResend) {
           const next = pendingResend;
           pendingResend = null;
-          input.value = next;
-          resizeInput();
-          void send();
+          if (JSON.stringify(next) === JSON.stringify(snapshotDraft())) {
+            void send();
+          } else {
+            ctx.notify?.('已停止，草稿仍保留在各自的会话中。');
+          }
         }
       }
     });
@@ -1628,11 +1986,18 @@
       setSlashOpen(false);
     });
 
-    input.addEventListener('input', () => {
+    input.addEventListener('input', (event) => {
+      // 组字尚未提交时不搬动正文，避免中文输入法的组合文本被转成标签。
+      if (!event.isComposing) syncTypedSkill();
       resizeInput();
       syncComposer();
       syncSlashFromInput();
       syncAtFromInput();
+      saveDraftInBackground();
+    });
+
+    input.addEventListener('compositionend', () => {
+      syncTypedSkill(); resizeInput(); syncComposer(); syncSlashFromInput(); saveDraftInBackground();
     });
 
     input.addEventListener('keydown', (event) => {
@@ -1644,7 +2009,7 @@
         slashCustomizing,
         itemCount: slashFlat.length,
         atOpen: Boolean(panelAt()?.isOpen()),
-        exactCommand: isExactBuiltinCommand(input.value),
+        exactCommand: !slashNavigated&&isExactBuiltinCommand(input.value),
         key: event.key,
         shiftKey: event.shiftKey
       });
@@ -1689,6 +2054,9 @@
 
     // 面板里的点击：改数字 / 关闭 / 点一行调用。改数字时点行不触发调用。
     slashPanel.addEventListener('click', (event) => {
+      if(event.target.closest('[data-builtin-toggle]')){builtinExpanded=!builtinExpanded;slashSelection=0;slashNavigated=false;renderSlash();return;}
+      if(event.target.closest('#skillRefresh')){loadSkills({refresh:true});return;}
+      if(event.target.closest('#skillAliasReset')){aliasOverrides={};saveAliases();renderSlash();return;}
       if (event.target.closest('#skillAliasToggle')) {
         toggleSlashCustomizing();
         return;
@@ -1700,11 +2068,11 @@
       if (slashCustomizing) return;
       const row = event.target.closest?.('[data-skill-row]');
       if (!row) return;
-      // 点行与回车选中走同一套：技能填充输入框，内置命令整句发送。
+      // 点行与回车选中走同一套：技能选择与命令填入都不自动发送。
       const index = Number(row.dataset.index);
       if (!Number.isInteger(index) || index < 0) return;
       slashSelection = index;
-      invokeSlashSelection();
+      invokeSlashSelection({explicit:true});
     });
 
     // 数字输入就地生效：不重画列表，否则每敲一位就丢焦点。
@@ -1745,7 +2113,7 @@
       }
       if (slashOpen) {
         // 已经打完整条内置命令：与 Enter 一致，直接执行这一条，不取默认选中项。
-        if (isExactBuiltinCommand(input.value)) {
+        if (!slashNavigated&&isExactBuiltinCommand(input.value)) {
           setSlashOpen(false);
           void send();
           return;
@@ -1782,6 +2150,7 @@
       await ctx.refreshThread();
       if (!input.value.trim()) {
         input.value = String(result.text ?? '');
+        saveDraftInBackground();
         resizeInput();
       } else {
         ctx.notify?.('已撤回；输入框里已有内容，没有覆盖');
@@ -1795,6 +2164,11 @@
       resize: resizeInput,
       sync: syncComposer,
       focus: () => input.focus(),
+      flushDraft: queueDraft,
+      restoreDraft,
+      hasDraft: () => Boolean(input.value || pickedSkill),
+      openFromLocate,
+      recoverChat,
       dismissSlash,
       dismissAt,
       // 配置箱里的「探测本机」走与 `/setup` 同一条路，只是不伪造一条用户消息。
@@ -1802,5 +2176,5 @@
     };
   };
 
-  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, distillReply, lessonsReply, decisionCandidateBlocks, decisionComposeReply, decisionReply, isExactBuiltinCommand, BUILTIN_COMMANDS, skillNameOf, create };
+  return { composerPlaceholder, composerKeyAction, parseCapabilityCommand, libraryReply, sinceReply, publishReply, distillReply, candidateReviewBlock, replyParts, lessonsReply, decisionCandidateBlocks, decisionComposeReply, decisionReply, isExactBuiltinCommand, BUILTIN_COMMANDS, skillNameOf, modelFailureReply, modelQuestionOf, sameDraftContent, create };
 });

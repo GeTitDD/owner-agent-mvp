@@ -33,7 +33,10 @@ const PI_HOME = path.join(tempBase, 'pi-home');
 const seedPiHome = () => {
   fs.mkdirSync(path.join(PI_HOME, 'agent'), { recursive: true });
   fs.writeFileSync(path.join(PI_HOME, 'agent', 'models.json'), JSON.stringify({
-    providers: { 'fixture-provider': { models: [{ id: 'fixture-model' }] } }
+    providers: { 'fixture-provider': { api: 'openai-completions', baseUrl: 'http://127.0.0.1:1/v1',
+      apiKey: 'not-a-real-key', models: [{ id: 'fixture-model', name: 'Fixture Model', reasoning: false,
+        input: ['text'], contextWindow: 32000, maxTokens: 1024,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } }
   }), 'utf8');
   fs.writeFileSync(path.join(PI_HOME, 'agent', 'auth.json'), JSON.stringify({
     'fixture-provider': { token: 'not-a-real-token' }
@@ -191,7 +194,7 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
       rows.map((row) => `${row.id}:${row.sourceText}`).join(' '));
     check('可写行有输入框，只读行没有输入框',
       rows.filter((row) => row.hasInput).map((row) => row.id).join(',')
-        === 'model,diagramModel,gatewayUrl,includePaths,chatSkills'
+        === 'model,diagramModel,gatewayUrl,includePaths,chatSkills,syncRepo,syncBranch'
       && rows.filter((row) => row.kind === 'readonly').every((row) => row.hasInput === false),
       rows.filter((row) => row.hasInput).map((row) => row.id).join(','));
 
@@ -262,7 +265,7 @@ const firstRun = async ({ userData, ownerDb, knowledgeDb }) => {
     check('滚到底时能看到监控与同步两段',
       ui.scroll.scrollTop > 0
       && ui.sections.find((section) => section.id === 'watch')?.rows.length === 3
-      && ui.sections.find((section) => section.id === 'sync')?.rows.length === 4,
+      && ui.sections.find((section) => section.id === 'sync')?.rows.length === 6,
       `scrollTop=${ui.scroll.scrollTop}`);
     await capture(panel, path.join(shotsDir, 'config-lower.png'));
 
@@ -388,7 +391,7 @@ const run = async () => {
   // 种一份 companion.json：model 偏离内置默认（→ 手改），其余可写项都是默认值（→ 探测）。
   fs.writeFileSync(path.join(userData, 'companion.json'), JSON.stringify({
     model: 'seed-model-127',
-    gatewayUrl: 'http://127.0.0.1:18789',
+    gatewayUrl: 'http://127.0.0.1:1',
     includePaths: ['package.json'],
     chatSkills: []
   }, null, 2), 'utf8');

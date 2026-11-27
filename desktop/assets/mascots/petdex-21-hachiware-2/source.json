@@ -1,0 +1,20 @@
+{
+  "rank": 21,
+  "id": "petdex-21-hachiware-2",
+  "slug": "hachiware-2",
+  "displayName": "小八",
+  "source": "https://petdex.dev/pets/hachiware-2",
+  "zipUrl": "https://assets.petdex.dev/pets/hachiware-6d07aabe3762/zip.zip",
+  "author": "pasta547",
+  "metrics": {
+    "installCount": 1945,
+    "likeCount": 45,
+    "zipDownloadCount": 97
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "086a6564329f855d79f52f7212fc193e5c06cf19024267388178196907c6bb74",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

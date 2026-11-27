@@ -48,6 +48,9 @@
         <div class="projects" id="projectPopover" role="dialog" aria-label="项目列表" hidden>
           <p class="projects-hint" id="projectHint">不选项目就是全局：读所有项目的记忆，不写入任何项目。</p>
           <ul class="projects-list" id="projectList"></ul>
+          <button type="button" class="project-add" id="projectAdd">选择本机目录</button>
+          <button type="button" class="project-add" id="githubProjectAdd">从 GitHub 添加</button>
+          <p class="project-add-status" id="projectAddStatus" role="status" hidden></p>
         </div>
       </div>
       <span class="config-entry">
@@ -93,8 +96,20 @@
         <p class="locate-status" id="locateStatus" role="status"></p>
         <ul class="locate-list" id="locateList"></ul>
         <p class="locate-empty" id="locateEmpty" hidden></p>
+        <div class="first-project" id="firstProject" hidden>
+          <h2>从一个项目开始</h2>
+          <p>选择本机目录，或从 GitHub 下载项目，随时看清变化、记住决策和经验。</p>
+          <button type="button" class="first-project-add" id="firstProjectAdd">添加第一个项目</button>
+          <button type="button" class="project-add" id="firstGithubProjectAdd">从 GitHub 添加</button>
+          <span>登记不改动现有项目；下载只写入明确选择的新目录。</span>
+          <p id="firstProjectError" class="project-add-status" role="alert" hidden></p>
+        </div>
       </section>
       <p class="empty" id="emptyState">还没有会话。点顶栏的「会话」新建一个。</p>
+      <div class="history-nav" id="historyNav" hidden>
+        <button type="button" id="historyOlder">加载更早消息</button>
+        <span id="historyStatus" role="status" aria-live="polite"></span>
+      </div>
       <ol class="messages" id="messages"></ol>
     </main>
 
@@ -123,17 +138,20 @@
               title="流式中发送：把这一句插进当前回答（steer）">引导</button>
       <button type="submit" class="send" id="send" disabled>发送</button>
     </form>
+    <p class="draft-status" id="draftStatus" role="status" aria-live="polite" hidden></p>
 
     <!-- #108：输入 `/` 打开技能面板。上半是数字快捷（1-9，可改），
          下半是扫描出来的全部技能；两段共用一个滚动容器，页脚写键盘用法。 -->
     <div class="slash-panel" id="skillPanel" role="dialog" aria-label="技能面板" hidden>
       <div class="slash-head">
-        <span class="slash-title">技能</span>
+        <span class="slash-title">技能与应用命令</span>
         <span class="slash-count" id="skillCount">读取中…</span>
+        <button type="button" class="slash-link" id="skillRefresh">刷新</button>
+        <button type="button" class="slash-link" id="skillAliasReset" hidden>恢复默认</button>
         <button type="button" class="slash-link" id="skillAliasToggle" aria-pressed="false">自定义</button>
         <button type="button" class="slash-close" id="skillClose" aria-label="关闭技能面板">✕</button>
       </div>
-      <div class="slash-scroll" id="skillList"></div>
+      <div class="slash-scroll" id="skillList" role="listbox" aria-label="选择命令或技能"></div>
       <p class="slash-hint" id="skillHint"></p>
       <p class="slash-warn" id="skillConflict" hidden></p>
       <p class="slash-error" id="skillError" role="status" hidden></p>
@@ -189,9 +207,10 @@
     <div class="config" role="dialog" aria-modal="true" aria-labelledby="configTitle">
       <div class="config-head">
         <b class="config-title" id="configTitle">配置</b>
-        <span class="config-sub">保存写回 companion.json；密钥只读环境变量，不写进文件</span>
+        <span class="config-sub">保存写回 companion.json；密钥仅检测状态，不在这里输入或保存</span>
         <button type="button" class="config-close" id="configClose" aria-label="关闭配置箱">✕</button>
       </div>
+      <button type="button" class="appearance-entry" id="appearanceOpen">外观与桌宠 <span>预览内置模板、切换或导入皮肤 ›</span></button>
       <!-- #128 /setup 的探测态：逐项判定 + 建议写入清单 + 一次确认 + 回执。
            这里只搭壳，数据由主进程算好（src/setup-probe.mjs），判定文案不在渲染层另写一份。
            放在 configBody 外面，是因为 configBody 每次重画都会 replaceChildren。 -->
@@ -226,6 +245,17 @@
     </div>
   </div>
 
+  <dialog id="appearanceDialog" class="appearance-dialog" aria-labelledby="appearanceTitle">
+    <header class="appearance-head"><div><b id="appearanceTitle">外观与桌宠</b><p>直接使用应用自带的模板</p></div><button type="button" id="appearanceClose" aria-label="关闭外观设置">✕</button></header>
+    <div class="appearance-body">
+      <section class="appearance-brand"><img id="appearanceIcon" src="./assets/branding/app-icon.png" width="64" height="64" alt="Owner Companion 动漫头像图标"/><div><b>Owner Companion</b><p>应用头像与桌宠分别设置</p><small>头像：Wikipe-tan · Kasuga / Actam<br/>CC BY-SA 3.0，已调整构图与边框</small></div></section>
+      <h3>选择桌宠模板</h3><p class="appearance-intro">内置 Petdex 安装量前 50 和 Cindy 模板。动画随应用状态播放，点击立即切换。</p>
+      <input type="search" id="appearanceSearch" class="appearance-search" placeholder="搜索名称、排名或来源…" aria-label="搜索桌宠模板"/>
+      <div class="appearance-grid" id="appearanceGrid" aria-label="可用桌宠模板"></div>
+    </div>
+    <p id="appearanceStatus" class="appearance-status" role="status" aria-live="polite"></p>
+    <footer class="appearance-actions"><button type="button" id="appearanceRefresh">刷新模板</button><button type="button" id="appearanceImport">导入动画皮肤包</button></footer>
+  </dialog>
   <script src="./shell-thread.cjs"></script>
   <script src="./shell-sessions.cjs"></script>
   <script src="./shell-skills.cjs"></script>
@@ -236,14 +266,19 @@
   <script src="./confirm-cards.cjs"></script>
   <!-- #138 决策改写与 /记决策 共用的一张表单（纯模型 + 动作分发） -->
   <script src="./decision-form.cjs"></script>
+  <script src="./chat-recovery.cjs"></script>
   <script src="./shell-blocks.cjs"></script>
   <script src="./shell-copy.cjs"></script>
   <script src="./shell-blocks-view.js"></script>
   <!-- #121 三块界面：顶栏 / 输入区 / 对话流；shell.js 只做装配与事件接线。 -->
+  <script src="../src/project-navigation.cjs"></script>
   <script src="./shell-header.cjs"></script>
+  <script src="./shell-github-project.cjs"></script>
   <!-- #127 配置箱：分区数据与来源规则在 src/config-box.mjs，经 host 模块挂到 window；
        这里只加载画 DOM 的那一层，装配层再建实例。 -->
+  <script src="./shell-sync.cjs"></script>
   <script src="./shell-config.cjs"></script>
+  <script src="./shell-appearance.cjs"></script>
   <!-- #122 `@@` 方法菜单：先于输入区加载，输入区要用它的触发判定与面板实例。 -->
   <script src="./shell-at.cjs"></script>
   <!-- #123 「生成 prompt」方法：流内勾选、计数与四段组装；方法卡进入时才 mount。 -->

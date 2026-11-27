@@ -1,0 +1,12 @@
+{
+  "id": "petdex-25-akie-qiuhui",
+  "displayName": "akie_qiuhui",
+  "description": "Akie_qiuhui pet, free for personal use only. Commercial use prohibited. Infringing materials will be removed. Created by yangprincess.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 25
+}

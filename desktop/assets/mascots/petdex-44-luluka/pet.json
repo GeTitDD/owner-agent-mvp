@@ -1,0 +1,13 @@
+{
+  "id": "petdex-44-luluka",
+  "displayName": "Luluka",
+  "description": "A tiny Codex digital pet inspired by Luluka, the blonde magical-girl character from the provided reference images.",
+  "spritesheetPath": "spritesheet.webp",
+  "kind": "person",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 44
+}

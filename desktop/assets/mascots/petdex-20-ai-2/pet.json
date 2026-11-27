@@ -1,0 +1,12 @@
+{
+  "id": "petdex-20-ai-2",
+  "displayName": "Ai",
+  "description": "A cute, calm Codex pet inspired by Haibara Ai, simplified into a chibi pixel-adjacent companion.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 20
+}

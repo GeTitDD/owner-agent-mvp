@@ -1,0 +1,22 @@
+{
+  "rank": 47,
+  "id": "petdex-47-spyro",
+  "slug": "spyro",
+  "displayName": "Spyro",
+  "source": "https://petdex.dev/pets/spyro",
+  "zipUrl": "https://assets.petdex.dev/pets/spyro-77142298d50f/zip.zip",
+  "author": "Wagner",
+  "metrics": {
+    "installCount": 1361,
+    "likeCount": 8,
+    "zipDownloadCount": 4
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "188bf3eeb742647698bcc4dd469bb97da3a9f9f45db25e2b6ead8cd92eb29777",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": [
+    "Archive filename correction: spritesheet.webp -> spritesheet.png"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "rank": 24,
+  "id": "petdex-24-uika",
+  "slug": "uika",
+  "displayName": "Uika",
+  "source": "https://petdex.dev/pets/uika",
+  "zipUrl": "https://assets.petdex.dev/pets/uika-77268ee712a3/zip.zip",
+  "author": "桜 八.",
+  "metrics": {
+    "installCount": 1809,
+    "likeCount": 12,
+    "zipDownloadCount": 13
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "acaf549f7485a20255d71a27375a00830c956179457f9a059cc88d86fd24f92e",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

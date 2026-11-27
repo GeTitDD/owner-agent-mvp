@@ -1,0 +1,12 @@
+{
+  "id": "petdex-24-uika",
+  "displayName": "Uika",
+  "description": "A small pixel-art Codex pet of Uika from BanG Dream in her black Sumimi stage outfit.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 24
+}

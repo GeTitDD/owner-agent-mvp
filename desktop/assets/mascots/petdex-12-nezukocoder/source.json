@@ -1,0 +1,20 @@
+{
+  "rank": 12,
+  "id": "petdex-12-nezukocoder",
+  "slug": "nezukocoder",
+  "displayName": "NezukoCoder",
+  "source": "https://petdex.dev/pets/nezukocoder",
+  "zipUrl": "https://assets.petdex.dev/pets/nezukocoder-7d766f7c2597/zip.zip",
+  "author": "Miro H.",
+  "metrics": {
+    "installCount": 2603,
+    "likeCount": 76,
+    "zipDownloadCount": 130
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "9d2c5bef55fc64513b78b8de82a777f0db5b818ae326e564e96361c1d2f20e92",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

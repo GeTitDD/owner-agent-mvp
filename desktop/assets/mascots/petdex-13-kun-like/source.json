@@ -1,0 +1,20 @@
+{
+  "rank": 13,
+  "id": "petdex-13-kun-like",
+  "slug": "kun-like",
+  "displayName": "Kun Like",
+  "source": "https://petdex.dev/pets/kun-like",
+  "zipUrl": "https://assets.petdex.dev/pets/kun-like-13c0db2cff04/zip.zip",
+  "author": "leodora_u",
+  "metrics": {
+    "installCount": 2519,
+    "likeCount": 33,
+    "zipDownloadCount": 94
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "55140db10cd32ce7ff61e4dc61ee37b28e1d9fccf4a8891a20f4f1ad7b310cfa",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

@@ -1,0 +1,20 @@
+{
+  "rank": 4,
+  "id": "petdex-04-deepseek",
+  "slug": "deepseek",
+  "displayName": "deepseek酱",
+  "source": "https://petdex.dev/pets/deepseek",
+  "zipUrl": "https://assets.petdex.dev/pets/deepseek-c3fa684cfe03/zip.zip",
+  "author": "fightingshine",
+  "metrics": {
+    "installCount": 4855,
+    "likeCount": 55,
+    "zipDownloadCount": 258
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "8bcf93748054ba31c659a46b4b1f8f41453c5fa78ccc6f3f7ac40c9fd57f5918",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

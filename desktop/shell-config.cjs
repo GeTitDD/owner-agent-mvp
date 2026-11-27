@@ -55,6 +55,7 @@
     let busy = false;
     // 每次打开/重载自增：慢回来的旧响应不能覆盖新状态。
     let loadToken = 0;
+    let clearSaveNotice = null;
     // #128 探测态：probeView = { probe, plan }；receipt 是本次确认 / 取消的回执。
     let probeView = null;
     let probeReceipt = null;
@@ -120,25 +121,40 @@
         input.spellcheck = false;
         input.setAttribute('aria-label', row.label);
         const options = Array.isArray(modelCatalog?.items) ? modelCatalog.items : [];
+        const search = el('input', 'cfg-input cfg-model-search');
+        search.type = 'search';
+        search.placeholder = '搜索名称、提供商或 ID';
+        search.dataset.modelSearch = row.id;
+        search.setAttribute('aria-label', `${row.label}：搜索模型目录`);
+        const count = el('span', 'cfg-model-count');
+        count.setAttribute('role', 'status');
         const pick = el('select', 'cfg-model-pick');
         pick.id = `cfg-pick-${row.id}`;
         pick.dataset.pickFor = row.id;
-        pick.setAttribute('aria-label', `${row.label}：从已装模型里选`);
-        pick.append(new Option(options.length ? '选已装模型…' : '没有读到模型目录', ''));
-        for (const item of options) {
-          const label = item.ready ? `${item.id}` : `${item.id}（未配置凭据）`;
-          const option = new Option(label, item.id);
-          if (item.id === row.display) option.selected = true;
-          pick.append(option);
-        }
-        pick.disabled = options.length === 0;
+        pick.setAttribute('aria-label', `${row.label}：从模型目录选择`);
+        const filter = () => {
+          const view = data().modelOptionsFor({ items: options, query: search.value, current: input.value });
+          pick.replaceChildren(new Option(view.matched ? '从匹配模型中选择…' : '没有匹配的模型', ''));
+          for (const item of view.items) {
+            const name = item.label && item.label !== item.id ? `${item.label} · ${item.id}` : item.id;
+            const label = item.ready ? name : `${name}（未配置凭据）`;
+            const option = new Option(label, item.id);
+            if (item.id === input.value) option.selected = true;
+            pick.append(option);
+          }
+          pick.disabled = view.items.length === 0;
+          count.textContent = view.label;
+        };
+        search.addEventListener('input', filter);
+        input.addEventListener('input', filter);
+        filter();
         pick.addEventListener('change', () => {
           if (!pick.value) return;
           input.value = pick.value;
           input.dispatchEvent(new Event('input', { bubbles: true }));
           input.focus();
         });
-        field.append(input, pick);
+        field.append(input, search, pick, count);
         return field;
       }
       const valueNode = el('span', row.kind === 'secret' ? 'cfg-value cfg-secret' : 'cfg-value', row.display);
@@ -175,6 +191,33 @@
       node.append(el('h3', 'cfg-group-title', section.label));
       if (section.hint) node.append(el('p', 'cfg-group-hint', section.hint));
       node.append(...sectionRows.map(renderRow));
+      if (section.id === 'model') {
+        const status = el('p', 'cfg-model-state');
+        status.setAttribute('role', 'status');
+        const refresh = () => {
+          const view = data().modelSelectionState({ model: node.querySelector('[data-cfg="model"]')?.value, catalog: modelCatalog });
+          status.dataset.state = view.state;
+          status.textContent = view.text;
+        };
+        const reload = el('button', 'review-action', '刷新模型目录');
+        reload.type = 'button';
+        reload.dataset.refreshModels = 'true';
+        reload.addEventListener('click', async () => {
+          reload.disabled = true;
+          try {
+            modelCatalog = await window.companion.models.catalog();
+            // 刷新目录只替换这一分区，保留尚未保存的所有配置草稿。
+            node.replaceWith(renderSection(section, sectionRows.map((row) => ({ ...row,
+              display: node.querySelector(`[data-cfg="${row.id}"]`)?.value ?? row.display }))));
+          }
+          catch { modelCatalog = null; refresh(); }
+          finally { reload.disabled = false; }
+        });
+        node.addEventListener('input', refresh);
+        node.append(status, reload);
+        refresh();
+      }
+      if (section.id === 'sync') window.OwnerShellSync?.mount(node, {ctx,values,onSave:save,onBegin:()=>setStatus('')});
       return node;
     };
 
@@ -483,12 +526,15 @@
       setStatus('正在保存…');
       try {
         await settings.set(patch);
+        window.OwnerShellSync?.reset();
+        void ctx.ui.header.loadSyncStatus();
         // 重读：来源标注按保存后的值重算（改回默认值就会变回「探测」）。
         const reloaded = await load();
         if (!reloaded) return false;
         const where = facts.paths?.config || 'companion.json';
         setStatus(`已保存到 ${where}；重启后仍然生效。`, 'ok');
-        ctx.notify?.('配置已保存', 'ok');
+        clearSaveNotice?.();
+        clearSaveNotice = ctx.notify?.('配置已保存', 'ok');
         return true;
       } catch (error) {
         setStatus(`保存失败：${error?.message ?? error}`, 'error');
@@ -525,7 +571,7 @@
       resetProbe();
       setStatus('');
       void load().then(() => {
-        bodyNode?.querySelector(`[data-section="${String(id)}"]`)?.scrollIntoView({ block: 'start' });
+        (id==='sync'&&values.syncRepo?bodyNode?.querySelector('.sync-workspace'):bodyNode?.querySelector(`[data-section="${String(id)}"]`))?.scrollIntoView({ block: 'start' });
       });
       return true;
     };
@@ -533,6 +579,8 @@
     /** 关掉：不写任何东西，草稿随 DOM 一起丢掉，下次打开重新读文件。 */
     const close = () => {
       if (!backdrop) return;
+      clearSaveNotice?.();
+      clearSaveNotice = null;
       // `/setup` 探测后还没确认就关闭，等同取消：补一条「0 处写入」回执，绝不偷偷落盘。
       if (probeView && probeOnReceipt) {
         const api = probeApi();
@@ -544,6 +592,8 @@
         void callback(receipt, { cancelled: true });
       }
       resetProbe();
+      window.OwnerShellSync?.detach();
+      void ctx.ui.header.loadSyncStatus();
       backdrop.hidden = true;
       toggle?.setAttribute('aria-expanded', 'false');
       bodyNode.replaceChildren();

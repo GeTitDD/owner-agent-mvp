@@ -1,8 +1,8 @@
-// #109 验收：生成式 UI 块（十二种）长在现有对话流里。
+// #109 验收：生成式 UI 块（十三种）长在现有对话流里。
 //
 // 路径：卡片壳（#105）→ 输入 /blocks（脚本化、不连模型）→ 回复带「文字 + 块」。
 // 断言四层：
-//   ① 十二种块按清单顺序出现，每种块的关键结构（表格行数、图表 svg 与点数、
+//   ① 十三种块按清单顺序出现，每种块的关键结构（表格行数、图表 svg 与点数、
 //      代码行号、提问选项数、时间线步骤、键值行数…）都对得上；
 //   ② 提问块三个出口：选项、自由回答、跳过，各自产生「我的 + 脚本化回复」两条，
 //      回答过的块收起按钮，重新渲染也不会再冒出来；
@@ -24,7 +24,7 @@ const { check, failures } = createChecker('[BLOCKS-#109]');
 // 免得「样本漏了一种块」被同一份清单一起掩盖过去。
 const EXPECTED_TYPES = [
   'card', 'table', 'kpi', 'line', 'donut', 'timeline',
-  'kv', 'code', 'diff', 'tool', 'badges', 'ask'
+  'kv', 'code', 'diff', 'tool', 'badges', 'ask', 'review'
 ];
 
 /** 往输入框里打字并派发 input 事件（等价于用户敲字，不触发发送）。 */
@@ -204,10 +204,10 @@ const runBlocks = async () => {
     check('my message is the command I typed', thread[0]?.text === '/blocks', thread[0]?.text);
     check('the reply says it is a scripted sample', (thread[1]?.text ?? '').includes('脚本化样本'),
       thread[1]?.text);
-    check('the reply carries twelve blocks', thread[1]?.blocks === 12, String(thread[1]?.blocks));
+    check('the reply carries thirteen blocks', thread[1]?.blocks === 13, String(thread[1]?.blocks));
 
     const blocks = await readBlocks(panel);
-    check('block order matches the twelve-type list',
+    check('block order matches the thirteen-type list',
       JSON.stringify(blocks.map((block) => block.type)) === JSON.stringify(EXPECTED_TYPES),
       JSON.stringify(blocks.map((block) => block.type)));
 
@@ -260,7 +260,7 @@ const runBlocks = async () => {
       && (byType.tool?.toolOutput ?? '').includes('Retry loop bound'),
       JSON.stringify({ summary: byType.tool?.toolSummary, output: byType.tool?.toolOutput }));
 
-    check('badges: twelve status tags', byType.badges?.tags === 12,
+    check('badges: thirteen status tags', byType.badges?.tags === 13,
       String(byType.badges?.tags));
 
     check('ask: question, why, tried, three options, free answer and skip',

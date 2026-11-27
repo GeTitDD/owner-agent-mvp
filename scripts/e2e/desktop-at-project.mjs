@@ -101,9 +101,11 @@ const readCard = (panel) => panel.evaluate(`(() => {
 
 const materialOf = (row, key) => row?.materials.find((material) => material.key === key) ?? null;
 
-const readFirstUserText = (panel) => panel.evaluate(`(() => {
-  const item = document.querySelector('#messages .msg[data-role="user"]');
-  return item?.querySelector('.bubble')?.textContent ?? '';
+// Markdown 标记会被渲染成标题与列表；发给模型的原文必须从真实会话读取，不能拿 textContent 冒充。
+const readFirstUserText = (panel) => panel.evaluate(`(async () => {
+  const id = document.querySelector('#sessionList .session-row[data-current="true"]')?.dataset.id;
+  const detail = await window.companion.cardSessions.get({ id });
+  return detail?.messages?.find(message => message.role === 'user')?.text ?? '';
 })()`);
 
 const seedData = ({ root, ownerDb, knowledgeDb }) => {
@@ -181,7 +183,7 @@ const run = async () => {
   const userData = path.join(root, 'userdata');
   fs.mkdirSync(userData, { recursive: true });
   fs.writeFileSync(path.join(userData, 'companion.json'), JSON.stringify({
-    projectId: '', gatewayUrl: 'http://127.0.0.1:18789', model: '', includePaths: ['package.json']
+    projectId: '', gatewayUrl: 'http://127.0.0.1:1', model: '', includePaths: ['package.json']
   }, null, 2));
   const ownerDb = path.join(root, 'owner.sqlite');
   const knowledgeDb = path.join(root, 'knowledge.sqlite');
@@ -332,6 +334,11 @@ const run = async () => {
     check('the message lands in the stream', await waitFor(panel,
       "document.querySelectorAll('#messages .msg').length === 2", 8000));
     const text = await readFirstUserText(panel);
+    check('the flow renders the linked-project heading and list', await panel.evaluate(`(() => {
+      const bubble=document.querySelector('#messages .msg[data-role="user"] .bubble');
+      return [...(bubble?.querySelectorAll('h2,h3,h4') ?? [])].some(node=>node.textContent==='关联项目')
+        && [...(bubble?.querySelectorAll('li') ?? [])].some(node=>node.textContent.startsWith('Alpha Repo'));
+    })()`));
     check('the sent prompt starts with the message', text.startsWith(MESSAGE), text.slice(0, 40));
     check('the prompt has the 关联项目 section', text.includes('## 关联项目'), text.slice(0, 200));
     check('Alpha is written as 项目名（来源 · 路径）',

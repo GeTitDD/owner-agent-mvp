@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import copy from '../desktop/shell-copy.cjs';
+import thread from '../desktop/shell-thread.cjs';
 
 export const CONVERSATIONS_DIR = 'conversations';
 export const CONVERSATION_FILE_EXT = '.md';
@@ -85,4 +86,11 @@ export function writeConversationExport({ root, sessionId, context, messages } =
     changed,
     bytes: Buffer.byteLength(markdown, 'utf8')
   };
+}
+
+/** 导出正文以存储为准，界面是否展开历史都不会影响完整性。 */
+export function exportStoredConversation({ store, root, sessionId, context } = {}) {
+  const session = store.getTranscript(sessionId);
+  return writeConversationExport({ root, sessionId: session.id, context,
+    messages: thread.fromStored(session.messages) });
 }

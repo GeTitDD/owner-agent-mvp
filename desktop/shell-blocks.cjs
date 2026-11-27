@@ -26,6 +26,8 @@
   const riskApi = (typeof module === 'object' && module.exports)
     ? require('./risk-card.cjs')
     : (typeof globalThis === 'undefined' ? null : globalThis.OwnerRiskCard);
+  const recoveryApi = (typeof module === 'object' && module.exports)
+    ? require('./chat-recovery.cjs') : globalThis.OwnerChatRecovery;
 
   // #116 外发 / 删除确认卡是独立的块类型（type=confirm）。与风险卡同一套双份导出：
   // 浏览器里 confirm-cards.cjs 先于本文件加载，Node 测试里直接 require。
@@ -349,6 +351,10 @@
         .filter((action) => action.id && action.label)
         .slice(0, 2),
       lessonId: str(data.lessonId),
+      ideaId: str(data.ideaId),
+      editKind: ['idea','candidate'].includes(data.editKind)?data.editKind:'',
+      expectedHash: str(data.expectedHash),
+      editValues: isObject(data.editValues)?Object.fromEntries(Object.entries(data.editValues).map(([key,value])=>[key,str(value)])):{},
       proposalId: str(data.proposalId),
       // 决策候选：项目 + 指纹是回主进程找未处理候选记录的键；缺理由单独带出去，界面要显式标注。
       projectId: str(data.projectId),
@@ -431,6 +437,7 @@
   };
 
   const NORMALIZERS = {
+    'chat-recovery': (data) => recoveryApi.normalize(data),
     card: normalizeCard,
     table: normalizeTable,
     kpi: normalizeKpi,
@@ -508,7 +515,7 @@
       // 提问块、确认卡、分享回执与带动作的灵感回执都靠 answers 收起按钮：
       // 同一套「点过就留记录」的机制，不另开字段。
       if ((model.type === 'ask' || model.type === 'risk' || model.type === 'confirm'
-        || model.type === 'share' || model.type === 'review' || model.type === 'kv')
+        || model.type === 'share' || model.type === 'review' || model.type === 'kv' || model.type === 'chat-recovery')
         && answer !== undefined) {
         model.answered = str(answer);
       }

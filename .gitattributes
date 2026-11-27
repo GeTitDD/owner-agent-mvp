@@ -1,0 +1,8 @@
+
+# 第三方资源按原始字节保存，避免 Windows 换行转换破坏来源摘要。
+desktop/assets/mascots/** -text
+desktop/assets/branding/** -text
+resources/skills/** -text -whitespace
+
+# 原始下载配置允许 CRLF；与图集一起保持上游原始字节。
+desktop/assets/mascots/petdex-*/upstream-pet.json whitespace=cr-at-eol

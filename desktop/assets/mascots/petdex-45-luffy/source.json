@@ -1,0 +1,20 @@
+{
+  "rank": 45,
+  "id": "petdex-45-luffy",
+  "slug": "luffy",
+  "displayName": "Luffy",
+  "source": "https://petdex.dev/pets/luffy",
+  "zipUrl": "https://assets.petdex.dev/pets/luffy-12e2064f59b6/zip.zip",
+  "author": "Oleg S.",
+  "metrics": {
+    "installCount": 1398,
+    "likeCount": 28,
+    "zipDownloadCount": 99
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "d33a905d38416210948b2ebc50e0a34af2f96209276e850e0ea25d19a163a07f",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

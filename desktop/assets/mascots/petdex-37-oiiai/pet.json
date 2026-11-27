@@ -1,0 +1,12 @@
+{
+  "id": "petdex-37-oiiai",
+  "displayName": "oiiai",
+  "description": "A Codex digital pet based on the OIIA/OIIAI spinning cat meme.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 37
+}

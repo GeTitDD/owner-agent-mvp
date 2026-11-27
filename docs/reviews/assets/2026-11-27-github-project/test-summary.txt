@@ -1,0 +1,26 @@
+ok 1355 - 文件数量上限阻止过大提案
+  ---
+  duration_ms: 137.009791
+  type: 'test'
+  ...
+1..1355
+# tests 1355
+# suites 0
+# pass 1350
+# fail 0
+# cancelled 0
+# skipped 5
+# todo 0
+# duration_ms 130611.013583
+
+
+> owner-agent-mvp@1.0.0 check
+> node scripts/check-syntax.mjs
+
+语法检查通过：312 个文件
+
+PASS 85 checks · screenshots: /Users/evansevans/Codex CLI/owner-agent-mvp/.verify/first-use
+[CARD-SHELL-#106] PASS
+[CARD-PROJECTS-#107] PASS
+[SLASH-#108] PASS
+[CONFIG-BOX-#127] PASS

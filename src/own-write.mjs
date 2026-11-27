@@ -39,7 +39,7 @@ export const OWN_WRITE_COMMAND = '/记灵感';
  * 灵感回执上唯一的动作（#137）：把这条灵感提升为 Lesson。
  * 只有记灵感的成功回执带它；其他写入动作的回执不带动作，界面上也就不会多出按钮。
  */
-export const IDEA_LESSON_ACTION = Object.freeze({ id: 'promote-lesson', label: '提升为 Lesson' });
+export const IDEA_LESSON_ACTION = Object.freeze({ id: 'promote-lesson', label: '整理经验' });
 const COMMAND_PATTERN = /^\/(?:记灵感|idea)(?:\s+([\s\S]*))?$/u;
 
 const stamp = () => new Date().toISOString();

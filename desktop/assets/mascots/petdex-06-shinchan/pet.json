@@ -1,0 +1,12 @@
+{
+  "id": "petdex-06-shinchan",
+  "displayName": "Shinchan",
+  "description": "A tiny mischievous kindergarten-boy companion in a red shirt and yellow shorts.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 6
+}

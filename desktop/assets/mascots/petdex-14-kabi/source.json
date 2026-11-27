@@ -1,0 +1,20 @@
+{
+  "rank": 14,
+  "id": "petdex-14-kabi",
+  "slug": "kabi",
+  "displayName": "卡比兽",
+  "source": "https://petdex.dev/pets/kabi",
+  "zipUrl": "https://assets.petdex.dev/pets/kabi-8d6adeb86474/zip.zip",
+  "author": "tfeng9669",
+  "metrics": {
+    "installCount": 2301,
+    "likeCount": 40,
+    "zipDownloadCount": 160
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "667eb6a1988423693866235dce5518364e6ad2684bd7916c253e61bcdef8cc12",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

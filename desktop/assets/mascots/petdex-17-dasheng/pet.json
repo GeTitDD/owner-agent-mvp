@@ -1,0 +1,12 @@
+{
+  "id": "petdex-17-dasheng",
+  "displayName": "Dasheng",
+  "description": "A tiny classic Chinese animated Monkey King companion named 大圣, with opera-inspired face markings, phoenix-feather cap, golden circlet, tiger-skin skirt, and a compact pixel-pet silhouette.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 17
+}

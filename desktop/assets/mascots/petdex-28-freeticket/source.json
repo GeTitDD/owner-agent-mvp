@@ -1,0 +1,20 @@
+{
+  "rank": 28,
+  "id": "petdex-28-freeticket",
+  "slug": "freeticket",
+  "displayName": "Freeticket",
+  "source": "https://petdex.dev/pets/freeticket",
+  "zipUrl": "https://assets.petdex.dev/pets/freeticket-229c32d21497/zip.zip",
+  "author": "Lucas L.",
+  "metrics": {
+    "installCount": 1657,
+    "likeCount": 0,
+    "zipDownloadCount": 1
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "e39f4cde823bfb03413c6fca0114739e910930ff7c02fa4bc3eb700a2f3e2a9a",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

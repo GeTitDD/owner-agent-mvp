@@ -1,0 +1,20 @@
+{
+  "rank": 6,
+  "id": "petdex-06-shinchan",
+  "slug": "shinchan",
+  "displayName": "Shinchan",
+  "source": "https://petdex.dev/pets/shinchan",
+  "zipUrl": "https://assets.petdex.dev/pets/shinchan-154a84d8ff3c/zip.zip",
+  "author": "adamholter",
+  "metrics": {
+    "installCount": 4320,
+    "likeCount": 66,
+    "zipDownloadCount": 164
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "c1a4cf865a672120403238d82bc06506f4c238e42f002b050ad2fe11b1401aa3",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

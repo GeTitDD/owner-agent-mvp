@@ -97,7 +97,8 @@ export const waitFor = async (panel, expression, timeoutMs = 30000) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      if (await panel.evaluate(`Boolean(${expression})`)) return true;
+      // IPC 条件可能返回 Promise；先等结果再转布尔，不能把 Promise 本身当作成功。
+      if (await panel.evaluate(`(async () => Boolean(await (${expression})))()`)) return true;
     } catch {
       // 页面重载时 evaluate 会短暂失败：继续等，不把整次验收判死。
     }
@@ -116,10 +117,10 @@ export const waitFor = async (panel, expression, timeoutMs = 30000) => {
  * @param {boolean} [options.showPanel] 启动后是否调用 companion.showPanel()
  * @param {string} [options.page] 要连的页面文件，默认 shell.html（#111 之后唯一渲染器）
  */
-export const startApp = async ({ userData, ownerDb, knowledgeDb, env = {}, showPanel = false, page = 'shell.html' }) => {
+export const startApp = async ({ userData, ownerDb, knowledgeDb, env = {}, showPanel = false, page = 'shell.html', entry = path.join(repoRoot, 'desktop', 'main.cjs') }) => {
   const port = await freePort();
   const child = spawn(electronPath, [
-    path.join(repoRoot, 'desktop', 'main.cjs'),
+    entry,
     `--user-data-dir=${userData}`,
     `--remote-debugging-port=${port}`
   ], {
@@ -129,6 +130,8 @@ export const startApp = async ({ userData, ownerDb, knowledgeDb, env = {}, showP
       OWNER_KNOWLEDGE_DB: knowledgeDb,
       OWNER_AGENT_NOTIFICATIONS: '0',
       OWNER_AGENT_E2E_OFFSCREEN: '1',
+      // 验收只读自己的技能夹具，不能把个人技能正文发给测试模型。
+      OWNER_AGENT_LOCAL_SKILLS_DIR: path.join(userData, 'isolated-local-skills'),
       ...env
     },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -144,6 +147,7 @@ export const startApp = async ({ userData, ownerDb, knowledgeDb, env = {}, showP
   if (showPanel) await panel.evaluate('window.companion.showPanel()');
   return {
     panel,
+    port,
     log,
     stop: async () => {
       try { panel.close(); } catch { /* ignore */ }

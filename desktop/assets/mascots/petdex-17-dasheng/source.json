@@ -1,0 +1,20 @@
+{
+  "rank": 17,
+  "id": "petdex-17-dasheng",
+  "slug": "dasheng",
+  "displayName": "Dasheng",
+  "source": "https://petdex.dev/pets/dasheng",
+  "zipUrl": "https://assets.petdex.dev/pets/dasheng-06c6070cff28/zip.zip",
+  "author": "剑文 张.",
+  "metrics": {
+    "installCount": 2116,
+    "likeCount": 1,
+    "zipDownloadCount": 12
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "4fc13c5fcb13257d7573deb4b1a02309a757877b853a4a2534df527cac74b107",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

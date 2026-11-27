@@ -1,0 +1,12 @@
+{
+  "id": "petdex-50-anya-2",
+  "displayName": "阿尼亚",
+  "description": "A Codex-style digital pet version of Anya Forger from SPY x FAMILY.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 50
+}

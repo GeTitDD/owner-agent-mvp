@@ -1,0 +1,12 @@
+{
+  "id": "petdex-38-miyabi-2",
+  "displayName": "Miyabi",
+  "description": "A tiny disciplined fox-eared swordswoman pet with a small sword-spirit companion.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 38
+}

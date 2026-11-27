@@ -173,3 +173,16 @@ test('#84 未提交改动清单：按文件给状态码与路径，读不到时�
   assert.deepEqual(changes.map((item) => item.status).sort(), ['??', 'M']);
   assert.equal(readWorkingTreeChanges({ root: path.join(dir, 'missing-worktree') }), null);
 }));
+
+test('文件清单保留中文、换行与首尾空格，重命名不多算成第二个文件', () => withDir(async (dir) => {
+  const root = makeRepo({ root: path.join(dir, 'paths') });
+  const filename = process.platform === 'win32' ? '中文 文件.txt' : ' 中文\n文件.txt ';
+  fs.writeFileSync(path.join(root, filename), 'new');
+  git(root, ['mv', 'a', '重命名 a']);
+  const before = treeDigest(root);
+  const changes = readWorkingTreeChanges({ root });
+  assert.equal(changes.length, 2);
+  assert.ok(changes.some((item) => item.path === filename && item.status === '??'));
+  assert.ok(changes.some((item) => item.path === '重命名 a' && item.previousPath === 'a' && item.status === 'R'));
+  assert.equal(treeDigest(root), before);
+}));

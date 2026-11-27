@@ -54,7 +54,7 @@ factory.create({cwd, model?}) -> {
 ## 存储与最小化
 
 - `owner_job_attempts` 增列 `session_id`（守卫式 ALTER，可重入；仅非敏感会话 id）；`owner_jobs` 增列 `input_snapshot`（审批事务内固定任务标题/说明，批准后的任务编辑不影响已批 Job）；`owner_projects` 增列 `root_identity`（见下）。
-- **路径漂移校验（best-effort）**：注册时在项目根内创建 `.owner-root-identity` 标记文件（约 60 字节；**这是注册的显式副作用**，不希望入库可加入项目 `.gitignore`）并固化其 dev/ino 哈希；Worker 运行前对比——目录被删除重建/替换为指向他处的链接 → `project-root-moved` 拒绝（零会话创建）。这是**best-effort 身份检查而非对抗性 OS fencing**：极端情况下 inode 复用可能漏检。测试采用 rename 保留旧身份 + 新建 marker 的确定性方案（不受 inode 复用影响）。
+- **路径漂移校验（best-effort）**：新登记项目只读取目录的 dev/ino/出生时间，将版本化身份存入自有数据库，不在项目内创建文件或修改 `.gitignore`。Worker 运行前对比，目录被替换时以 `project-root-moved` 拒绝（零会话创建）。旧项目仍只读校验原 `.owner-root-identity`，不自动删除或重写用户文件。测试采用 rename 保留原目录再替换路径的确定性方案。这是身份漂移检查，不是对抗性 OS fencing。
 - 新表 `owner_job_results`：项目私有产物（content ≤65536 字符、sha256 content_hash、model、truncated 标记、usage 默认 `unknown`——SDK usage 不可得时不编造）。
 - Job 行与审计事件只引用 `chars:<n>; tools:0; usage:unknown`；**prompt、回答原文、密钥、工具 I/O、上游错误消息原文一律不入库**——错误只记固定分类（`session-aborted/timeout/auth-error/network-error/session-error`，有测试断言）。
 - 成功路径使用 `completeJobWithResult` **原子提交**：与 `reportJobResult` 相同的 Worker/Attempt/租约校验 + 结果 INSERT 在同一 `BEGIN IMMEDIATE` 事务内，租约失效/取消竞态不可能留下孤儿结果。

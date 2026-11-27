@@ -1,0 +1,20 @@
+{
+  "rank": 39,
+  "id": "petdex-39-nickel-file-ledger",
+  "slug": "nickel-file-ledger",
+  "displayName": "Nickel File Ledger",
+  "source": "https://petdex.dev/pets/nickel-file-ledger",
+  "zipUrl": "https://assets.petdex.dev/pets/nickel-file-ledger-bac8e56a8fef/zip.zip",
+  "author": "codexfede",
+  "metrics": {
+    "installCount": 1428,
+    "likeCount": 3,
+    "zipDownloadCount": 7
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "c5d2f25e94f3a881fa532ea2682b89a587cbe46e98f228bd733117e55b2b8203",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

@@ -20,7 +20,7 @@
   // 键名带版本，形状变了可以另起一份而不误读旧值。
   const ALIAS_STORAGE_KEY = 'ownerShell.skillAliases.v1';
   // 来源顺序与 src/knowledge/skills.mjs 的 SKILL_SOURCES 一致。
-  const SOURCE_ORDER = ['domain', 'pstack', 'matt', 'plugin'];
+  const SOURCE_ORDER = ['domain', 'pstack', 'matt', 'plugin', 'local'];
 
   const str = (value) => (value === undefined || value === null ? '' : String(value));
 
@@ -60,7 +60,13 @@
         sourceLabel: str(item.sourceLabel).trim() || str(item.source).trim() || '未知',
         missing: item.missing === true,
         playbookOnly: item.playbookOnly === true,
-        reason: str(item.reason).trim()
+        reason: str(item.reason).trim(),
+        commandName: str(item.commandName).trim() || shortNameOf(id),
+        callId: str(item.callId).trim() || id,
+        callable: item.callable!==false && item.missing!==true && item.playbookOnly!==true,
+        callReason: str(item.callReason || item.reason).trim(),
+        origin: str(item.origin).trim(),
+        distribution: item.distribution === 'bundled' ? 'bundled' : 'external'
       });
     }
     return rows.sort((a, b) =>
@@ -84,7 +90,7 @@
   const defaultSlots = (skills, count = SLOT_COUNT) => {
     const cap = Math.min(Math.max(1, Number(count) || SLOT_COUNT), SLOT_MAX);
     const usable = (Array.isArray(skills) ? skills : [])
-      .filter((skill) => skill && skill.id && !skill.missing && !skill.playbookOnly);
+      .filter((skill) => skill && skill.id && !skill.missing && !skill.playbookOnly && skill.callable!==false);
     return usable.slice(0, cap).map((skill, index) => ({
       id: skill.id,
       number: index + 1,
@@ -164,9 +170,11 @@
     const next = normalizeOverrides(overrides);
     const slot = (Array.isArray(slots) ? slots : []).find((item) => item.id === id);
     if (!slot) return next;
-    const number = parseSlotNumber(value);
-    if (number === null || number === slot.defaultNumber) delete next[id];
-    else next[id] = number;
+    const number = parseSlotNumber(value) ?? slot.defaultNumber;
+    const previous=slot.number;
+    const peers=(Array.isArray(slots)?slots:[]).filter(item=>item.id!==id&&item.number===number);
+    for(const peer of peers){if(previous===peer.defaultNumber)delete next[peer.id];else next[peer.id]=previous;}
+    if(number===slot.defaultNumber)delete next[id];else next[id]=number;
     return next;
   };
 
@@ -180,7 +188,7 @@
    */
   const rankSkill = (skill, query) => {
     const id = str(skill?.id).toLowerCase();
-    const name = shortNameOf(id);
+    const name = str(skill?.commandName||shortNameOf(id)).toLowerCase();
     const display = str(skill?.name).toLowerCase();
     if (!query) return 0;
     if (name.startsWith(query) || display.startsWith(query)) return 0;
@@ -267,7 +275,54 @@
     };
   };
 
+  const resolveInvocation = (raw,skills=[]) => {
+    const text=str(raw).trim();if(!text.startsWith('/'))return null;
+    const matches=[];
+    for(const skill of skills){for(const token of new Set([skill.id,skill.commandName||shortNameOf(skill.id)])){
+      if(token&&(text===`/${token}`||(text.startsWith(`/${token}`)&&/\s/u.test(text[token.length+1]||''))))matches.push({skill,token});
+    }}
+    if(!matches.length)return null;
+    const max=Math.max(...matches.map(match=>match.token.length));const best=matches.filter(match=>match.token.length===max);
+    if(best.length!==1)return {ambiguous:true,ids:best.map(match=>match.skill.id)};
+    const {skill,token}=best[0];return {id:skill.callId||skill.id,question:text.slice(token.length+1).trim(),callable:skill.callable!==false&&!skill.missing&&!skill.playbookOnly,reason:skill.callReason||skill.reason||'这条技能当前不能用于对话。'};
+  };
+
+  /** 输入确认分隔符后才绑定；保留问题原文，不把搜索中的半个名字当技能。 */
+  const typedSelection = (raw, skills = []) => {
+    const value = str(raw);
+    const prefix = /^\/([^\s]+)\s/u.exec(value);
+    if (!prefix) return null;
+    const call = resolveInvocation(value, skills);
+    if (!call || call.ambiguous || !call.callable) return null;
+    const skill = skills.find(item => (item.callId || item.id) === call.id);
+    return skill ? { id: skill.id, question: value.slice(prefix[0].length) } : null;
+  };
+
+  /** 用已有消息块保存指定身份；重放时不根据可能已变动的目录猜技能。 */
+  const selectionBlock = (skill) => skill ? {
+    type: 'kv', title: '本轮指定技能', rows: [
+      ['技能', skill.callId || skill.id],
+      ['名称', `/${skill.commandName || shortNameOf(skill.id)}`],
+      ['来源', skill.sourceLabel || skill.source || '未知']
+    ]
+  } : null;
+
+  const messageSelection = (message) => {
+    if (message?.role !== 'user') return null;
+    const block = message.blocks?.find(item => item.type === 'kv' && item.title === '本轮指定技能');
+    const rows = new Map((block?.rows || []).filter(row => Array.isArray(row) && row.length === 2));
+    const id = rows.get('技能'); const name = rows.get('名称');
+    if (typeof id !== 'string' || typeof name !== 'string' || !name.startsWith('/')) return null;
+    const text = str(message.text);
+    const body = text.startsWith(name) && /\s/u.test(text[name.length] || '') ? text.slice(name.length + 1) : text;
+    return { id, name, source: rows.get('来源') || '未知', body, block };
+  };
+
   return {
+    typedSelection,
+    selectionBlock,
+    messageSelection,
+    resolveInvocation,
     SLOT_COUNT,
     SLOT_MIN,
     SLOT_MAX,

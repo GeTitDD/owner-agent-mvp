@@ -1,0 +1,12 @@
+{
+  "id": "petdex-41-qqpet-codex",
+  "displayName": "QQpet-codex",
+  "description": "QQPet QGG custom Codex desktop pet with large-motion hover and instrument-checking review animations.",
+  "spritesheetPath": "spritesheet.png",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 41
+}

@@ -1,0 +1,20 @@
+{
+  "rank": 10,
+  "id": "petdex-10-wangcai",
+  "slug": "wangcai",
+  "displayName": "Wangcai",
+  "source": "https://petdex.dev/pets/wangcai",
+  "zipUrl": "https://assets.petdex.dev/pets/wangcai-4745956f417b/zip.zip",
+  "author": "boxu-openai",
+  "metrics": {
+    "installCount": 2862,
+    "likeCount": 26,
+    "zipDownloadCount": 98
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "ab9b32b69d43f757b11f200c05e6281a1086bf8f7bf4df753010b0159eb526ad",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

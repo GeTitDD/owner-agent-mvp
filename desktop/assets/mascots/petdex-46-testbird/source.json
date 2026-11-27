@@ -1,0 +1,20 @@
+{
+  "rank": 46,
+  "id": "petdex-46-testbird",
+  "slug": "testbird",
+  "displayName": "TestBird",
+  "source": "https://petdex.dev/pets/testbird",
+  "zipUrl": "https://assets.petdex.dev/pets/testbird-fb3c75a55910/zip.zip",
+  "author": "lee l.",
+  "metrics": {
+    "installCount": 1379,
+    "likeCount": 5,
+    "zipDownloadCount": 6
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "b16e447f2545ae9d1d27f6079c02713abd31c31d39e1d75ebc3dfdbc5dc02470",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

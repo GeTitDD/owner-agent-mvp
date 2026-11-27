@@ -1,0 +1,20 @@
+{
+  "rank": 19,
+  "id": "petdex-19-yukina",
+  "slug": "yukina",
+  "displayName": "Yukina",
+  "source": "https://petdex.dev/pets/yukina",
+  "zipUrl": "https://assets.petdex.dev/pets/yukina-3eb6cf89dcf1/zip.zip",
+  "author": "YK L.",
+  "metrics": {
+    "installCount": 1983,
+    "likeCount": 10,
+    "zipDownloadCount": 5
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "d2d06673e105c44f3f18aadeff42abee2a43e6d8a18f69ee3dfaed964937f44c",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

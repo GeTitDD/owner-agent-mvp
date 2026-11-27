@@ -11,6 +11,8 @@ import {
   scanMattSkills,
   scanPluginSkills,
   scanPstackSkills,
+  scanLocalSkills,
+  localSkillRoots,
   skillCatalogFor,
   skillCatalogView
 } from '../src/knowledge/skills.mjs';
@@ -47,13 +49,13 @@ test('视图模型按来源分组、统计缺失，缺失排在最前', () => {
     ]
   });
   const [domain, pstack, matt, plugin] = view.groups;
-  assert.deepEqual(view.groups.map((group) => group.label), ['域包', 'pstack', 'matt', '插件']);
+  assert.deepEqual(view.groups.map((group) => group.label), ['域包', 'pstack', 'Matt Pocock', '插件', '本机']);
   assert.deepEqual(domain.items.map((item) => item.name), ['a-skill', 'z-skill']);
   assert.equal(domain.missing, 1);
   assert.equal(pstack.count, 1);
   assert.equal(plugin.missing, 1);
   assert.deepEqual(view.totals,
-    { all: 4, missing: 2, playbookOnly: 0, present: 2, domain: 2, pstack: 1, matt: 0, plugin: 1 });
+    { all: 4, missing: 2, playbookOnly: 0, present: 2, domain: 2, pstack: 1, matt: 0, plugin: 1, local: 0 });
   assert.equal(view.empty, null);
   assert.equal(view.scannedAt, '2026-11-24T00:00:00.000Z');
 });
@@ -274,4 +276,25 @@ test('缓存：TTL 内复用、过期重扫、refresh 强制重扫', () => {
   cache.clear();
   cache.read();
   assert.equal(scans, 4);
+});
+
+test('仅显式指定时读取本机扩展，不自动查找个人技能目录', () => {
+  assert.deepEqual(localSkillRoots({env:{OWNER_AGENT_LOCAL_SKILLS_DIR:''},home:'/example'}),[]);
+  assert.deepEqual(localSkillRoots({env:{CODEX_HOME:'/custom'},home:'/example'}),[]);
+  assert.deepEqual(localSkillRoots({env:{OWNER_AGENT_LOCAL_SKILLS_DIR:'/custom'},home:'/example'}).map(root=>root.path),['/custom']);
+});
+
+test('本机技能按真实正文去重、保留同名不同来源，扫描不执行脚本', t => {
+  const root=tempRoot(t); const a=path.join(root,'a'); const b=path.join(root,'b');
+  writeFile(path.join(a,'review','SKILL.md'),skillMd('review','来源 A'));
+  writeFile(path.join(b,'review','SKILL.md'),skillMd('review','来源 B'));
+  writeFile(path.join(a,'.hidden','SKILL.md'),skillMd('hidden','不扫描隐藏目录'));
+  writeFile(path.join(a,'review','run.sh'),'exit 1');
+  fs.mkdirSync(path.join(a,'missing'),{recursive:true});
+  fs.symlinkSync(path.join(a,'review'),path.join(b,'alias'),process.platform==='win32'?'junction':'dir');
+  const rows=scanLocalSkills({roots:[{path:a,label:'Agents'},{path:b,label:'Codex'},{path:a,label:'重复根'},path.join(root,'absent')]});
+  assert.equal(rows.length,2);assert.equal(new Set(rows.map(row=>row.id)).size,2);
+  assert.deepEqual(rows.map(row=>row.source),['local','local']);
+  assert.deepEqual(rows.map(row=>row.origin),['Agents','Codex']);
+  assert.equal(skillCatalogFor({localRoots:[a],withItems:true}).totals.local,1);
 });

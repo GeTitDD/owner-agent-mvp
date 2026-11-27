@@ -1,0 +1,20 @@
+{
+  "rank": 27,
+  "id": "petdex-27-pupu",
+  "slug": "pupu",
+  "displayName": "PUPU",
+  "source": "https://petdex.dev/pets/pupu",
+  "zipUrl": "https://assets.petdex.dev/pets/pupu-44d3b8bb6ca5/zip.zip",
+  "author": "nomanplay",
+  "metrics": {
+    "installCount": 1708,
+    "likeCount": 3,
+    "zipDownloadCount": 6
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "36f9257561f163cca1d832f9bedf8c6de176bc901248eab5e9f0735df6dd963e",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

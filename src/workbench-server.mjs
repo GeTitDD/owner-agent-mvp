@@ -176,6 +176,8 @@ export async function createWorkbenchServer({
           packageVersions:staticCatalog.packages.filter(x=>x.id===id).map(x=>x.version),knowledgeCount:allUnits().filter(x=>x.domains.includes(id)).length})));
       }
       if(method==='POST'&&url.pathname==='/api/domains')return json(res,store.createDomain(await body(req)),201);
+      if(method==='GET'&&url.pathname==='/api/knowledge/chat-references')
+        return json(res,store.listChatReferences({knowledgeId:url.searchParams.get('knowledgeId')??'',limit:200}));
       if(method==='GET'&&url.pathname==='/api/knowledge/usages')
         return json(res,store.listUsages({targetRunId:url.searchParams.get('targetRunId')??'',projectId:url.searchParams.get('projectId')??'',knowledgeId:url.searchParams.get('knowledgeId')??'',limit:Math.min(200,Math.max(1,Number(url.searchParams.get('limit')??100)))}));
       if(method==='GET'&&url.pathname==='/api/knowledge/feedback')

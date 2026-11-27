@@ -7,6 +7,13 @@
 
 换皮肤不需要重启，也不需要改代码。
 
+当前随应用提供 Petdex 中文站默认 **Most installed（安装量）排序前 50** 的真实动画图集，
+以及原有 10 个 Cindy 模板。资源、快照排名和摘要实际保存在代码库的 `desktop/assets/mascots/`，
+运行时不从网站临时下载，也不要求用户自己寻找模板。
+
+打开方式：**齿轮 → 外观与桌宠**，或桌宠悬停的 `▦` / 右键。可按名称、来源或 `#50` 这样的排名搜索。
+选择立即生效并持久化；静态图与动画包明确区分。列表使用小缩略图，只给当前桌宠解码完整精灵图。
+
 ## 1. 内置皮肤
 
 | id | 说明 |
@@ -14,7 +21,7 @@
 | `cindy` / `blackcat` / `pululu` / `tarara` / `boli` | Cindy 内置套装 |
 | `whitesnow` / `annie` / `chaku` / `muffin` / `erika` | Cindy 内置套装 |
 
-默认皮肤：`pululu`（与 Cindy 的 `DEFAULT_AGENT_ISLAND_MASCOT_SKIN` 一致）。
+默认皮肤：`petdex-01-boba`（Petdex 安装量快照第 1 位的 Boba 动画）。另保留 10 个 Cindy 模板。
 资源位置：`desktop/assets/mascots/`。
 
 ## 2. 阶段与动画
@@ -93,7 +100,7 @@ Codex Pet 的 spritesheet 是「一行一个动作」，行为由会话状态驱
 
 - **桌宠悬停**：右上角出现 `↻`（一键切到下一个皮肤）、`▦`（打开皮肤选择）、`×`（隐藏）。
 - **右键桌宠**：直接打开皮肤选择（不再隐藏）。
-- **设置 → 桌宠皮肤**：点击任意皮肤立即生效；动画包优先使用 `thumb.png` 首帧缩略图，没有时回退到 spritesheet 首帧（lazy），避免一次性解码 100 张大图；底部显示「共 N 个 · 自定义 M」和「刷新」，悬停可看自定义皮肤目录。
+- **齿轮 → 外观与桌宠**：点击任意皮肤立即生效；动画包优先使用 `thumb.png` 首帧缩略图，没有时回退到 spritesheet 首帧（lazy），避免一次性解码 100 张大图；底部显示「共 N 个模板」和「刷新」，悬停可看自定义皮肤目录。
 - **导入 Codex 宠物…**：选择 `pet.json` 或所在文件夹，复制到用户目录并立即切换。
 
 ## 5. 静态皮肤快速替换
@@ -119,7 +126,7 @@ Codex Pet 的 spritesheet 是「一行一个动作」，行为由会话状态驱
 规则：
 - 接受 `*.png` / `*.svg` / `*.webp` / `*.gif`；id 由文件名归一化（小写、保留 `a-z0-9._-`）。
 - 同名时用户目录覆盖内置；动画包 id 默认取 `pet.json.id`，再回退到目录名。
-- 配置里的皮肤不存在时回退到 `manifest.default` → `pululu` → 第一个可用皮肤，并在快照里标 `fallback`。
+- 配置里的皮肤不存在时回退到 `manifest.default` → `petdex-01-boba` → 第一个可用皮肤，并在快照里标 `fallback`。
 - 不接受路径穿越；`mascots.set` 只允许目录内已存在的 id。
 - 动画包缺失 spritesheet、路径越界或 JSON 损坏时忽略，不影响静态皮肤。
 
@@ -146,3 +153,15 @@ npm run e2e:desktop:mascots
 静态皮肤资源与阶段命名来自 `makecindy/cindy`（Apache-2.0）。
 Codex Pet 只借鉴公开的包格式约定，不包含其运行时或美术资源。详见 `docs/THIRD_PARTY_NOTICES.md`。
 
+
+
+## Petdex 快照与维护
+
+清单：`desktop/assets/mascots/petdex-manifest.json`，逐包保留原始 `upstream-pet.json`、
+未改像素的精灵图、适配后的 `pet.json`、`source.json` 和 `thumb.png`。
+本批为 48 个 v1 和 2 个 v2 包；Spyro 上游配置中的扩展名与包内文件不符，
+本地仅修正引用并记录修复，原始配置仍保留。
+
+显式重新导入工具：`python3 scripts/import-petdex.py`（维护者需要 Pillow）。已有快照时工具拒绝自动覆盖；
+更新前需要审阅旧清单并明确安排替换。该维护工具不进入应用运行路径。
+来源素材的权利和包内许可逐条保留，不推定站点所有作品采用同一个开源许可。

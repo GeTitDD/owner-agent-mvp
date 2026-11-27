@@ -1,0 +1,20 @@
+{
+  "rank": 37,
+  "id": "petdex-37-oiiai",
+  "slug": "oiiai",
+  "displayName": "oiiai",
+  "source": "https://petdex.dev/pets/oiiai",
+  "zipUrl": "https://assets.petdex.dev/pets/oiiai-23a48c92c83c/zip.zip",
+  "author": "carlhavingfun",
+  "metrics": {
+    "installCount": 1464,
+    "likeCount": 38,
+    "zipDownloadCount": 59
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "e47eb4b3e7d3b655cf3c37fc2f8471241beebae8ca43ba3f59a4f8d9e80402ab",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

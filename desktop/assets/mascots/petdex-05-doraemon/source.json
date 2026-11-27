@@ -1,0 +1,20 @@
+{
+  "rank": 5,
+  "id": "petdex-05-doraemon",
+  "slug": "doraemon",
+  "displayName": "Doraemon",
+  "source": "https://petdex.dev/pets/doraemon",
+  "zipUrl": "https://assets.petdex.dev/pets/doraemon-58b12a5012e0/zip.zip",
+  "author": "korkyzer",
+  "metrics": {
+    "installCount": 4775,
+    "likeCount": 54,
+    "zipDownloadCount": 303
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "f6b9a13059104d6cb8fd74ef1d0d5518212c25eaeeb9befdb3d6350bcb58172e",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

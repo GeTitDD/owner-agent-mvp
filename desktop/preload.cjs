@@ -31,13 +31,20 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
   }),
   // #131 同步状态：get 是只读；attempt 是一次显式补同步，返回 {status, result}。
   // 断网时 attempt 只更新状态，不阻塞本地读写（本地写入不经过这条通道）。
+  memorySync: Object.freeze(Object.fromEntries(['prepare','detail','execute','cancel','archives','restore'].map(method => [method,(input) => invoke(`companion:memory-sync-${method}`,input)]))),
   syncStatus: Object.freeze({
     get: () => invoke('companion:sync-status-get'),
     attempt: () => invoke('companion:sync-attempt')
   }),
   cardSessions: Object.freeze({
+    reviewDraft: (input) => invoke('companion:review-draft', input),
+    draft: (input) => invoke('companion:card-draft-get', input),
+    saveDraft: (input) => invoke('companion:card-draft-save', input),
+    clearDraft: (input) => invoke('companion:card-draft-clear', input),
     list: (input) => invoke('companion:card-sessions', input),
     get: (input) => invoke('companion:card-session-get', input),
+    message: (input) => invoke('companion:card-session-message', input),
+    transcript: (input) => invoke('companion:card-session-transcript', input),
     create: (input) => invoke('companion:card-session-create', input),
     rename: (input) => invoke('companion:card-session-rename', input),
     pin: (input) => invoke('companion:card-session-pin', input),
@@ -143,12 +150,14 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     ask: (input) => invoke('companion:knowledge-ask', input),
     // 对话取经验：按项目再补域，只读；渲染与提示词不在这里改。
     lessons: (input) => invoke('companion:lesson-retrieve', input),
+    recall: (input) => invoke('companion:experience-recall', input),
     // #58：未提炼执行记录的提议信号；#61：按项目取经验 / 一键提为候选。
     distillProposals: (input) => invoke('companion:knowledge-distill-proposals', input),
     // 显式提炼：执行记录 → Lesson（会调用模型；失败逐条返回原因）。
     distill: (input) => invoke('companion:distill-lessons', input),
     lessonList: (input) => invoke('companion:lesson-list', input),
-    pendingProposals: () => invoke('companion:pending-proposals'),
+    candidateDraft: (input) => invoke('companion:candidate-draft', input),
+    pendingProposals: (input) => invoke('companion:pending-proposals', input),
     promoteLesson: (input) => invoke('companion:lesson-promote', input),
     detail: (input) => invoke('companion:knowledge-detail', input),
     open: () => invoke('companion:knowledge-open')
@@ -184,6 +193,17 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     set: (input) => invoke('companion:settings:set', input),
     addProject: () => invoke('companion:add-project')
   }),
+  githubProjects: Object.freeze({
+    inspect: input => invoke('companion:github-project-inspect',input),
+    link: input => invoke('companion:github-project-link',input),
+    clone: input => invoke('companion:github-project-clone',input),
+    cancel: input => invoke('companion:github-project-cancel',input),
+    directory: input => invoke('companion:github-project-directory',input),
+    onProgress: listener => {
+      const handler=(_event,payload)=>listener(payload);ipcRenderer.on('companion:github-project-progress',handler);
+      return ()=>ipcRenderer.removeListener('companion:github-project-progress',handler);
+    }
+  }),
   // #126 分享到飞书：只发一条文本；webhook 配置在主进程读，值不回渲染层。
   share: Object.freeze({
     feishu: (input) => invoke('companion:share-feishu', input)
@@ -198,6 +218,11 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     import: () => invoke('companion:mascots:import')
   }),
   openSkinPicker: () => ipcRenderer.send('companion:open-skin-picker'),
+  onOpenAppearance: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('companion:open-appearance', listener);
+    return () => ipcRenderer.removeListener('companion:open-appearance', listener);
+  },
   diagnostics: () => invoke('companion:diagnostics'),
   sandbox: Object.freeze({
     detect: (input) => invoke('companion:sandbox-detect', input)

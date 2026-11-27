@@ -49,6 +49,7 @@ export function ideaToLesson(item, { projectId, at = nowIso() } = {}) {
     sourceRecordId: ideaId,
     // 现象是灵感的短句；完整原文留在下面的证据摘录里，长文不会被截断后无处可查。
     phenomenon: normalizePhenomenon(source),
+    content: String(item.rawText || source).trim(),
     // 没有证据就不编机制与对策：这两段留空，由人在后续审核里补。
     mechanism: '',
     countermeasure: '',
@@ -87,7 +88,7 @@ export function ideaToLesson(item, { projectId, at = nowIso() } = {}) {
  * @param {string} input.id 灵感 id
  * @param {string} [input.projectId] 当前项目；缺了就拒绝
  */
-export function promoteIdeaToLesson({ store, personalStore, id, projectId = '' } = {}) {
+export function promoteIdeaToLesson({ store, personalStore, id, projectId = '', edits = null } = {}) {
   if (!store || typeof store.getIdeaItem !== 'function') {
     throw new Error('store is required');
   }
@@ -116,10 +117,15 @@ export function promoteIdeaToLesson({ store, personalStore, id, projectId = '' }
   // 同一条灵感只提升一次：按来源记录 id 找回已有经验，不再写第二条。
   const existing = personalStore.listLessons({ sourceRecordId: ideaId, limit: 10 })[0] ?? null;
   if (existing) {
+    if(existing.projectId!==project)return refuse('project','这条灵感已属于另一项目的经验，未重复写入。');
     return { ok: true, created: false, reason: 'existing', lesson: existing };
   }
 
   const lesson = ideaToLesson(item, { projectId: project });
+  if (edits) {
+    Object.assign(lesson, edits);
+    lesson.dedupeKey = lessonDedupeKey(lesson);
+  }
   // 现象 + 作用域相同的经验已在库里时，recordLesson 只追加证据、不新建：仍按「已有」回执。
   const duplicate = typeof personalStore.lessonByDedupe === 'function'
     ? personalStore.lessonByDedupe(lesson.dedupeKey)
@@ -133,10 +139,12 @@ export function promoteIdeaToLesson({ store, personalStore, id, projectId = '' }
 
   let stored;
   try {
-    stored = personalStore.recordLesson(lesson, { evidence });
+    stored = edits && typeof personalStore.recordLessonOrDispute==='function'
+      ? personalStore.recordLessonOrDispute(lesson, { evidence })
+      : personalStore.recordLesson(lesson, { evidence });
   } catch (error) {
     // 写失败不静默：把原因交回调用方，流里留一条失败回执。
     return refuse('write', `经验没写成：${error?.message ?? error}　这次什么都没写。`);
   }
-  return { ok: true, created: !duplicate, reason: duplicate ? 'existing' : '', lesson: stored };
+  return { ok: true, created: !duplicate || stored.id !== duplicate.id, reason: duplicate && stored.id===duplicate.id ? 'existing' : '', lesson: stored };
 }

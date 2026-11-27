@@ -1,0 +1,20 @@
+{
+  "rank": 15,
+  "id": "petdex-15-hoops",
+  "slug": "hoops",
+  "displayName": "Hoops",
+  "source": "https://petdex.dev/pets/hoops",
+  "zipUrl": "https://assets.petdex.dev/pets/hoops-206e70d7dbd5/zip.zip",
+  "author": "kaidi c.",
+  "metrics": {
+    "installCount": 2213,
+    "likeCount": 37,
+    "zipDownloadCount": 90
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "af8bd86408fb90e0b60a530e22d556755941b9c54633ffd643f2c394a5a16c98",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

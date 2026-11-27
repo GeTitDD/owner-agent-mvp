@@ -91,7 +91,9 @@ test('从未同步与第一次就失败可区分：同是 unknown，failure 一�
   const failedBadge = syncBadge(firstFailure);
   assert.match(neverBadge.detail, /从未成功同步过/u);
   assert.doesNotMatch(neverBadge.detail, /network unreachable/u);
-  assert.match(failedBadge.detail, /network unreachable/u);
+  assert.match(failedBadge.detail, /连接失败，请联网后重试/u);
+  assert.match(failedBadge.hint, /network unreachable/u);
+  assert.doesNotMatch(failedBadge.detail, /pull：|network unreachable/u);
   assert.equal(failedBadge.label, '未同步');
 });
 
@@ -169,8 +171,35 @@ test('补同步回执：成功说完成，失败说原因，不把失败写成�
   const failed = applySyncAttempt(emptySyncStatus(), OFFLINE, AT_1);
   const text = syncAttemptText({ status: failed, result: OFFLINE });
   assert.match(text, /未完成/u);
-  assert.match(text, /network unreachable/u);
+  assert.match(text, /连接失败，请联网后重试/u);
   assert.doesNotMatch(text, /同步完成/u);
+});
+
+test('正常宿主尚未接入执行器时如实显示仅本机，并提供说明而非无效补同步', () => {
+  const stored = applySyncAttempt(emptySyncStatus(), OK, AT_1);
+  const badge = syncBadge({ ...stored, availability: { available: false } });
+  assert.equal(badge.state, 'local-only');
+  assert.equal(badge.label, '仅本机');
+  assert.notEqual(badge.tone, 'ok');
+  assert.match(badge.detail, /尚未接入/);
+  assert.equal(badge.action, 'info');
+  assert.equal(badge.retryLabel, '了解同步');
+  assert.match(badge.hint, /本机读写照常/);
+  assert.match(badge.hint, /2026-11-26 10:00 UTC/);
+  assert.equal(stored.state, 'synced', '界面能力说明不能篡改历史结果');
+});
+
+test('失败摘要说清下一步，完整技术原因保留在可查详情中', () => {
+  for (const [message, expected] of [
+    ['401 Bad credentials', /检查凭据/], ['ECONNREFUSED', /联网后重试/],
+    ['network unreachable', /联网后重试/], ['非常长的底层堆栈内容', /查看详情/]
+  ]) {
+    const status = applySyncAttempt(emptySyncStatus(), { status: 'error', step: 'push', message }, AT_1);
+    const badge = syncBadge(status);
+    assert.match(badge.detail, expected);
+    assert.ok(badge.hint.includes(message));
+    assert.doesNotMatch(badge.detail, /push：/);
+  }
 });
 
 test('落盘：写进临时文件后新开一个 store 仍读到同一份时间与原因', () => {
@@ -208,4 +237,19 @@ test('坏文件 / 不存在的文件都退回「从未成功同步」，不挡�
 test('store 要求一个存储路径（不回退到会写用户目录的默认值）', () => {
   assert.throws(() => new SyncStatusStore({}), /缺少同步状态的存储路径/u);
   assert.throws(() => new SyncStatusStore({ file: '   ' }), /缺少同步状态的存储路径/u);
+});
+
+test('真实同步状态按目标、凭据、未解决和本机变化显示，成功历史不能掩盖新变化',()=>{
+  const status={state:'synced',lastSuccessAt:'2026-11-27T10:00:00Z',availability:{available:true,mode:'manual-preview'},count:0,unresolved:0};
+  assert.equal(syncBadge(status).label,'已同步');assert.equal(syncBadge({...status,count:2}).label,'待检查');
+  assert.match(syncBadge({...status,unresolved:1}).detail,/冲突未解决/);
+  assert.equal(syncBadge({...status,availability:{available:false,mode:'manual-preview',reason:'auth-missing'}}).label,'仅本机');
+  assert.equal(syncBadge(status).retryLabel,'检查同步');
+});
+
+test('同步错误日常说明不带 IPC 通道或本机 Git 路径，仍可展开技术详情',async()=>{
+  const {syncErrorView}=await import('../src/memory/sync-status.mjs');
+  const error=syncErrorView(new Error("Error invoking remote method 'companion:memory-sync-prepare': SyncTransportError: Git 同步未完成：fatal: '/tmp/fixture/remote.git' does not appear to be a git repository"));
+  assert.match(error.text,/检查网络/);assert.ok(!error.text.includes('companion:'));assert.ok(!error.text.includes('/tmp/'));assert.ok(error.detail.includes('/tmp/fixture/'));
+  assert.match(syncErrorView(new Error("Error invoking remote method 'companion:memory-sync-execute': Error: 本机记忆在预览后已变化，请重新检查。")).text,/^本机记忆/);
 });

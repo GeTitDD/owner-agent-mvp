@@ -1,16 +1,23 @@
-// Shared, best-effort project-root identity checks (v0.7 marker reused by v0.8).
-//
-// The marker file `.owner-root-identity` is created inside the registered project root
-// at registration time. Its dev/ino hash pins the directory identity: a deleted and
-// recreated directory, or a root swapped for a link to another directory, has a different
-// identity. This is NOT adversarial OS fencing (inode reuse after deletion is possible);
-// it is a deterministic drift check shared by every worker that touches a project root.
+// 目录身份只读采集并保存在应用数据库，登记与验证都不向被观察仓库写文件。
+// 旧库仍按原标记校验；不自动清理旧文件，避免修改用户仓库或绕过原有漂移保护。
+// 这是尽力而为的漂移检查，不代替操作系统级隔离。
 import { statSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { sha256 } from './utils.mjs';
 
-// Hash of the marker file's dev/ino pair. Returns null when the marker is missing.
+// 出生时间不会因普通文件编辑而改变，并减少目录删除重建后 inode 复用造成的误认。
 export const rootIdentityOf = (root) => {
+  try {
+    const st = statSync(root, { bigint: true });
+    if (!st.isDirectory()) return null;
+    return `dir-v1:${sha256(`${st.dev}:${st.ino}:${st.birthtimeNs}`).slice(0, 32)}`;
+  } catch {
+    return null;
+  }
+};
+
+// 兼容已登记项目；这里只读原标记，缺失时仍按原保护规则拒绝。
+const legacyRootIdentityOf = (root) => {
   try {
     const st = statSync(path.join(root, '.owner-root-identity'), { bigint: true });
     return sha256(`${st.dev}:${st.ino}`).slice(0, 32);
@@ -55,7 +62,9 @@ export const verifyProjectRoot = (project) => {
   }
   if (!samePath(root, project.root)) return { ok: false, reason: 'project-root-moved' };
   if (project.root_identity) {
-    const identity = rootIdentityOf(root);
+    const identity = project.root_identity.startsWith('dir-v1:')
+      ? rootIdentityOf(root)
+      : legacyRootIdentityOf(root);
     if (identity === null) return { ok: false, reason: 'project-root-missing' };
     if (identity !== project.root_identity) return { ok: false, reason: 'project-root-moved' };
   }

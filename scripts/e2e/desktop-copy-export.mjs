@@ -1,6 +1,6 @@
 // #110 验收：悬停复制与会话导出。
 //
-// 路径：卡片壳（#105）+ 块（#109）→ 输入 /blocks 得到「文字 + 十二块」。
+// 路径：卡片壳（#105）+ 块（#109）→ 输入 /blocks 得到「文字 + 十三块」。
 // 断言五层：
 //   ① 悬停消息只亮消息按钮；移到块上只亮块按钮（同一时刻一个）；
 //   ② 复制块得到「这个块」的 Markdown（表格仍是表格，不含别的块）；
@@ -152,8 +152,8 @@ const run = async () => {
     // 一条带全部块的回复。
     await sendDraft(panel, '/blocks');
     await waitFor(panel, "document.querySelectorAll('#messages .msg').length === 2", 5000);
-    check('the sample reply carries twelve blocks',
-      await panel.evaluate("document.querySelectorAll('#messages .msg.agent [data-block]').length") === 12);
+    check('the sample reply carries thirteen blocks',
+      await panel.evaluate("document.querySelectorAll('#messages .msg.agent [data-block]').length") === 13);
 
     // ① 悬停消息：只有消息按钮亮。
     check('hovering a message is possible',

@@ -6,7 +6,7 @@
 // - 会话可以不绑项目（#106 的全局会话）：project_id 可空，空即「还没绑项目」。
 // - 只存消息文本与必要元数据（项目、标题、时间、角色、引用、状态、置顶、删除时间、
 //   正在看的项目），不把聊天记录当项目状态，也不写回 owner_projects。
-// - 只新增 owner_chat_sessions / owner_chat_messages 两张表，
+// - 会话、消息与按范围隔离的草稿各存一张自有表，
 //   老库通过 CREATE TABLE IF NOT EXISTS + 列迁移平滑升级，不改旧表语义。
 // - 删除会话只动自己与消息，项目数据不受影响；#106 的软删除只写 deleted_at，
 //   记录与消息都留着，按 id 能找回。
@@ -193,6 +193,19 @@ export class ChatSessionStore {
         ON owner_chat_messages(session_id,seq);
     `);
     this.migrateSessionColumns();
+    // 范围属于草稿键的一部分：同一会话跨项目时，也不把上一项目的未发送内容带过去。
+    this.db.exec(`CREATE TABLE IF NOT EXISTS owner_review_drafts(
+      session_id TEXT NOT NULL REFERENCES owner_chat_sessions(id) ON DELETE CASCADE,
+      card_key TEXT NOT NULL, payload TEXT NOT NULL,
+      PRIMARY KEY(session_id,card_key)
+    )`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS owner_chat_drafts(
+      session_id TEXT NOT NULL REFERENCES owner_chat_sessions(id) ON DELETE CASCADE,
+      project_id TEXT NOT NULL DEFAULT '',
+      text TEXT NOT NULL DEFAULT '',
+      skill_id TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY(session_id,project_id)
+    )`);
   }
 
   /**
@@ -262,9 +275,18 @@ export class ChatSessionStore {
   }
 
   /** 新建会话：projectId 留空即全局会话（#106），传了就必须是已登记项目。 */
-  createSession({ projectId = '', title = '', sessionId = '' } = {}) {
+  createSession({ projectId = '', title = '', sessionId = '', reuseEmptyGlobalId = '' } = {}) {
     const wanted = String(projectId ?? '').trim();
     const project = wanted ? this.assertProject(wanted) : null;
+    // 首次选项目复用自动准备的空会话；存在输入、消息、置顶或自定义标题时保留原会话。
+    if (project && reuseEmptyGlobalId) {
+      const reused = this.db.prepare(`UPDATE owner_chat_sessions SET project_id=?,view_project_id=?
+        WHERE id=? AND project_id IS NULL AND title=? AND pinned=0 AND deleted_at IS NULL
+        AND NOT EXISTS(SELECT 1 FROM owner_chat_messages WHERE session_id=owner_chat_sessions.id)
+        AND NOT EXISTS(SELECT 1 FROM owner_chat_drafts WHERE session_id=owner_chat_sessions.id
+          AND (text<>'' OR skill_id<>''))`).run(project.id, project.id, String(reuseEmptyGlobalId), DEFAULT_CHAT_TITLE);
+      if (reused.changes) return this.getSession(String(reuseEmptyGlobalId));
+    }
     const id = String(sessionId ?? '').trim() || `chat_${randomUUID()}`;
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/u.test(id)) fail('会话 ID 不合法');
     const now = this.now();
@@ -305,7 +327,7 @@ export class ChatSessionStore {
     return rows.map(sessionRow);
   }
 
-  getSession(id, { limit = MESSAGE_PAGE } = {}) {
+  getSession(id, { limit = MESSAGE_PAGE, beforeSeq = 0 } = {}) {
     const key = String(id ?? '').trim();
     if (!key) fail('缺少会话 ID');
     const row = this.db.prepare(`
@@ -315,11 +337,96 @@ export class ChatSessionStore {
       FROM owner_chat_sessions s WHERE s.id=?
     `).get(key);
     if (!row) fail('会话不存在', 404);
-    const safeLimit = Math.min(Math.max(1, Number(limit) || MESSAGE_PAGE), MESSAGE_PAGE);
+    const cursor = Number(beforeSeq);
+    if (!Number.isSafeInteger(cursor) || cursor < 0) fail('历史消息游标无效');
+    const safeLimit = Math.floor(Math.min(Math.max(1, Number(limit) || MESSAGE_PAGE), MESSAGE_PAGE));
+    // 从最新一批向前读，多取一条判断是否仍有历史；展示仍按正序，游标不受新增消息影响。
     const messages = this.db.prepare(
-      'SELECT * FROM owner_chat_messages WHERE session_id=? ORDER BY seq ASC LIMIT ?'
-    ).all(key, safeLimit).map(messageRow);
-    return { ...sessionRow(row), messages };
+      `SELECT * FROM owner_chat_messages WHERE session_id=? ${cursor ? 'AND seq<?' : ''} ORDER BY seq DESC LIMIT ?`
+    ).all(key, ...(cursor ? [cursor] : []), safeLimit + 1);
+    const hasMore = messages.length > safeLimit;
+    if (hasMore) messages.pop();
+    messages.reverse();
+    return { ...sessionRow(row), messages: messages.map(messageRow),
+      page: { hasMore, nextBeforeSeq: messages[0]?.seq ?? null } };
+  }
+
+  /** 原问题以会话和序号定位，不依赖界面当前加载到哪一页。 */
+  getMessage(id, seq) {
+    const key = this.draftSession(id).id;
+    if (!Number.isSafeInteger(seq) || seq < 1) fail('消息序号无效');
+    const row = this.db.prepare('SELECT * FROM owner_chat_messages WHERE session_id=? AND seq=?').get(key, seq);
+    return row ? messageRow(row) : null;
+  }
+
+  /** 显式导出与同步读完整正文；单次 SELECT 保证不会把并发追加混入不同页。 */
+  getTranscript(id) {
+    const session = this.getSession(id, { limit: 1 });
+    const messages = this.db.prepare('SELECT * FROM owner_chat_messages WHERE session_id=? ORDER BY seq ASC')
+      .all(session.id).map(messageRow);
+    const { page, ...detail } = session;
+    return { ...detail, messages };
+  }
+
+  /** 草稿保留原始空白，不作为消息、进度或最近活动排序依据。 */
+  draftSession(id) {
+    const key = String(id ?? '').trim();
+    if (!key) fail('缺少会话 ID');
+    // 每次输入只需验证归属，不读取并解析整段聊天历史。
+    const row = this.db.prepare('SELECT id,deleted_at FROM owner_chat_sessions WHERE id=?').get(key);
+    if (!row) fail('会话不存在', 404);
+    return row;
+  }
+
+  // 审阅草稿按会话、候选身份与展示版本隔离，SQLite 同步提交保证退出后也能恢复。
+  reviewDraft({id,key,values,clear=false}={}) {
+    const session=this.draftSession(id);
+    if(session.deleted_at && (values!==undefined||clear))fail('会话已删除，请先找回',409);
+    if(typeof key!=='string'||!/^(?:idea|candidate):[A-Za-z0-9._-]{1,90}:[a-f0-9]{64}$/u.test(key))fail('审阅草稿身份无效');
+    if(clear){this.db.prepare('DELETE FROM owner_review_drafts WHERE session_id=? AND card_key=?').run(session.id,key);return {cleared:true};}
+    if(values!==undefined){
+      if(!values||typeof values!=='object'||Array.isArray(values))fail('审阅草稿必须是字段对象');
+      const allowed=new Set(['phenomenon','mechanism','countermeasure','content','title','scope','domains','applicability','exceptions']);
+      for(const [name,value]of Object.entries(values))if(!allowed.has(name)||typeof value!=='string'||value.length>20000||/[\x00-\x08\x0b\x0c\x0e-\x1f]/u.test(value))fail('审阅草稿字段无效或过长');
+      const json=JSON.stringify(values);if(json.length>50000)fail('审阅草稿过长，未截断保存');
+      this.db.prepare('INSERT INTO owner_review_drafts(session_id,card_key,payload) VALUES(?,?,?) ON CONFLICT(session_id,card_key) DO UPDATE SET payload=excluded.payload').run(session.id,key,json);
+    }
+    const row=this.db.prepare('SELECT payload FROM owner_review_drafts WHERE session_id=? AND card_key=?').get(session.id,key);
+    return {values:row?JSON.parse(row.payload):null};
+  }
+
+  getDraft({ id, projectId = '' } = {}) {
+    const session = this.draftSession(id);
+    const project = String(projectId ?? '').trim();
+    if (project) this.assertProject(project);
+    const row = this.db.prepare(
+      'SELECT text,skill_id FROM owner_chat_drafts WHERE session_id=? AND project_id=?'
+    ).get(session.id, project);
+    return { text: row?.text ?? '', skillId: row?.skill_id ?? '' };
+  }
+
+  saveDraft({ id, projectId = '', text = '', skillId = '' } = {}) {
+    const session = this.draftSession(id);
+    if (session.deleted_at) fail('会话已删除，请先找回', 409);
+    const project = String(projectId ?? '').trim();
+    if (project) this.assertProject(project);
+    const body = String(text ?? '');
+    if (body.length > CHAT_MESSAGE_MAX) fail(`草稿最多 ${CHAT_MESSAGE_MAX} 字`);
+    if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/u.test(body)) fail('草稿含有非法字符');
+    const skill = String(skillId ?? '');
+    if (skill.length > 300 || /[\x00-\x1f]/u.test(skill)) fail('草稿技能不合法');
+    this.db.prepare(`INSERT INTO owner_chat_drafts(session_id,project_id,text,skill_id)
+      VALUES(?,?,?,?) ON CONFLICT(session_id,project_id)
+      DO UPDATE SET text=excluded.text,skill_id=excluded.skill_id`).run(session.id, project, body, skill);
+    return { text: body, skillId: skill };
+  }
+
+  /** 发送完成只移除当时发送的版本；等待期间新写的草稿不能被迟到回执清空。 */
+  clearDraft({ id, projectId = '', text = '', skillId = '' } = {}) {
+    const changed = this.db.prepare(`DELETE FROM owner_chat_drafts
+      WHERE session_id=? AND project_id=? AND text=? AND skill_id=?`)
+      .run(String(id), String(projectId), String(text), String(skillId));
+    return { cleared: Number(changed.changes) > 0 };
   }
 
   renameSession(id, title) {
@@ -344,6 +451,8 @@ export class ChatSessionStore {
     const exists = this.db.prepare('SELECT id FROM owner_chat_sessions WHERE id=?').get(key);
     if (!exists) fail('会话不存在', 404);
     this.db.prepare('DELETE FROM owner_chat_messages WHERE session_id=?').run(key);
+    this.db.prepare('DELETE FROM owner_chat_drafts WHERE session_id=?').run(key);
+    this.db.prepare('DELETE FROM owner_review_drafts WHERE session_id=?').run(key);
     this.db.prepare('DELETE FROM owner_chat_sessions WHERE id=?').run(key);
     return { id: key, deleted: true };
   }
@@ -514,15 +623,17 @@ export class ChatSessionStore {
    * 给模型的续聊上下文：只取最近几轮成功消息，逐条截断。
    * 失败的助手消息不进入上下文，避免把错误提示当成事实。
    */
-  historyForPrompt(sessionId, { limit = CHAT_HISTORY_LIMIT } = {}) {
+  historyForPrompt(sessionId, { limit = CHAT_HISTORY_LIMIT, beforeSeq = 0 } = {}) {
     const key = String(sessionId ?? '').trim();
     if (!key) return [];
     const safeLimit = Math.min(Math.max(1, Number(limit) || CHAT_HISTORY_LIMIT), 30);
+    const before = Number.isSafeInteger(beforeSeq) && beforeSeq > 0 ? beforeSeq : 0;
     const rows = this.db.prepare(`
       SELECT role,text,status FROM owner_chat_messages
       WHERE session_id=? AND (role='user' OR status='ok')
+        ${before ? 'AND seq < ?' : ''}
       ORDER BY seq DESC LIMIT ?
-    `).all(key, safeLimit);
+    `).all(...(before ? [key, before, safeLimit] : [key, safeLimit]));
     return rows.reverse().map((row) => ({
       role: row.role,
       text: String(row.text ?? '').slice(0, 600)

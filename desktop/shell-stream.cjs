@@ -47,7 +47,7 @@
       ['对策', String(lesson?.countermeasure ?? '') || '（未记录）'],
       ['状态', String(lesson?.verificationStatus ?? '')]
     ],
-    actions: [{ id: 'promote', label: '提升为候选' }],
+    actions: [{ id: 'promote', label: '审阅并沉淀' }],
     note: '提升只生成候选；接受后才会写进知识库。'
   });
 
@@ -70,8 +70,22 @@
     const threadNode = $('thread');
     const exportButton = $('exportConversation');
     const exportPathNode = $('exportPath');
+    const historyNav = $('historyNav');
+    const historyOlder = $('historyOlder');
+    const historyStatus = $('historyStatus');
 
     let messages = [];
+    const historyPageSize = 100;
+    let loadedId = '';
+    let loadVersion = 0;
+    let page = { hasMore: false, nextBeforeSeq: null };
+    let messageCount = 0;
+    let olderLoading = false;
+    let historyError = '';
+    let historyFailureDetail = '';
+    let preserveOnRender = false;
+    const reviewing = new Set();
+    const recovering = new Set();
     // 悬停态只记一个节点：最后被指到的那一个（块或消息）亮按钮，另一个立刻收起。
     // 用属性而不是 :hover 叠加，是因为块本身也在消息里面，纯 CSS 会同时亮两个。
     let copyActive = null;
@@ -165,11 +179,35 @@
      * 气泡只在有文字时画（只有块的回复不该多一个空气泡）；
      * 块由 view 挂在同一个 li 里，所以块是长在对话流里的，不是另一个容器。
      */
+    // 渲染层只画表单；草稿持久化与异步恢复跟随对话流的会话身份。
+    const bindExperienceDraft = (node,sessionId) => {
+      const id=sessionId;
+      const draftKey=node.dataset.experienceDraftKey;
+      const form=node.querySelector('.experience-form'),error=node.querySelector('[data-experience-error]');
+      const bridge=window.companion?.cardSessions?.reviewDraft;
+      if(!listApi.canCompose(sessionId)){for(const input of node.querySelectorAll('input,textarea,select,button'))input.disabled=true;return;}
+      let touched=false,closed=false,pending=Promise.resolve();
+      const snapshot=()=>Object.fromEntries([...form.querySelectorAll('[data-experience-field]')].map(input=>[input.dataset.experienceField,input.value]));
+      const save=()=>{
+        touched=true;const next=snapshot();
+        pending=pending.then(()=>{if(!closed){if(typeof bridge!=='function')throw Error('审阅草稿接口未就绪');return bridge({id,key:draftKey,values:next});}}).catch(()=>{error.textContent='本机草稿暂未保存，请保留当前窗口并复制输入后重试。';error.hidden=false;});
+    };
+      node.experienceDraft={flush:()=>pending,clear:async()=>{await pending;closed=true;await bridge?.({id,key:draftKey,clear:true});}};
+      if(bridge)void bridge({id,key:draftKey}).then(result=>{
+        if(touched||closed||!form.isConnected||!result?.values)return;
+        for(const input of form.querySelectorAll('[data-experience-field]'))if(typeof result.values[input.dataset.experienceField]==='string')input.value=result.values[input.dataset.experienceField];
+        form.querySelector('[data-experience-field=scope]')?.dispatchEvent(new Event('change',{bubbles:false}));
+      }).catch(()=>{error.textContent='未能读取上次审阅草稿，请先核对当前内容。';error.hidden=false;});
+      form.addEventListener('input',save);form.addEventListener('change',save);
+    };
+
+
     const renderMessage = (message, index) => {
       const item = el('li', `msg ${message.role === 'user' ? 'user' : 'agent'}`);
       item.dataset.role = message.role;
       // 块内按钮的点击要能找回「哪条消息的哪个提问块」，序号跟着消息走。
       item.dataset.index = String(index);
+      if (message.seq) item.dataset.seq = String(message.seq);
       // #123：有没有可勾选的原文；勾选态是否显形由 .messages.selecting 统一给样式。
       item.dataset.selectable = canSelect(message) ? 'true' : 'false';
       item.setAttribute('aria-selected', 'false');
@@ -196,19 +234,51 @@
         who.append(rewind);
       }
       item.append(who);
-      if (message.text) {
+      const selection = ctx.skillsApi.messageSelection(message);
+      if (selection) {
+        const chip = el('span', 'skill-chip skill-message-chip', `技能 · ${selection.name} · ${selection.source}`);
+        chip.dataset.skillId = selection.id;
+        chip.title = selection.id;
+        chip.setAttribute('aria-label', `本轮指定技能 ${selection.name}，来源 ${selection.source}`);
+        item.append(chip);
+      }
+      const body = selection ? selection.body : message.text;
+      if (body) {
         const bubble = el('div', 'bubble');
-        renderMarkdown(bubble, message.text);
+        renderMarkdown(bubble, body);
         item.append(bubble);
       }
-      item.append(blocksView.renderReply(message));
+      const content=blocksView.renderReply(selection ? {...message,blocks:message.blocks.filter(block=>block!==selection.block)} : message);
+      item.append(content);
+      for(const node of item.querySelectorAll('[data-experience-draft-key]'))bindExperienceDraft(node,currentId());
       return item;
     };
 
-    const renderThread = () => {
+    const renderHistory = () => {
+      historyNav.hidden = !page.hasMore && !olderLoading && !historyError && messageCount <= historyPageSize;
+      historyOlder.hidden = !page.hasMore;
+      historyOlder.disabled = olderLoading || Boolean(streamNode);
+      historyOlder.textContent = olderLoading ? '正在加载…' : historyError ? '重试加载更早消息' : '加载更早消息';
+      historyNav.dataset.error = historyError ? 'true' : 'false';
+      historyNav.setAttribute('aria-busy', String(olderLoading));
+      historyStatus.textContent = historyError || (page.hasMore
+        ? `已显示 ${messages.length} / ${messageCount} 条消息` : '已到会话开头');
+      historyStatus.title = historyError ? historyFailureDetail : '';
+    };
+
+    const renderThread = ({ preserveScroll = preserveOnRender } = {}) => {
+      if (loadedId !== currentId()) return;
+      preserveOnRender = false;
+      // 用可见消息作锚，前插历史或更新卡片时保持阅读位置；不依赖新增内容的高度。
+      const top = threadNode.getBoundingClientRect().top;
+      const anchor = preserveScroll ? [...messagesNode.children].find((node) => node.getBoundingClientRect().bottom > top) : null;
+      const anchorSeq = anchor?.dataset.seq;
+      const offset = anchor ? anchor.getBoundingClientRect().top - top : 0;
+      const oldScroll = threadNode.scrollTop;
       // 重画会换掉旧节点：悬停态跟着旧节点一起作废，避免按钮挂在不存在的块上。
       setCopyActive(null);
       messagesNode.replaceChildren(...messages.map(renderMessage));
+      renderHistory();
       // 重画会换掉旧节点：勾选态与选中标记要跟着新节点重新穿上。
       applySelection();
       // 空态分两种：一条会话都没有（不许发消息）与当前会话还没有消息。
@@ -218,26 +288,94 @@
         noSessionHint: listApi.EMPTY_SESSION_HINT
       });
       emptyNode.textContent = hint;
-      emptyNode.hidden = !hint;
+      emptyNode.hidden = !hint || (!ctx.ui.header.viewProjectId() && !ctx.ui.header.projects().length);
       // 新消息在底部：画完再滚，避免停在上一屏。
-      threadNode.scrollTop = threadNode.scrollHeight;
+      if (preserveScroll) {
+        const next = anchorSeq && messagesNode.querySelector(`[data-seq="${anchorSeq}"]`);
+        threadNode.scrollTop = next ? oldScroll + next.getBoundingClientRect().top - top - offset : oldScroll;
+      } else threadNode.scrollTop = threadNode.scrollHeight;
     };
 
     /** 读当前会话的消息。切会话与刷新都只走这一条。 */
     const load = async () => {
       const id = currentId();
+      const version = ++loadVersion;
+      const sameSession = loadedId === id;
+      const firstSeq = sameSession ? messages[0]?.seq : null;
+      olderLoading = false;
+      historyError = '';
       if (!id) {
         messages = [];
+        page = { hasMore: false, nextBeforeSeq: null };
+        messageCount = 0;
       } else {
-        const detail = await store.get({ id });
-        messages = threadApi.fromStored(detail?.messages);
+        let detail = await store.get({ id, limit: historyPageSize });
+        let rows = detail?.messages ?? [];
+        // 已展开的历史继续留在流中；从最新快照向前补齐，也同步撤回和旧卡片的状态。
+        while (sameSession && firstSeq && detail?.page?.hasMore && rows[0]?.seq > firstSeq) {
+          if (version !== loadVersion || currentId() !== id) return;
+          const older = await store.get({ id, limit: historyPageSize, beforeSeq: detail.page.nextBeforeSeq });
+          rows = [...older.messages, ...rows];
+          detail = { ...detail, page: older.page };
+        }
+        if (version !== loadVersion || currentId() !== id) return;
+        if (sameSession && firstSeq) {
+          const visible = rows.filter((row) => row.seq >= firstSeq);
+          if (visible.length) {
+            const trimmed = visible.length !== rows.length;
+            rows = visible;
+            detail = { ...detail, page: { hasMore: trimmed || detail.page.hasMore,
+              nextBeforeSeq: rows[0]?.seq ?? null } };
+          }
+        }
+        messages = threadApi.fromStored(rows);
+        page = detail?.page ?? { hasMore: false, nextBeforeSeq: null };
+        messageCount = detail?.messageCount ?? messages.length;
       }
+      preserveOnRender = sameSession && !pinnedToBottom();
+      if (!sameSession) {
+        exportPathNode.textContent = '';
+        exportPathNode.hidden = true;
+      }
+      loadedId = id;
       // 换了一批消息，旧下标不再指同一条：勾选态下重新开始，不留下错位的选中。
       if (selectMode) {
         selected = new Set();
         emitSelection();
       }
     };
+
+    const loadOlder = async () => {
+      if (olderLoading || streamNode || !page.hasMore || loadedId !== currentId()) return;
+      const id = loadedId;
+      const version = loadVersion;
+      olderLoading = true;
+      historyError = '';
+      renderHistory();
+      try {
+        const detail = await store.get({ id, limit: historyPageSize, beforeSeq: page.nextBeforeSeq });
+        if (version !== loadVersion || currentId() !== id || streamNode) return;
+        const selectedSeqs = new Set([...selected].map((index) => messages[index]?.seq));
+        const known = new Set(messages.map((message) => message.seq));
+        messages = [...threadApi.fromStored(detail.messages).filter((message) => !known.has(message.seq)), ...messages];
+        page = detail.page;
+        messageCount = detail.messageCount;
+        selected = new Set(messages.flatMap((message, index) => selectedSeqs.has(message.seq) ? [index] : []));
+        olderLoading = false;
+        renderThread({ preserveScroll: true });
+        emitSelection();
+      } catch (error) {
+        if (version !== loadVersion || currentId() !== id) return;
+        historyFailureDetail = String(error?.message || '历史读取暂时不可用');
+        historyError = '暂时无法加载更早消息。当前消息和草稿已保留，请重试。';
+      } finally {
+        if (version === loadVersion && currentId() === id) {
+          olderLoading = false;
+          renderHistory();
+        }
+      }
+    };
+    historyOlder.addEventListener('click', () => { void loadOlder(); });
 
     /** 回到流的顶部：进全局模式时用，别停在最后一条消息上。 */
     const resetScroll = () => {
@@ -298,6 +436,7 @@
       threadNode.scrollTop = threadNode.scrollHeight;
       if (streamTimer) clearInterval(streamTimer);
       streamTimer = setInterval(tickStream, 1000);
+      renderHistory();
     };
 
     const appendText = (text) => {
@@ -350,6 +489,7 @@
       streamToolLine = null;
       streamText = '';
       streamThinkingText = '';
+      renderHistory();
     };
 
     /** 流式中插入的一句：插在临时气泡前面，保证「先我后它」的顺序。 */
@@ -446,12 +586,13 @@
         const current = ctx.ui.header.currentSession();
         const result = await window.companion.conversation.export({
           sessionId: id,
-          context: sessionContext(current, current ? listApi.titleOf(current) : ''),
-          messages
+          context: sessionContext(current, current ? listApi.titleOf(current) : '')
         });
-        exportPathNode.textContent = result.path;
-        exportPathNode.hidden = false;
-        notify(`已导出：${result.path}`, 'ok');
+        if (currentId() === id) {
+          exportPathNode.textContent = result.path;
+          exportPathNode.hidden = false;
+          notify(`已导出：${result.path}`, 'ok');
+        }
       } catch (error) {
         notify(`导出失败：${error?.message || '未知原因'}`, 'error');
       }
@@ -462,7 +603,8 @@
      * 这里用纯函数算出下一轮，再按两条普通消息落库：提问块不在块里执行动作。
      */
     const answerAsk = (button) => ctx.report('回答', async () => {
-      if (!listApi.canCompose(currentId())) return;
+      const sessionId = currentId();
+      if (!listApi.canCompose(sessionId)) return;
       const askNode = button.closest('[data-block="ask"]');
       const item = button.closest('.msg');
       if (!askNode || !item) return;
@@ -498,18 +640,17 @@
         const answerLabel = result?.ok
           ? (result.missingReason ? '接受（缺理由）' : '接受')
           : (skipped ? '跳过失败' : '接受失败');
-        const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, answerLabel);
-        const answers = answered[messageIndex]?.answers ?? {};
+        const answers = { ...(target.answers ?? {}), [blockIndex]: answerLabel };
         if (Number.isInteger(target.seq)) {
-          await store.answers({ id: currentId(), seq: target.seq, answers });
+          await store.answers({ id: sessionId, seq: target.seq, answers });
         }
         await store.append({
-          id: currentId(),
+          id: sessionId,
           role: 'user',
           text: skipped ? '跳过理由，保持缺理由' : reason
         });
         await store.append({
-          id: currentId(),
+          id: sessionId,
           role: 'assistant',
           text: result?.ok
             ? `已接受这条决策${reason ? `，理由：${reason}` : '，理由保持「缺理由」'}。${result.created ? '写入一条决策' : '库里已有同一指纹的决策，没有重复写'}，来源可回查。`
@@ -532,14 +673,13 @@
       // 自由回答为空：不改流，也不假装收到。
       if (!action) return;
       // 先记「这一块已经答过」，重画之后按钮不会再冒出来；再追加我问的一句与一条回复。
-      const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, action.answeredLabel);
-      const answers = answered[messageIndex]?.answers ?? {};
+      const answers = { ...(target.answers ?? {}), [blockIndex]: action.answeredLabel };
       if (Number.isInteger(target.seq)) {
-        await store.answers({ id: currentId(), seq: target.seq, answers });
+        await store.answers({ id: sessionId, seq: target.seq, answers });
       }
-      await store.append({ id: currentId(), role: 'user', text: action.userText });
+      await store.append({ id: sessionId, role: 'user', text: action.userText });
       await store.append({
-        id: currentId(),
+        id: sessionId,
         role: 'assistant',
         text: action.reply?.text ?? '',
         blocks: Array.isArray(action.reply?.blocks) ? action.reply.blocks : []
@@ -555,7 +695,8 @@
      * 在那条路上是真的写文件，并回一条带路径与字节数的回执。
      */
     const actRisk = (button) => ctx.report('确认卡', async () => {
-      if (!listApi.canCompose(currentId())) return;
+      const sessionId = currentId();
+      if (!listApi.canCompose(sessionId)) return;
       const cardNode = button.closest('[data-block="risk"]');
       const item = button.closest('.msg');
       if (!cardNode || !item) return;
@@ -593,7 +734,7 @@
           card,
           action: overrideSubmit ? 'override' : (button.dataset.riskAction ?? ''),
           ...overrideArgs(),
-          sessionId: currentId()
+          sessionId
         });
       } else if (overrideSubmit) {
         action = riskApi.riskAction({ card, action: 'override', ...overrideArgs() });
@@ -604,14 +745,13 @@
       if (!action) return;
 
       // 先记「这一张已经选过」，重画之后按钮不会再冒出来；再追加我问的一句与一条回复。
-      const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, action.answeredLabel);
-      const answers = answered[messageIndex]?.answers ?? {};
+      const answers = { ...(target.answers ?? {}), [blockIndex]: action.answeredLabel };
       if (Number.isInteger(target.seq)) {
-        await store.answers({ id: currentId(), seq: target.seq, answers });
+        await store.answers({ id: sessionId, seq: target.seq, answers });
       }
-      await store.append({ id: currentId(), role: 'user', text: action.userText });
+      await store.append({ id: sessionId, role: 'user', text: action.userText });
       await store.append({
-        id: currentId(),
+        id: sessionId,
         role: 'assistant',
         text: action.reply?.text ?? '',
         blocks: Array.isArray(action.reply?.blocks) ? action.reply.blocks : []
@@ -652,12 +792,45 @@
       const card = target?.blocks?.[blockIndex];
       if (!target || !card) return;
       if (target.answers?.[blockIndex] !== undefined) return;
+      const sessionId = currentId();
+      const sourceMessages = messages;
+      const reviewKey = card.kind === 'candidate' ? `candidate:${card.proposalId}`
+        : `${sessionId}:${card.fingerprint || `${target.seq}:${blockIndex}`}`;
+      if (reviewing.has(reviewKey)) return;
+      reviewing.add(reviewKey);
+      notify.clear?.();
+      button.disabled = true;
+      try {
       const knowledge = window.companion?.knowledge;
       const action = button.dataset.reviewAction ?? '';
       let answerLabel = '';
       let reply = null;
 
-      if (card.kind === 'lesson' && action === 'promote') {
+      if (card.editKind && (action==='save-lesson'||action==='approve'||action==='reject'||action==='cancel-experience')) {
+        const fail=error=>{const node=cardNode.querySelector('[data-experience-error]');if(node){node.hidden=false;node.textContent=error?.message||String(error);}else notify(error?.message||String(error),'error');};
+        if(card.projectId && card.projectId!==ctx.ui.header.viewProjectId()){fail(Error('先切回这张卡的来源项目，再确认。输入已保留。'));return;}
+        const fields=Object.fromEntries([...cardNode.querySelectorAll('[data-experience-field]')].map(input=>[input.dataset.experienceField,input.value]));
+        try{
+          if(action==='cancel-experience'){
+            answerLabel='取消整理';reply={text:card.editKind==='candidate'?'已取消本次审阅，没有写入知识；经验和待审候选保留，可用 /经验 继续。':'已取消整理，没有写入经验或知识。原始灵感仍保留。',blocks:[]};
+          }else if(action==='save-lesson'){
+            const saved=await window.companion.ideas.toLesson({ideaId:card.ideaId,projectId:card.projectId,expectedHash:card.expectedHash,edits:fields});
+            if(!saved?.ok)throw Error(saved?.reason||'经验未保存，请重试。');
+            answerLabel=saved.created?'已确认保存经验':'已有经验';
+            let prepared;
+            try{prepared=await knowledge.promoteLesson({lessonId:saved.lesson.id});}catch(error){reply={text:`经验已保存，但下一步审阅未准备好：${error?.message||error}。可在这张经验卡继续。`,blocks:[ideaLessonReview(saved.lesson)]};}
+            if(prepared)reply=prepared.reason==='approved'?{text:'这条经验已经沉淀过，没有重复写入。',blocks:[]}:{text:'第一次确认已保存经验。接下来核对知识正文和使用范围，第二次确认后才沉淀为知识。',blocks:[window.OwnerShellCompose.candidateReviewBlock(prepared.candidate)]};
+          }else{
+            const decision=action==='approve'?'approved':'rejected';
+            const result=await knowledge.review({id:card.proposalId,decision,expectedHash:card.expectedHash,edits:action==='approve'?fields:null});
+            if(!result?.ok)throw Error(result?.reason||'没有保存成功，请保留输入后重试。');
+            answerLabel=action==='approve'?'已按改写内容确认（以下回执为准）':'拒绝';
+            const item=result.item;
+            reply=action==='approve'?{text:'已接受并沉淀为知识。写入的是本次审阅后的正文和范围，验证状态保持不变。',blocks:[{type:'kv',title:item?.title||'知识写入回执',rows:[['正文',item?.content||''],['范围',item?.scope==='domain'?`领域共享：${item.domains.join('、')}`:`仅项目：${item?.projectId||''}`],['状态',item?.verificationStatus==='verified'?'已验证':'待验证'],['引用',`[knowledge:${result.appliedId}@${item?.revision||1}]`]]}]}:{text:`已拒绝：${card.title}。没有写入知识，经验保留。`,blocks:[]};
+          }
+          try{await cardNode.experienceDraft?.clear?.();}catch{ /* 成功回执仍以数据库中的知识为准。 */ }
+        }catch(error){fail(error);return;}
+      } else if (card.kind === 'lesson' && action === 'promote') {
         if (typeof knowledge?.promoteLesson !== 'function') {
           notify('提升接口还没加载好，稍等一下再试。', 'error');
           return;
@@ -673,22 +846,18 @@
           const why = result.reason === 'approved'
             ? '这条经验已经被接受过，不会重复提交。'
             : '这条经验已经有一条待审候选，直接在上面审就行。';
-          reply = { text: `没有新建候选：${why}`, blocks: [] };
+          reply = { text: `没有新建候选：${why}`, blocks: result.reason === 'pending' && result.candidate
+            ? [window.OwnerShellCompose.candidateReviewBlock(result.candidate)] : result.knowledge ? [{type:'kv',title:'已沉淀的当前知识',rows:[['标题',result.knowledge.title],['正文',result.knowledge.content],['引用',`[knowledge:${result.knowledge.id}@${result.knowledge.revision}]`],['修订','需要修改时打开完整工作台，保留修订历史。']]}] : [] };
         } else {
           answerLabel = '已提升为候选';
           reply = {
             text: '已生成候选：接受后才会写进知识库。',
-            blocks: [{
-              type: 'review',
-              kind: 'candidate',
-              proposalId: result.proposalId,
-              title: card.title,
-              rows: [['来源', '经验提升'], ['状态', '待审核']],
-              actions: [{ id: 'approve', label: '接受' }, { id: 'reject', label: '拒绝' }],
-              note: '接受会写入知识库；拒绝只留记录。'
-            }]
+            blocks: [window.OwnerShellCompose.candidateReviewBlock(result.candidate)]
           };
         }
+      } else if (card.kind === 'candidate' && action==='approve' && !card.editKind) {
+        const fresh=await knowledge.candidateDraft({id:card.proposalId});
+        answerLabel='已打开最新审阅';reply={text:'请核对最新正文和范围后再确认；本次尚未写入知识。',blocks:[window.OwnerShellCompose.candidateReviewBlock(fresh.candidate)]};
       } else if (card.kind === 'candidate' && (action === 'approve' || action === 'reject')) {
         if (typeof knowledge?.review !== 'function') {
           notify('审核接口还没加载好，稍等一下再试。', 'error');
@@ -832,20 +1001,37 @@
         return;
       }
 
-      const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, answerLabel);
-      const answers = answered[messageIndex]?.answers ?? {};
-      if (Number.isInteger(target.seq)) {
-        await store.answers({ id: currentId(), seq: target.seq, answers });
+      // 失败不消耗审核动作；成功则同步收起本会话中同一候选的其他旧卡。
+      if (!answerLabel.endsWith('失败')) {
+        let answered = sourceMessages;
+        for (let index = 0; index < sourceMessages.length; index += 1) {
+          const message = sourceMessages[index];
+          let changed = false;
+          for (let bi = 0; bi < (message.blocks ?? []).length; bi += 1) {
+            const block = message.blocks[bi];
+            const same = (card.kind === 'candidate' && card.proposalId && block.kind === 'candidate' && block.proposalId === card.proposalId)
+              || (card.kind === 'decision' && card.fingerprint && block.kind === 'decision'
+                && block.fingerprint === card.fingerprint && block.projectId === card.projectId);
+            if ((index === messageIndex && bi === blockIndex) || same) {
+              answered = threadApi.answerBlock(answered, index, bi, answerLabel);
+              changed = true;
+            }
+          }
+          if (changed && Number.isInteger(message.seq)) {
+            await store.answers({ id: sessionId, seq: message.seq, answers: answered[index]?.answers ?? {} });
+          }
+        }
+        await store.append({ id: sessionId, role: 'user', text: answerLabel });
       }
-      await store.append({ id: currentId(), role: 'user', text: answerLabel });
-      await store.append({
-        id: currentId(),
-        role: 'assistant',
-        text: reply.text,
-        blocks: Array.isArray(reply.blocks) ? reply.blocks : []
-      });
+      for (const part of window.OwnerShellCompose.replyParts(reply)) {
+        await store.append({ id: sessionId, role: 'assistant', ...part });
+      }
       await ctx.refreshThread();
       ctx.ui.compose.focus();
+      } finally {
+        reviewing.delete(reviewKey);
+        if (button.isConnected) button.disabled = false;
+      }
     });
 
     /**
@@ -856,7 +1042,8 @@
      * 不新建第二条。动作只执行一次：点过之后按 answers 收起按钮。
      */
     const actReceiptAction = (button) => ctx.report('提升为 Lesson', async () => {
-      if (!listApi.canCompose(currentId())) return;
+      const sessionId = currentId();
+      if (!listApi.canCompose(sessionId)) return;
       const cardNode = button.closest('[data-block="kv"]');
       const item = button.closest('.msg');
       if (!cardNode || !item) return;
@@ -882,7 +1069,12 @@
           notify('提升接口还没加载好，稍等一下再试。', 'error');
           return;
         }
-        const result = await ideas.toLesson({ ideaId, projectId });
+        const result = await ideas.toLesson({ ideaId, projectId, preview:true });
+        if(result?.preview && result.card){
+          await store.append({id:sessionId,role:'assistant',text:'先核对并补全经验，确认前不会写入经验或知识。',blocks:[result.card]});
+          if(currentId()===sessionId)await ctx.refreshThread();
+          return;
+        }
         if (!result?.ok) {
           answerLabel = '提升失败';
           reply = { text: `没提升成：${result?.reason || '原因未知'}`, blocks: [] };
@@ -901,14 +1093,13 @@
         }
       }
 
-      const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, answerLabel);
-      const answers = answered[messageIndex]?.answers ?? {};
+      const answers = { ...(target.answers ?? {}), [blockIndex]: answerLabel };
       if (Number.isInteger(target.seq)) {
-        await store.answers({ id: currentId(), seq: target.seq, answers });
+        await store.answers({ id: sessionId, seq: target.seq, answers });
       }
-      await store.append({ id: currentId(), role: 'user', text: answerLabel });
+      await store.append({ id: sessionId, role: 'user', text: answerLabel });
       await store.append({
-        id: currentId(),
+        id: sessionId,
         role: 'assistant',
         text: reply.text,
         blocks: Array.isArray(reply.blocks) ? reply.blocks : []
@@ -924,7 +1115,8 @@
      * 本函数只负责把动作交出去、把回执与「已选择」标记落进流。
      */
     const actConfirm = (button) => ctx.report('确认卡', async () => {
-      if (!listApi.canCompose(currentId())) return;
+      const sessionId = currentId();
+      if (!listApi.canCompose(sessionId)) return;
       const cardNode = button.closest('[data-block="confirm"]');
       const item = button.closest('.msg');
       if (!cardNode || !item) return;
@@ -963,14 +1155,13 @@
       if (!action) return;
 
       // 先记「这一张已经选过」，重画之后按钮不会再冒出来；再追加我问的一句与一条回复。
-      const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, action.answeredLabel);
-      const answers = answered[messageIndex]?.answers ?? {};
+      const answers = { ...(target.answers ?? {}), [blockIndex]: action.answeredLabel };
       if (Number.isInteger(target.seq)) {
-        await store.answers({ id: currentId(), seq: target.seq, answers });
+        await store.answers({ id: sessionId, seq: target.seq, answers });
       }
-      await store.append({ id: currentId(), role: 'user', text: action.userText });
+      await store.append({ id: sessionId, role: 'user', text: action.userText });
       await store.append({
-        id: currentId(),
+        id: sessionId,
         role: 'assistant',
         text: action.reply?.text ?? '',
         blocks: Array.isArray(action.reply?.blocks) ? action.reply.blocks : []
@@ -984,7 +1175,8 @@
      * 旧回执按「点过就留记录」的口径收起按钮，重试也只能由人再点一次。
      */
     const retryShare = (button) => ctx.report('重试分享', async () => {
-      if (!listApi.canCompose(currentId())) return;
+      const sessionId = currentId();
+      if (!listApi.canCompose(sessionId)) return;
       const share = ctx.ui.atShare;
       if (typeof share?.retry !== 'function') {
         notify('分享模块还没加载好，稍等一下再试。', 'error');
@@ -1001,14 +1193,13 @@
       const reply = share.retry({ draftId: button.dataset.shareRetry ?? '' });
       if (!reply) return;
 
-      const answered = threadApi.answerBlock(messages, messageIndex, blockIndex, '重试');
-      const answers = answered[messageIndex]?.answers ?? {};
+      const answers = { ...(target.answers ?? {}), [blockIndex]: '重试' };
       if (Number.isInteger(target.seq)) {
-        await store.answers({ id: currentId(), seq: target.seq, answers });
+        await store.answers({ id: sessionId, seq: target.seq, answers });
       }
-      await store.append({ id: currentId(), role: 'user', text: '重试分享到飞书' });
+      await store.append({ id: sessionId, role: 'user', text: '重试分享到飞书' });
       await store.append({
-        id: currentId(),
+        id: sessionId,
         role: 'assistant',
         text: reply.text ?? '',
         blocks: Array.isArray(reply.blocks) ? reply.blocks : []
@@ -1035,7 +1226,45 @@
     });
     messagesNode.addEventListener('mouseleave', () => setCopyActive(null));
 
+    const recoverFromButton = (button) => ctx.report('恢复提问', async () => {
+      const cardNode = button.closest('[data-block="chat-recovery"]');
+      const item = button.closest('.msg');
+      if (!cardNode || !item) return;
+      const message = messages[Number(item.dataset.index)];
+      const blockIndex = Number(cardNode.dataset.blockIndex);
+      const raw = message?.blocks?.[blockIndex];
+      if (!raw || message.answers?.[blockIndex]) return;
+      const model = window.OwnerChatRecovery.normalize(raw);
+      const action = button.dataset.chatRecovery;
+      if (!model.actions.some((entry) => entry.id === action)) return;
+      if (action === 'configure') {
+        ctx.ui.config.openSection('model');
+        return;
+      }
+      const sessionId = currentId();
+      const key = `${sessionId}:${model.sourceSeq}`;
+      if (recovering.has(key)) return;
+      recovering.add(key);
+      button.disabled = true;
+      try {
+        if (await ctx.ui.compose.recoverChat(model, action)) {
+          const answers = { ...message.answers, [blockIndex]: '已重试' };
+          await store.answers({ id: sessionId, seq: message.seq, answers });
+          message.answers = answers;
+          await ctx.refreshThread();
+        }
+      } finally {
+        recovering.delete(key);
+        if (button.isConnected) button.disabled = false;
+      }
+    });
+
     messagesNode.addEventListener('click', (event) => {
+      const recovery = event.target.closest?.('[data-chat-recovery]');
+      if (recovery) {
+        void recoverFromButton(recovery);
+        return;
+      }
       // 确认卡的动作、复制/导出的按钮、提问块的回答是三套落点，但都只声明「点了什么」；
       // 真正的行为分别由 actConfirm / actRisk / copyFromButton / answerAsk 负责。
       const confirmButton = event.target.closest?.('[data-confirm-action]');
@@ -1116,6 +1345,11 @@
       load,
       render: renderThread,
       resetScroll,
+      // 定位打开的是一段内容：先露出本次回复开头，而不是一张长审核卡的最底部。
+      revealLatestReply: () => {
+        const lastUser = messages.findLastIndex((message) => message.role === 'user');
+        messagesNode.querySelector(`.msg[data-index="${lastUser + 1}"]`)?.scrollIntoView({ block: 'start' });
+      },
       // 流式：先画一个临时气泡，增量更新；结束时移除，由落库后的正式消息接管。
       beginStream,
       appendText,

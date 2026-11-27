@@ -13,7 +13,8 @@ export const MASCOT_SKINS = Object.freeze([
   'cindy', 'blackcat', 'pululu', 'tarara', 'boli',
   'whitesnow', 'annie', 'chaku', 'muffin', 'erika'
 ]);
-export const DEFAULT_MASCOT_SKIN = 'pululu';
+export const DEFAULT_MASCOT_SKIN = 'petdex-01-boba';
+const BUILTIN_LABELS = Object.freeze({cindy:'Cindy',blackcat:'黑猫',pululu:'Pululu（简约）',tarara:'Tarara',boli:'Boli',whitesnow:'白雪',annie:'Annie',chaku:'Chaku',muffin:'Muffin',erika:'Erika'});
 
 /** Codex / Agent Island 会话阶段（用于与外部会话快照对接）。 */
 export const SESSION_PHASES = Object.freeze([
@@ -126,6 +127,8 @@ export function readMascotPackage(dir) {
     file: sheet,
     sheetName,
     version,
+    collection: manifest.collection === 'petdex' ? 'petdex' : '',
+    rank: Number.isSafeInteger(manifest.rank) && manifest.rank > 0 ? manifest.rank : null,
     sprite: {
       frameWidth,
       frameHeight,
@@ -173,14 +176,18 @@ export function listMascots({ builtinDir = '', userDir = '' } = {}) {
   for (const item of scanDir(userDir, 'custom')) byId.set(item.id, item);
   const manifest = readManifest(userDir);
   const labels = manifest.labels && typeof manifest.labels === 'object' ? manifest.labels : {};
+  const petdex = [...byId.values()].filter(item=>item.source==='builtin'&&item.collection==='petdex')
+    .sort((a,b)=>(a.rank??999)-(b.rank??999)||a.id.localeCompare(b.id));
+  const petdexIds = new Set(petdex.map(item=>item.id));
   const ordered = [
+    ...petdex.map(item=>({...item,label:labels[item.id]??item.label,builtin:true})),
     ...MASCOT_SKINS.filter((id) => byId.has(id)).map((id) => ({
-      ...byId.get(id), label: labels[id] ?? byId.get(id).label, builtin: MASCOT_SKINS.includes(id)
+      ...byId.get(id), label: labels[id] ?? BUILTIN_LABELS[id] ?? byId.get(id).label, builtin: byId.get(id).source === 'builtin'
     })),
     ...[...byId.values()]
-      .filter((item) => !MASCOT_SKINS.includes(item.id))
+      .filter((item) => !MASCOT_SKINS.includes(item.id)&&!petdexIds.has(item.id))
       .sort((a, b) => a.id.localeCompare(b.id))
-      .map((item) => ({ ...item, label: labels[item.id] ?? item.label, builtin: false }))
+      .map((item) => ({ ...item, label: labels[item.id] ?? item.label, builtin: item.source === 'builtin' }))
   ];
   return {
     skins: ordered,

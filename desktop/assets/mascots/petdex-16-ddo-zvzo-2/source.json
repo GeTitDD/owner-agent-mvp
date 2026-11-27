@@ -1,0 +1,20 @@
+{
+  "rank": 16,
+  "id": "petdex-16-ddo-zvzo-2",
+  "slug": "ddo-zvzo-2",
+  "displayName": "ddo-zvzo",
+  "source": "https://petdex.dev/pets/ddo-zvzo-2",
+  "zipUrl": "https://assets.petdex.dev/pets/ddo-zvzo-49f5c2067af6/zip.zip",
+  "author": "준회 Junhoe Kim 김.",
+  "metrics": {
+    "installCount": 2207,
+    "likeCount": 15,
+    "zipDownloadCount": 105
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "1f693e03d6790edb61ff5fe9c6c22cec5ae13bc30b7ed31d853b11b47e2938e9",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

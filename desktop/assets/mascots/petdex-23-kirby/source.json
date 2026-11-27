@@ -1,0 +1,20 @@
+{
+  "rank": 23,
+  "id": "petdex-23-kirby",
+  "slug": "kirby",
+  "displayName": "Kirby",
+  "source": "https://petdex.dev/pets/kirby",
+  "zipUrl": "https://assets.petdex.dev/pets/kirby-602269bf05c2/zip.zip",
+  "author": "Bao Chi P.",
+  "metrics": {
+    "installCount": 1857,
+    "likeCount": 43,
+    "zipDownloadCount": 77
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "510a75df839097568d532639ccee24109dbd9578097ec041c425a2ffc1d44f62",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

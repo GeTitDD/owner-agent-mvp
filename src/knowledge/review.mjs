@@ -38,7 +38,7 @@ export function knowledgeReviewFor({
   personalStore,
   id,
   decision,
-  reviewer = 'local-user'
+  reviewer = 'local-user', edits = null, expectedHash = ''
 } = {}) {
   const proposalId = String(id ?? '');
   const fail = (reason) => ({
@@ -70,7 +70,7 @@ export function knowledgeReviewFor({
   try {
     const done = personalStore.reviewProposal(proposalId, {
       decision,
-      reviewer,
+      reviewer, edits, expectedProposalHash: expectedHash,
       // 有目标知识时把提案钉住的修订号一并传下去，冲突让存储层拒绝。
       expectedRevision: proposal.target_revision ?? null
     });
@@ -80,6 +80,7 @@ export function knowledgeReviewFor({
       decision,
       status: done?.status ?? decision,
       appliedId: done?.applied_id ?? null,
+      item: done?.applied_id ? personalStore.get(done.applied_id) : null,
       reason: null
     };
   } catch (error) {

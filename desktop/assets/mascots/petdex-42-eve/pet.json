@@ -1,0 +1,12 @@
+{
+  "id": "petdex-42-eve",
+  "displayName": "EVE",
+  "description": "A tiny movie-faithful EVE robot companion with expressive blue LED eyes, simplified into Codex digital pet style.",
+  "spritesheetPath": "spritesheet.webp",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "collection": "petdex",
+  "rank": 42
+}

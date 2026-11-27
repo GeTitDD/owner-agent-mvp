@@ -1,0 +1,20 @@
+{
+  "rank": 20,
+  "id": "petdex-20-ai-2",
+  "slug": "ai-2",
+  "displayName": "Ai",
+  "source": "https://petdex.dev/pets/ai-2",
+  "zipUrl": "https://assets.petdex.dev/pets/ai-274da11c107e/zip.zip",
+  "author": "yadoon",
+  "metrics": {
+    "installCount": 1953,
+    "likeCount": 17,
+    "zipDownloadCount": 15
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "fef18ec677cf19fa0d9cb345ea5a8974197ef5a500913fe00d5848b8195ea5a5",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

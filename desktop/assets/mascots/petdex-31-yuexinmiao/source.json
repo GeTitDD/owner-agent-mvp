@@ -1,0 +1,20 @@
+{
+  "rank": 31,
+  "id": "petdex-31-yuexinmiao",
+  "slug": "yuexinmiao",
+  "displayName": "月薪喵",
+  "source": "https://petdex.dev/pets/yuexinmiao",
+  "zipUrl": "https://assets.petdex.dev/pets/yuexinmiao-f35a9aec318c/zip.zip",
+  "author": "T C.",
+  "metrics": {
+    "installCount": 1591,
+    "likeCount": 60,
+    "zipDownloadCount": 92
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "88b34849cf17d61db42df643740a2bbe40414cf8ddcc85fc602389af88b816cb",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}

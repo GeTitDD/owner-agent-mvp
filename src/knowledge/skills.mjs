@@ -1,23 +1,26 @@
 // 知识模式：技能目录（只读）。
 //
-// 项目里的「技能」散在三处载体：
+// 技能目录保留来源身份，读取已知载体：
 //   1. 域包：domains/<id>/<version>/manifest.json 的 skillDirs（与 src/loader.mjs 同一条规则）；
 //   2. pstack：外部 skills 目录里的 <id>/SKILL.md（与 playbook 共用 resolvePstackSkillsDir）；
 //   3. 插件：plugins/<name>/ghost.json 的 skill.items。
-// 这里把三处合并成一份列表并标注来源，只读——不运行技能、不提供编辑入口。
+//   4. matt：分类目录下的 SKILL.md；5. 本机：仅显式指定的扩展目录。
+// 这里合并列表并标注来源，只读——不运行技能脚本、不提供编辑入口。
 //
 // 容错是硬要求：目录不存在、manifest 异常、ghost.json 异常、SKILL.md 缺失都只会让
 // 单条（或单个来源）标成「缺失」，不能让整个列表挂掉。
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 // 来源顺序即界面上的分组顺序；key 用于视图模型，label 用于展示。
 export const SKILL_SOURCES = Object.freeze([
   { key: 'domain', label: '域包' },
   { key: 'pstack', label: 'pstack' },
-  { key: 'matt', label: 'matt' },
-  { key: 'plugin', label: '插件' }
+  { key: 'matt', label: 'Matt Pocock' },
+  { key: 'plugin', label: '插件' },
+  { key: 'local', label: '本机' }
 ]);
 
 // 一次扫描结果默认缓存一分钟：切换模式/重复渲染复用，显式刷新才重扫。
@@ -126,6 +129,38 @@ const makeEntry = ({
   reason: missing && !playbookOnly ? String(reason || '缺失') : '',
   origin: origin || ''
 });
+
+/** 个人目录仅显式开启时读取；默认由应用自带包提供方法，不依赖个人安装。 */
+export function localSkillRoots({ env = process.env } = {}) {
+  return String(env.OWNER_AGENT_LOCAL_SKILLS_DIR || '').split(path.delimiter).filter(Boolean)
+    .map(dir => ({path:dir,label:'指定扩展目录'}));
+}
+
+/** 本机技能是只读方法正文；软链接按真实文件去重，不安装扩展或执行脚本。 */
+export function scanLocalSkills({ roots = [] } = {}) {
+  const items = []; const seen = new Set();
+  for (const root of roots) {
+    const dir = typeof root === 'string' ? root : root.path;
+    if (!dir) continue;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a,b) => a.name.localeCompare(b.name)); } catch { continue; }
+    let realRoot;
+    try { realRoot = fs.realpathSync(dir); } catch { continue; }
+    const rootId = createHash('sha256').update(realRoot).digest('hex').slice(0,12);
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || (!entry.isDirectory() && !entry.isSymbolicLink())) continue;
+      const file = path.join(dir,entry.name,'SKILL.md');
+      let realFile;
+      try { realFile = fs.realpathSync(file); if (!fs.statSync(realFile).isFile()) continue; } catch { continue; }
+      if (seen.has(realFile)) continue;
+      seen.add(realFile);
+      const meta = readSkillFile(file,entry.name);
+      items.push(makeEntry({key:'local',id:`local:${rootId}:${entry.name}`,name:meta.name,skillPath:file,
+        description:meta.description,missing:!meta.ok,reason:meta.reason,origin:root.label || path.basename(dir)}));
+    }
+  }
+  return items;
+}
 
 /**
  * 域包技能：遍历 domains/<id>/<version>/manifest.json 的 skillDirs。
@@ -322,7 +357,7 @@ export function scanPluginSkills({ pluginsDir } = {}) {
       const declaredDescription = typeof item?.description === 'string' ? item.description.trim() : '';
       items.push(makeEntry({
         key: 'plugin',
-        id: `plugin:${pluginId}:${index}`,
+        id: `plugin:${pluginId}:${relative || index}`,
         name: meta.name || fallback,
         skillPath,
         description: declaredDescription || meta.description,
@@ -368,15 +403,16 @@ export function skillCatalogView({ items = [], scannedAt = null, limit = DEFAULT
     domain: groups.find((group) => group.key === 'domain')?.count ?? 0,
     pstack: groups.find((group) => group.key === 'pstack')?.count ?? 0,
     matt: groups.find((group) => group.key === 'matt')?.count ?? 0,
-    plugin: groups.find((group) => group.key === 'plugin')?.count ?? 0
+    plugin: groups.find((group) => group.key === 'plugin')?.count ?? 0,
+    local: groups.find((group) => group.key === 'local')?.count ?? 0
   };
   // 全空时说明「为什么空」，而不是留一片空白。
   const empty = items.length
     ? null
     : {
         kind: 'no-skills',
-        title: '四处都没有找到技能',
-        detail: '域包看 domains/*/*/manifest.json 的 skillDirs，pstack 看 PSTACK_DIR，matt 看 MATT_SKILLS_DIR，插件看 ghost.json 的 skill.items；确认目录后点刷新。'
+        title: '没有找到技能',
+        detail: '检查应用内置的 pstack / Matt Pocock 资源、域包 manifest.json 与插件 ghost.json；指定了外部扩展时再检查对应目录，然后点刷新。'
       };
   return { scannedAt, totals, groups, empty };
 }
@@ -392,13 +428,15 @@ export function collectSkillItems({
   pluginsDir = '',
   pstackSkillsDir = '',
   pstackSkillIds = [],
-  mattSkillsDir = ''
+  mattSkillsDir = '',
+  localRoots = []
 } = {}) {
   return [
     ...scanDomainSkills({ domainRoot }),
     ...scanPstackSkills({ skillsDir: pstackSkillsDir, expectedIds: pstackSkillIds }),
     ...scanMattSkills({ skillsRoot: mattSkillsDir }),
-    ...scanPluginSkills({ pluginsDir })
+    ...scanPluginSkills({ pluginsDir }),
+    ...scanLocalSkills({ roots: localRoots })
   ];
 }
 
@@ -415,12 +453,13 @@ export function skillCatalogFor({
   pstackSkillsDir = '',
   pstackSkillIds = [],
   mattSkillsDir = '',
+  localRoots = [],
   limit = DEFAULT_GROUP_LIMIT,
   scannedAt = new Date().toISOString(),
   withItems = false
 } = {}) {
   const items = collectSkillItems({
-    domainRoot, pluginsDir, pstackSkillsDir, pstackSkillIds, mattSkillsDir
+    domainRoot, pluginsDir, pstackSkillsDir, pstackSkillIds, mattSkillsDir, localRoots
   });
   const view = { ...skillCatalogView({ items, scannedAt, limit }), scannedAt };
   return withItems ? { ...view, items } : view;

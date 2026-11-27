@@ -1,0 +1,20 @@
+{
+  "rank": 50,
+  "id": "petdex-50-anya-2",
+  "slug": "anya-2",
+  "displayName": "阿尼亚",
+  "source": "https://petdex.dev/pets/anya-2",
+  "zipUrl": "https://assets.petdex.dev/pets/anya-8ef9d09d13c0/zip.zip",
+  "author": "Thomas W.",
+  "metrics": {
+    "installCount": 1336,
+    "likeCount": 25,
+    "zipDownloadCount": 52
+  },
+  "spriteVersionNumber": 1,
+  "downloadedAt": "2026-11-27T00:38:40.087845+00:00",
+  "archiveSha256": "82c8c0d325d9aedd68d1140e7886ad8afe166a52dc4bb6a535bd9971f8ee15d1",
+  "license": null,
+  "licenseFiles": [],
+  "adaptations": []
+}
